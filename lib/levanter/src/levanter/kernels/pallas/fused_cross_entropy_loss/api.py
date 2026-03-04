@@ -3,9 +3,8 @@
 
 from collections.abc import Callable, Sequence
 from functools import lru_cache
-import json
-import os
-from pathlib import Path
+import hashlib
+import logging
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
@@ -14,6 +13,8 @@ import jax
 from jax import core as jax_core
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
+
+from levanter.kernels.pallas import autotune_cache_utils
 
 from .config import BlockSizes
 from .tuned_block_sizes import infer_block_sizes, infer_block_sizes_with_tuned_match
@@ -41,9 +42,13 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
 _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _PALLAS_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
-_AUTOTUNE_CACHE_FILENAME = "levanter_fused_ce_block_sizes_v1.json"
+_AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
+_AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
 _AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, BlockSizes] = {}
 _AUTOTUNE_CACHE_LOADED = False
+_AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
+
+logger = logging.getLogger(__name__)
 
 try:
     from .pallas_tpu import (
@@ -93,29 +98,14 @@ def _warn_pallas_fallback_once(exc: Exception) -> None:
 
 
 def _autotune_enabled() -> bool:
-    value = os.environ.get(_AUTOTUNE_ON_MISS_ENV_VAR)
-    if value is None:
-        return True
-    return value.lower() in {"1", "true", "yes", "on"}
+    return autotune_cache_utils.is_enabled_from_env(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
 
-def _jax_compilation_cache_path() -> Path | None:
-    cache_dir: str | None = None
-    read = getattr(jax.config, "read", None)
-    if callable(read):
-        try:
-            cache_dir = cast(Optional[str], read("jax_compilation_cache_dir"))
-        except Exception:
-            cache_dir = None
-    if not cache_dir:
-        values = getattr(jax.config, "values", None)
-        if isinstance(values, dict):
-            value = values.get("jax_compilation_cache_dir")
-            if isinstance(value, str) and value:
-                cache_dir = value
-    if not cache_dir:
-        return None
-    return Path(cache_dir) / _AUTOTUNE_CACHE_FILENAME
+def _kernel_autotune_cache_url() -> str | None:
+    return autotune_cache_utils.kernel_autotune_cache_url(
+        kernel_name=_AUTOTUNE_KERNEL_NAME,
+        filename=_AUTOTUNE_CACHE_FILENAME,
+    )
 
 
 def _ensure_autotune_cache_loaded() -> None:
@@ -123,13 +113,11 @@ def _ensure_autotune_cache_loaded() -> None:
     if _AUTOTUNE_CACHE_LOADED:
         return
     _AUTOTUNE_CACHE_LOADED = True
-    cache_path = _jax_compilation_cache_path()
-    if cache_path is None or not cache_path.exists():
+    cache_url = _kernel_autotune_cache_url()
+    if cache_url is None:
         return
     try:
-        payload = json.loads(cache_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            return
+        payload = autotune_cache_utils.load_json(cache_url)
         for key, entry in payload.items():
             if not isinstance(key, str) or not isinstance(entry, dict):
                 continue
@@ -138,16 +126,17 @@ def _ensure_autotune_cache_loaded() -> None:
             v = entry.get("v_block_size")
             if all(isinstance(val, int) for val in (b, h, v)):
                 _AUTOTUNE_BLOCK_SIZE_CACHE[key] = BlockSizes(b_block_size=b, h_block_size=h, v_block_size=v)
-    except Exception:
+        logger.debug("Loaded %d fused CE autotune entries from %s.", len(_AUTOTUNE_BLOCK_SIZE_CACHE), cache_url)
+    except Exception as exc:
+        logger.debug("Unable to load fused CE autotune cache from %s: %s", cache_url, exc)
         return
 
 
 def _persist_autotune_cache() -> None:
-    cache_path = _jax_compilation_cache_path()
-    if cache_path is None:
+    cache_url = _kernel_autotune_cache_url()
+    if cache_url is None:
         return
     try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             key: {
                 "b_block_size": value.b_block_size,
@@ -156,20 +145,71 @@ def _persist_autotune_cache() -> None:
             }
             for key, value in _AUTOTUNE_BLOCK_SIZE_CACHE.items()
         }
-        cache_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-    except Exception:
+        autotune_cache_utils.write_json(cache_url, payload)
+    except Exception as exc:
+        logger.debug("Unable to persist fused CE autotune cache to %s: %s", cache_url, exc)
         return
 
 
-def _autotune_cache_key(
-    impl_name: str,
+def _autotune_jaxpr_hash(
+    *,
+    fn: ArrayImpl,
+    inferred: BlockSizes,
     x: jax.Array,
+    labels: jax.Array,
     w: jax.Array,
     dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+    return_argmax: bool,
+) -> str | None:
+    try:
+        kwargs = dict(
+            block_sizes=inferred,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        )
+        if return_argmax:
+            kwargs["return_argmax"] = True
+
+        def _loss_only(x_value: jax.Array, labels_value: jax.Array, w_value: jax.Array) -> jax.Array:
+            out = fn(x_value, labels_value, w_value, **kwargs)
+            return out[0]
+
+        traced = jax.make_jaxpr(_loss_only)(x, labels, w)
+        return hashlib.sha256(str(traced.jaxpr).encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return None
+
+
+def _autotune_cache_key(
+    *,
+    impl_name: str,
+    fn: ArrayImpl,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+    inferred: BlockSizes,
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+    return_argmax: bool,
 ) -> str:
     devices = jax.devices()
     device_kind = devices[0].device_kind.lower() if devices else ""
     compute_dtype = jnp.dtype(dtype).name if dtype is not None else "none"
+    jaxpr_hash = _autotune_jaxpr_hash(
+        fn=fn,
+        inferred=inferred,
+        x=x,
+        labels=labels,
+        w=w,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        return_argmax=return_argmax,
+    )
     return "|".join(
         (
             impl_name,
@@ -181,6 +221,10 @@ def _autotune_cache_key(
             jnp.dtype(x.dtype).name,
             jnp.dtype(w.dtype).name,
             compute_dtype,
+            str(logit_soft_cap),
+            str(precision),
+            str(return_argmax),
+            f"jaxpr={jaxpr_hash}" if jaxpr_hash is not None else "jaxpr=unavailable",
         )
     )
 
@@ -255,6 +299,12 @@ def _benchmark_block_sizes_candidate(
     lowered = jitted.lower(*abstract_args)
     lowered.compile()
     compile_time = time.perf_counter() - start
+    if compile_time <= _AUTOTUNE_COMPILE_HIT_THRESHOLD_S:
+        logger.info(
+            "Fused CE autotune candidate %s likely hit JAX compilation cache (compile %.3fs).",
+            candidate,
+            compile_time,
+        )
 
     if _is_tracer(x) or _is_tracer(labels) or _is_tracer(w):
         return compile_time
@@ -282,14 +332,32 @@ def _autotune_block_sizes_on_miss(
     if not _autotune_enabled():
         return inferred
     _ensure_autotune_cache_loaded()
-    cache_key = _autotune_cache_key(impl_name, x, w, dtype)
+    cache_key = _autotune_cache_key(
+        impl_name=impl_name,
+        fn=fn,
+        x=x,
+        labels=labels,
+        w=w,
+        inferred=inferred,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        return_argmax=return_argmax,
+    )
     cached = _AUTOTUNE_BLOCK_SIZE_CACHE.get(cache_key)
     if cached is not None:
+        logger.info("Fused CE autotune cache hit for %s. Using cached block sizes %s.", impl_name, cached)
         return cached
 
+    candidates = _candidate_block_sizes(impl_name, inferred)
+    logger.info(
+        "Fused CE autotune miss for %s. Sweeping %d block-size candidates.",
+        impl_name,
+        len(candidates),
+    )
     best = inferred
     best_score = float("inf")
-    for candidate in _candidate_block_sizes(impl_name, inferred):
+    for candidate in candidates:
         try:
             score = _benchmark_block_sizes_candidate(
                 fn=fn,
@@ -310,6 +378,7 @@ def _autotune_block_sizes_on_miss(
 
     _AUTOTUNE_BLOCK_SIZE_CACHE[cache_key] = best
     _persist_autotune_cache()
+    logger.info("Fused CE autotune selected block sizes %s for %s.", best, impl_name)
     return best
 
 

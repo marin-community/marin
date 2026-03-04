@@ -5,10 +5,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import warnings
+
 import jax
 import jax.numpy as jnp
 import pytest
 
+from levanter.kernels.pallas import autotune_cache_utils
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_gpu
@@ -697,6 +699,60 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     assert winner_1 == faster
     assert winner_2 == faster
     assert calls["bench"] == 3
+
+
+def test_fused_ce_autotune_cache_url_uses_jax_cache_subdir(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        autotune_cache_utils,
+        "get_jax_compilation_cache_dir",
+        lambda: "gs://my-cache-root/compiled",
+    )
+
+    cache_url = fused_api._kernel_autotune_cache_url()
+
+    assert (
+        cache_url
+        == "gs://my-cache-root/compiled/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json"
+    )
+
+
+def test_fused_ce_autotune_jaxpr_hash_is_stable_for_same_inputs():
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
+        del labels_raw, block_sizes
+        batch = x_raw.shape[0]
+        logits = jnp.einsum("bh,hv->bv", x_raw, w_raw)
+        return jnp.sum(logits, axis=-1), jnp.zeros((batch,), dtype=jnp.float32)
+
+    hash_1 = fused_api._autotune_jaxpr_hash(
+        fn=fake_impl,
+        inferred=inferred,
+        x=x,
+        labels=y,
+        w=w,
+        dtype=jnp.float32,
+        logit_soft_cap=None,
+        precision=None,
+        return_argmax=False,
+    )
+    hash_2 = fused_api._autotune_jaxpr_hash(
+        fn=fake_impl,
+        inferred=inferred,
+        x=x,
+        labels=y,
+        w=w,
+        dtype=jnp.float32,
+        logit_soft_cap=None,
+        precision=None,
+        return_argmax=False,
+    )
+
+    assert hash_1 is not None
+    assert hash_1 == hash_2
 
 
 def test_fused_cross_entropy_pallas_bwd_matches_reference():
