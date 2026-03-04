@@ -8,6 +8,8 @@ exercises a specific dashboard view and validates both DOM state and visual
 rendering via screenshots.
 """
 
+import time
+
 import pytest
 from iris.rpc import cluster_pb2
 
@@ -176,8 +178,6 @@ def test_worker_detail_sparklines_with_history(cluster, page, screenshot):
     assert worker_id
 
     # Wait for heartbeats to accumulate (local interval is 0.5s, need >=2 entries)
-    import time
-
     time.sleep(3)
 
     dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
@@ -246,8 +246,6 @@ def test_job_detail_task_table_shows_resource_values(cluster, page, screenshot):
     cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
 
     # Wait for stats collection (poll interval is 5s)
-    import time
-
     time.sleep(7)
 
     dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
