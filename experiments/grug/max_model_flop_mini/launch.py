@@ -53,8 +53,8 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe_test.model import GrugModelConfig
-from experiments.grug.moe_test.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.max_model_flop_mini.model import GrugModelConfig
+from experiments.grug.max_model_flop_mini.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.tootsie.exp1295_32b import nemotron_mix
 
 
