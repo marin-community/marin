@@ -1,18 +1,7 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
-"""AdamH hyperparameter sweep for a ~130M Qwen3 model on Nemotron mix."""
+"""AdamH hyperparameter sweep for a ~130M Grug model on Nemotron mix."""
 
 import json
 import os
@@ -24,18 +13,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 import fsspec
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
+from levanter.tracker.wandb import WandbConfig
 from vizier.service import clients
 from vizier.service import pyvizier as vz
 
-from experiments.defaults import default_train
+from experiments.defaults import default_validation_sets
+from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
+from experiments.grug.base.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.pretraining_datasets.main import nemotron_mix
-from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.processing.tokenize import add_validation_sets_to_mixture
 
 FloatRange = tuple[float, float]
 
@@ -80,9 +69,9 @@ class SweepSettings:
 # Edit this single object to tune the sweep.
 SWEEP = SweepSettings(
     # Common edits.
-    experiment_name="ref-sweep-qwen3-130m-vizier-v5",
+    experiment_name="ref-sweep-grug-130m-vizier-v5",
     num_loops=10,
-    suggestions_per_loop=16,
+    suggestions_per_loop=4,
     search_space={
         "lr": (0.00005, 0.03),
         "beta1": (0.5, 1.0),
@@ -104,7 +93,7 @@ SWEEP = SweepSettings(
     lr_schedule="linear",
     warmup_fraction=0.1,
     decay_fraction=0.2,
-    base_train_tags=("sweep", "qwen3", "130m", "adamh"),
+    base_train_tags=("sweep", "grug", "130m", "adamh"),
 )
 
 SUGGESTIONS_FILENAME = "vizier_suggestions.json"
@@ -113,14 +102,9 @@ RESOURCE_FILENAME = "vizier_resource.json"
 OPTIMAL_FILENAME = "vizier_optimal.json"
 VIZIER_DB_FILENAME = "vizier.db"
 
-qwen3_130m = Qwen3Config(
-    max_seq_len=4096,
-    hidden_dim=512,
-    intermediate_dim=512 * 4,
-    num_heads=4,
-    num_kv_heads=4,
-    num_layers=6,
-    rope=Llama3RotaryEmbeddingsConfig(),
+NEMOTRON_MIX_WITH_EVAL = add_validation_sets_to_mixture(
+    nemotron_mix,
+    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
 )
 
 
@@ -143,7 +127,7 @@ class VizierSuggestConfig:
 class VizierTrainConfig:
     suggestions_path: str
     suggestion_index: int
-    base_pod_config: TrainLmOnPodConfig
+    base_launch_config: GrugBaseLaunchConfig
     target_tokens: int
     seq_len: int
     fixed_batch_size: int
@@ -300,7 +284,7 @@ def _build_adamh_config(
     )
 
 
-def _build_base_pod_config() -> TrainLmOnPodConfig:
+def _build_base_launch_config() -> GrugBaseLaunchConfig:
     placeholder_lr = SWEEP.search_space["lr"][0]
     placeholder_beta1 = SWEEP.search_space["beta1"][0]
     placeholder_adam_lr = SWEEP.search_space["adam_lr"][0]
@@ -310,14 +294,22 @@ def _build_base_pod_config() -> TrainLmOnPodConfig:
     placeholder_batch_size = SWEEP.fixed_batch_size
     placeholder_steps = SWEEP.target_tokens // (placeholder_batch_size * SWEEP.seq_len)
 
-    train_config = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu("v5p-8"),
-        train_batch_size=placeholder_batch_size,
-        num_train_steps=placeholder_steps,
-        learning_rate=placeholder_lr,
-        train_seq_len=SWEEP.seq_len,
-        z_loss_weight=5e-6,
-        optimizer_config=_build_adamh_config(
+    return GrugBaseLaunchConfig(
+        model=GRUG_130M_MODEL,
+        data=NEMOTRON_MIX_WITH_EVAL,
+        output_path=this_output_path(),
+        run_id=f"{SWEEP.experiment_name}-base",
+        steps=placeholder_steps,
+        batch_size=placeholder_batch_size,
+        seed=0,
+        mp="params=float32,compute=bfloat16,output=bfloat16",
+        tracker=WandbConfig(
+            project="marin",
+            tags=list(SWEEP.base_train_tags),
+            group=SWEEP.experiment_name,
+            name=None,
+        ),
+        optimizer=_build_adamh_config(
             learning_rate=placeholder_lr,
             beta1=placeholder_beta1,
             adam_learning_rate=placeholder_adam_lr,
@@ -325,18 +317,13 @@ def _build_base_pod_config() -> TrainLmOnPodConfig:
             epsilon=placeholder_epsilon,
             max_grad_norm=placeholder_max_grad_norm,
         ),
-        steps_per_eval=500,
+        grug_trainer=GrugTrainerConfig(
+            z_loss_weight=5e-6,
+        ),
+        eval=GrugEvalConfig(
+            steps_per_eval=500,
+        ),
     )
-
-    base_step = default_train(
-        name=f"{SWEEP.experiment_name}-base",
-        tokenized=nemotron_mix,
-        model_config=qwen3_130m,
-        train_config=train_config,
-        tags=list(SWEEP.base_train_tags),
-        eval_harness_tasks=[],
-    )
-    return base_step.config
 
 
 def run_vizier_suggest(config: VizierSuggestConfig) -> None:
@@ -390,12 +377,10 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
     batch_size = config.fixed_batch_size
     num_steps = config.target_tokens // (batch_size * config.seq_len)
 
-    base_pod_config = config.base_pod_config
-    base_train_config = base_pod_config.train_config
-    base_trainer = base_train_config.trainer
-
-    new_tags = list(getattr(base_trainer.tracker, "tags", []) or [])
+    base = config.base_launch_config
     trial_id = int(suggestion["trial_id"])
+
+    new_tags = list(getattr(base.tracker, "tags", []) or [])
     new_tags.extend(
         [
             f"lr={hparams['lr']}",
@@ -411,17 +396,15 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
         ]
     )
 
-    tracker = replace(base_trainer.tracker, tags=new_tags)
-    trainer = replace(
-        base_trainer,
-        train_batch_size=batch_size,
-        num_train_steps=num_steps,
-        tracker=tracker,
-    )
+    tracker = replace(base.tracker, tags=new_tags, name=f"trial-{trial_id}-loop-{config.loop_index}")
+    grug_trainer = replace(base.grug_trainer, z_loss_weight=hparams["z_loss_weight"])
 
-    train_config = replace(
-        base_train_config,
-        trainer=trainer,
+    launch_config = replace(
+        base,
+        run_id=f"{SWEEP.experiment_name}-loop{config.loop_index}-trial{trial_id}",
+        steps=num_steps,
+        batch_size=batch_size,
+        tracker=tracker,
         optimizer=_build_adamh_config(
             learning_rate=hparams["lr"],
             beta1=hparams["beta1"],
@@ -430,11 +413,10 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
             epsilon=hparams["epsilon"],
             max_grad_norm=hparams["max_grad_norm"],
         ),
-        z_loss_weight=hparams["z_loss_weight"],
+        grug_trainer=grug_trainer,
     )
-    pod_config = replace(base_pod_config, train_config=train_config)
 
-    run_levanter_train_lm(pod_config)
+    run_grug_base_trial(launch_config)
 
 
 def run_vizier_update(config: VizierUpdateConfig) -> None:
@@ -561,7 +543,7 @@ def _build_train_step(
     loop_index: int,
     suggestion_index: int,
     suggestions_path: str,
-    base_pod_config: TrainLmOnPodConfig,
+    base_launch_config: GrugBaseLaunchConfig,
 ) -> ExecutorStep:
     return ExecutorStep(
         name=os.path.join(
@@ -572,12 +554,13 @@ def _build_train_step(
         config=VizierTrainConfig(
             suggestions_path=suggestions_path,
             suggestion_index=suggestion_index,
-            base_pod_config=base_pod_config,
+            base_launch_config=base_launch_config,
             target_tokens=SWEEP.target_tokens,
             seq_len=SWEEP.seq_len,
             fixed_batch_size=SWEEP.fixed_batch_size,
             loop_index=loop_index,
         ),
+        resources=ResourceConfig.with_tpu("v4-8"),
     )
 
 
@@ -631,7 +614,7 @@ if __name__ == "__main__":
     suggestions_per_loop = SWEEP.suggestions_per_loop
 
     previous_update_step: ExecutorStep | None = None
-    base_pod_config = _build_base_pod_config()
+    base_launch_config = _build_base_launch_config()
 
     for loop_index in range(num_loops):
         input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
@@ -643,7 +626,7 @@ if __name__ == "__main__":
                 loop_index=loop_index,
                 suggestion_index=suggestion_index,
                 suggestions_path=suggestions_path,
-                base_pod_config=base_pod_config,
+                base_launch_config=base_launch_config,
             )
             for suggestion_index in range(suggestions_per_loop)
         ]

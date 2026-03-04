@@ -1,44 +1,38 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Reference: Single-run pretraining → midtraining → SFT pipeline.
 
 Demonstrates that pretrain/midtrain/SFT are all just data mixing phases.
 The entire pipeline is one training run with time-varying mixture weights:
 
-  1. Pretrain (steps 0-20k): DCLM baseline
-  2. Midtrain (steps 20k-25k): Blend DCLM + Dolmino math
-  3. SFT (steps 25k-26k): SmolTalk instruction data
+  1. Pretrain (steps 0-40k): DCLM baseline
+  2. Midtrain (steps 40k-50k): Blend DCLM + Dolmino math
+  3. SFT (steps 50k-52k): SmolTalk instruction data
 """
 
 import dataclasses
 
 from levanter.data.text import ChatLmDatasetFormat
-from levanter.models.llama import LlamaConfig
+from levanter.optim import AdamConfig
+from levanter.tracker.wandb import WandbConfig
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_tokenize, default_validation_sets
+from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
+from experiments.grug.base.model import GrugModelConfig
+from experiments.grug.base.train import GrugEvalConfig
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino
-from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-# --- Model: 600M LLaMA ---
-model = LlamaConfig(
+# --- Model: 600M Grug ---
+model = GrugModelConfig(
+    vocab_size=128_256,
     max_seq_len=4096,
     hidden_dim=1024,
     intermediate_dim=3584,
@@ -48,9 +42,9 @@ model = LlamaConfig(
 )
 
 # --- Schedule ---
-PRETRAIN_STEPS = 20_000
-MIDTRAIN_STEPS = 5_000
-SFT_STEPS = 1_000
+PRETRAIN_STEPS = 40_000
+MIDTRAIN_STEPS = 10_000
+SFT_STEPS = 2_000
 TOTAL_STEPS = PRETRAIN_STEPS + MIDTRAIN_STEPS + SFT_STEPS
 
 # --- Data components ---
@@ -80,26 +74,38 @@ data = lm_varying_mixture_data_config(
 )
 # Override tokenizer to use marin_tokenizer (same vocab as llama3 but with chat template for SFT)
 data = dataclasses.replace(data, tokenizer=marin_tokenizer)
+data = add_validation_sets_to_mixture(data, default_validation_sets(tokenizer=data.tokenizer))
 
 # --- Training ---
-train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_tpu("v5p-16"),
-    train_batch_size=512,
-    num_train_steps=TOTAL_STEPS,
-    learning_rate=3e-3,
-    weight_decay=0.1,
-    warmup=0.05,
-    decay=0.2,
-    steps_per_eval=500,
-)
-
-training_step = default_train(
+training_step = ExecutorStep(
     name="reference-pipeline",
-    tokenized=data,
-    model_config=model,
-    train_config=train_config,
-    tags=["reference", "pipeline"],
-    eval_harness_tasks=[],
+    fn=run_grug_base_trial,
+    config=GrugBaseLaunchConfig(
+        model=model,
+        data=data,
+        output_path=this_output_path(),
+        run_id="reference-pipeline",
+        steps=TOTAL_STEPS,
+        batch_size=256,
+        seed=0,
+        mp="params=float32,compute=bfloat16,output=bfloat16",
+        tracker=WandbConfig(
+            project="marin",
+            tags=["reference", "pipeline"],
+            group="reference-pipeline",
+            name=None,
+        ),
+        optimizer=AdamConfig(
+            learning_rate=3e-3,
+            weight_decay=0.1,
+            warmup=0.05,
+            decay=0.2,
+        ),
+        eval=GrugEvalConfig(
+            steps_per_eval=500,
+        ),
+    ),
+    resources=ResourceConfig.with_tpu("v4-8"),
 )
 
 if __name__ == "__main__":
