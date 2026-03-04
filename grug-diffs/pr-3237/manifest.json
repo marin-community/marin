@@ -2,8 +2,8 @@
   "added_variants": [
     "max_model_flop_mini"
   ],
-  "base_sha": "ba965b40c19a87674e1b51c7e612488239bc2d57",
-  "head_sha": "d81738291f748f405f4234c5135f0046b3c998f2",
+  "base_sha": "9da8a170575e2ba9220fb5c1fd6cc28e5358ba14",
+  "head_sha": "0ac1c9bd89dec29bd386280e322f23ba92364ff8",
   "report_count": 1,
   "reports": [
     {
