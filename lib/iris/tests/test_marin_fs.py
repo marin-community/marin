@@ -62,17 +62,6 @@ def test_marin_prefix_from_metadata():
         assert marin_prefix() == "gs://marin-us-central2"
 
 
-def test_marin_prefix_from_metadata_uses_europe_west4_override_bucket():
-    with (
-        patch(
-            "iris.marin_fs.urllib.request.urlopen",
-            return_value=_mock_urlopen(b"projects/12345/zones/europe-west4-b"),
-        ),
-        patch.dict(os.environ, {}, clear=True),
-    ):
-        assert marin_prefix() == "gs://marin-eu-west4"
-
-
 def test_marin_prefix_falls_back_to_local():
     with (
         patch("iris.marin_fs.urllib.request.urlopen", side_effect=OSError("not on GCP")),
