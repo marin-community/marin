@@ -318,16 +318,29 @@ def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray,
         pad_length = 512 - hs_shape[0] % 512
         lhs_ = jax.lax.pad(lhs_, 0.0, [(0, pad_length, 0), (0, 0, 0)])
 
-    tile_size = (512, 1024, 1024)  # (m, k, n)
-    m, k, n = lhs_.shape[0], lhs_.shape[1], rhs_.shape[2]
-    out = gmm(
-        lhs_,
-        rhs_,
-        group_sizes_,
-        preferred_element_type=lhs_.dtype,
-        tiling=(min(m, tile_size[0]), min(k, tile_size[1]), min(n, tile_size[2])),
-        interpret=jax.default_backend() == "cpu",
-    )
+    if jax.default_backend() == "gpu":
+        # Work around Triton lowering failures in pallas-backed GMM on some GPU runtimes.
+        out = jax.lax.ragged_dot_general(
+            lhs=lhs_,
+            rhs=rhs_,
+            group_sizes=group_sizes_,
+            ragged_dot_dimension_numbers=jax.lax.RaggedDotDimensionNumbers(
+                dot_dimension_numbers=(((1,), (1,)), ((), ())),
+                lhs_ragged_dimensions=(0,),
+                rhs_group_dimensions=(0,),
+            ),
+        )
+    else:
+        tile_size = (512, 1024, 1024)  # (m, k, n)
+        m, k, n = lhs_.shape[0], lhs_.shape[1], rhs_.shape[2]
+        out = gmm(
+            lhs_,
+            rhs_,
+            group_sizes_,
+            preferred_element_type=lhs_.dtype,
+            tiling=(min(m, tile_size[0]), min(k, tile_size[1]), min(n, tile_size[2])),
+            interpret=jax.default_backend() == "cpu",
+        )
 
     if ar:
         out = jax.lax.psum(out, ResourceAxis.MODEL)
