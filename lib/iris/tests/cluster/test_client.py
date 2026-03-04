@@ -140,57 +140,25 @@ def test_terminate_prefix_excludes_finished(local_client):
     assert job.job_id not in terminated
 
 
-# --- TPU replica validation ---
-
-
-def test_validate_tpu_replicas_rejects_single_replica_for_multihost():
-    """Single replica for a multi-host TPU (v6e-32, vm_count=8) must be rejected."""
-    device = tpu_device("v6e-32")
+def test_validate_tpu_replicas(local_client):
+    """Validate TPU replica count against topology vm_count."""
+    # Multi-host TPU with wrong replica count must be rejected
     with pytest.raises(ValueError, match="replicas must be a multiple of 8"):
-        validate_tpu_replicas(device, replicas=1)
-
-
-def test_validate_tpu_replicas_accepts_correct_count():
-    """Replicas matching vm_count should pass validation."""
-    device = tpu_device("v6e-32")
-    validate_tpu_replicas(device, replicas=8)  # 1 slice
-
-
-def test_validate_tpu_replicas_accepts_multislice():
-    """Replicas that are a multiple of vm_count (multi-slice) should pass."""
-    device = tpu_device("v6e-32")
-    validate_tpu_replicas(device, replicas=16)  # 2 slices
-    validate_tpu_replicas(device, replicas=24)  # 3 slices
-
-
-def test_validate_tpu_replicas_rejects_non_multiple():
-    """Replicas that are not a multiple of vm_count should be rejected."""
-    device = tpu_device("v5litepod-16")  # vm_count=4
+        validate_tpu_replicas(tpu_device("v6e-32"), replicas=1)
     with pytest.raises(ValueError, match="replicas must be a multiple of 4"):
-        validate_tpu_replicas(device, replicas=3)
+        validate_tpu_replicas(tpu_device("v5litepod-16"), replicas=3)
 
+    # Correct counts and multislice pass
+    validate_tpu_replicas(tpu_device("v6e-32"), replicas=8)
+    validate_tpu_replicas(tpu_device("v6e-32"), replicas=16)
 
-def test_validate_tpu_replicas_skips_single_host():
-    """Single-host TPUs (vm_count=1) should not be validated."""
-    device = tpu_device("v6e-4")  # vm_count=1
-    validate_tpu_replicas(device, replicas=1)
-
-
-def test_validate_tpu_replicas_skips_no_device():
-    """No device config should silently pass."""
+    # Single-host, no device, and unknown topology are skipped
+    validate_tpu_replicas(tpu_device("v6e-4"), replicas=1)
     validate_tpu_replicas(None, replicas=1)
+    validate_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1)
 
-
-def test_validate_tpu_replicas_skips_unknown_topology():
-    """Unknown TPU variant should silently pass."""
-    device = tpu_device("v99-unknown", count=4)
-    validate_tpu_replicas(device, replicas=1)
-
-
-def test_submit_rejects_multihost_tpu_with_wrong_replicas(local_client):
-    """IrisClient.submit() should reject multi-host TPU jobs with wrong replica count."""
+    # IrisClient.submit() integration
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g", device=tpu_device("v6e-32"))
-
     with pytest.raises(ValueError, match="replicas must be a multiple of 8"):
         local_client.submit(entrypoint, "bad-tpu-job", resources, user="test-user", replicas=1)
