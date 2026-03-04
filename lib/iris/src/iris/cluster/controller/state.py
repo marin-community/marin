@@ -525,10 +525,10 @@ class ControllerJob:
     task_state_counts: Counter[int] = field(default_factory=Counter)
 
     # Reservation holder flag. When True, this is a synthetic child job
-    # whose tasks hold reserved capacity. Its tasks participate in
-    # scheduling and commit real resources, but are never dispatched
-    # (no entrypoint). Peer tasks from the parent job can preempt
-    # holder tasks to take over the reserved workers.
+    # whose tasks generate demand to keep reserved capacity alive. Its
+    # tasks participate in scheduling but consume zero resources and are
+    # never dispatched (no entrypoint). The constraints/taints on claimed
+    # workers ensure only peer jobs can use the reserved resources.
     is_reservation_holder: bool = False
 
     # --- Task State Tracking ---
@@ -1150,11 +1150,11 @@ class ControllerState:
 
         # Create a synthetic child job for reservation entries. The child
         # job ``{parent}/reservation`` has one task per reservation entry.
-        # Holder tasks participate in scheduling and commit real resources
-        # just like normal tasks, keeping reserved capacity alive. They are
-        # never dispatched (no entrypoint). Peer tasks from the parent job
-        # can preempt holders to take over reserved workers. When the parent
-        # finishes, ``_cancel_child_jobs`` cleans them up automatically.
+        # Holder tasks participate in scheduling but consume zero resources,
+        # generating demand to keep reserved capacity alive. They are never
+        # dispatched (no entrypoint). The constraints/taints on claimed
+        # workers ensure only peer jobs can use the reserved resources.
+        # When the parent finishes, ``_cancel_child_jobs`` cleans them up.
         if job.request.HasField("reservation"):
             num_entries = len(job.request.reservation.entries)
             holder_job_id = job.job_id.child("reservation")
@@ -1239,7 +1239,15 @@ class ControllerState:
         old_state = task.state
         task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_ASSIGNED)
 
-        worker.assign_task(event.task_id, job.request.resources)
+        # Holder tasks consume zero resources — they exist only to generate
+        # demand and keep reserved capacity alive via taints.
+        if not job.is_reservation_holder:
+            worker.assign_task(event.task_id, job.request.resources)
+        else:
+            # Still track the task in running_tasks for lifecycle management,
+            # but don't commit any resources.
+            worker.running_tasks.add(event.task_id)
+            worker.task_history.add(event.task_id)
 
         new_job_state = job.on_task_transition(old_state, task.state)
         if new_job_state is not None:
@@ -1441,7 +1449,11 @@ class ControllerState:
         if worker_id:
             worker = self._workers.get(worker_id)
             if worker and task.task_id in worker.running_tasks:
-                worker.unassign_task(task.task_id, job.request.resources)
+                if job.is_reservation_holder:
+                    # Holder tasks consume zero resources, just remove from running set.
+                    worker.running_tasks.discard(task.task_id)
+                else:
+                    worker.unassign_task(task.task_id, job.request.resources)
                 txn.log("task_unassigned", task.task_id, worker_id=str(worker_id))
 
         self._remove_endpoints_for_task(task.task_id)
@@ -1630,52 +1642,6 @@ class ControllerState:
             job_ids = {t.job_id for t in tasks}
             return {jid: self._jobs[jid] for jid in job_ids if jid in self._jobs}
 
-    def preempt_holder_tasks(self, holder_job_id: JobName, max_count: int) -> set[JobName]:
-        """Preempt running holder tasks to free workers for peer tasks.
-
-        Terminates up to ``max_count`` running holder tasks using
-        WORKER_FAILED with exhausted preemption retries so they become
-        terminal without triggering JOB_STATE_KILLED on the holder job.
-
-        Returns the set of preempted task IDs.
-        """
-        # First, collect task IDs to preempt (under lock).
-        targets: list[JobName] = []
-        with self._lock:
-            for task_id in self._tasks_by_job.get(holder_job_id, []):
-                if len(targets) >= max_count:
-                    break
-                task = self._tasks.get(task_id)
-                if not task or task.is_finished() or not task.worker_id:
-                    continue
-                # Exhaust preemption budget so the task becomes terminal
-                # when handle_event processes the WORKER_FAILED event.
-                task.preemption_count = task.max_retries_preemption
-                targets.append(task_id)
-
-        # Process each preemption through the normal event pipeline.
-        preempted: set[JobName] = set()
-        for task_id in targets:
-            task = self.get_task(task_id)
-            if task is None or task.is_finished():
-                continue
-            event = TaskStateChangedEvent(
-                task_id=task_id,
-                new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
-                attempt_id=task.current_attempt_id,
-                error="Preempted: peer task taking over reserved worker",
-            )
-            self.handle_event(event)
-            preempted.add(task_id)
-
-        if preempted:
-            logger.info(
-                "Preempted %d holder tasks from %s for pending peer tasks",
-                len(preempted),
-                holder_job_id,
-            )
-        return preempted
-
     def get_tasks_for_worker(self, worker_id: WorkerId, limit: int = 50) -> list[ControllerTask]:
         """Return tasks that have been assigned to this worker, newest first."""
         with self._lock:
@@ -1828,7 +1794,11 @@ class ControllerState:
             if task.worker_id and job:
                 worker = self._workers.get(task.worker_id)
                 if worker:
-                    worker.unassign_task(task_id, job.request.resources)
+                    if job.is_reservation_holder:
+                        # Holder tasks consume zero resources, just remove from running set.
+                        worker.running_tasks.discard(task_id)
+                    else:
+                        worker.unassign_task(task_id, job.request.resources)
             self._remove_endpoints_for_task(task_id)
 
             txn.log("task_killed", task_id, old_state=old_state, error=error)

@@ -2476,101 +2476,12 @@ def test_demand_mixed_building_limited_and_unschedulable():
 
 
 # =============================================================================
-# Holder Task Preemption Tests
+# Holder Task Zero-Resource Tests
 # =============================================================================
 
 
-def test_preempt_holder_tasks_frees_workers():
-    """Preempting holder tasks makes them terminal and frees worker resources."""
-    state = ControllerState()
-
-    # Submit a job with 2 reservation entries
-    req = _make_reservation_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device()],
-        replicas=2,
-    )
-    submit_job(state, "j1", req)
-
-    # Register a GPU worker and assign a holder task to it
-    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
-    holder_job_id = JobName.root("test-user", "j1").child("reservation")
-    holder_tasks = state.get_job_tasks(holder_job_id)
-    assert len(holder_tasks) == 2
-
-    # Dispatch holder task 0 to worker
-    dispatch_task(state, holder_tasks[0], wid)
-
-    # Preempt 1 holder task
-    preempted = state.preempt_holder_tasks(holder_job_id, max_count=1)
-    assert len(preempted) == 1
-
-    # The preempted task should be terminal
-    task = state.get_task(holder_tasks[0].task_id)
-    assert task.is_finished()
-
-    # Worker resources should be freed
-    worker = state.get_worker(wid)
-    assert holder_tasks[0].task_id not in worker.running_tasks
-
-
-def test_preempt_holder_tasks_respects_max_count():
-    """Preemption only kills up to max_count running holders."""
-    state = ControllerState()
-
-    req = _make_reservation_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device(), _h100_device()],
-        replicas=3,
-    )
-    submit_job(state, "j1", req)
-
-    # Register workers and assign all 3 holder tasks
-    wids = []
-    holder_job_id = JobName.root("test-user", "j1").child("reservation")
-    holder_tasks = state.get_job_tasks(holder_job_id)
-    for i, ht in enumerate(holder_tasks):
-        wid = register_worker(state, f"w{i}", f"10.0.0.{i}:8080", _gpu_worker_metadata())
-        wids.append(wid)
-        dispatch_task(state, ht, wid)
-
-    # Preempt only 2 of 3
-    preempted = state.preempt_holder_tasks(holder_job_id, max_count=2)
-    assert len(preempted) == 2
-
-    # Check that exactly 1 holder is still running
-    remaining = [t for t in state.get_job_tasks(holder_job_id) if not t.is_finished()]
-    assert len(remaining) == 1
-
-
-def test_preempt_holder_does_not_trigger_job_killed():
-    """Preempted holders use WORKER_FAILED (not KILLED) so the holder job stays alive."""
-    state = ControllerState()
-
-    req = _make_reservation_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device()],
-        replicas=2,
-    )
-    submit_job(state, "j1", req)
-
-    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
-    holder_job_id = JobName.root("test-user", "j1").child("reservation")
-    holder_tasks = state.get_job_tasks(holder_job_id)
-    dispatch_task(state, holder_tasks[0], wid)
-
-    # Preempt the running holder
-    state.preempt_holder_tasks(holder_job_id, max_count=1)
-
-    # The holder job should NOT be in KILLED state
-    holder_job = state.get_job(holder_job_id)
-    assert holder_job.state != cluster_pb2.JOB_STATE_KILLED
-    # The other holder task should still be schedulable
-    assert holder_tasks[1].can_be_scheduled()
-
-
-def test_holder_tasks_commit_real_resources():
-    """Holder tasks commit real resources when assigned to workers."""
+def test_holder_tasks_consume_zero_resources():
+    """Holder tasks consume zero resources when assigned to workers."""
     state = ControllerState()
 
     req = _make_reservation_job_request(
@@ -2591,6 +2502,40 @@ def test_holder_tasks_commit_real_resources():
     # Assign holder task
     state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
 
-    # Worker's available GPUs should decrease
+    # Worker's available GPUs should NOT decrease (zero resources)
     worker_after = state.get_worker(wid)
-    assert worker_after.available_gpus < gpus_before
+    assert worker_after.available_gpus == gpus_before
+
+    # But the task should be tracked in running_tasks
+    assert holder_tasks[0].task_id in worker_after.running_tasks
+
+
+def test_holder_task_cleanup_releases_no_resources():
+    """When a holder task finishes, it doesn't release resources it never committed."""
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child("reservation")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+
+    # Assign holder task
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+
+    worker_before = state.get_worker(wid)
+    gpus_before = worker_before.available_gpus
+
+    # Kill the holder task via parent job cancellation
+    parent_job_id = JobName.root("test-user", "j1")
+    state.handle_event(JobCancelledEvent(job_id=parent_job_id, reason="test"))
+
+    # Worker GPUs should be unchanged (nothing to release)
+    worker_after = state.get_worker(wid)
+    assert worker_after.available_gpus == gpus_before
+    assert holder_tasks[0].task_id not in worker_after.running_tasks

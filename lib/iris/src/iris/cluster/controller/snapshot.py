@@ -473,12 +473,16 @@ def restore_snapshot(
         total_tasks += len(tasks)
 
         # Rebuild worker running_tasks and committed resources from active task state.
-        # All tasks (including reservation holders) commit real resources.
+        # Holder tasks consume zero resources — only track them in running_tasks.
         for task in tasks:
             if task.state in _ACTIVE_TASK_STATES and task.worker_id:
                 worker = workers.get(task.worker_id)
                 if worker:
-                    worker.assign_task(task.task_id, job.request.resources)
+                    if job.is_reservation_holder:
+                        worker.running_tasks.add(task.task_id)
+                        worker.task_history.add(task.task_id)
+                    else:
+                        worker.assign_task(task.task_id, job.request.resources)
 
     # Restore endpoints with their task associations
     endpoint_count = 0

@@ -102,10 +102,11 @@ def compute_demand_entries(
     single unified path. Every task participates in the dry-run and generates
     demand through the same logic using its job's resource spec.
 
-    Holder tasks commit real resources, so the dry-run accurately reflects
-    capacity usage. Peer tasks preempt holders during scheduling (not here),
-    so holder demand correctly represents reserved capacity that hasn't yet
-    been taken over by real tasks.
+    Holder tasks consume zero resources on workers, so they won't be absorbed
+    by the dry-run when workers have available capacity. This ensures they
+    always generate demand, keeping reserved capacity alive via the
+    autoscaler. The taint/constraint mechanism ensures only peer jobs can
+    actually use the reserved workers.
 
     Args:
         state: Controller state to read pending tasks and jobs from.
@@ -830,7 +831,6 @@ class Controller:
         schedulable_task_ids: list[JobName] = []
         jobs: dict[JobName, JobRequirements] = {}
         has_reservation: set[JobName] = set()
-        pending_real_by_reservation: dict[JobName, int] = {}
         for task in pending_tasks:
             if not task.can_be_scheduled():
                 continue
@@ -851,29 +851,6 @@ class Controller:
                     has_reservation.add(task.job_id)
                 elif _find_reservation_ancestor(self._state, task.job_id) is not None:
                     has_reservation.add(task.job_id)
-            # Track pending real tasks per reservation job for preemption.
-            if not job.is_reservation_holder and job.request.HasField("reservation"):
-                pending_real_by_reservation[task.job_id] = pending_real_by_reservation.get(task.job_id, 0) + 1
-
-        if not schedulable_task_ids:
-            return
-
-        # Phase 1: Preempt holder tasks to free claimed workers for real tasks.
-        # When peer tasks are pending, kill running holders so the scheduler
-        # can assign real tasks to those freed workers.
-        if pending_real_by_reservation:
-            preempted_any = False
-            for res_job_id, pending_count in pending_real_by_reservation.items():
-                holder_job_id = res_job_id.child("reservation")
-                preempted = self._state.preempt_holder_tasks(holder_job_id, pending_count)
-                if preempted:
-                    preempted_any = True
-                    # Remove preempted holder tasks from schedulable list
-                    # (they're now terminal, not schedulable).
-                    schedulable_task_ids = [t for t in schedulable_task_ids if t not in preempted]
-            if preempted_any:
-                # Re-fetch workers to see freed resources.
-                workers = self._state.get_available_workers()
 
         if not schedulable_task_ids:
             return
@@ -892,11 +869,11 @@ class Controller:
             jobs=jobs,
         )
 
-        # Phase 2: soft preference — steer reservation tasks toward claimed workers.
+        # Phase 1: soft preference — steer reservation tasks toward claimed workers.
         # Skips coscheduled jobs (they need atomic all-or-nothing via find_assignments).
         preference_assignments = _preference_pass(context, has_reservation, self._reservation_claims)
 
-        # Phase 3: normal scheduler for all remaining tasks.
+        # Phase 2: normal scheduler for all remaining tasks.
         result = self._scheduler.find_assignments(context)
 
         all_assignments = preference_assignments + result.assignments
