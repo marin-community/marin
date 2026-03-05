@@ -43,6 +43,24 @@ class Lease:
         return (time.time() - self.timestamp) > HEARTBEAT_TIMEOUT
 
 
+def _lease_from_data(data: dict) -> Lease:
+    """Parse lease JSON with support for legacy lock files.
+
+    Supports both ``worker_id`` (current) and ``holder_id`` (legacy).
+    """
+    worker = data.get("worker_id")
+    if worker is None:
+        worker = data.get("holder_id")
+    if worker is None:
+        raise KeyError("Lock data missing holder_id/worker_id")
+
+    timestamp = data.get("timestamp")
+    if timestamp is None:
+        raise KeyError("Lock data missing timestamp")
+
+    return Lease(worker_id=str(worker), timestamp=float(timestamp))
+
+
 def default_worker_id() -> str:
     """Return a unique holder ID for the current host and thread."""
     return f"{os.uname()[1]}-{threading.get_ident()}"
@@ -110,7 +128,7 @@ class DistributedLock:
         if blob is None:
             return (0, None)
         data = json.loads(blob.download_as_string())
-        return (blob.generation, Lease(**data))
+        return (blob.generation, _lease_from_data(data))
 
     def _write_gcs(self, lease: Lease, if_generation_match: int) -> None:
         from google.cloud import storage
@@ -142,7 +160,7 @@ class DistributedLock:
                 if not content:
                     return (0, None)
                 data = json.loads(content)
-            return (1, Lease(**data))
+            return (1, _lease_from_data(data))
         except FileNotFoundError:
             return (0, None)
 
@@ -157,7 +175,7 @@ class DistributedLock:
             f.seek(0)
             content = f.read()
             if content:
-                current = Lease(**json.loads(content))
+                current = _lease_from_data(json.loads(content))
                 if not current.is_stale() and current.worker_id != lease.worker_id:
                     raise FileExistsError(f"Lock held by {current.worker_id}")
             f.seek(0)
@@ -178,7 +196,7 @@ class DistributedLock:
             if not content:
                 return (0, None)
             data = json.loads(content)
-            return (1, Lease(**data))
+            return (1, _lease_from_data(data))
         except FileNotFoundError:
             return (0, None)
 
