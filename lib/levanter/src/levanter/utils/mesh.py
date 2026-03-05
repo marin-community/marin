@@ -205,6 +205,8 @@ def get_active_mesh() -> Mesh | None:
         return None
 
     return mesh
+
+
 def _norm(v: Union[str, Sequence[str]]) -> Union[str, Tuple[str, ...]]:
     if isinstance(v, (list, tuple)):
         v = tuple(v)
