@@ -232,6 +232,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             h_block_size=512,
             v_block_size=1024,
         ),
+        ("bfloat16", "huge-batch-small-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=128,
+            v_block_size=256,
+        ),
         ("bfloat16", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
             h_block_size=512,
@@ -256,6 +261,11 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
             b_block_size=1024,
             h_block_size=512,
             v_block_size=1024,
+        ),
+        ("float32", "huge-batch-small-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=128,
+            v_block_size=256,
         ),
         ("float32", "medium-batch-medium-h"): BlockSizes(
             b_block_size=1024,
@@ -326,6 +336,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         b_max=1048576,
         h_min=4096,
         h_max=4096,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
+        name="huge-batch-small-h",
+        b_min=131073,
+        b_max=1048576,
+        h_min=256,
+        h_max=1024,
         v_min=120000,
         v_max=131072,
     ),

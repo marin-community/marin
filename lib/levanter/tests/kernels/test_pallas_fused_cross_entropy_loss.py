@@ -825,6 +825,47 @@ def test_infer_block_sizes_respects_local_batch_and_hidden_divisibility():
     assert 768 % block_sizes.h_block_size == 0
 
 
+def test_infer_block_sizes_tpu_v4_huge_batch_small_h_jits_with_pallas():
+    if jax.default_backend() != "tpu":
+        pytest.skip("requires TPU backend")
+    device_kind = jax.devices()[0].device_kind.lower()
+    if "v4" not in device_kind:
+        pytest.skip("requires TPU v4 backend")
+
+    b, h, v = 262_144, 1024, 128_256
+    block_sizes = infer_block_sizes(
+        b=b,
+        h=h,
+        v=v,
+        dtype=jnp.bfloat16,
+        device_kind=device_kind,
+    )
+
+    def loss_fn(x: jax.Array, w: jax.Array, y: jax.Array) -> jax.Array:
+        return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            y,
+            w,
+            reduction="mean",
+            logsumexp_weight=0.0,
+            block_sizes=block_sizes,
+            dtype=jnp.float32,
+            implementation="pallas_tpu",
+        )
+
+    compiled = (
+        jax.jit(jax.value_and_grad(loss_fn, argnums=(0, 1)))
+        .lower(
+            jax.ShapeDtypeStruct((b, h), jnp.bfloat16),
+            jax.ShapeDtypeStruct((h, v), jnp.bfloat16),
+            jax.ShapeDtypeStruct((b,), jnp.int32),
+        )
+        .compile()
+    )
+
+    assert compiled is not None
+
+
 def test_infer_block_sizes_huge_batch_without_scoped_vmem_flag_warns_and_uses_safe_v(
     monkeypatch: pytest.MonkeyPatch,
 ):
