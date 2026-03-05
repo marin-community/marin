@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "parallel_attn_mlp"
+  ],
+  "base_sha": "d5a750a83862f6f155253cc52739d65d876d9642",
+  "head_sha": "b1afbd315cd2d0671e11809a1a80b5e0719141b5",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 195,
+      "report_relpath": "parallel_attn_mlp/index.html",
+      "status_counts": {
+        "added": 1,
+        "changed": 3,
+        "removed": 0,
+        "unchanged": 1
+      },
+      "variant": "parallel_attn_mlp"
+    }
+  ]
+}
