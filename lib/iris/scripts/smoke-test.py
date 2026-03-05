@@ -210,7 +210,7 @@ def _run_iris(*args: str, config_path: Path, timeout: float = DEFAULT_CLI_TIMEOU
     cmd = ["uv", "run", "iris", "--config", str(config_path), *args]
     result = subprocess.run(cmd, capture_output=False, text=True, cwd=str(IRIS_ROOT), timeout=timeout)
     if result.returncode != 0:
-        logger.error("Command failed (exit %d): %s\nstdout: %s\nstderr: %s", result.returncode, " ".join(cmd))
+        logger.error("Command failed (exit %d): %s", result.returncode, " ".join(cmd))
         result.check_returncode()
     return result
 
