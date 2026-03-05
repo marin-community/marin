@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -11,10 +10,17 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
-from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import CoefficientType, map_flattened_linear_layers, zeropower_via_newtonschulz5
+from levanter.optim.util import (
+    CoefficientType,
+    is_linear_like_module,
+    label_linear_like_module,
+    linear_like_weight_array,
+    map_flattened_linear_layers,
+    replace_linear_like_weight_array,
+    zeropower_via_newtonschulz5,
+)
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -88,13 +94,13 @@ class ScionConfig(OptimizerConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             if "Embedding" in path_str or "lm_head" in path_str:
                 return "signum"
-            elif isinstance(param, Linear):
+            elif is_linear_like_module(param):
                 # scion for linear layers
-                return dataclasses.replace(param, weight="scion", bias="signum" if param.bias is not None else None)
+                return label_linear_like_module(param, weight_label="scion", bias_label="signum")
             else:
                 return "signum"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
 
 
 class ScaleByScionState(NamedTuple):
@@ -117,7 +123,7 @@ def scale_by_signum(momentum=0.95):
             is_leaf=lambda x: x is None,
         )
 
-        updates = jax.tree_map(lambda u: None if u is None else jnp.sign(u), buf, is_leaf=lambda x: x is None)
+        updates = jax.tree.map(lambda u: None if u is None else jnp.sign(u), buf, is_leaf=lambda x: x is None)
 
         return updates, ScaleByScionState(momentum_buffer=buf)
 
@@ -139,19 +145,29 @@ def scale_with_scion(momentum=0.95, steps=5, scion_eps=1e-8, coefficient_type="q
         )
         updates = buf
 
-        def transform_linear_layer(layer: haliax.nn.Linear):
-            assert layer.weight.ndim == 2
+        def transform_linear_layer(layer):
+            weight = linear_like_weight_array(layer)
+            if weight.ndim < 2:
+                raise ValueError(f"Expected linear-like weight with rank >= 2, got {weight.ndim}")
 
-            updated_weight_array = zeropower_via_newtonschulz5(
-                layer.weight.array, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
-            )
+            out_dim, in_dim = weight.shape[-2], weight.shape[-1]
+            if weight.ndim == 2:
+                updated_weight_array = zeropower_via_newtonschulz5(
+                    weight, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
+                )
+            else:
+                flat = weight.reshape((-1, out_dim, in_dim))
+                flat_updated = jax.vmap(
+                    lambda mat: zeropower_via_newtonschulz5(
+                        mat, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
+                    )
+                )(flat)
+                updated_weight_array = flat_updated.reshape(weight.shape)
 
-            scale = jnp.sqrt(jnp.maximum(1, updated_weight_array.shape[0] / updated_weight_array.shape[1]))
+            scale = jnp.sqrt(jnp.maximum(1, out_dim / in_dim))
             updated_weight_array *= scale
 
-            updated_weight = dataclasses.replace(layer.weight, array=updated_weight_array)
-
-            return dataclasses.replace(layer, weight=updated_weight)  # type: ignore
+            return replace_linear_like_weight_array(layer, updated_weight_array)
 
         updates = map_flattened_linear_layers(transform_linear_layer, updates)
 
