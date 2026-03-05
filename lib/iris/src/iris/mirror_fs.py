@@ -109,7 +109,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         """Return file size at a full URL, or None if it cannot be determined."""
         fs, fspath = self._get_fs_and_path(url)
         size = fs.size(fspath)
-        return size if size else None
+        return size if size is not None else None
 
     def _fs_copy(self, src_url: str, dst_url: str) -> None:
         """Copy a file from src_url to dst_url, potentially cross-filesystem."""
