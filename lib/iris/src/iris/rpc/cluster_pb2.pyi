@@ -986,33 +986,6 @@ class Worker(_message.Message):
         TASKS_FIELD_NUMBER: _ClassVar[int]
         tasks: _containers.RepeatedCompositeFieldContainer[TaskStatus]
         def __init__(self, tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ...) -> None: ...
-    class FetchLogsFilter(_message.Message):
-        __slots__ = ("regex", "start_line", "start_ms", "end_ms", "max_lines")
-        REGEX_FIELD_NUMBER: _ClassVar[int]
-        START_LINE_FIELD_NUMBER: _ClassVar[int]
-        START_MS_FIELD_NUMBER: _ClassVar[int]
-        END_MS_FIELD_NUMBER: _ClassVar[int]
-        MAX_LINES_FIELD_NUMBER: _ClassVar[int]
-        regex: str
-        start_line: int
-        start_ms: int
-        end_ms: int
-        max_lines: int
-        def __init__(self, regex: _Optional[str] = ..., start_line: _Optional[int] = ..., start_ms: _Optional[int] = ..., end_ms: _Optional[int] = ..., max_lines: _Optional[int] = ...) -> None: ...
-    class FetchTaskLogsRequest(_message.Message):
-        __slots__ = ("task_id", "filter", "attempt_id")
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        FILTER_FIELD_NUMBER: _ClassVar[int]
-        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        filter: Worker.FetchLogsFilter
-        attempt_id: int
-        def __init__(self, task_id: _Optional[str] = ..., filter: _Optional[_Union[Worker.FetchLogsFilter, _Mapping]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
-    class FetchTaskLogsResponse(_message.Message):
-        __slots__ = ("logs",)
-        LOGS_FIELD_NUMBER: _ClassVar[int]
-        logs: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
-        def __init__(self, logs: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ...) -> None: ...
     class KillTaskRequest(_message.Message):
         __slots__ = ("task_id", "term_timeout")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]

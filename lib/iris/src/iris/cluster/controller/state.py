@@ -2028,16 +2028,20 @@ class ControllerState:
                     continue
                 task_id = JobName.from_wire(entry.task_id)
                 task = self._tasks.get(task_id)
-                if not task or task.is_finished():
+                if not task:
+                    continue
+
+                # Always ingest logs, even for finished tasks, because the final
+                # heartbeat carries the terminal state and the last log delta together.
+                if entry.log_entries and self._log_store is not None:
+                    self._log_store.append(task_id, entry.attempt_id, entry.log_entries)
+
+                if task.is_finished():
                     continue
 
                 # Store resource usage snapshot
                 if entry.resource_usage.ByteSize() > 0:
                     task.resource_usage = entry.resource_usage
-
-                # Accumulate delta log entries from heartbeat into the log store
-                if entry.log_entries and self._log_store is not None:
-                    self._log_store.append(task_id, entry.attempt_id, entry.log_entries)
 
                 if task.state == entry.state:
                     continue
