@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import jmp
 import optax
 import pytest
+from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 
@@ -194,6 +195,7 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
         run_cfg = train_module.GrugRunConfig(
             model=_small_model_config(model_module.GrugModelConfig, vocab_size=vocab_size, seq_len=seq_len),
             data=data_config,
+            resources=ResourceConfig.with_cpu(),
             trainer=train_module.GrugTrainerConfig(trainer=trainer_config, log_every=1),
             eval=train_module.GrugEvalConfig(
                 eval_batch_size=1,
