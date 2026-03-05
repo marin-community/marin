@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum, auto
 import logging
 import os
-import humanfriendly
 import pyarrow as pa
 import pyarrow.json as pa_json
 
+from fray.v2 import ResourceConfig
 from marin.utilities.wandb_utils import init_wandb
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utils import fsspec_glob
@@ -63,8 +63,7 @@ class DedupConfig:
     mode: DedupMode = DedupMode.EXACT_PARAGRAPH
     # field to use for text content in Parquet files
     text_field: str = "text"
-    ray_num_cpus: int = 2
-    ray_memory: int = humanfriendly.parse_size("64GB", binary=True)
+    worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="32g", disk="5g"))
     # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
     fuzzy_minhash_num_perms: int = 286
     fuzzy_minhash_num_bands: int = 26
@@ -82,6 +81,7 @@ def deduplicate(config: DedupConfig):
             output_path=config.output_path,
             text_field=config.text_field,
             filetypes=config.filetypes,
+            worker_resources=config.worker_resources,
         )
     elif config.mode == DedupMode.EXACT_DOCUMENT:
         from marin.processing.classification.deduplication.exact import dedup_exact_document
@@ -91,6 +91,7 @@ def deduplicate(config: DedupConfig):
             output_path=config.output_path,
             text_field=config.text_field,
             filetypes=config.filetypes,
+            worker_resources=config.worker_resources,
         )
     elif config.mode == DedupMode.FUZZY_DOCUMENT:
         from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
@@ -104,6 +105,7 @@ def deduplicate(config: DedupConfig):
             fuzzy_minhash_num_bands=config.fuzzy_minhash_num_bands,
             fuzzy_minhash_ngram_size=config.fuzzy_minhash_ngram_size,
             fuzzy_minhash_seed=config.fuzzy_minhash_seed,
+            worker_resources=config.worker_resources,
         )
     else:
         raise ValueError(f"Unknown mode {config.mode}")

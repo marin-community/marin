@@ -52,6 +52,7 @@ def dedup_exact_paragraph(
     text_field: str = "text",
     filetypes: list[str] | None = None,
     max_parallelism: int | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> dict:
     if filetypes is None:
         filetypes = DEFAULT_FILETYPES
@@ -72,7 +73,11 @@ def dedup_exact_paragraph(
         ]
         return dupekit.transform(batch, pipeline)
 
-    ctx = ZephyrContext(name="exact-para-dedup", max_workers=max_parallelism, resources=ResourceConfig(cpu=1, ram="32g"))
+    ctx = ZephyrContext(
+        name="exact-para-dedup",
+        max_workers=max_parallelism,
+        resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+    )
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
         # NOTE: all records belong to the specific file and are sorted by doc_id
@@ -185,6 +190,7 @@ def dedup_exact_document(
     text_field: str = "text",
     filetypes: list[str] | None = None,
     max_parallelism: int | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> dict:
     """Exact document deduplication: identify duplicate documents based on full text hash"""
     if filetypes is None:
@@ -203,7 +209,11 @@ def dedup_exact_document(
         ]
         return dupekit.transform(batch, pipeline)
 
-    ctx = ZephyrContext(name="exact-doc-dedup", max_workers=max_parallelism, resources=ResourceConfig(cpu=1, ram="32g"))
+    ctx = ZephyrContext(
+        name="exact-doc-dedup",
+        max_workers=max_parallelism,
+        resources=worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+    )
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict[str, Any]]) -> dict:
         # NOTE: all records belong to the specific file and are sorted by doc_id

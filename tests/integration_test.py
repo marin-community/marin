@@ -8,7 +8,6 @@ import sys
 
 import draccus
 from fray.v1.cluster import ResourceConfig, create_cluster, set_current_cluster
-import humanfriendly
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
@@ -133,8 +132,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_paths=transform_hq_data_step,
             output_path=this_output_path(),
             mode=DedupMode.EXACT_PARAGRAPH,
-            ray_memory=humanfriendly.parse_size("1GB", binary=True),
-            ray_num_cpus=1,
+            worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
     dedup_fuzzy_document_step = ExecutorStep(
@@ -144,8 +142,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_paths=transform_hq_data_step,
             output_path=this_output_path(),
             mode=DedupMode.FUZZY_DOCUMENT,
-            ray_memory=humanfriendly.parse_size("1GB", binary=True),
-            ray_num_cpus=1,
+            worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
 
