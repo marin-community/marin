@@ -5,7 +5,7 @@
         "author": {
           "affiliation": "UC San Diego",
           "name": "Suraj Ranganath",
-          "url": "https://github.com/suraj-ranganath"
+          "url": "https://www.linkedin.com/in/suraj-ranganath/"
         },
         "description": "LLaMA-300M speedrun using NAMO-family optimizer (official_namod_alt) on local multi-GPU resources.",
         "device_flops": 149700000000000.0,
@@ -21,7 +21,7 @@
           "initializer_range": 0.02,
           "input_embedding_norm": false,
           "intermediate_dim": 2688,
-          "layer_norm_epsilon": 1e-05,
+          "layer_norm_epsilon": 0.00001,
           "max_seq_len": 4096,
           "num_heads": 12,
           "num_kv_heads": 12,
@@ -39,7 +39,7 @@
           "use_layer_norm_weight": true,
           "use_qk_norm": false
         },
-        "model_flops": 9.989922286422983e+18,
+        "model_flops": 9.989922286422983E+18,
         "model_flops_per_token": 555024384.0,
         "model_size": 299649792,
         "num_chips": 6,
@@ -58,7 +58,7 @@
           "replicas": 1
         },
         "run_completion_timestamp": "2026-03-03 10:55:48 UTC",
-        "tokenized_dataset": "/data/suraj/speedrun/marin_store/tokenized/subcache/fineweb-edu-10B-ac65f6",
+        "tokenized_dataset": "tokenized/subcache/fineweb-edu-10B-ac65f6",
         "total_tokens": 5999689728,
         "train_config": {
           "allow_partial_checkpoint": false,
@@ -82,7 +82,7 @@
           "optimizer_config": {
             "adam_lr": 0.003,
             "adam_weight_decay": null,
-            "adamnorm_eps": 1e-08,
+            "adamnorm_eps": 1E-8,
             "backend_steps": 5,
             "beta1": 0.9,
             "beta2": 0.95,
@@ -93,7 +93,7 @@
             "cycles": null,
             "decay": 1.0,
             "default_weight_decay_mask": null,
-            "epsilon": 1e-08,
+            "epsilon": 1E-8,
             "haps": null,
             "learning_rate": 0.01,
             "lr_schedule": "linear",
@@ -101,7 +101,7 @@
             "min_lr_ratio": 0.0,
             "momentum": 0.95,
             "mu2": 0.99,
-            "muon_epsilon": 1e-08,
+            "muon_epsilon": 1E-8,
             "nesterov": true,
             "rewarmup": 0.0,
             "scale_coeff": 0.2,
@@ -142,9 +142,9 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 1.1618342975513379e+20,
+        "training_hardware_flops": 1.1618342975513379E+20,
         "training_time": 129351.40253299242,
-        "wandb_run_link": "https://wandb.ai/suranganath-uc-san-diego/marin/runs/llama_300m_official_namod_alt_namo_submission_fullv1-52aad9"
+        "wandb_run_link": "https://wandb.ai/suranganath-uc-san-diego/marin/reports/NAMO-D-300M-Speedrun-Submission-LLaMA-vs-Paper-Faithful-Qwen3-Attempt--VmlldzoxNjExMjM4OA?accessToken=7m10omm2kzwr860b9molfe4ebl2wsr4r281oc87lb3dzd5i4b5flqoqmo32vs3xx"
       }
     }
   ]
