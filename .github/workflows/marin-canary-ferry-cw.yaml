@@ -32,7 +32,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-packages --extra=cpu --no-default-groups
+        run: uv sync --extra=train --extra=cpu --no-default-groups
 
       - name: Write CoreWeave kubeconfig
         run: |
@@ -48,7 +48,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Start CoreWeave cluster
-        run: .venv/bin/iris -v --config=lib/iris/examples/coreweave.yaml cluster start
+        run: .venv/bin/iris -v --config=examples/iris/coreweave.yaml cluster start
         env:
           BUILDKIT_PROGRESS: plain
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -56,7 +56,7 @@ jobs:
 
       - name: Submit canary ferry
         run: |
-          .venv/bin/iris --config=lib/iris/examples/coreweave.yaml \
+          .venv/bin/iris --config=examples/iris/coreweave.yaml \
             job run \
             --memory=16G --disk=16G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-us-west-04a/marin/ \

@@ -104,7 +104,7 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
 
 7. RESTART
    - This step restarts only the Ray job. Never restart/recreate/mutate the cluster here without explicit human consent in this thread, except for TPU bad-node recovery below.
-   uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster <CLUSTER> -- python <EXPERIMENT_PATH>
+   uv run src/marin/run/ray_run.py --no_wait --cluster <CLUSTER> -- python <EXPERIMENT_PATH>
 
    - Capture new job_id from output
    - Update state file: job_id = <NEW_JOB_ID>, restart_count += 1

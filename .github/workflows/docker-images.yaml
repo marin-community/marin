@@ -135,7 +135,7 @@ jobs:
           enable-cache: true
 
       - name: Update Docker image tag in cluster config script
-        run: sed -i -E 's/LATEST = "[a-z0-9]+"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' lib/marin/src/marin/cluster/config.py
+        run: sed -i -E 's/LATEST = "[a-z0-9]+"/LATEST = "${{ steps.set-tags.outputs.HASH_TAG }}"/' src/marin/cluster/config.py
 
       - name: Generate cluster configs
         run: uv run scripts/ray/cluster.py update-configs
@@ -159,13 +159,13 @@ jobs:
       matrix:
         include:
           - image: iris-worker
-            dockerfile: lib/iris/Dockerfile.worker
-            context: lib/iris
+            dockerfile: docker/iris/Dockerfile.worker
+            context: .
           - image: iris-controller
-            dockerfile: lib/iris/Dockerfile.controller
-            context: lib/iris
+            dockerfile: docker/iris/Dockerfile.controller
+            context: .
           - image: iris-task
-            dockerfile: lib/iris/Dockerfile.task
+            dockerfile: docker/iris/Dockerfile.task
             context: .
     steps:
       - name: Checkout repository
@@ -270,7 +270,7 @@ jobs:
 
       - name: Build and push Levanter base image
         run: |
-          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.base \
+          docker buildx build --file docker/levanter/tpu/Dockerfile.base \
             --tag ghcr.io/marin-community/levanter-base:latest \
             --tag ghcr.io/marin-community/levanter-base:${{ env.DATE }} \
             --push .
@@ -312,7 +312,7 @@ jobs:
 
       - name: Build and push Levanter TPU image
         run: |
-          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.incremental \
+          docker buildx build --file docker/levanter/tpu/Dockerfile.incremental \
             --tag ghcr.io/marin-community/levanter-tpu:latest \
             --tag ghcr.io/marin-community/levanter-tpu:${{ env.DATE }} \
             --push .
@@ -354,7 +354,7 @@ jobs:
 
       - name: Build and push Levanter cluster image
         run: |
-          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.cluster \
+          docker buildx build --file docker/levanter/tpu/Dockerfile.cluster \
             --tag ghcr.io/levanter-cluster:latest \
             --tag ghcr.io/levanter-cluster:${{ env.DATE }} \
             --push .

@@ -59,7 +59,7 @@ Run one command (with sync):
 ```bash
 RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/marin-us-east5-a.yaml \
-  execute -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
+  execute -- uv run --package levanter --group test pytest tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py
 ```
 
 `dev_tpu.py` creates an alias for a TPU VM monitored by Ray. By default, it uses your username together with the
@@ -97,7 +97,7 @@ RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/marin-us-east5-a.yaml \
   --tpu-name "$TPU_NAME" \
   execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- \
-  uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_hillclimb.py
+  uv run --package levanter --extra tpu scripts/levanter/bench/bench_moe_hillclimb.py
 ```
 
 Notes:
@@ -112,7 +112,7 @@ For iterative profiling/tuning, either skip sync with `--no-sync` or SSH directl
 RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/marin-us-east5-a.yaml \
   --tpu-name "$TPU_NAME" \
-  execute --no-sync -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
+  execute --no-sync -- uv run --package levanter --group test pytest tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py
 ```
 
 Or SSH directly:
@@ -203,7 +203,7 @@ Run tests:
 RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/marin-us-east5-a.yaml \
   --tpu-name "$TPU_NAME" \
-  execute -- uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
+  execute -- uv run --package levanter --group test pytest tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py
 ```
 
 Run benchmark:
@@ -213,5 +213,5 @@ RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/marin-us-east5-a.yaml \
   --tpu-name "$TPU_NAME" \
   execute -e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000" -- \
-  uv run --package levanter --extra tpu lib/levanter/scripts/bench/bench_moe_mlp_profile.py
+  uv run --package levanter --extra tpu scripts/levanter/bench/bench_moe_mlp_profile.py
 ```

@@ -35,7 +35,7 @@ SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 TARGET_EPOCHS = 3
 TRAIN_BATCH_SIZE = 2048
 
-# Row counts captured on 2025-11-07 via `uv run python lib/marin/tools/get_hf_dataset_schema.py ...`.
+# Row counts captured on 2025-11-07 via `uv run python tools/get_hf_dataset_schema.py ...`.
 SMOLTALK2_ROW_COUNTS = {
     "LongAlign_64k_Qwen3_32B_yarn_131k_think": 7526,
     "OpenThoughts3_1.2M_think": 1133524,

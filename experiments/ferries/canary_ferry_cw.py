@@ -8,7 +8,7 @@ reducing random-read pressure while maintaining good data mixing via
 hierarchical Feistel permutation.
 
 Usage (via Iris):
-    iris --config=lib/iris/examples/coreweave.yaml job run \
+    iris --config=examples/iris/coreweave.yaml job run \
         -e MARIN_PREFIX s3://marin-test -e WANDB_API_KEY $WANDB_API_KEY \
         -- python -m experiments.ferries.canary_ferry_cw
 """

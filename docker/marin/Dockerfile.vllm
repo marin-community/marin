@@ -87,14 +87,14 @@ ENV UV_SYSTEM_PYTHON=1
 
 # Install into the system Python environment b/c Ray will use this as a base
 COPY --chown=ray pyproject.toml /tmp/marin/
-COPY --chown=ray lib/ /tmp/marin/lib/
+COPY --chown=ray src/ /tmp/marin/src/
+COPY --chown=ray lib/dupekit/ /tmp/marin/lib/dupekit/
+COPY --chown=ray experiments/ /tmp/marin/experiments/
 WORKDIR /tmp/marin
 RUN ray --version >/tmp/marin/ray_version_before.txt \
-  && mkdir -p src/marin/\
-  && touch src/marin/__init__.py\
   && touch README.md\
   && touch LICENSE\
-  && uv pip install -e .[dev,gcp,vllm] --system \
+  && uv pip install -e .[train,dev,vllm] --system \
   && uv pip install -e lib/dupekit --system \
   && ray --version >/tmp/marin/ray_version_after.txt \
   && (diff /tmp/marin/ray_version_before.txt /tmp/marin/ray_version_after.txt || (echo "$(cat /tmp/marin/ray_version_before.txt) in the base image differs vs dependencies $(cat /tmp/marin/ray_version_after.txt)!" && exit 1)) \

@@ -3,11 +3,8 @@
 ## How to Use This Guide
 
 - Start with the shared practices below; if you discover missing guidance, expand this document so the next agent benefits.
-- When you uncover directory-specific guidance, add it to the relevant subproject manual so the next agent stays aligned.
-- Consult the subproject manuals when working in submodule trees:
-  * `lib/levanter/AGENTS.md` for Levanter-specific conventions.
-  * `lib/marin/AGENTS.md` for Marin-specific conventions
-  * `lib/iris/AGENTS.md` for Iris-specific conventions
+- When you uncover directory-specific guidance, add it to the relevant subproject section or its dedicated docs.
+- Per-project sections below contain only project-specific conventions. Detailed operational docs live in the project's own `docs/` directory.
 
 ## Shared Workflow Playbooks
 
@@ -44,18 +41,20 @@
 ### Code Style
 
 - Put all imports at the top of the file. Avoid local imports unless technically necessary (for example, to break circular dependencies or guard optional dependencies).
+- Avoid `TYPE_CHECKING`; use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
 - Prefer top-level functions when code does not mutate shared state; use classes to encapsulate data when that improves clarity.
 - Prefer top-level Python tests and fixtures.
-- Separation of responsibilities: when a change introduces a new subsystem (e.g., serving/inference, data access, evaluation), encapsulate lifecycle/configuration in a dedicated module and have callers depend on the interface rather than re-implementing setup/teardown details.
+- Separation of responsibilities: when a change introduces a new subsystem, encapsulate lifecycle/configuration in a dedicated module and have callers depend on the interface.
 - Disprefer internal mutation of function arguments, especially config dataclasses; prefer returning a modified copy (e.g., via `dataclasses.replace`) so call sites remain predictable and side effects are explicit.
 - Use early returns (`if not x: return None`) when they reduce nesting.
 - Do not introduce ad-hoc compatibility hacks like `hasattr(m, "old_attr")`; update the code consistently instead.
 - Document public APIs with concise Google-style docstrings.
 - Prefer small, concrete helpers over abstraction that adds indirection without reuse.
 - When defaults depend on environment/resource type, resolve them once and fail fast on unknown/ambiguous inputs rather than silently guessing.
-- Keep environment detection logic minimal and explicit; avoid multi-key heuristics unless they are clearly required.
-- Prefer single strong signals over sprawling defensive checks when detecting environment state (e.g., check the one variable that must be set rather than many optional ones).
-- In marin we generally prefer logging over `print` statements. `print` is fine for debugging and "scripts".
+- Keep environment detection logic minimal and explicit; prefer single strong signals over sprawling defensive checks.
+- Prefer logging over `print` statements. `print` is fine for debugging and scripts.
+- Prefer generic code parameterized with `TypeVar` over hard-coding concrete types where reuse is natural.
+- Aim for deterministic behavior; avoid nondeterminism unless explicitly needed.
 
 ### Error Handling
 
@@ -102,9 +101,11 @@ You don't generate comments that merely restate the code, e.g.
 
 - Always fix tests if you broke them.
 - Do not fix tests by relaxing tolerances or hacking around them.
-- Avoid “tautological” tests that merely restate implementation logic as asserts; prefer tests that validate externally-observable behavior, integration points, or realistic failure modes.
-- Run the appropriate tests for your changes (for example, `uv run pytest` under the relevant directory); consult subproject guides for preferred markers.
+- Avoid "tautological" tests that merely restate implementation logic as asserts; prefer tests that validate externally-observable behavior, integration points, or realistic failure modes.
+- Run the appropriate tests for your changes (for example, `uv run pytest` under the relevant directory); consult subproject sections below for preferred markers.
 - Use pytest features like fixtures and parameterization to avoid duplication and write clean code.
+- Do not relax numerical tolerances without prior agreement from a human. Prefer `assert_allclose` with 1e-4 for complex modules and 1e-5 for simpler ones.
+- Always protect PyTorch-dependent tests with `@skip_if_no_torch`.
 
 PREFER:
 
@@ -114,7 +115,128 @@ DO NOT:
 
 - Create tests which validate obvious features: if a type exists, a constant has a value, etc.
 
-
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
+
+---
+
+## Levanter
+
+Levanter lives in `src/levanter`. For detailed docs see `docs/levanter/`.
+
+### Testing
+
+* Run `uv run pytest tests -m "not entry and not slow and not ray"` for the default suite.
+* Batch sizes should generally be a low multiple (e.g. 1 or 2) of `len(jax.devices())` to ensure multi-device correctness.
+* Mark long-running tests with `@pytest.mark.slow`.
+
+### TPU VMEM Flags
+
+* For TPU Pallas benchmark/tuning runs, set `LIBTPU_INIT_ARGS` by TPU generation:
+  * `v5p`/`v5e`: `--xla_tpu_scoped_vmem_limit_kib=50000`
+  * `v6e`: `--xla_tpu_scoped_vmem_limit_kib=98304`
+* Do not set a special scoped VMEM limit flag on `v4` unless a user explicitly asks for it.
+
+### Design Preferences
+
+* **Named tensors:** Represent arrays with `NamedArray` and explicit `Axis` objects via Haliax. Operate over named axes whenever possible.
+* **Configurations:** Dataclasses loaded via `draccus`. Keep them declarative and typed.
+* **Datasets:** Use `AsyncDataset` or `SyncDataset` in `levanter.data.dataset`. Prefer `AsyncDataset` unless there is a concrete reason not to.
+* **Logging and tracking:** Use the existing tracker hooks (W&B, TensorBoard) for metrics instead of ad-hoc logging.
+* Prefer `Stacked` with `fold` or `scan` over hand-written loops to improve compile times and gradient-checkpointing behavior.
+* Use Equinox and Haliax -- avoid Flax and Haiku layers in new code.
+* Prefer functional-style JAX code with explicit PRNG keys.
+* Maintain compatibility with both GPU and TPU backends.
+
+### JIT Safety
+
+* Avoid data-dependent Python control flow inside jitted code.
+* Do not rely on dynamic shapes or dynamic lengths when indexing.
+* Use `debug.print` if you need to inspect values; choose `jnp.where` or `hax.where` when branching on data.
+* Do not call `jax.default_backend()` or `jax.devices()` at module import time; resolve lazily inside runtime functions.
+
+Any method inside an `equinox.Module`, any function decorated with `jax.jit` (or variants like `eqx.filter_jit`, `jax.named_jit`), and any helpers they call must follow these rules.
+
+### Recipes
+
+* [Porting a Model to Levanter](docs/recipes/port-models.md)
+
+---
+
+## Marin
+
+Marin pipeline code lives in `src/marin`. For detailed docs see `docs/marin/`.
+
+### Data Access
+
+* Do not special-case Google Cloud Storage unless absolutely necessary. Use `fsspec.open` and other fsspec helpers so code stays filesystem-agnostic.
+* Do not copy data artifacts (`.json`, `.parquet`, etc.) to the local filesystem -- stream them through fsspec instead.
+* Avoid hard-coding GCS paths like `gs://marin-us-central2/foo/bar`. Prefer referencing pipeline steps; if you must inject a literal path, wrap it with `InputName.hard_coded` and call out the follow-up risk.
+* NEVER EVER EVER load GCS files from across region if they are more than a few MB.
+
+### Testing
+
+* Run `uv run --package marin pytest` targeting any suites that exercise the package before submitting changes.
+
+---
+
+## Iris
+
+Iris lives in `src/iris`. For operational docs see `docs/iris/`, `OPS.md`, and `TESTING.md` in the Iris directory.
+
+### API Style
+
+* Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
+* After changing `.proto` files, regenerate via `scripts/generate_protos.py`.
+* Any functionality exposed by dashboards must also be available via RPC. Dashboards are a thin UI over the RPC API, not a second implementation path.
+
+### Concurrency Model
+
+* Platform operations (`terminate`, `create_slice`, etc.) shell out via `subprocess.run` and are thread-safe.
+* For concurrent independent platform operations, use `concurrent.futures.ThreadPoolExecutor` (not asyncio) and apply hard timeouts.
+
+### Time Utilities
+
+Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`. Key types: `Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`.
+
+### Planning
+
+Prefer spiral plans over linear plans: each stage should be independently testable (proto -> server stub -> client wiring -> end-to-end test), then iterate.
+
+### Operational Details
+
+Deployment topology, CoreWeave disk layout, light worker mode, multi-region image push/pull, and zone validation are documented in the Iris `docs/` directory (especially `docs/coreweave.md` and `docs/image-push.md`). Consult those when working on infrastructure changes.
+
+### Testing
+
+See `TESTING.md` in the Iris directory for the testing policy and commands.
+
+---
+
+## Haliax
+
+Haliax lives in `src/haliax`. For detailed docs see `docs/haliax/` and [docs/primer.md](docs/primer.md) for an agent-oriented overview.
+
+### Playbooks
+
+* [Adding tensor typing annotations](.playbooks/add-types.md)
+* [Wrapping standard JAX functions](.playbooks/wrap-non-named.md) so they operate on `NamedArray`
+
+### Library Conventions
+
+* Haliax revolves around `NamedArray` and named shapes via `Axis` objects or shape dicts. Prefer APIs that accept axes or axis names rather than hard-coding positional dimensions. Use `AxisSpec` and `AxisSelection` where possible.
+* Utilities should work with arbitrary axis names; avoid relying on fixed axis orders.
+* Use `haliax.nn` or Equinox when building neural network layers.
+* Type annotations can use named shapes shorthand from `haliax.haxtyping`: e.g. `ht.f32[NamedArray, "batch"]`.
+* Prefer `Stacked` with `fold` or `scan` over hand-written loops.
+* Prefer frozen dataclasses over dictionaries for configuration.
+
+### Type Checking
+
+Haliax uses `mypy` for static type checking (configured in `pyproject.toml`, run via `infra/pre-commit.py`).
+
+### Testing
+
+* Default: `XLA_FLAGS=--xla_force_host_platform_device_count=8 PYTHONPATH=tests:src:. uv run pytest tests`
+* When wrapping a new JAX function, add a reference to it in `docs/api.md`.

@@ -273,7 +273,7 @@ gh issue list \
 Launch shape (illustrative, to pin in recipe):
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
+uv run src/marin/run/ray_run.py \
   --no_wait \
   --cluster us-central1 \
   -- python experiments/ferries/daily.py --run_name "daily-125m-$(date +%F)"

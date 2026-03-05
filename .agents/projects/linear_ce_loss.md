@@ -5,7 +5,7 @@ We now have a **new Pallas TPU backward kernel** for `fused_cross_entropy_loss_a
 **Note (historical):** we previously experimented with a **split backward strategy** (separate Pallas calls for `x_grad` and `w_grad`, each rematting logits), but this path and its `BlockSizes(..., bwd_strategy="split")` hook have been removed; the current implementation only exposes block-size parameters (`b_block_size`, `h_block_size`, `v_block_size`) for the single combined backward kernel.
 
 ## Where it lives
-- `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+- `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
   - `linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu` (HBM-ref, scratch-first `dw`, core-parallel when available)
   - `_make_custom_vjp` always uses this single backward implementation (split path removed)
 
@@ -90,7 +90,7 @@ cooperative megacore:
 - Remaining gap (~40 ms vs floor) is plausibly explained by tiling + DMA/semaphore overhead + per-core `w_grad_partial` reduction.
 
 ## Test status
-- `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+- `tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py`
   - TPU bwd comparison now targets the single backward path (split removed).
   - Some failures were previously due to XLA layout / tile misalignment; now handled by constraints.
 
@@ -131,13 +131,13 @@ The workaround should be isolated to v4 (or a backend capability check) so v5+ c
 keep using the faster native lowering.
 
 ### Files already created
-- `lib/levanter/scripts/debug/fused_ce_v4_probe.py`
+- `scripts/levanter/debug/fused_ce_v4_probe.py`
   - Tries the Pallas path on v4 and prints the failure.
-- `lib/levanter/scripts/debug/fused_ce_v4_workaround.py`
+- `scripts/levanter/debug/fused_ce_v4_workaround.py`
   - Forces XLA path; useful for baseline comparisons.
-- `lib/levanter/scripts/debug/splash_attention_v4_repro.py`
+- `scripts/levanter/debug/splash_attention_v4_repro.py`
   - Uses splash attention with `v=I` to recover softmax; works on v4.
-- `lib/levanter/scripts/debug/splash_like_logsumexp_v4_repro.py`
+- `scripts/levanter/debug/splash_like_logsumexp_v4_repro.py`
   - Minimal splash-style logsumexp + in-kernel label logits; works on v4.
 
 ### V4 work log (2026-02-02)
@@ -166,11 +166,11 @@ keep using the faster native lowering.
 
 ## How to run TPU tests
 ```bash
-RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml execute .venv/bin/python -m pytest lib/levanter/tests/kernels
+RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml execute .venv/bin/python -m pytest tests/levanter/kernels
 ```
 
 ## Perf bench
-- `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py`
+- `scripts/levanter/bench/bench_fused_cross_entropy_loss_pallas.py`
 - Added roofline estimate and grug-wrapped bench variant.
 
 ### V4 bench snapshots (pallas_tpu, infer block sizes)
@@ -218,7 +218,7 @@ Notes:
 ### 2026-02-17: Ferry low-MFU block-size sweep (v5p, llama-150m-ish shape)
 - Shape target for ferry daily (`train_batch_size=512`, `seq_len=1024`, `data_shards=4`):
   - per-shard kernel shape `B=131072, H=512, V=128256`.
-- Added sweep controls to `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`:
+- Added sweep controls to `scripts/levanter/tune/tune_fused_cross_entropy_loss_block_sizes.py`:
   - configurable `implementation`, `steps`, and CSV block-size grids,
   - optional `--include-infer`,
   - machine-readable `result_json` output per config.
@@ -244,7 +244,7 @@ Notes:
 - Root cause for earlier gap:
   - forward pallas path did not use explicit core-grid parallelization while backward already did.
 - Code change:
-  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+  - `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
   - forward `pallas_call` grid changed from `(num_b_blocks, num_v_blocks, num_h_blocks)` to
     `(num_cores, num_b_blocks_per_core, num_v_blocks, num_h_blocks)` using `_infer_core_grid(...)`.
   - forward kernel program IDs updated accordingly.
@@ -400,7 +400,7 @@ Notes:
   - `scripts/ray/dev_tpu.py --config infra/marin-us-central2.yaml --tpu-type v4-8`
   - TPU: `TPU v4` (4 local devices on the `v4-8` slice)
 - Tuned with:
-  - `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`
+  - `scripts/levanter/tune/tune_fused_cross_entropy_loss_block_sizes.py`
   - candidate grid from script (`b in {1024,2048}`, `h in {128,256,512}`, `v in {1024,2048,4096}`)
 - Result summary (all non-`v=1024` candidates OOM on v4-8 in these runs):
   - `small-vocab` (`B=2048,H=512,V=8192`): best `b=1024,h=256,v=1024` at ~11.04M tokens/s.
@@ -408,17 +408,17 @@ Notes:
   - `large-batch-small-h` (`B=65536,H=512,V=128256`): best `b=1024,h=512,v=1024` at ~1.17M tokens/s.
   - `medium-batch-medium-h` (`B=8192,H=2048,V=128256`): best `b=1024,h=512,v=1024` at ~349k tokens/s.
 - Code update:
-  - Added missing TPU v4 table entries in `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py` for:
+  - Added missing TPU v4 table entries in `src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py` for:
     - `small-vocab` (`h=256,v=1024`)
     - `llama3-ish` (`h=512,v=1024`)
   - Kept existing TPU v4 entries for `large-batch-small-h` and `medium-batch-medium-h` (already `h=512,v=1024`).
 - Tokamax note:
-  - `lib/levanter/scripts/bench/bench_tokamax_linear_softmax_ce.py` currently fails in this dev TPU env with
+  - `scripts/levanter/bench/bench_tokamax_linear_softmax_ce.py` currently fails in this dev TPU env with
     `ModuleNotFoundError: No module named 'tokamax'`.
 
 ### 2026-02-20: v4-8 pallas vs xla backend comparison (same bench script)
 - Command template:
-  - `uv run --package levanter --extra tpu python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py --input-dtype bfloat16 --accum-dtype float32 --block-sizes infer --implementation <pallas_tpu|xla> ...`
+  - `uv run --package levanter --extra tpu python scripts/levanter/bench/bench_fused_cross_entropy_loss_pallas.py --input-dtype bfloat16 --accum-dtype float32 --block-sizes infer --implementation <pallas_tpu|xla> ...`
 - Environment:
   - `scripts/ray/dev_tpu.py --config infra/marin-us-central2.yaml` on `v4-8` (`TPU v4`, 4 local devices)
 - Shape A (`B=32, P=1024, H=512, V=128256`):
@@ -467,14 +467,14 @@ Notes:
     - `gw_rel = 9.1245504e-08`
 
 #### Repo changes (this branch)
-- `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py`
+- `src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py`
   - Added `_use_v4_custom_xla_vjp()` gate: enable custom VJP only for TPU v4.
   - Added `_linear_softmax_cross_entropy_loss_streaming_custom_vjp(...)` with manual streaming backward:
     - computes blockwise `delta = (dL + dLSE)*prob - dL*one_hot`
     - applies soft-cap derivative when enabled
     - accumulates `dx` and writes `dw` blockwise.
   - `linear_softmax_cross_entropy_loss_xla(...)` now dispatches to custom VJP on v4; other backends keep existing behavior.
-- `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+- `tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py`
   - Added `test_v4_custom_xla_vjp_gate`
   - Added `test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff`
   - Local test run (`-k 'xla or custom_vjp or gate'`): `3 passed, 1 skipped`.
@@ -576,7 +576,7 @@ Notes:
   - Removed the v4-only gate from active dispatch.
 - Tests:
   - Removed gate-specific test and kept custom-VJP grad parity test.
-  - `pytest -k 'xla or custom_vjp'` in `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`:
+  - `pytest -k 'xla or custom_vjp'` in `tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py`:
     - `2 passed, 1 skipped`.
 - v5p sanity after change (`B=512,H=512,V=128256`):
   - `api_xla`: `0.00168887s` (`~303.2k tok/s`)
@@ -585,10 +585,10 @@ Notes:
 
 ### 2026-02-21: Default backend policy update
 - Changed fused CE API default implementation order to always prefer `xla`, even when `pallas_tpu` is importable.
-  - file: `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
+  - file: `src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
   - `pallas_tpu` remains available when explicitly requested via `implementation='pallas_tpu'`.
 - Validation:
-  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+  - `uv run --package levanter --group test pytest tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py`
   - result: `14 passed, 3 skipped`.
 
 ### 2026-02-21: Follow-up v5p check (where can pallas still win?)

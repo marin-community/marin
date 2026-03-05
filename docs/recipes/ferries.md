@@ -119,7 +119,7 @@ Then push the launch commit (no proposal PR by default).
 Before launch, confirm requester approval in-thread unless they already gave explicit "launch without asking" permission.
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
+uv run src/marin/run/ray_run.py \
   --no_wait \
   --cluster us-central1 \
   -- python experiments/ferries/daily.py
@@ -133,7 +133,7 @@ After launch, capture and post to the issue:
 
 Optional deterministic daily rerun name:
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
+uv run src/marin/run/ray_run.py \
   --no_wait \
   --cluster us-central1 \
   -e FERRY_DATE="$(date +%Y%m%d-%H%M%S)-daily-ferry" \
@@ -194,7 +194,7 @@ Even for unchanged canary runs, ask the requester before launch unless they expl
 
 Launch:
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
+uv run src/marin/run/ray_run.py \
   --no_wait \
   --cluster us-central1 \
   -- python experiments/ferries/canary_ferry.py

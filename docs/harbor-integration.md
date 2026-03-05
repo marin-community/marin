@@ -27,7 +27,7 @@ Harbor is an optional dependency. The `evaluate_harbor()` function automatically
 
 Alternatively, install manually:
 ```bash
-cd lib/marin
+cd .
 uv add --optional harbor "harbor>=0.1.42"
 ```
 
@@ -164,7 +164,7 @@ step = evaluate_harbor(
 
 ### HarborEvaluator
 
-The `HarborEvaluator` class in `lib/marin/src/marin/evaluation/evaluators/harbor_evaluator.py` provides the integration.
+The `HarborEvaluator` class in `src/marin/evaluation/evaluators/harbor_evaluator.py` provides the integration.
 
 **Key design decisions:**
 1. **No adapters needed** - Uses Harbor's registry system to load any dataset
@@ -216,7 +216,7 @@ Required for different agents and environments:
 
 Harbor should be auto-installed via `pip_dependency_groups=["harbor"]`. If not:
 ```bash
-cd lib/marin
+cd .
 uv sync --extra harbor
 ```
 

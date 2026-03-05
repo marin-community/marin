@@ -60,7 +60,7 @@ RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
 RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py \
   --config infra/<cluster-config>.yaml \
   --tpu-name <name> execute -- \
-  .venv/bin/python lib/levanter/scripts/bench/bench_moe_hillclimb.py ...
+  .venv/bin/python scripts/levanter/bench/bench_moe_hillclimb.py ...
 ```
 
 Notes:

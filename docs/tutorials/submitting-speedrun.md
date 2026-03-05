@@ -34,7 +34,7 @@ etc.).
 
 4. Run the training script with a dry run to see the estimated training HW
 FLOPs, model FLOPs, model size, and your speedrun configs displayed (invoking
-[speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/speedrun/speedrun.py#L76)).
+[speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/src/marin/speedrun/speedrun.py#L76)).
 
 ```bash
 uv run experiments/speedrun/<submission-name>/main.py --dry_run true

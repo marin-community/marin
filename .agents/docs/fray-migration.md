@@ -1,6 +1,6 @@
 # Migration to Fray
 
-Fray is our new library -- see @lib/fray/docs/design.md -- for abstracting job and task scheduling.
+Fray is our new library -- see @docs/fray/design.md -- for abstracting job and task scheduling.
 
 We'd like to replace our usage of Ray with Fray throughout the Marin code base.
 We'll first work on drop-in replacement and cleanup of Ray references before

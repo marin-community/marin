@@ -35,7 +35,7 @@ uv run python experiments/grug/base/launch.py
 Ray cluster run:
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py \
+uv run src/marin/run/ray_run.py \
   --env_vars WANDB_API_KEY=${WANDB_API_KEY} \
   -- python experiments/grug/base/launch.py
 ```

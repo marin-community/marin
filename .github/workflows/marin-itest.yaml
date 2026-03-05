@@ -37,10 +37,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        # `--no-default-groups` keeps uv from also installing every workspace package's
-        # dev/docs/test groups (e.g. `levanter[docs,test,dev]`), which saves multiple
-        # minutes and avoids re-downloading CUDA wheels unnecessarily on cold caches.
-        run: uv sync --all-packages --extra=cpu --extra=dedup --no-default-groups
+        run: uv sync --extra=train --extra=cpu --extra=dedup --frozen
 
       - name: Check df -h
         run: df -h
@@ -52,7 +49,9 @@ jobs:
         shell: bash -l {0}
         # N.B. You _must not_ use `uv run` here, as that triggers weird behavior from Ray
         # https://github.com/ray-project/ray/issues/54344
-        run: .venv/bin/python tests/integration_test.py
+        # -P prevents tests/ from being prepended to sys.path, avoiding
+        # tests/levanter/ shadowing the real src/levanter/ package.
+        run: .venv/bin/python -P tests/integration_test.py
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           JAX_TRACEBACK_FILTERING: off
