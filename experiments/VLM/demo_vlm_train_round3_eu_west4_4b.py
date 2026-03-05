@@ -203,7 +203,7 @@ train_config = SimpleVlmTrainConfig(
 
     # Load complete VLM weights from GCS HF checkpoint (vision encoder + projector + LLM)
     # This checkpoint contains trained weights from stage 1
-    initialize_from_checkpoint_path="gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-correct-mixed-6-9fe39f/checkpoints",
+    initialize_from_checkpoint_path="gs://marin-eu-west4/checkpoints/vlm-official-qwen3-4b-stage2-50M-mixed-0-7459cb/checkpoints/",
     # vision_checkpoint and llm_checkpoint not needed when using vlm_checkpoint
 
     # New training stage - data starts from beginning
