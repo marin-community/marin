@@ -426,3 +426,61 @@ def test_step_without_remote_or_resources_is_plain_fn():
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert not isinstance(resolved.fn, RemoteCallable)
+
+
+# ---------------------------------------------------------------------------
+# Multi-replica correctness: orchestration runs locally, not in Fray
+# ---------------------------------------------------------------------------
+
+
+def test_remote_step_runs_orchestration_locally(tmp_path: Path):
+    """For remote steps, disk_cache/distributed_lock must run on the submitting
+    side, NOT inside the Fray job. Only the raw function should run on replicas.
+
+    We verify this by checking that executable_fn is NOT a RemoteCallable
+    (it's a disk_cache wrapping a distributed_lock wrapping a RemoteCallable).
+    """
+    from marin.execution.disk_cache import disk_cache as disk_cache_cls
+
+    @remote
+    def my_step(output_path):
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_orchestration_test",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    executable = step.executable_fn
+
+    # The outer wrapper should be disk_cache (not RemoteCallable)
+    assert isinstance(executable, disk_cache_cls), (
+        f"Expected executable_fn to be disk_cache, got {type(executable).__name__}. "
+        "Orchestration (caching/locking) must run locally, not inside Fray."
+    )
+    assert not isinstance(
+        executable, RemoteCallable
+    ), "executable_fn should NOT be a RemoteCallable — orchestration must run locally."
+
+
+def test_remote_step_artifact_saved_inside_fray(tmp_path: Path):
+    """For remote steps, the artifact should still be saved (inside the Fray
+    job) even though disk_cache runs locally."""
+
+    @remote
+    def my_step(output_path):
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_artifact_test",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    runner = StepRunner()
+    runner.run([step])
+
+    # Artifact should have been saved inside the Fray job
+    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
+    assert loaded.path == tmp_path.as_posix()
