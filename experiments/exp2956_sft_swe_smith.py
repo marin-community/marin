@@ -44,8 +44,12 @@ RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \\
     --env_vars WANDB_PROJECT marin \\
     --env_vars TPU_CI true \\
     --env_vars HF_TOKEN ${HF_TOKEN} \\
+    --env_vars RUN_ID "exp2956_minimax_$(date +%s)" \\
     --cluster us-east5-a \\
     -- python -m experiments.exp2956_sft_swe_smith --teacher minimax-m2.5 --force_run_failed true
+
+Note: Pass a unique RUN_ID env var to avoid wandb init hangs when resubmitting
+(wandb hangs when resuming a deleted run with the same ID).
 """
 
 import argparse
