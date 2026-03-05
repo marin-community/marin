@@ -36,7 +36,7 @@ jobs:
       - name: Test fray
         run: |
           # NOTE: do not use frozen here because it makes ray sad when it sets up venvs with uv
-          uv run --group=test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/fray/
+          uv run --group=test --extra train pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/fray/
 
   tpu-test:
     runs-on: [tpu-ci]
@@ -81,4 +81,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 590 uv run --group=test pytest tests/fray/ -v --tb=short -s --log-cli-level=INFO -m tpu_ci"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 590 uv run --group=test --extra train pytest tests/fray/ -v --tb=short -s --log-cli-level=INFO -m tpu_ci"
