@@ -35,7 +35,7 @@ For a new kernel `K`, you should produce:
 
 Tokamax uses a pattern that works well for kernel development:
 - a single public API entrypoint (`api.py`) that dispatches to implementations
-- a default “best available” backend order (e.g. TPU Pallas, then XLA)
+- a default backend order chosen for robustness in production (for example, XLA first with optional Pallas override)
 - optional imports for accelerated backends so CPU-only users can still import modules
 
 For Levanter kernels, we recommend the same pattern:
@@ -155,6 +155,8 @@ Guidelines:
 - If a specific implementation is selected (e.g. `implementation="pallas_tpu"`), **error** on unsupported shapes or
   non-TPU backends.
 - If the default implementation order is used, **warn and fallback** to XLA/reference.
+- For fused CE specifically, TPU defaults are intentionally XLA-first; use `implementation="pallas_tpu"` when you are
+  explicitly benchmarking/tuning shape-dependent Pallas behavior.
 
 **Z-loss/logsumexp penalty:**
 - Have the kernel return both per-example loss and `logsumexp`.
