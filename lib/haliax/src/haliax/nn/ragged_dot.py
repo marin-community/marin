@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal, TypeAlias, cast
+import warnings
+from typing import Literal, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +12,8 @@ from jax.experimental.pallas.ops.tpu.megablox import gmm
 from ..partitioning import ResourceAxis
 
 Implementation: TypeAlias = Literal["auto", "megablox", "xla"]
+_AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
+_HAS_WARNED_AUTO_FALLBACK = False
 
 
 def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
@@ -58,12 +61,12 @@ def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes:
 
 
 def ragged_dot(
-    lhs_: jnp.ndarray,
-    rhs_: jnp.ndarray,
-    group_sizes_: jnp.ndarray,
+    lhs_: jax.Array,
+    rhs_: jax.Array,
+    group_sizes_: jax.Array,
     ar: bool = False,
     implementation: Implementation = "auto",
-) -> jnp.ndarray:
+) -> jax.Array:
     """Grouped matrix multiply with backend-dispatched ragged dot implementations.
 
     Args:
@@ -80,24 +83,27 @@ def ragged_dot(
     hs_shape = lhs_.shape
     if hs_shape[0] % 512:
         pad_length = 512 - hs_shape[0] % 512
-        lhs_ = jax.lax.pad(lhs_, 0.0, [(0, pad_length, 0), (0, 0, 0)])
+        lhs_ = jax.lax.pad(lhs_, jnp.zeros((), dtype=lhs_.dtype), [(0, pad_length, 0), (0, 0, 0)])
 
     out = None
-    last_exc: Exception | None = None
 
     for impl in _preferred_implementations(implementation):
         try:
             out = _run_impl(impl, lhs_, rhs_, group_sizes_)
             break
-        except Exception as exc:
-            last_exc = exc
-            if implementation == "auto":
+        except _AUTO_FALLBACK_EXCEPTIONS as exc:
+            if implementation == "auto" and impl == "megablox":
+                global _HAS_WARNED_AUTO_FALLBACK
+                if not _HAS_WARNED_AUTO_FALLBACK:
+                    warnings.warn(
+                        f"ragged_dot auto fallback: megablox failed ({type(exc).__name__}), trying XLA.",
+                        RuntimeWarning,
+                    )
+                    _HAS_WARNED_AUTO_FALLBACK = True
                 continue
             raise
 
     if out is None:
-        if last_exc is not None:
-            raise last_exc
         raise RuntimeError("No ragged_dot implementation was selected")
 
     if ar:
@@ -106,7 +112,7 @@ def ragged_dot(
     if hs_shape[0] % 512:
         out = out[: hs_shape[0]]
 
-    return cast(jnp.ndarray, out)
+    return out
 
 
 __all__ = ["Implementation", "ragged_dot"]
