@@ -36,32 +36,14 @@ HEARTBEAT_TIMEOUT = 90  # seconds before considering a lease stale
 class Lease:
     """A lease held by a lock holder."""
 
-    holder_id: str
+    worker_id: str
     timestamp: float
 
     def is_stale(self) -> bool:
         return (time.time() - self.timestamp) > HEARTBEAT_TIMEOUT
 
 
-def _lease_from_data(data: dict) -> Lease:
-    """Parse lease JSON with support for legacy lock files.
-
-    Legacy files used ``worker_id``; current files use ``holder_id``.
-    """
-    holder = data.get("holder_id")
-    if holder is None:
-        holder = data.get("worker_id")
-    if holder is None:
-        raise KeyError("Lock data missing holder_id/worker_id")
-
-    timestamp = data.get("timestamp")
-    if timestamp is None:
-        raise KeyError("Lock data missing timestamp")
-
-    return Lease(holder_id=str(holder), timestamp=float(timestamp))
-
-
-def default_holder_id() -> str:
+def default_worker_id() -> str:
     """Return a unique holder ID for the current host and thread."""
     return f"{os.uname()[1]}-{threading.get_ident()}"
 
@@ -84,12 +66,12 @@ class DistributedLock:
 
     Args:
         lock_path: Path to the lock file (``gs://...``, local, or any fsspec URL).
-        holder_id: Unique identifier for this lock holder.
+        worker_id: Unique identifier for this lock holder.
     """
 
-    def __init__(self, lock_path: str, holder_id: str | None = None):
+    def __init__(self, lock_path: str, worker_id: str | None = None):
         self.lock_path = lock_path
-        self.holder_id = holder_id or default_holder_id()
+        self.worker_id = worker_id or default_worker_id()
 
     def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
         """Read lock file and its generation. Returns (0, None) if doesn't exist."""
@@ -128,7 +110,7 @@ class DistributedLock:
         if blob is None:
             return (0, None)
         data = json.loads(blob.download_as_string())
-        return (blob.generation, _lease_from_data(data))
+        return (blob.generation, Lease(**data))
 
     def _write_gcs(self, lease: Lease, if_generation_match: int) -> None:
         from google.cloud import storage
@@ -160,7 +142,7 @@ class DistributedLock:
                 if not content:
                     return (0, None)
                 data = json.loads(content)
-            return (1, _lease_from_data(data))
+            return (1, Lease(**data))
         except FileNotFoundError:
             return (0, None)
 
@@ -175,9 +157,9 @@ class DistributedLock:
             f.seek(0)
             content = f.read()
             if content:
-                current = _lease_from_data(json.loads(content))
-                if not current.is_stale() and current.holder_id != lease.holder_id:
-                    raise FileExistsError(f"Lock held by {current.holder_id}")
+                current = Lease(**json.loads(content))
+                if not current.is_stale() and current.worker_id != lease.worker_id:
+                    raise FileExistsError(f"Lock held by {current.worker_id}")
             f.seek(0)
             f.truncate()
             f.write(json.dumps(asdict(lease)))
@@ -196,7 +178,7 @@ class DistributedLock:
             if not content:
                 return (0, None)
             data = json.loads(content)
-            return (1, _lease_from_data(data))
+            return (1, Lease(**data))
         except FileNotFoundError:
             return (0, None)
 
@@ -214,8 +196,8 @@ class DistributedLock:
         try:
             with fs.open(path, "r") as f:
                 readback = json.loads(f.read())
-            if readback.get("holder_id") != lease.holder_id:
-                raise FileExistsError(f"Lock race lost to {readback.get('holder_id')}")
+            if readback.get("worker_id") != lease.worker_id:
+                raise FileExistsError(f"Lock race lost to {readback.get('worker_id')}")
         except FileNotFoundError as err:
             raise FileExistsError("Lock file disappeared after write") from err
 
@@ -226,24 +208,24 @@ class DistributedLock:
         generation, lock_data = self._read_lock_with_generation()
 
         if lock_data and not lock_data.is_stale():
-            if lock_data.holder_id == self.holder_id:
-                logger.debug("[%s] Already hold lock at %s", self.holder_id, self.lock_path)
+            if lock_data.worker_id == self.worker_id:
+                logger.debug("[%s] Already hold lock at %s", self.worker_id, self.lock_path)
                 return True
-            logger.debug("[%s] Lock %s held by %s (fresh)", self.holder_id, self.lock_path, lock_data.holder_id)
+            logger.debug("[%s] Lock %s held by %s (fresh)", self.worker_id, self.lock_path, lock_data.worker_id)
             return False
 
         if lock_data:
-            logger.debug("[%s] Found stale lock at %s from %s", self.holder_id, self.lock_path, lock_data.holder_id)
+            logger.debug("[%s] Found stale lock at %s from %s", self.worker_id, self.lock_path, lock_data.worker_id)
 
-        lease = Lease(holder_id=self.holder_id, timestamp=time.time())
+        lease = Lease(worker_id=self.worker_id, timestamp=time.time())
         try:
             self._write_lock(lease, if_generation_match=generation)
         except FileExistsError:
-            logger.debug("[%s] Lost lock race for %s", self.holder_id, self.lock_path)
+            logger.debug("[%s] Lost lock race for %s", self.worker_id, self.lock_path)
             return False
         except Exception as e:
             if _is_gcs_path(self.lock_path) and "PreconditionFailed" in type(e).__name__:
-                logger.debug("[%s] Lost lock race for %s", self.holder_id, self.lock_path)
+                logger.debug("[%s] Lost lock race for %s", self.worker_id, self.lock_path)
                 return False
             raise
 
@@ -252,19 +234,19 @@ class DistributedLock:
     def refresh(self) -> None:
         """Refresh a lock held by the current holder."""
         generation, lock_data = self._read_lock_with_generation()
-        if lock_data and lock_data.holder_id == self.holder_id:
-            self._write_lock(Lease(self.holder_id, time.time()), generation)
+        if lock_data and lock_data.worker_id == self.worker_id:
+            self._write_lock(Lease(self.worker_id, time.time()), generation)
         else:
-            current_holder = lock_data.holder_id if lock_data else "unknown"
+            current_holder = lock_data.worker_id if lock_data else "unknown"
             raise ValueError(
-                f"Cannot refresh: lock at {self.lock_path} held by {current_holder}, expected {self.holder_id}"
+                f"Cannot refresh: lock at {self.lock_path} held by {current_holder}, expected {self.worker_id}"
             )
 
     def release(self) -> None:
         """Release the lock if held by this holder."""
         try:
             _, lock_data = self._read_lock_with_generation()
-            if lock_data and lock_data.holder_id == self.holder_id:
+            if lock_data and lock_data.worker_id == self.worker_id:
                 if _is_gcs_path(self.lock_path):
                     self._delete_gcs()
                 elif _is_local_path(self.lock_path):
@@ -272,7 +254,7 @@ class DistributedLock:
                 else:
                     fs, path = self._get_fs()
                     fs.rm(path)
-                logger.debug("[%s] Released lock %s", self.holder_id, self.lock_path)
+                logger.debug("[%s] Released lock %s", self.worker_id, self.lock_path)
         except FileNotFoundError:
             pass
 

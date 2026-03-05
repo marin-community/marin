@@ -7,7 +7,7 @@ We associate each `output_path` with:
 - A status file (`output_path/.executor_status`) containing simple text: SUCCESS, FAILURE, or RUNNING
 - A LOCK file (`output_path/.executor_status.lock`) for distributed locking
 
-The LOCK file contains JSON with {holder_id, timestamp} and is refreshed periodically.
+The LOCK file contains JSON with {worker_id, timestamp} and is refreshed periodically.
 On GCS, we use generation-based conditional writes for atomicity.
 """
 
@@ -23,7 +23,7 @@ from typing import TypeVar
 from iris.distributed_lock import (
     HEARTBEAT_INTERVAL,
     DistributedLock,
-    default_holder_id,
+    default_worker_id,
 )
 from iris.marin_fs import url_to_fs
 
@@ -47,7 +47,7 @@ class StatusFile:
 
     Two types of files:
     - LOCK file (JSON): Single file for distributed lock acquisition.
-      Contains {holder_id, timestamp}. Must be refreshed periodically.
+      Contains {worker_id, timestamp}. Must be refreshed periodically.
     - Status file (simple text): Final state - SUCCESS, FAILURE, or RUNNING.
 
     Lock acquisition delegates to ``iris.distributed_lock.DistributedLock``.
@@ -59,7 +59,7 @@ class StatusFile:
         self.worker_id = worker_id
         self._lock_path = self.path + ".lock"
         self.fs = url_to_fs(self.path, use_listings_cache=False)[0]
-        self._lock = DistributedLock(self._lock_path, holder_id=worker_id)
+        self._lock = DistributedLock(self._lock_path, worker_id=worker_id)
 
     @property
     def status(self) -> str | None:
@@ -144,7 +144,7 @@ class StatusFile:
 
 
 def worker_id() -> str:
-    return default_holder_id()
+    return default_worker_id()
 
 
 class PreviousTaskFailedError(Exception):

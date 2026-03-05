@@ -44,7 +44,7 @@ def mirror_fs(mirror_env, tmp_path):
     fs._remote_prefixes = mirror_env["remote_prefixes"]
     fs._copy_limit_bytes = MIRROR_COPY_LIMIT_BYTES
     fs._bytes_copied = 0
-    fs._holder_id = "test-holder"
+    fs._worker_id = "test-holder"
     # Override lock paths to use local tmp dir
     lock_dir = str(tmp_path / "locks")
     fs._lock_path_for = lambda path: os.path.join(lock_dir, f"{path.replace('/', '_')}.lock")

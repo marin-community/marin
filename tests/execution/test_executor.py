@@ -624,7 +624,7 @@ def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     # Manually backdate the lock to make it stale via the underlying DistributedLock
     lock = dead_worker._lock
     generation, _ = lock._read_lock_with_generation()
-    stale_lease = Lease(holder_id="dead-worker", timestamp=time.time() - HEARTBEAT_TIMEOUT - 10)
+    stale_lease = Lease(worker_id="dead-worker", timestamp=time.time() - HEARTBEAT_TIMEOUT - 10)
     lock._write_lock(stale_lease, if_generation_match=generation)
 
     # Worker B comes along and takes over
@@ -640,12 +640,12 @@ def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
 
     # Verify we now own the lock
     _, lease_after_takeover = live_worker._lock._read_lock_with_generation()
-    assert lease_after_takeover.holder_id == "live-worker"
+    assert lease_after_takeover.worker_id == "live-worker"
 
     # Now try to refresh
     time.sleep(0.1)
     live_worker.refresh_lock()
 
     _, lease_after_refresh = live_worker._lock._read_lock_with_generation()
-    assert lease_after_refresh.holder_id == "live-worker"
+    assert lease_after_refresh.worker_id == "live-worker"
     assert lease_after_refresh.timestamp > lease_after_takeover.timestamp
