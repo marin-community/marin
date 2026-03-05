@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-from functools import lru_cache
 from typing import Literal, TypeAlias, cast
 
 import jax
@@ -12,25 +10,10 @@ from jax.experimental.pallas.ops.tpu.megablox import gmm
 
 from ..partitioning import ResourceAxis
 
-logger = logging.getLogger(__name__)
-
-Implementation: TypeAlias = Literal["auto", "megablox", "ragged_dot_general"]
+Implementation: TypeAlias = Literal["auto", "megablox", "xla"]
 
 
-@lru_cache(maxsize=1)
-def _warn_gpu_fallback_once() -> None:
-    logger.warning(
-        "haliax.nn.gmm_sharded: falling back from megablox to ragged_dot_general on GPU "
-        "after Triton dynamic-grid lowering failure"
-    )
-
-
-def _is_triton_dynamic_grid_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return "dynamic grid bounds not supported" in msg and "triton" in msg
-
-
-def _gmm_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     tile_size = (512, 1024, 1024)  # (m, k, n)
     m, k, n = lhs.shape[0], lhs.shape[1], rhs.shape[2]
     return gmm(
@@ -43,7 +26,7 @@ def _gmm_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -
     )
 
 
-def _gmm_ragged_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _ragged_dot_xla_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     return jax.lax.ragged_dot_general(
         lhs=lhs,
         rhs=rhs,
@@ -60,37 +43,36 @@ def _preferred_implementations(implementation: Implementation) -> tuple[Implemen
     if implementation != "auto":
         return (implementation,)
 
-    backend = jax.default_backend()
-    if backend == "gpu":
-        return ("megablox", "ragged_dot_general")
+    if jax.default_backend() == "tpu":
+        return ("megablox", "xla")
 
-    return ("megablox",)
+    return ("xla",)
 
 
-def _run_gmm_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     if name == "megablox":
-        return _gmm_megablox_impl(lhs, rhs, group_sizes)
-    if name == "ragged_dot_general":
-        return _gmm_ragged_impl(lhs, rhs, group_sizes)
-    raise ValueError(f"Unknown GMM implementation: {name}")
+        return _ragged_dot_megablox_impl(lhs, rhs, group_sizes)
+    if name == "xla":
+        return _ragged_dot_xla_impl(lhs, rhs, group_sizes)
+    raise ValueError(f"Unknown ragged_dot implementation: {name}")
 
 
-def gmm_sharded(
+def ragged_dot(
     lhs_: jnp.ndarray,
     rhs_: jnp.ndarray,
     group_sizes_: jnp.ndarray,
     ar: bool = False,
     implementation: Implementation = "auto",
 ) -> jnp.ndarray:
-    """Grouped matrix multiply with explicit backend-dispatch behavior.
+    """Grouped matrix multiply with backend-dispatched ragged dot implementations.
 
     Args:
         lhs_: [tokens, in] input matrix.
         rhs_: [experts, in, out] expert weights.
         group_sizes_: [experts] number of tokens per expert.
         ar: Whether to perform an all-reduce over the model axis on the output.
-        implementation: Backend selection policy. `"auto"` tries preferred kernels,
-            using structured fallback for known unsupported GPU Triton lowerings.
+        implementation: Backend selection policy. `"auto"` uses XLA on CPU/GPU and
+            Megablox on TPU with XLA fallback.
 
     Returns:
         A [tokens, out] array.
@@ -100,26 +82,23 @@ def gmm_sharded(
         pad_length = 512 - hs_shape[0] % 512
         lhs_ = jax.lax.pad(lhs_, 0.0, [(0, pad_length, 0), (0, 0, 0)])
 
-    implementations = _preferred_implementations(implementation)
-
     out = None
     last_exc: Exception | None = None
 
-    for impl in implementations:
+    for impl in _preferred_implementations(implementation):
         try:
-            out = _run_gmm_impl(impl, lhs_, rhs_, group_sizes_)
+            out = _run_impl(impl, lhs_, rhs_, group_sizes_)
             break
         except Exception as exc:
             last_exc = exc
-            if impl == "megablox" and implementation == "auto" and _is_triton_dynamic_grid_error(exc):
-                _warn_gpu_fallback_once()
+            if implementation == "auto":
                 continue
             raise
 
     if out is None:
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError("No GMM implementation was selected")
+        raise RuntimeError("No ragged_dot implementation was selected")
 
     if ar:
         out = jax.lax.psum(out, ResourceAxis.MODEL)
@@ -130,4 +109,4 @@ def gmm_sharded(
     return cast(jnp.ndarray, out)
 
 
-__all__ = ["Implementation", "gmm_sharded"]
+__all__ = ["Implementation", "ragged_dot"]

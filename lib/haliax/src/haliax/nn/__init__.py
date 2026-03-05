@@ -40,7 +40,7 @@ from .activations import (
 from .conv import Conv, ConvTranspose
 from .dropout import Dropout, dropout
 from .embedding import Embedding
-from .gmm import gmm_sharded
+from .ragged_dot import ragged_dot
 from .linear import Linear, MoELinear
 from .loss import binary_cross_entropy_loss, cross_entropy_loss, cross_entropy_loss_and_log_normalizers, reduce_loss
 from .mlp import MLP
@@ -102,7 +102,7 @@ __all__ = [
     "Linear",
     "MoELinear",
     "Embedding",
-    "gmm_sharded",
+    "ragged_dot",
     "RmsNorm",
     "Stacked",
     "BlockSeq",

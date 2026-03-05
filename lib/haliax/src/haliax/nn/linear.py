@@ -15,7 +15,7 @@ import haliax as hax
 
 
 from . import mup
-from .gmm import gmm_sharded
+from .ragged_dot import ragged_dot
 from .mup import AbstractLinearReparam, ReparamEnabled, LinearStandardParam
 from .._src.state_dict import (
     Mod,
@@ -302,7 +302,7 @@ def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
     # Return a raw array from the shard_map body and wrap it with global axes after shard_map reassembles it.
 
     def gmm_impl(lhs, rhs, group_sizes):
-        return gmm_sharded(lhs.array, rhs.array, group_sizes.array, ar=ar)
+        return ragged_dot(lhs.array, rhs.array, group_sizes.array, ar=ar)
 
     if sharded:
         return hax.named(gmm_impl(lhs, rhs, group_sizes), out_axes)
