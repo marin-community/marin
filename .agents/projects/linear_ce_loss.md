@@ -721,3 +721,38 @@ Notes:
     - `/tmp/ce_diag/tune_compile.log` containing run output and `result_json`.
 - Conclusion:
   - diagnostics hooks are functioning as intended on dev TPU runs and capture reproducible compile/HLO context.
+
+### 2026-03-04: v4-8 retune for Grug reference shape (us-central2)
+- TPU setup:
+  - Cluster config: `infra/marin-us-central2-staging.yaml`
+  - TPU: `v4-8` (4 chips), dev TPU via `scripts/ray/dev_tpu.py`
+- Shape under test:
+  - `global_batch=256`, `seq_len=4096`, `data_shards=4`
+  - kernel shape `B=262144`, `H=1024`, `V=128256`
+  - dtype: inputs `bfloat16`, accum `float32`
+
+- Reproduced failure with prior/default Pallas tuning sweep:
+  - `b1024_h{128,256,512}_v1024`: compile vmem OOM (`Used 20.19M of 16.00M`)
+  - `b1024_h{256,512}_v2048`: compile vmem OOM (`Used 32.29M of 16.00M`)
+  - `b1024_h{256,512}_v4096`: compile vmem OOM (`Allocation 33,554,432 > 16,777,216`)
+  - `b2048_h{256,512}_v2048`: compile vmem OOM (`Used 48.54M of 16.00M`)
+
+- XLA checks at same shape:
+  - `bs=256` (`B=262144`): success, `steady_time_s=1.9428`, `~539,724 tok/s`
+  - `bs=512` (`B=524288`): success in isolated CE tune script, `steady_time_s=3.9370`, `~532,676 tok/s`
+  - Note: the `bs=512` success here is isolated CE benchmarking and does not include full-train activation/state pressure.
+
+- Expanded Pallas sweep (explicit grid):
+  - sweep: `b in {1024,2048}`, `h in {128,256,512,1024}`, `v in {128,256,512,768,1024}`
+  - `b=1024`:
+    - `v=128` and `v=256` succeeded for all tested `h`
+    - best observed: `b1024_h128_v256` at `~663,603 tok/s` (`steady_time_s=1.5801`)
+    - `v>=512` failed (vmem compile OOM)
+  - `b=2048`:
+    - all tested `h/v` failed (vmem compile OOM)
+
+- Follow-up code changes (this run):
+  - keep TPU default path XLA-first in `api.py` (Pallas only when explicitly requested)
+  - add new TPU v4 tuned bucket for huge-batch/small-h shapes:
+    - bucket: `B in [131073, 1048576], H in [256,1024], V in [120000,131072]`
+    - tuned entry: `b=1024, h=128, v=256` (bf16/f32)
