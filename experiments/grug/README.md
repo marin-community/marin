@@ -23,6 +23,11 @@
 2. Make model/training changes in that variant, not in shared trainer libraries.
 3. Set run knobs in `<variant>/launch.py` (run id, data mix, optimizer, TPU type).
 4. Launch from the variant's `launch.py` entrypoint.
+5. Add or update variant-specific notes in `experiments/grug/variants.md`.
+
+## Variant notes
+
+Variant-specific guidance (including modular-opt notes) lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
