@@ -653,7 +653,6 @@ def _handle_clones(
     return gen_state, outputs
 
 
-# @named_jit(donate_args=(True, False, False))
 @functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
 def _run_generation_loop(
     gen_state: GenState,
