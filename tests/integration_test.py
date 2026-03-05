@@ -160,10 +160,13 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             output_path=this_output_path(),
             # TODO (rav): add quality filters
             filters=[
+                # TODO: these 2 may collidate on canonical records, removing more data then necessary
                 FilterConfig(
                     type=FilterType.REMOVE_SPANS,
                     attribute_path=dedup_exact_paragraph_step.cd("data"),
-                    name=str(DedupMode.EXACT_PARAGRAPH),
+                    name="dup_spans",
+                    attribute_filetype="vortex",
+                    keep_if_missing=True,
                 ),
                 FilterConfig(
                     type=FilterType.REMOVE_DOC,
