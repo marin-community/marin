@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Official speedrun submission attempts for LLaMA-300M using NAMO/NAMO-D.

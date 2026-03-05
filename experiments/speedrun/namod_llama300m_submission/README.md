@@ -27,7 +27,7 @@ uv run python experiments/speedrun/namod_llama300m_submission/namod_llama300m_su
 
 - `NAMO_SPEEDRUN_PROFILES`: comma-separated list from `{official_namod, official_namod_alt, fallback_namo}`
 - `NAMO_SPEEDRUN_GPU_COUNT`: number of visible GPUs to use
-- `NAMO_SPEEDRUN_BATCH_SIZE`: global train batch size (default 128)
+- `NAMO_SPEEDRUN_BATCH_SIZE`: global train batch size (default 144)
 - `NAMO_SPEEDRUN_PER_DEVICE_PARALLELISM`: microbatch size per device (default 4)
 - `NAMO_SPEEDRUN_TOKENIZED_INPUT`: local pretokenized cache path relative to prefix
 - `NAMO_SPEEDRUN_NUM_TRAIN_STEPS`: optional override for quick smoke runs
