@@ -74,6 +74,8 @@ jobs:
       # CW autoscaler to scale down. Delete them explicitly to avoid lingering
       # H100 costs. We attempt both even if one fails — cost protection matters
       # more than clean state.
+      # TODO(#3277): Move NodePool teardown into Iris (e.g. `iris cluster stop
+      # --delete-nodepools`) so CI doesn't leak the `iris-iris-managed` label.
       - name: Tear down CoreWeave cluster
         if: always()
         run: |
