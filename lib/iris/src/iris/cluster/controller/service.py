@@ -931,6 +931,7 @@ class ControllerServiceImpl:
                     since_ms=request.since_ms,
                     regex_filter=compiled_regex,
                     max_lines=remaining,
+                    tail=True,
                 )
 
                 for entry in worker_logs:
