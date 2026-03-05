@@ -24,7 +24,7 @@ Supports multiple teacher models:
 
 Supports multiple student models:
   - qwen3-8b:                   Qwen/Qwen3-8B
-  - qwen25-coder-32b-instruct:  Qwen/Qwen2.5-Coder-32B-Instruct
+  - qwen25-coder-7b-instruct:   Qwen/Qwen2.5-Coder-7B-Instruct
 
 Each dataset has a JSON-serialized "messages" column in OpenAI chat format
 plus metadata like instance_id, resolved, model, traj_id, and patch.
@@ -52,7 +52,6 @@ import dataclasses
 import math
 from dataclasses import dataclass
 
-import haliax
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 
@@ -63,8 +62,8 @@ from experiments.posttrain.instruction_datasets import (
 )
 from experiments.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
 from experiments.qwen3 import (
-    qwen2_5_coder_32b_instruct,
-    qwen2_5_coder_32b_instruct_tokenizer,
+    qwen2_5_coder_7b_instruct,
+    qwen2_5_coder_7b_instruct_tokenizer,
     qwen3_8b,
     qwen3_8b_tokenizer,
 )
@@ -123,18 +122,18 @@ STUDENT_CONFIGS: dict[str, StudentConfig] = {
         model_name_or_path="Qwen/Qwen3-8B",
         chat_template=QWEN_3_CHAT_TEMPLATE,
     ),
-    "qwen25-coder-32b-instruct": StudentConfig(
-        model_config=qwen2_5_coder_32b_instruct,
-        tokenizer=qwen2_5_coder_32b_instruct_tokenizer,
-        model_name_or_path="Qwen/Qwen2.5-Coder-32B-Instruct",
+    "qwen25-coder-7b-instruct": StudentConfig(
+        model_config=qwen2_5_coder_7b_instruct,
+        tokenizer=qwen2_5_coder_7b_instruct_tokenizer,
+        model_name_or_path="Qwen/Qwen2.5-Coder-7B-Instruct",
         chat_template=QWEN_2_5_INSTRUCT_CHAT_TEMPLATE,
     ),
 }
 
 TARGET_EPOCHS = 3
-TRAIN_BATCH_SIZE = 16
-MICROBATCH_SIZE = 16
-RESOURCES = ResourceConfig.with_tpu("v5p-32")
+DEFAULT_TRAIN_BATCH_SIZE = 8
+DEFAULT_MICROBATCH_SIZE = 4
+RESOURCES = ResourceConfig.with_tpu("v5p-8")
 RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
 
 
@@ -169,7 +168,6 @@ def build_swe_smith_sft(teacher: str, student: str = "qwen3-8b") -> tuple[Execut
         max_seq_len=32768,
         rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
         cross_entropy_block_size=32000,  # Process vocab in chunks to reduce memory during loss computation
-        gradient_checkpointing=haliax.ScanCheckpointPolicy(save_carries="offload"),
     )
 
     datasets = {teacher_config.hf_dataset_id: teacher_config.hf_dataset_id}
@@ -181,7 +179,7 @@ def build_swe_smith_sft(teacher: str, student: str = "qwen3-8b") -> tuple[Execut
     }
 
     total_examples = teacher_config.num_samples
-    num_train_steps = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
+    num_train_steps = math.ceil(TARGET_EPOCHS * total_examples / DEFAULT_TRAIN_BATCH_SIZE)
 
     warmup_steps = 5
     warmup_fraction = warmup_steps / num_train_steps if num_train_steps > 0 else 0.0
@@ -191,14 +189,16 @@ def build_swe_smith_sft(teacher: str, student: str = "qwen3-8b") -> tuple[Execut
         resources=RESOURCES,
         tokenizer=student_config.tokenizer,
         model_name_or_path=student_config.model_name_or_path,
-        train_batch_size=TRAIN_BATCH_SIZE,
-        per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
+        train_batch_size=DEFAULT_TRAIN_BATCH_SIZE,
+        per_device_parallelism=compute_per_device_parallelism(
+            DEFAULT_TRAIN_BATCH_SIZE, DEFAULT_MICROBATCH_SIZE, RESOURCES
+        ),
         per_device_eval_parallelism=8,
         num_train_steps=num_train_steps,
         learning_rate=1e-4,
         max_seq_len=32768,
         seed=42,
-        steps_per_checkpoint=(total_examples // TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
+        steps_per_checkpoint=(total_examples // DEFAULT_TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
         lr_schedule="cosine",
         warmup=warmup_fraction,
         decay=decay_fraction,

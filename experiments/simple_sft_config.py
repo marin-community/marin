@@ -28,23 +28,24 @@ def compute_per_device_parallelism(
         - per_device_parallelism = 8 / 4 = 2
         - gradient_accumulation = 128 / 8 = 16 steps
     """
-    num_devices = resources.chip_count()
+    num_chips = resources.chip_count()
 
-    if microbatch_size % num_devices != 0:
-        raise ValueError(f"microbatch_size ({microbatch_size}) must be divisible by " f"num_devices ({num_devices})")
+    if microbatch_size % num_chips != 0:
+        raise ValueError(f"microbatch_size ({microbatch_size}) must be divisible by num_chips ({num_chips})")
 
     if global_batch_size % microbatch_size != 0:
         raise ValueError(
             f"global_batch_size ({global_batch_size}) must be divisible by " f"microbatch_size ({microbatch_size})"
         )
 
-    per_device_parallelism = microbatch_size // num_devices
+    per_device_parallelism = microbatch_size // num_chips
     grad_accum_steps = global_batch_size // microbatch_size
 
     print(
         f"Gradient accumulation config: "
         f"global_batch={global_batch_size}, microbatch={microbatch_size}, "
-        f"num_devices={num_devices}, per_device_parallelism={per_device_parallelism}, "
+        f"num_chips={num_chips}, "
+        f"per_device_parallelism={per_device_parallelism}, "
         f"grad_accum_steps={grad_accum_steps}"
     )
 

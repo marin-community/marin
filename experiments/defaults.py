@@ -366,12 +366,13 @@ def default_train(
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
+                axes={"data": -1},
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
-                }
+                },
             ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
