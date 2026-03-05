@@ -711,8 +711,7 @@ def test_fused_ce_autotune_cache_url_uses_jax_cache_subdir(monkeypatch: pytest.M
     cache_url = fused_api._kernel_autotune_cache_url()
 
     assert (
-        cache_url
-        == "gs://my-cache-root/compiled/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json"
+        cache_url == "gs://my-cache-root/compiled/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json"
     )
 
 

@@ -30,7 +30,7 @@ from levanter.utils.logging import save_xla_dumps_to_wandb
 
 
 def eval_loss_loop(
-    loss_fn: LossFunctionWithMetrics, model, dataset, max_batches: Optional[int] = None, name: Optional[str] = None
+    loss_fn: LossFunctionWithMetrics, model, dataset, max_batches: int | None = None, name: str | None = None
 ) -> tuple[float, dict[str, float]]:
 
     total_loss = 0.0
@@ -87,8 +87,8 @@ def eval_loss_loop(
 def compute_validation_loss(
     loss_fn: LossFunctionWithMetrics,
     dataset: DataLoader,
-    max_batches: Optional[int] = None,
-    name: Optional[str] = None,
+    max_batches: int | None = None,
+    name: str | None = None,
 ):
     def compute_loss(info: StepInfo):
         loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
@@ -115,7 +115,7 @@ def compute_validation_loss(
 def wandb_xla_logger(config: WandbConfig):
     import wandb
 
-    last_mtime = wandb.run and wandb.run.start_time or time.time()
+    last_mtime = (wandb.run and wandb.run.start_time) or time.time()
 
     def log_xla_to_wandb(step: StepInfo):
         nonlocal last_mtime
@@ -237,19 +237,19 @@ def profile_ctx(
 
 
 __all__ = [
-    "eval_loss_loop",
-    "compute_validation_loss",
-    "wandb_xla_logger",
-    "profile",
-    "profile_ctx",
-    "Callback",
     "CBInfo",
+    "Callback",
+    "CallbackStateView",
     "JitCallback",
     "LambdaCallback",
+    "StateCallbackRunner",
     "StepInfo",
+    "compute_validation_loss",
+    "eval_loss_loop",
     "log_performance_stats",
     "log_step_info",
     "pbar_logger",
-    "CallbackStateView",
-    "StateCallbackRunner",
+    "profile",
+    "profile_ctx",
+    "wandb_xla_logger",
 ]

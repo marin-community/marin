@@ -169,9 +169,7 @@ def named_attention_mask_from_grug(
                 hax.named(kv_seg, (Batch, KeyPos)),
             )
         else:
-            raise ValueError(
-                f"segment_ids must be both rank-1 or both rank-2, got ranks {q_seg.ndim} and {kv_seg.ndim}"
-            )
+            raise ValueError(f"segment_ids must be both rank-1 or both rank-2, got ranks {q_seg.ndim} and {kv_seg.ndim}")
 
     return AttentionMask(
         is_causal=mask.is_causal,

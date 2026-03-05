@@ -48,7 +48,7 @@ jobs:
       - name: Create virtual environment
         run: uv venv
       - name: Install dependencies
-        run: uv pip install -e .
+        run: uv sync --extra train --extra cpu --frozen
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2

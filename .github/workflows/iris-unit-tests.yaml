@@ -38,4 +38,4 @@ jobs:
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          uv run --group dev python -m pytest -n4 --durations=5 --tb=short -m 'not slow and not docker' tests/
+          uv run --group dev python -m pytest -n4 --durations=5 --tb=short -m 'not slow and not docker' tests/iris/

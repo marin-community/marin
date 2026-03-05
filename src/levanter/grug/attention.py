@@ -15,7 +15,6 @@ from jaxtyping import Array, Bool, Float, Int
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
 
-
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 

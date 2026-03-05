@@ -11,7 +11,8 @@ OLMo 3 key differences from other models:
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence, Type, Union, cast
+from typing import cast
+from collections.abc import Sequence
 
 import equinox as eqx
 import jax.random as jrandom
@@ -59,12 +60,12 @@ class Olmo3Config(HFCompatConfig):
     attention_bias: bool = False
     attention_dropout: float = 0.0
     sliding_window: int = 4096
-    layer_types: Optional[Sequence[str]] = None
+    layer_types: Sequence[str] | None = None
 
     upcast_attn: bool = False
-    use_flash_attention: Optional[bool] = True
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
+    use_flash_attention: bool | None = True
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = None
 
     gradient_checkpointing: bool = True
     scan_layers: bool = True
@@ -74,7 +75,7 @@ class Olmo3Config(HFCompatConfig):
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
     reference_checkpoint: str = "allenai/Olmo-3-1025-7B"
-    tokenizer: Optional[str] = None
+    tokenizer: str | None = None
 
     @property
     def Embed(self) -> Axis:
@@ -91,7 +92,7 @@ class Olmo3Config(HFCompatConfig):
             self.num_heads % self.num_kv_heads == 0
         ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["Olmo3Config"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["Olmo3Config"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
@@ -122,7 +123,7 @@ class Olmo3Config(HFCompatConfig):
             rope=rope_config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfOlmo3Config:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfOlmo3Config:
         if config_overrides is None:
             config_overrides = {}
 
@@ -152,7 +153,7 @@ class Olmo3Config(HFCompatConfig):
         )
 
     @property
-    def model_type(self) -> Type["Olmo3LMHeadModel"]:
+    def model_type(self) -> type["Olmo3LMHeadModel"]:
         return Olmo3LMHeadModel
 
     def mk_LayerNorm(self, axis: AxisSpec) -> hnn.RmsNorm:
@@ -265,7 +266,7 @@ class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
+        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
@@ -322,21 +323,21 @@ class Olmo3Transformer(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
+        self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x = cast(NamedArray, self._layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"_layers": "layers"}
 
 
 class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config]):
     transformer: Olmo3Transformer
     embeddings: Olmo2Embedding
-    lm_head: Optional[hnn.Linear]
+    lm_head: hnn.Linear | None
 
     @property
     def config(self):
@@ -362,7 +363,7 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
 
         return Olmo3LMHeadModel(transformer, embeddings, lm_head)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {
             "transformer": "model",
             "embeddings": "model",
@@ -372,7 +373,7 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
     def __call__(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
+        attn_mask: NamedArray | AttentionMask | None = None,
         pos_ids: NamedArray | None = None,
         *,
         key=None,
@@ -392,7 +393,7 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,

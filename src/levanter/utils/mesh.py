@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from functools import cached_property
 from math import prod
-from typing import Union, Sequence, Tuple, Mapping, Dict
+from collections.abc import Sequence, Mapping
 
 from draccus import field
 
@@ -16,7 +16,7 @@ from jax.sharding import AxisType, Mesh
 DEFAULT_DP_AXES = ("replica_dcn", "replica", "data")
 DEFAULT_ICI_AXIS_SPEC = {"data": -1, "replica": 1, "model": 1}
 DEFAULT_DCN_AXIS_SPEC = {"replica_dcn": -1}
-DEFAULT_SHARED_MAPPING: Dict[str, str | Tuple[str, ...]] = {"mlp": "model", "heads": "model"}
+DEFAULT_SHARED_MAPPING: dict[str, str | tuple[str, ...]] = {"mlp": "model", "heads": "model"}
 
 
 @dataclass(frozen=True)
@@ -70,7 +70,7 @@ class MeshConfig:
 
         return mapping
 
-    def axis_shapes(self, num_devices: int, num_slices: int) -> tuple[Dict[str, int], Dict[str, int]]:
+    def axis_shapes(self, num_devices: int, num_slices: int) -> tuple[dict[str, int], dict[str, int]]:
         """
         Computes the ICI and DCN axis sizes based on the configuration. num_devices is the total number of devices,
         which are split over num_slices slices.
@@ -187,7 +187,7 @@ def create_mesh_from_axis_specs(
     return Mesh(device_mesh, tuple(axis_names), axis_types=axis_types)
 
 
-def _norm(v: Union[str, Sequence[str]]) -> Union[str, Tuple[str, ...]]:
+def _norm(v: str | Sequence[str]) -> str | tuple[str, ...]:
     if isinstance(v, (list, tuple)):
         v = tuple(v)
         return v if len(v) > 1 else v[0]

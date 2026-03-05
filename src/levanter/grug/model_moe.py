@@ -22,7 +22,6 @@ from .attention import AttentionMask, RotaryConfig, apply_rotary_embedding, atte
 from .loss import fused_linear_softmax_cross_entropy_loss
 from .sharding import Pbatch, unshard
 
-
 #### Conventions
 
 # Mesh meanings:
@@ -259,9 +258,7 @@ class Block(eqx.Module):
         )
 
     @named_call
-    def __call__(
-        self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array
-    ) -> tuple[Float[Array, "B S D"], dict]:
+    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> tuple[Float[Array, "B S D"], dict]:
         x = x + self.attn(self.rms_attn(x), mask)
         moe_out, extras = self.moe(self.rms_mlp(x))
         x = x + moe_out
@@ -379,10 +376,10 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
 
 
 __all__ = [
-    "CausalSelfAttention",
     "MOE",
-    "RMSNorm",
     "Block",
-    "Transformer",
+    "CausalSelfAttention",
     "GrugModelConfig",
+    "RMSNorm",
+    "Transformer",
 ]

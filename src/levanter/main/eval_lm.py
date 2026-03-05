@@ -3,7 +3,6 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 import equinox as eqx
 import jax
@@ -27,15 +26,14 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 
-
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class EvalLmConfig:
 
-    checkpoint_path: Optional[str] = None
-    hf_checkpoint: Optional[RepoRef] = None
+    checkpoint_path: str | None = None
+    hf_checkpoint: RepoRef | None = None
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     data: LmDataConfig = field(default_factory=LmDataConfig)
     max_eval_length: int = 2048
@@ -139,9 +137,7 @@ def main(config: EvalLmConfig):
                 raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
-            model = converter.load_pretrained(
-                model_config.model_type, ref=config.hf_checkpoint, dtype=mp.compute_dtype
-            )
+            model = converter.load_pretrained(model_config.model_type, ref=config.hf_checkpoint, dtype=mp.compute_dtype)
         else:
             assert False, "Should not get here"
 

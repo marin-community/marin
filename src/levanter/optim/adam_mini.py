@@ -132,9 +132,7 @@ def scale_with_mini(beta1, beta2, epsilon, mean_axis=(1,)):
         second_moment_buffer = otu.tree_zeros_like(params)  # Second moment
         count = jnp.zeros([], jnp.int32)
 
-        return ScaleByMiniState(
-            count=count, momentum_buffer=momentum_buffer, second_moment_buffer=second_moment_buffer
-        )
+        return ScaleByMiniState(count=count, momentum_buffer=momentum_buffer, second_moment_buffer=second_moment_buffer)
 
     def update_fn(updates, state, params=None):
         # Update momentum buffer (step 6 in algorithm)
@@ -153,9 +151,7 @@ def scale_with_mini(beta1, beta2, epsilon, mean_axis=(1,)):
                     squared = squared.repeat(update.shape[axis], axis=axis)
             return prev_moment * beta2 + squared * (1 - beta2)
 
-        second_moment_buffer = jax.tree_util.tree_map(
-            calc_and_update_second_moment, updates, state.second_moment_buffer
-        )
+        second_moment_buffer = jax.tree_util.tree_map(calc_and_update_second_moment, updates, state.second_moment_buffer)
 
         # Bias correction (steps 7 and 9 in algorithm)
         count_inc = optax.safe_increment(state.count)

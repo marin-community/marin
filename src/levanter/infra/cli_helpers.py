@@ -10,7 +10,6 @@ import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Optional
 
 import draccus
 import yaml
@@ -75,7 +74,7 @@ def gcloud_config():
     return out
 
 
-def get_default_zone() -> Optional[str]:
+def get_default_zone() -> str | None:
     try:
         result = subprocess.run(["gcloud", "config", "get-value", "compute/zone"], stdout=subprocess.PIPE, text=True)
         return result.stdout.strip()
@@ -168,9 +167,7 @@ def add_capacity_type_args(parser, config):
         dest="capacity_type",
     )
     add_arg(parser, config, ["--spot"], required=False, action="store_const", const="spot", dest="capacity_type")
-    add_arg(
-        parser, config, ["--reserved"], required=False, action="store_const", const="reserved", dest="capacity_type"
-    )
+    add_arg(parser, config, ["--reserved"], required=False, action="store_const", const="reserved", dest="capacity_type")
     add_arg(
         parser, config, ["--on-demand"], required=False, action="store_const", const="on-demand", dest="capacity_type"
     )

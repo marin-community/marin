@@ -27,7 +27,6 @@ from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 from levanter.visualization import compute_and_diff_log_probs, compute_and_visualize_log_probs
 
-
 logger = logging.getLogger(__name__)
 
 

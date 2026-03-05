@@ -62,9 +62,7 @@ class Embedding(eqx.Module, ReparamEnabled):
             init_scale = initializer_range
 
         all_axes = concat_axes(Vocab, Embed)
-        weight = hax.random.truncated_normal(key, all_axes, -3, 3) * (
-            init_scale * reparam_cls.init_scale(Vocab, Embed)
-        )
+        weight = hax.random.truncated_normal(key, all_axes, -3, 3) * (init_scale * reparam_cls.init_scale(Vocab, Embed))
         return Embedding(weight=weight, Vocab=Vocab, Embed=Embed, _reparam_cls=reparam_cls)
 
     def __call__(self, input_ids: NamedArray, *, key: PRNGKeyArray | None = None):

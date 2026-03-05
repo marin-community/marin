@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import chex
 import jax
@@ -26,9 +26,9 @@ class AdoptConfig(OptimizerConfig):
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-6
-    max_grad_norm: Optional[float] = 1.0
-    haps: Optional[list[int]] = None
-    schedule_list: Optional[list[str]] = None
+    max_grad_norm: float | None = 1.0
+    haps: list[int] | None = None
+    schedule_list: list[str] | None = None
 
     def build(self, num_train_steps):
         """Creates the optimizer"""
@@ -67,7 +67,7 @@ def scale_by_adopt(
     b2: float = 0.999,
     eps: float = 1e-6,
     eps_root: float = 0.0,
-    mu_dtype: Optional[Any] = None,
+    mu_dtype: Any | None = None,
     *,
     nesterov: bool = False,
 ) -> optax.GradientTransformation:

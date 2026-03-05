@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from functools import partial
-from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -30,8 +29,8 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
     dout_lse: Float[Array, "B"],
     *,
     block_size: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     if block_size <= 0:
@@ -114,8 +113,8 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
 @partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3))
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     block_size: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -135,8 +134,8 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
 
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     block_size: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -156,13 +155,11 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
 
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
     block_size: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
-    cotangents: tuple[
-        jax.Array | jax.custom_derivatives.SymbolicZero, jax.Array | jax.custom_derivatives.SymbolicZero
-    ],
+    cotangents: tuple[jax.Array | jax.custom_derivatives.SymbolicZero, jax.Array | jax.custom_derivatives.SymbolicZero],
 ) -> tuple[jax.Array, None, jax.Array]:
     x, labels, w, lse = residuals
     dout_loss, dout_lse = cotangents
@@ -195,8 +192,8 @@ def linear_softmax_cross_entropy_loss_xla(
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes | None = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:

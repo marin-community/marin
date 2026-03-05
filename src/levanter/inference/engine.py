@@ -8,7 +8,7 @@ import os
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import equinox as eqx
 import haliax as hax
@@ -72,7 +72,7 @@ class InferenceEngineConfig:
     max_seqs: int = 256
     """Maximum concurrent sequences (local slots)."""
 
-    max_pages: Optional[int] = None
+    max_pages: int | None = None
     """Total number of KV pages available. If None, inferred from :attr:`hbm_utilization`."""
 
     compute_dtype: jnp.dtype = jnp.bfloat16
@@ -85,7 +85,7 @@ class InferenceEngineConfig:
     """Maximum number of sequences to batch in prefill before flushing."""
 
     # Prefill buffer sizing
-    max_prefill_size: Optional[int] = None
+    max_prefill_size: int | None = None
     """Maximum number of tokens packed into the prefill buffer before a flush.
 
     If None, inferred at construction time from `tokenizer.model_max_length` when available; otherwise
@@ -163,7 +163,7 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
         )
         return int(config.max_seqs * max_pages_per_seq)
 
-    @functools.lru_cache(maxsize=None)
+    @functools.cache
     def cache_bytes(num_pages: int) -> int:
         if num_pages <= 0:
             raise ValueError("num_pages must be positive when sizing the KV cache.")
@@ -851,9 +851,7 @@ class InferenceEngine:
         prefill_work = self._prefill_prompts(batch)
         if prefill_work is None:
             return None
-        new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
-        )
+        new_state = _run_prefill(self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill)
 
         # _run_prefill returns (GenState, _DecodeOutputs)
         self.gen_state, outputs = new_state
@@ -1040,9 +1038,7 @@ class InferenceEngine:
         expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
         # Initialize fresh result buckets for this call
         for rid in call_rids:
-            self.results[rid] = {
-                k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
-            }
+            self.results[rid] = {k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])}
 
         # Validate requested stop-token shapes against configured capacity; do not resize dynamically
         ds = self.gen_state.decode_state

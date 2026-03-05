@@ -6,7 +6,6 @@ import gc
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 import haliax as hax
 import jax.numpy as jnp
@@ -56,18 +55,18 @@ class TrainLmConfig:
 
     z_loss_weight: float = 0.0
 
-    hf_save_path: Optional[str] = None
-    hf_upload: Optional[str] = None
+    hf_save_path: str | None = None
+    hf_upload: str | None = None
     hf_save_steps: int = 10000
-    hf_save_dtype: Optional[str] = None
+    hf_save_dtype: str | None = None
 
-    data_seed: Optional[int] = None  # if provided, will override the data seed from the trainer
-    initialize_from_checkpoint_path: Optional[str] = None
+    data_seed: int | None = None  # if provided, will override the data seed from the trainer
+    initialize_from_checkpoint_path: str | None = None
     """
     If provided, will initialize from this checkpoint, used for llama style ablation. This resets the data loader.
     Note that this differs from --trainer.initialize_from, which does not reset the data loader.
     """
-    eval_harness: Optional[LmEvalHarnessConfig] = None
+    eval_harness: LmEvalHarnessConfig | None = None
     eval_harness_steps: int = 10000
 
     # TODO: really need to add callback framework
@@ -258,7 +257,7 @@ def main(config: TrainLmConfig):
             else:
                 full_save_path = config.hf_save_path
 
-            save_dtype: Optional[jnp.dtype] = None
+            save_dtype: jnp.dtype | None = None
             if config.hf_save_dtype is not None:
                 try:
                     save_dtype = jnp.dtype(config.hf_save_dtype)

@@ -4,7 +4,7 @@
 import dataclasses
 from dataclasses import dataclass
 from functools import partial
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -38,7 +38,7 @@ class MuonConfig(OptimizerConfig):
     nesterov: bool = True
     backend_steps: int = 5  # Number of steps for Newton-Schulz orthogonalization
     weight_decay: float = 0.0
-    adam_weight_decay: Optional[float] = None
+    adam_weight_decay: float | None = None
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8

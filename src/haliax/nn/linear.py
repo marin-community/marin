@@ -4,7 +4,6 @@
 
 import dataclasses
 import math
-from typing import Optional
 
 import equinox as eqx
 import jax
@@ -153,14 +152,14 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
         else:
             return self.weight.axes[-len(self.Out) :] != self.Out
 
-    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
         # weight can be None for certain filtering things like LoRA
         scaled = dataclasses.replace(
             self, weight=self.weight * self.reparam.active_scale if self.weight is not None else None
         )
         return default_eqx_module_to_state_dict(scaled, prefix)
 
-    def from_state_dict(self: Mod, state_dict: StateDict, prefix: Optional[str] = None) -> Mod:
+    def from_state_dict(self: Mod, state_dict: StateDict, prefix: str | None = None) -> Mod:
         unscaled = default_eqx_module_from_state_dict(self, state_dict, prefix)
         if unscaled.weight is not None:
             unscaled = dataclasses.replace(unscaled, weight=unscaled.weight / self.reparam.active_scale)

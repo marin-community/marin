@@ -3,7 +3,6 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Optional
 
 import draccus
 
@@ -21,7 +20,7 @@ class LayerNormConfigBase(draccus.ChoiceRegistry, abc.ABC):
     use_bias: bool = False
 
     @classmethod
-    def default_choice_name(cls) -> Optional[str]:
+    def default_choice_name(cls) -> str | None:
         return "rms"
 
     @abc.abstractmethod

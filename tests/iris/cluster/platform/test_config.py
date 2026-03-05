@@ -203,7 +203,7 @@ scale_groups:
     def test_example_eu_west4_config_round_trips(self, tmp_path: Path):
         """Real example config from examples/marin.yaml round-trips correctly."""
         iris_root = Path(__file__).parent.parent.parent.parent
-        config_path = iris_root / "examples" / "marin.yaml"
+        config_path = iris_root / "examples" / "iris" / "marin.yaml"
         if not config_path.exists():
             pytest.skip("Example config not found")
 
@@ -690,8 +690,8 @@ scale_groups:
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
-            iris_root / "examples" / "marin.yaml",
-            iris_root / "examples" / "demo.yaml",
+            iris_root / "examples" / "iris" / "marin.yaml",
+            iris_root / "examples" / "iris" / "demo.yaml",
         ]
 
         for config_path in example_configs:

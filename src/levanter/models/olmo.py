@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union
+from collections.abc import Callable
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -31,7 +31,6 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-
 
 silence_transformer_nag()
 from transformers import Olmo2Config as HfOlmo2Config  # noqa: E402
@@ -71,9 +70,9 @@ class Olmo2Config(HFCompatConfig):
 
     # Attention-related config
     upcast_attn: bool = False
-    use_flash_attention: Optional[bool] = True
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
+    use_flash_attention: bool | None = True
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = None
 
     gradient_checkpointing: bool = True
     scan_layers: bool = True
@@ -83,7 +82,7 @@ class Olmo2Config(HFCompatConfig):
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
     reference_checkpoint: str = "allenai/OLMo-2-1124-7B"
-    tokenizer: Optional[str] = None
+    tokenizer: str | None = None
 
     # Axis
     @property
@@ -102,7 +101,7 @@ class Olmo2Config(HFCompatConfig):
         ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
     def hf_checkpoint_converter(
-        self, ref_checkpoint: Optional[str] = None
+        self, ref_checkpoint: str | None = None
     ) -> HFCheckpointConverter["Olmo2Config"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
@@ -132,7 +131,7 @@ class Olmo2Config(HFCompatConfig):
             rope=rope_config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfOlmo2Config:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfOlmo2Config:
         """Convert to HuggingFace's Olmo2Config
 
         Args:
@@ -169,7 +168,7 @@ class Olmo2Config(HFCompatConfig):
         )
 
     @property
-    def model_type(self) -> Type["Olmo2LMHeadModel"]:
+    def model_type(self) -> type["Olmo2LMHeadModel"]:
         return Olmo2LMHeadModel
 
     def mk_LayerNorm(self, axis: AxisSpec) -> hnn.RmsNorm:
@@ -270,7 +269,7 @@ class Olmo2MLP(eqx.Module):
 
     @staticmethod
     def init(
-        Embed: Axis, Mlp: Axis, activation_fn: Union[ActivationFunctionEnum, Callable], *, key, use_bias: bool = False
+        Embed: Axis, Mlp: Axis, activation_fn: ActivationFunctionEnum | Callable, *, key, use_bias: bool = False
     ) -> "Olmo2MLP":
         k_fc, k_up_proj, k_down_proj = jrandom.split(key, 3)
         gate_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_fc, use_bias=use_bias, out_first=True)
@@ -291,7 +290,7 @@ class Olmo2MLP(eqx.Module):
 
 
 class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
-    use_flash_attention: Optional[bool] = eqx.field(static=True, default=None)
+    use_flash_attention: bool | None = eqx.field(static=True, default=None)
     attention_dropout: float = eqx.field(static=True, default=0.0)
 
     @staticmethod
@@ -350,7 +349,7 @@ class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
+        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         key_proj, key_o = maybe_rng_split(key, 2)
 
@@ -417,7 +416,7 @@ class Olmo2DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
+        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
@@ -457,7 +456,7 @@ class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
+        self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
@@ -483,10 +482,10 @@ class Olmo2Embedding(ModuleWithStateDictSerialization, eqx.Module):
     def unembed(self, x: NamedArray):
         return self.token_embeddings.unembed(x)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"token_embeddings": "embed_tokens"}
 
-    def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
+    def resize_embeddings(self, new_size: int, key: PRNGKeyArray | None = None):
         new_weights = self.token_embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_weights)
 
@@ -494,7 +493,7 @@ class Olmo2Embedding(ModuleWithStateDictSerialization, eqx.Module):
 class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config]):
     transformer: Olmo2Transformer
     embeddings: Olmo2Embedding
-    lm_head: Optional[hnn.Linear]
+    lm_head: hnn.Linear | None
 
     @property
     def config(self):
@@ -520,7 +519,7 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
 
         return Olmo2LMHeadModel(transformer, embeddings, lm_head)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         """Map model parameter names to HF parameter names"""
         return {
             "transformer": "model",
@@ -531,7 +530,7 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
     def __call__(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
+        attn_mask: NamedArray | AttentionMask | None = None,
         pos_ids: NamedArray | None = None,
         *,
         key=None,
@@ -562,7 +561,7 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,

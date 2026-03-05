@@ -9,7 +9,6 @@ import os
 import subprocess
 import sys
 import time
-from typing import Optional
 
 import requests  # type: ignore
 
@@ -147,9 +146,7 @@ def start_tpu_vm_queued_resources(tpu_name, *, tpu_type, capacity_type, version,
             case "ACTIVE":
                 break
             case "FAILED":
-                raise RuntimeError(
-                    f"{tpu_name} creation failed: {tpu_stat['state']['failedData']['error']['message']}"
-                )
+                raise RuntimeError(f"{tpu_name} creation failed: {tpu_stat['state']['failedData']['error']['message']}")
             case _:
                 print(f"Status is {tpu_stat['state']['state']}. Waited {waited} minutes...")
 
@@ -164,7 +161,7 @@ def launch_job(
     full_image_id: str,
     env: dict[str, str],
     foreground: bool,
-    version: Optional[str] = None,
+    version: str | None = None,
 ):
     start_tpu_vm_queued_resources(
         tpu_name=tpu_name,
@@ -202,9 +199,7 @@ def add_ssh_key(ssh_key_filename):
             .decode("utf-8")
             .split()[1]
         )
-        existing_keys = (
-            subprocess.check_output(["ssh-add", "-l"], stderr=subprocess.STDOUT).decode("utf-8").split("\n")
-        )
+        existing_keys = subprocess.check_output(["ssh-add", "-l"], stderr=subprocess.STDOUT).decode("utf-8").split("\n")
         for key in existing_keys:
             if key_hash in key:
                 print("Existing key found in keychain, skipping ssh-add")

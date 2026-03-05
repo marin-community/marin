@@ -4,7 +4,6 @@
 # cf https://github.com/lucidrains/flash-attention-jax
 # cf https://tridao.me/publications/flash2/flash2.pdf
 # cf https://arxiv.org/pdf/2205.14135.pdf
-from typing import Optional, Tuple
 
 import equinox
 import jax
@@ -20,7 +19,6 @@ from haliax.types import PrecisionLike
 
 from levanter.layers.attention import AttentionMask, materialize_mask
 
-
 BLOCK_SIZE = 1024
 
 
@@ -32,15 +30,15 @@ def flash_attention(
     q: hax.NamedArray,
     k: hax.NamedArray,
     v: hax.NamedArray,
-    mask: Optional[AttentionMask | hax.NamedArray] = None,
-    bias: Optional[hax.NamedArray] = None,
-    attn_sink: Optional[hax.NamedArray] = None,
+    mask: AttentionMask | hax.NamedArray | None = None,
+    bias: hax.NamedArray | None = None,
+    attn_sink: hax.NamedArray | None = None,
     *,
     dropout: float = 0.0,
     inference: bool,
-    key: Optional[PRNGKeyArray] = None,
-    block_size: Optional[int] = None,
-    dtype: Optional[jnp.dtype] = None,
+    key: PRNGKeyArray | None = None,
+    block_size: int | None = None,
+    dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
     scaling_factor: float | None = None,
     logits_soft_cap: float | None = None,
@@ -116,19 +114,19 @@ def flash_attention(
 
 @equinox.filter_custom_vjp
 def _flash_attention(
-    qkv_sink: Tuple[hax.NamedArray, hax.NamedArray, hax.NamedArray, Optional[hax.NamedArray]],
+    qkv_sink: tuple[hax.NamedArray, hax.NamedArray, hax.NamedArray, hax.NamedArray | None],
     QPos: hax.Axis,
     KPos: hax.Axis,
     Key: hax.Axis,
-    mask: Optional[AttentionMask | hax.NamedArray] = None,
-    bias: Optional[hax.NamedArray] = None,
+    mask: AttentionMask | hax.NamedArray | None = None,
+    bias: hax.NamedArray | None = None,
     dropout: float = 0.0,
     *,
     inference: bool,
-    key: Optional[PRNGKeyArray] = None,
+    key: PRNGKeyArray | None = None,
     block_size: int,
     precision: PrecisionLike,
-    logits_soft_cap: Optional[float],
+    logits_soft_cap: float | None,
 ) -> hax.NamedArray:
     return _flash_attention_forward(
         None,
@@ -154,15 +152,15 @@ def _flash_attention_forward(
     QPos: hax.Axis,
     KPos: hax.Axis,
     Key: hax.AxisSelector,
-    mask: Optional[AttentionMask | hax.NamedArray],
-    bias: Optional[hax.NamedArray],
+    mask: AttentionMask | hax.NamedArray | None,
+    bias: hax.NamedArray | None,
     dropout: float,
     *,
     inference: bool,
-    key: Optional[PRNGKeyArray],
+    key: PRNGKeyArray | None,
     block_size: int,
     precision: PrecisionLike,
-    logits_soft_cap: Optional[float],
+    logits_soft_cap: float | None,
 ):
     del ignore
     q, k, v, attn_sink = qkv_sink
@@ -176,7 +174,7 @@ def _flash_attention_forward(
     Tc = KPos.size // block_size
 
     # Row axes: everything in q except (QPos, Key)
-    q_batch_axes: Tuple[hax.Axis, ...] = hax.eliminate_axes(q.axes, (QPos, Key))
+    q_batch_axes: tuple[hax.Axis, ...] = hax.eliminate_axes(q.axes, (QPos, Key))
 
     # output variables: O is the attention output, ell is the per-position log normalizer
     o_shape = _infer_attention_output_block_shape(QPos, KPos, Key, q, k, v)
@@ -203,7 +201,7 @@ def _flash_attention_forward(
         o_i = o[QPos, ds.block(i, block_size)]
 
         QPosBlock = QPos.resize(block_size)
-        row_axes_block: Tuple[hax.Axis, ...] = q_batch_axes + (QPosBlock,)
+        row_axes_block: tuple[hax.Axis, ...] = q_batch_axes + (QPosBlock,)
 
         sumexp_i = hax.zeros(row_axes_block, q.dtype)
         max_i = hax.full(row_axes_block, -jnp.inf, q.dtype)
@@ -306,15 +304,15 @@ def _flash_attention_backward(
     QPos: hax.Axis,
     KPos: hax.Axis,
     Key: hax.AxisSelector,
-    mask: Optional[AttentionMask | hax.NamedArray] = None,
-    bias: Optional[hax.NamedArray] = None,
+    mask: AttentionMask | hax.NamedArray | None = None,
+    bias: hax.NamedArray | None = None,
     dropout: float = 0.0,
     *,
     inference: bool,
-    key: Optional[PRNGKeyArray] = None,
+    key: PRNGKeyArray | None = None,
     block_size: int,
     precision: PrecisionLike,
-    logits_soft_cap: Optional[float] = None,
+    logits_soft_cap: float | None = None,
 ):
     del ignore
     O, L = residuals
@@ -423,7 +421,7 @@ def _flash_attention_backward(
     j, dQ, dK, dV = jax.lax.while_loop(lambda state: state[0] < Tc, do_kv_block, (0, dQ, dK, dV))
 
     if attn_sink is not None:
-        q_batch_axes: Tuple[hax.Axis, ...] = hax.eliminate_axes(q.axes, (QPos, Key))
+        q_batch_axes: tuple[hax.Axis, ...] = hax.eliminate_axes(q.axes, (QPos, Key))
         sink_prefix = attn_sink
         for ax in q_batch_axes:
             if ax not in sink_prefix.axes:

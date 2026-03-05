@@ -263,9 +263,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
     x = jax.random.normal(key, (tokens, hidden_dim), dtype=jnp.float32)
     selected_experts = jnp.zeros((tokens, topk), dtype=jnp.int32)
     combine_weights = jnp.full((tokens, topk), 0.5, dtype=jnp.float32)
-    w_up_gate = jax.random.normal(
-        jax.random.key(6), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
-    )
+    w_up_gate = jax.random.normal(jax.random.key(6), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32)
     w_down = jax.random.normal(jax.random.key(7), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32)
 
     with jax.set_mesh(mesh):

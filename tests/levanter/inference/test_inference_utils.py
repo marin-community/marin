@@ -44,9 +44,7 @@ def test_is_stop_signal_invalid_tokens_in_stop_sequences():
 def test_is_stop_signal_multiple_stop_sequences_one_matches():
     # Multiple stop_sequences, only one matches
     tail_tokens = hax.named(jnp.array([8, 9, 10], dtype=jnp.int32), axis=("position",))
-    stop_sequences = hax.named(
-        jnp.array([[1, 2, 3], [8, 9, 10], [4, 5, 6]], dtype=jnp.int32), axis=("seq", "position")
-    )
+    stop_sequences = hax.named(jnp.array([[1, 2, 3], [8, 9, 10], [4, 5, 6]], dtype=jnp.int32), axis=("seq", "position"))
     assert is_stop_signal(tail_tokens, stop_sequences)
 
 

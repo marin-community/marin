@@ -3,7 +3,8 @@
 
 import asyncio
 import os
-from typing import Generic, List, Sequence, TypeVar
+from typing import Generic, TypeVar
+from collections.abc import Sequence
 
 import jax
 import jax.numpy as jnp
@@ -98,9 +99,7 @@ class TreeStore(Generic[T]):
         For instance, HF's BatchEncoding is a dict of lists of numpy arrays.
         """
         futures = jtu.tree_map(
-            lambda writer, xs: writer.extend_async(
-                xs if isinstance(xs, PreparedBatch) else [np.asarray(x) for x in xs]
-            ),
+            lambda writer, xs: writer.extend_async(xs if isinstance(xs, PreparedBatch) else [np.asarray(x) for x in xs]),
             self.tree,
             batch,
             is_leaf=heuristic_is_leaf_batched,
@@ -137,7 +136,7 @@ class TreeStore(Generic[T]):
         else:
             return len(jax.tree.leaves(self.tree)[0])
 
-    async def get_batch(self, indices) -> List[T]:
+    async def get_batch(self, indices) -> list[T]:
         grouped = jtu.tree_map(lambda reader: reader.get_batch(indices), self.tree, is_leaf=heuristic_is_leaf)
 
         leaves, structure = jtu.tree_flatten(grouped, is_leaf=heuristic_is_leaf)
@@ -165,7 +164,7 @@ class TreeStore(Generic[T]):
             for i in range(len(self)):
                 yield self[i]
 
-    def get_batch_sync(self, indices) -> List[T]:
+    def get_batch_sync(self, indices) -> list[T]:
         # TODO: would be better to batch these up
         grouped = jtu.tree_map(lambda reader: reader.get_batch_sync(indices), self.tree, is_leaf=heuristic_is_leaf)
 
@@ -211,7 +210,7 @@ class TreeBatchPreparer(Generic[T]):
     def __init__(self, exemplar: T):
         self.exemplar = exemplar
 
-    def __call__(self, batch: List[T]) -> PyTree:
+    def __call__(self, batch: list[T]) -> PyTree:
         return jtu.tree_map(
             lambda _, *xs: PreparedBatch.from_batch([np.asarray(x) for x in xs]),
             self.exemplar,

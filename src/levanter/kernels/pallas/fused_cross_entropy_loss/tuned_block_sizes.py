@@ -3,14 +3,12 @@
 
 from dataclasses import dataclass
 import os
-from typing import Optional
 import warnings
 
 import jax
 import jax.numpy as jnp
 
 from .config import BlockSizes
-
 
 DEFAULT_DEVICE_KEY = "default"
 
@@ -383,11 +381,11 @@ _SCOPED_VMEM_LIMIT_ARG = "xla_tpu_scoped_vmem_limit_kib="
 _WARNED_HUGE_BATCH_SAFE_FALLBACK = False
 
 
-def _is_tpu_device(device_key: Optional[str]) -> bool:
+def _is_tpu_device(device_key: str | None) -> bool:
     return bool(device_key and device_key.startswith("TPU"))
 
 
-def _normalized_device_kind(device_kind: Optional[str]) -> Optional[str]:
+def _normalized_device_kind(device_kind: str | None) -> str | None:
     if device_kind is None and jax.devices():
         device_kind = jax.devices()[0].device_kind
     if not device_kind:
@@ -395,7 +393,7 @@ def _normalized_device_kind(device_kind: Optional[str]) -> Optional[str]:
     return device_kind.lower()
 
 
-def _device_key(device_kind: Optional[str]) -> Optional[str]:
+def _device_key(device_kind: str | None) -> str | None:
     device_kind = _normalized_device_kind(device_kind)
     if not device_kind:
         return None
@@ -422,13 +420,13 @@ def _device_key(device_kind: Optional[str]) -> Optional[str]:
     return None
 
 
-def _dtype_name(dtype: Optional[jnp.dtype]) -> Optional[str]:
+def _dtype_name(dtype: jnp.dtype | None) -> str | None:
     if dtype is None:
         return None
     return jnp.dtype(dtype).name
 
 
-def _shape_bucket(b: int, h: int, v: int, *, device_key: Optional[str]) -> Optional[str]:
+def _shape_bucket(b: int, h: int, v: int, *, device_key: str | None) -> str | None:
     for bucket in SHAPE_BUCKETS:
         if bucket.name.startswith("gb10-") and device_key != "NVIDIA GB10":
             continue
@@ -462,7 +460,7 @@ def _maybe_override_huge_batch_block_sizes(
     entry: BlockSizes,
     dtype_name: str,
     bucket: str,
-    device_key: Optional[str],
+    device_key: str | None,
 ) -> BlockSizes:
     if bucket != _HUGE_BATCH_BUCKET:
         return entry
@@ -512,8 +510,8 @@ def _is_valid_for_pallas_shape(
     *,
     b: int,
     h: int,
-    device_key: Optional[str],
-    device_kind: Optional[str],
+    device_key: str | None,
+    device_kind: str | None,
 ) -> bool:
     del device_kind
     if _is_tpu_device(device_key):
@@ -540,8 +538,8 @@ def _sanitize_for_pallas(
     *,
     b: int,
     h: int,
-    device_key: Optional[str],
-    device_kind: Optional[str],
+    device_key: str | None,
+    device_kind: str | None,
 ) -> BlockSizes:
     """Adjust inferred block sizes so B/H blocks divide local shapes when possible."""
     del device_kind
@@ -564,8 +562,8 @@ def infer_block_sizes(
     h: int,
     v: int,
     *,
-    dtype: Optional[jnp.dtype],
-    device_kind: Optional[str] = None,
+    dtype: jnp.dtype | None,
+    device_kind: str | None = None,
 ) -> BlockSizes:
     """Infer block sizes from a small tuned table.
 
@@ -594,8 +592,8 @@ def infer_block_sizes_with_tuned_match(
     h: int,
     v: int,
     *,
-    dtype: Optional[jnp.dtype],
-    device_kind: Optional[str] = None,
+    dtype: jnp.dtype | None,
+    device_kind: str | None = None,
 ) -> tuple[BlockSizes, bool]:
     """Infer block sizes and report whether they came from tuned lookup data."""
     normalized_device_kind = _normalized_device_kind(device_kind)
@@ -650,8 +648,8 @@ def infer_xla_v_block_size(
     h: int,
     v: int,
     *,
-    dtype: Optional[jnp.dtype],
-    device_kind: Optional[str] = None,
+    dtype: jnp.dtype | None,
+    device_kind: str | None = None,
 ) -> int:
     """Heuristic v-block size for the XLA streaming path."""
     del b, h, dtype
@@ -671,9 +669,9 @@ def infer_xla_v_block_size(
 
 __all__ = [
     "DEFAULT_DEVICE_KEY",
-    "ShapeBucket",
-    "TUNED_BLOCK_SIZES",
     "SHAPE_BUCKETS",
+    "TUNED_BLOCK_SIZES",
+    "ShapeBucket",
     "infer_block_sizes",
     "infer_block_sizes_with_tuned_match",
     "infer_xla_v_block_size",

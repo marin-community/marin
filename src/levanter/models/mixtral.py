@@ -5,7 +5,7 @@ import dataclasses
 import inspect
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Dict, List, Optional, Type, Union
+from collections.abc import Callable
 
 import equinox as eqx
 import jax
@@ -34,11 +34,9 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.types import BlockFoldable
 
-
 silence_transformer_nag()
 from transformers import MixtralConfig as HfMixtralConfig  # noqa: E402
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
-
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
@@ -81,14 +79,14 @@ class MixtralConfig(MistralConfig):
     n_routed_experts: int = 8
     n_shared_experts: int = 0
 
-    lbl_coef: Optional[float] = 0.01
-    rzl_coef: Optional[float] = 0.001
+    lbl_coef: float | None = 0.01
+    rzl_coef: float | None = 0.001
 
     # Attention-related config
     upcast_attn: bool = False
-    use_flash_attention: Optional[bool] = True
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = 2048
+    use_flash_attention: bool | None = True
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = 2048
 
     gradient_checkpointing: bool = True
     scan_layers: bool = True
@@ -99,7 +97,7 @@ class MixtralConfig(MistralConfig):
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
     reference_checkpoint: str = "mistralai/Mixtral-8x7B-v0.1"
-    tokenizer: Optional[str] = None
+    tokenizer: str | None = None
 
     # Axis
     @property
@@ -122,7 +120,7 @@ class MixtralConfig(MistralConfig):
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
 
     def hf_checkpoint_converter(
-        self, ref_checkpoint: Optional[str] = None
+        self, ref_checkpoint: str | None = None
     ) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
@@ -153,7 +151,7 @@ class MixtralConfig(MistralConfig):
             lbl_coef=hf_config.router_aux_loss_coef,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfMixtralConfig:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfMixtralConfig:
         """Convert to HuggingFace's MistralConfig
 
         Args:
@@ -189,7 +187,7 @@ class MixtralConfig(MistralConfig):
         )
 
     @property
-    def model_type(cls) -> Type["MixtralLMHeadModel"]:
+    def model_type(cls) -> type["MixtralLMHeadModel"]:
         return MixtralLMHeadModel
 
     def mk_LayerNorm(self, axis: AxisSpec) -> LayerNormBase:
@@ -260,7 +258,7 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
         Experts: Axis,
         Embed: Axis,
         Mlp: Axis,
-        activation_fn: Union[ActivationFunctionEnum, Callable],
+        activation_fn: ActivationFunctionEnum | Callable,
         *,
         key,
         use_bias: bool = False,
@@ -282,7 +280,7 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
         outputs = self.w2(hidden_states, group_sizes, key=k2)
         return outputs
 
-    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
         w = [self.w1.weight, self.w2.weight, self.w3.weight]
         out = {}
 
@@ -296,8 +294,8 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
 
         return out
 
-    def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "MixtralMoEMlp":
-        w: List[List[Array]] = [[], [], []]
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> "MixtralMoEMlp":
+        w: list[list[Array]] = [[], [], []]
         num_experts = self.w1.Experts.size
         for i in range(num_experts):
             for j in range(3):
@@ -414,9 +412,7 @@ class MixtralSparseMoeBlock(eqx.Module):
         def unpermute_sharded(out_repeat_sort_: Array, sort_idx_: Array):
             inv_sort_idx_ = jnp.argsort(sort_idx_)
             out_repeat_ = jnp.take(out_repeat_sort_, inv_sort_idx_, axis=0)
-            out_repeat_unflat_ = jnp.reshape(
-                out_repeat_, (-1, self.config.num_experts_per_tok, self.config.hidden_dim)
-            )
+            out_repeat_unflat_ = jnp.reshape(out_repeat_, (-1, self.config.num_experts_per_tok, self.config.hidden_dim))
 
             return out_repeat_unflat_
 
@@ -427,7 +423,7 @@ class MixtralSparseMoeBlock(eqx.Module):
         return out_repeat_unflat
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> tuple[NamedArray, Dict[str, NamedArray]]:
+    def __call__(self, x: NamedArray, *, key=None) -> tuple[NamedArray, dict[str, NamedArray]]:
         if x.has_axis("batch"):
             squash_axes = [x.resolve_axis("batch"), x.resolve_axis(self.config.max_Pos.name)]
         else:
@@ -480,7 +476,7 @@ class MixtralDecoderLayer(eqx.Module):
     block_sparse_moe: MixtralSparseMoeBlock
     input_layernorm: hnn.RmsNorm
     post_attention_layernorm: hnn.RmsNorm
-    shared_mlp: Optional[LlamaMlp]
+    shared_mlp: LlamaMlp | None
 
     @staticmethod
     def init(config: MistralConfig, *, key) -> "MixtralDecoderLayer":
@@ -504,8 +500,8 @@ class MixtralDecoderLayer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None
-    ) -> tuple[NamedArray, Dict[str, NamedArray]]:
+        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None
+    ) -> tuple[NamedArray, dict[str, NamedArray]]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
@@ -545,7 +541,7 @@ class MixtralTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray], *, key, pos_ids: NamedArray | None = None
+        self, x: NamedArray, attn_mask: NamedArray | None, *, key, pos_ids: NamedArray | None = None
     ) -> tuple[NamedArray, dict]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
@@ -576,7 +572,7 @@ class MixtralTransformer(eqx.Module):
 class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralConfig]):
     transformer: MixtralTransformer
     embeddings: LlamaEmbedding
-    lm_head: Optional[hnn.Linear]
+    lm_head: hnn.Linear | None
 
     @property
     def config(self):
@@ -605,7 +601,7 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
     def __call__(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
+        attn_mask: NamedArray | AttentionMask | None = None,
         pos_ids: NamedArray | None = None,
         *,
         key=None,
@@ -630,7 +626,7 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         pos_ids: NamedArray | None = None,
         *,
         key=None,
@@ -673,5 +669,5 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": "model", "embeddings": None}

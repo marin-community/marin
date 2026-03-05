@@ -5,7 +5,8 @@
 
 import dataclasses
 import functools
-from typing import Generic, Iterable, Iterator, Self, TypeVar
+from typing import Generic, Self, TypeVar
+from collections.abc import Iterable, Iterator
 
 import equinox as eqx
 import haliax as hax

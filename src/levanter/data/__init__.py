@@ -9,7 +9,6 @@ from .permutation import BlockShufflingDataset, EraShufflingDataset, Permutation
 from .sharded_datasource import ShardedDataSource, datasource_from_hf, datasource_from_json, datasource_from_jsonl
 from .utils import batched
 
-
 __all__ = [
     "AsyncDataset",
     "BatchProcessor",

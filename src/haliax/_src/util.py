@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Callable, MutableMapping, Sequence, TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar
+from collections.abc import Callable, MutableMapping, Sequence
 
 T = TypeVar("T")
 U = TypeVar("U")

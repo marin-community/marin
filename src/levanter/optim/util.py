@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Any, Callable, Literal, TypeVar
+from typing import Any, Literal, TypeVar
+from collections.abc import Callable
 
 import chex
 import equinox as eqx
@@ -20,7 +21,6 @@ from haliax.tree_util import scan_aware_tree_map
 from levanter.models.linear import has_linear_like_marker
 import levanter.tracker
 from levanter.utils.jax_utils import is_inexact_arrayish
-
 
 T = TypeVar("T")
 

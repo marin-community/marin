@@ -4,8 +4,7 @@
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Iterator
-
+from collections.abc import Iterator
 
 # Create a ThreadPoolExecutor
 _executor = ThreadPoolExecutor(max_workers=10)

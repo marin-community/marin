@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union, cast
+from typing import Any, cast
 
 import equinox as eqx
 import haliax as hax
@@ -222,18 +222,18 @@ class TrainDpoConfig:
 
     beta: float = 0.1
 
-    initialize_from_hf: Union[bool, str] = False
+    initialize_from_hf: bool | str = False
     use_hf_model_config: bool = False
 
     validation_split_fraction: float | None = 0.1
 
-    hf_save_path: Optional[str] = None
-    hf_upload: Optional[str] = None
+    hf_save_path: str | None = None
+    hf_upload: str | None = None
     hf_save_steps: int = 10000
-    hf_save_dtype: Optional[str] = None
+    hf_save_dtype: str | None = None
 
-    data_seed: Optional[int] = None
-    initialize_from_checkpoint_path: Optional[str] = None
+    data_seed: int | None = None
+    initialize_from_checkpoint_path: str | None = None
 
 
 def main(config: TrainDpoConfig):
@@ -376,9 +376,7 @@ def main(config: TrainDpoConfig):
             elif config.initialize_from_checkpoint_path is not None:
                 with use_cpu_device():
                     policy_model = eqx.filter_eval_shape(config.model.build, Vocab, key=init_policy_key)
-                    policy_model = load_checkpoint(
-                        policy_model, config.initialize_from_checkpoint_path, subpath="model"
-                    )
+                    policy_model = load_checkpoint(policy_model, config.initialize_from_checkpoint_path, subpath="model")
                 policy_model = hax.shard(policy_model, parameter_axis_mapping)
                 policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
             else:
@@ -451,7 +449,7 @@ def main(config: TrainDpoConfig):
             else:
                 full_save_path = config.hf_save_path
 
-            save_dtype: Optional[jnp.dtype] = None
+            save_dtype: jnp.dtype | None = None
             if config.hf_save_dtype is not None:
                 try:
                     save_dtype = jnp.dtype(config.hf_save_dtype)

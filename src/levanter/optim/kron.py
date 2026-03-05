@@ -5,7 +5,8 @@ import string
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Callable, Generic, List, Optional, Tuple, TypeVar, Union, cast
+from typing import Any, Generic, TypeVar, Union, cast
+from collections.abc import Callable
 
 import chex
 import jax
@@ -26,7 +27,7 @@ from levanter.optim.config import OptimizerConfig
 # Define type variables for the pytree structure
 T = TypeVar("T")
 PartitionSpecTree = TypeVar(
-    "PartitionSpecTree", bound=Union[PartitionSpec, List[PartitionSpec], Tuple[PartitionSpec, ...], dict, list, tuple]
+    "PartitionSpecTree", bound=PartitionSpec | list[PartitionSpec] | tuple[PartitionSpec, ...] | dict | list | tuple
 )
 
 # Type for the update probability schedule
@@ -87,27 +88,27 @@ class KronConfig(OptimizerConfig, Generic[PartitionSpecTree]):
     # some of these are changed from kron defaults to better suit levanter
     beta1: float = 0.9
     weight_decay: float = 0.1
-    max_grad_norm: Optional[float] = 1.0
+    max_grad_norm: float | None = 1.0
     normalize_grads: bool = False
     preconditioner_update_probability: UpdateProbSchedule = 0.05
     update_prob_flat_start: int = 500
     max_size_triangular: int = 25000
     min_ndim_triangular: int = 2
-    memory_save_mode: Optional[str] = None
+    memory_save_mode: str | None = None
     preconditioner_lr: float = 0.1
     preconditioner_init_scale: float = 1.0
-    mu_dtype: Optional[Union[str, jnp.dtype]] = None
-    precond_dtype: Optional[Union[str, jnp.dtype]] = None
-    precond_update_precision: Optional[str] = "tensorfloat32"
-    precond_grads_precision: Optional[str] = None
+    mu_dtype: str | jnp.dtype | None = None
+    precond_dtype: str | jnp.dtype | None = None
+    precond_update_precision: str | None = "tensorfloat32"
+    precond_grads_precision: str | None = None
     lax_map_scanned_layers: bool = False
     lax_map_batch_size: int = 8
     merge_small_dims: bool = True
     target_merged_dim_size: int = 8192
     partition_grads_into_blocks: bool = True
     block_size: int = 256
-    params_sharding: Optional[PartitionSpecTree] = None
-    preconditioner_sharding: Optional[tuple[str | None, str | None]] = None
+    params_sharding: PartitionSpecTree | None = None
+    preconditioner_sharding: tuple[str | None, str | None] | None = None
 
     def build(self, num_train_steps):
         """Creates the optimizer."""
@@ -197,21 +198,21 @@ def scale_by_kron(
     preconditioner_update_probability: UpdateProbSchedule = precond_update_prob_schedule(),
     max_size_triangular: int = 8192,
     min_ndim_triangular: int = 2,
-    memory_save_mode: Optional[str] = None,
+    memory_save_mode: str | None = None,
     preconditioner_lr: float = 0.1,
     preconditioner_init_scale: float = 1.0,
-    mu_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_update_precision: Optional[str] = "tensorfloat32",
-    precond_grads_precision: Optional[str] = None,
+    mu_dtype: str | jnp.dtype | None = None,
+    precond_dtype: str | jnp.dtype | None = None,
+    precond_update_precision: str | None = "tensorfloat32",
+    precond_grads_precision: str | None = None,
     lax_map_scanned_layers: bool = True,
     lax_map_batch_size: int = 8,
     merge_small_dims: bool = False,
     target_merged_dim_size: int = 2048,
     partition_grads_into_blocks: bool = False,
     block_size: int = 256,
-    params_sharding: Optional[PartitionSpecTree] = None,
-    preconditioner_sharding: Optional[tuple[str | None, str | None]] = None,
+    params_sharding: PartitionSpecTree | None = None,
+    preconditioner_sharding: tuple[str | None, str | None] | None = None,
     **kwargs,
 ) -> base.GradientTransformation:
     """
@@ -426,9 +427,7 @@ def scale_by_kron(
         if return_partition_specs_only:
             exprs, Qs_sharding_no_leading_dims = [jax.tree.map(lambda _, x: x[i], params, output) for i in range(2)]
         else:
-            Qs, exprs, Qs_sharding_no_leading_dims = [
-                jax.tree.map(lambda _, x: x[i], params, output) for i in range(3)
-            ]
+            Qs, exprs, Qs_sharding_no_leading_dims = [jax.tree.map(lambda _, x: x[i], params, output) for i in range(3)]
         Qs_sharding = None
         if have_qs_sharding:
             # add scan and stack dims to Qs sharding
@@ -918,30 +917,30 @@ def scale_by_kron(
 
 
 def kron(
-    learning_rate: Union[float, Callable[[int], float]] = 0.001,
+    learning_rate: float | Callable[[int], float] = 0.001,
     b1: float = 0.9,
     weight_decay: float = 0.0,
-    weight_decay_mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
+    weight_decay_mask: Any | Callable[[base.Params], Any] | None = None,
     normalize_grads: bool = False,
     preconditioner_update_probability: UpdateProbSchedule = precond_update_prob_schedule(),
     max_size_triangular: int = 8192,
     min_ndim_triangular: int = 2,
-    memory_save_mode: Optional[str] = None,
+    memory_save_mode: str | None = None,
     preconditioner_lr: float = 0.1,
     preconditioner_init_scale: float = 1.0,
-    mu_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_update_precision: Optional[str] = "tensorfloat32",
-    precond_grads_precision: Optional[str] = None,
-    scanned_layers: Optional[base.Params] = None,
+    mu_dtype: str | jnp.dtype | None = None,
+    precond_dtype: str | jnp.dtype | None = None,
+    precond_update_precision: str | None = "tensorfloat32",
+    precond_grads_precision: str | None = None,
+    scanned_layers: base.Params | None = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
     merge_small_dims: bool = False,
     target_merged_dim_size: int = 2048,
     partition_grads_into_blocks: bool = False,
     block_size: int = 256,
-    params_sharding: Optional[PartitionSpecTree] = None,
-    preconditioner_sharding: Optional[tuple[str | None, str | None]] = None,
+    params_sharding: PartitionSpecTree | None = None,
+    preconditioner_sharding: tuple[str | None, str | None] | None = None,
 ) -> base.GradientTransformation:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -1029,8 +1028,8 @@ def kron(
 
 
 def _get_preconditioner_types(
-    shape: Tuple[int, ...], max_size: int, min_ndim: int, mem_save_mode: Optional[str]
-) -> List[bool]:
+    shape: tuple[int, ...], max_size: int, min_ndim: int, mem_save_mode: str | None
+) -> list[bool]:
     if len(shape) == 0:
         return [True]
 
@@ -1374,7 +1373,7 @@ def _partitions(lst):
 
 def _merge_small_dims(
     shape_to_merge, max_dim, dim_diag, sharding_to_merge=None
-) -> Tuple[List[int], List[bool], Optional[PartitionSpec]]:
+) -> tuple[list[int], list[bool], PartitionSpec | None]:
     if not shape_to_merge:  # handles scalar shape ()
         return [], [True], PartitionSpec() if sharding_to_merge is not None else None
     if np.all(np.array(shape_to_merge) == 1):  # handles shape (1,)
@@ -1418,7 +1417,7 @@ def _merge_small_dims(
 
     merged_shape = []
     merged_diag = []
-    merged_sharding: List[Union[tuple, None]] = []
+    merged_sharding: list[tuple | None] = []
 
     for group in best_partition:
         merged_shape.append(np.prod([shape_to_merge[i] for i in group]))
@@ -1480,7 +1479,7 @@ def _unstack_and_unpad_matrices(stacked_array, original_shapes):
 
 
 # unused fns (can be used for stacking partitions without padding):
-def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
+def _sort_and_group_matrices(matrix_shapes: list[tuple[int, ...]]):
     indexed_list = list(enumerate(matrix_shapes))
     sorted_indexed = sorted(indexed_list, key=lambda x: x[1])
     sorted_shapes = [shape for _, shape in sorted_indexed]

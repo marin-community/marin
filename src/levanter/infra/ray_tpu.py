@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import draccus
 import ray
@@ -25,8 +25,8 @@ from ray.dashboard.modules.job.sdk import JobSubmissionClient
 from levanter.infra.docker import make_docker_run_command
 
 __all__ = [
-    "run_docker_on_pod",
     "RunDockerOnPodConfig",
+    "run_docker_on_pod",
     "submit_tpu_job_on_ray",
 ]
 
@@ -87,7 +87,7 @@ class RunDockerOnPodConfig:
     node_count: int = 1
 
 
-def submit_tpu_job_on_ray(config: RunDockerOnPodConfig, ray_address: str, run_id: Optional[str] = None):
+def submit_tpu_job_on_ray(config: RunDockerOnPodConfig, ray_address: str, run_id: str | None = None):
     """
     Submit a job to run on a TPU pod on a Ray cluster. This programmatically submits a job to the Ray cluster.
     This should be run on your local machine, not on the Ray cluster itself.
@@ -122,7 +122,7 @@ def _make_unique_job_id(client, run_id):
     try:
         while client.get_job_status(job_id) is not None:
             job_id = f"{run_id}-{time.time_ns()}"
-    except Exception as e:  # noqa
+    except Exception as e:
         if "does not exist" in str(e):
             pass
         else:

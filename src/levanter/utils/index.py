@@ -1,8 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Generic, Iterable, Iterator, TypeVar
-
+from typing import Generic, TypeVar
+from collections.abc import Iterable, Iterator
 
 T = TypeVar("T")
 

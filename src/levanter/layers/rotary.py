@@ -3,7 +3,6 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Tuple
 
 import draccus
 import equinox as eqx
@@ -273,9 +272,7 @@ class YarnRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
 RotaryEmbeddingsConfig.register_subclass("yarn", YarnRotaryEmbeddingsConfig)
 
 
-def rotary_pos_emb(
-    HeadSize: Axis, Pos: Axis, theta: float = 10000, scale: float = 1.0
-) -> Tuple[NamedArray, NamedArray]:
+def rotary_pos_emb(HeadSize: Axis, Pos: Axis, theta: float = 10000, scale: float = 1.0) -> tuple[NamedArray, NamedArray]:
     with jax.ensure_compile_time_eval():
         HeadHalfSize = HeadSize.resize(HeadSize.size // 2)
         inv_freq: NamedArray = 1.0 / (theta ** (hax.arange(HeadHalfSize, step=2) / HeadSize.size)) / scale

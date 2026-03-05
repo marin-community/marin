@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 __all__ = [
+    "cb_compute_and_visualize_log_probs",
     "cb_compute_entropies",
     "cb_compute_top2_gap",
     "compute_entropy_histogram",
     "compute_top2_gap_histogram",
     "summary_statistics_for_tree",
-    "cb_compute_and_visualize_log_probs",
     "visualize_log_prob_diff",
     "visualize_log_probs",
 ]

@@ -4,7 +4,8 @@
 
 import dataclasses
 from types import EllipsisType
-from typing import Mapping, NoReturn, Sequence
+from typing import NoReturn
+from collections.abc import Mapping, Sequence
 
 from haliax.axis import Axis, AxisSelector
 

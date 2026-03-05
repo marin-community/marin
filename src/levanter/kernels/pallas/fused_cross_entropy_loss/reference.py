@@ -1,14 +1,13 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 
-def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[float]) -> Float[Array, "B V"]:
+def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: float | None) -> Float[Array, "B V"]:
     if logit_soft_cap is None:
         return logits
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
@@ -19,10 +18,10 @@ def linear_softmax_cross_entropy_loss_reference(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
     *,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
-    block_sizes: Optional[object] = None,
+    block_sizes: object | None = None,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Reference loss + logsumexp for linear softmax cross-entropy.
@@ -66,8 +65,8 @@ def linear_softmax_cross_entropy_loss_streaming(
     w: Float[Array, "H V"],
     *,
     block_size: int,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:

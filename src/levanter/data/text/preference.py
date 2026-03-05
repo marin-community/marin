@@ -11,7 +11,7 @@ import functools
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, TypedDict
+from typing import Any, Literal, TypedDict
 import dataclasses
 
 import equinox as eqx
@@ -206,7 +206,7 @@ class PreferenceChatProcessor(BatchProcessor[dict, ProcessedPreferenceChatDict])
         return self._chosen.num_cpus
 
     @property
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         return {
             "chosen": self._chosen.metadata,
             "rejected": self._rejected.metadata,

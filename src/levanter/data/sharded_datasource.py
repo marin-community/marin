@@ -7,7 +7,8 @@ import json
 import os
 import warnings
 from functools import cached_property
-from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
+from typing import Any, Generic, TypeVar
+from collections.abc import Callable, Iterable, Iterator, Sequence, Sized
 
 import datasets
 import numpy as np
@@ -323,7 +324,7 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
                 raise ValueError(f"Unknown format {format}")
 
 
-class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, str]]):
+class AudioTextUrlDataSource(UrlBackedShardedDataSource[tuple[np.ndarray, int, str]]):
     """
     Dataset for various audio and text formats.
     """
@@ -336,7 +337,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
 
     @staticmethod
     def resolve_audio_pointer(audio_pointer, sampling_rate) -> dict[str, Any]:
-        import librosa  # noqa F401
+        import librosa
 
         def _load_audio_file(file_name, sampling_rate):
             with open_url(audio_pointer, "rb", compression="infer") as f:
@@ -362,7 +363,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
             raise ValueError(f"Unsupported audio format {audio_pointer}")
         return audio
 
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[Tuple[np.ndarray, int, str]]:
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[tuple[np.ndarray, int, str]]:
         url = self._shard_name_to_url_mapping[shard_name]
         i = 0
         with open_url(url, "r", compression="infer") as f:
@@ -508,7 +509,7 @@ class ParquetDataSource(UrlBackedShardedDataSource[dict]):
 
 
 def _mk_shard_name_mapping(urls):
-    missing_urls: List[str] = []
+    missing_urls: list[str] = []
 
     def _expand_or_placeholder(url):
         expanded = list(expand_glob(url))

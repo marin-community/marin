@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import chex
 import jax
@@ -27,7 +27,7 @@ class MarsConfig(OptimizerConfig):
     beta2: float = 0.99
     gamma: float = 0.025
     epsilon: float = 1e-8
-    max_grad_norm: Optional[float] = 1.0
+    max_grad_norm: float | None = 1.0
 
     def build(self, num_train_steps):
         """Creates the optimizer"""
@@ -69,7 +69,7 @@ def scale_by_mars(
     eps: float = 1e-8,
     eps_root: float = 0.0,
     max_grad_norm: float = 0.0,
-    mu_dtype: Optional[Any] = None,
+    mu_dtype: Any | None = None,
 ) -> optax.GradientTransformation:
     r"""Rescale updates according to the Mars algorithm.
 

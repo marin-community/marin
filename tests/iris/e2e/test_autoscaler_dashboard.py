@@ -35,7 +35,7 @@ from .conftest import (
     wait_for_dashboard_ready,
 )
 
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "iris" / "demo.yaml"
 
 pytestmark = pytest.mark.e2e
 

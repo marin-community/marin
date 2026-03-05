@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Type, cast
+from typing import cast
 
 import equinox as eqx
 import jax.random as jrandom
@@ -25,7 +25,6 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.types import BlockFoldable
 
-
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers import Qwen2Config as HfQwenConfig  # noqa: E402
@@ -38,7 +37,7 @@ class QwenConfig(LlamaConfig):
     """Extends LlamaConfig with Qwen specific features"""
 
     use_sliding_window: bool = False
-    sliding_window: Optional[int] = None
+    sliding_window: int | None = None
     max_window_layers: int = 0  # Only apply sliding window beyond this layer
 
     def __post_init__(self):
@@ -46,7 +45,7 @@ class QwenConfig(LlamaConfig):
             self.num_heads % self.num_kv_heads == 0
         ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["QwenConfig"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["QwenConfig"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
@@ -77,7 +76,7 @@ class QwenConfig(LlamaConfig):
             use_bias=not getattr(hf_config, "no_bias", True),
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwenConfig:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfQwenConfig:
         if config_overrides is None:
             config_overrides = {}
 
@@ -105,7 +104,7 @@ class QwenConfig(LlamaConfig):
         )
 
     @property
-    def model_type(self) -> Type["QwenLMHeadModel"]:
+    def model_type(self) -> type["QwenLMHeadModel"]:
         return QwenLMHeadModel
 
     def flops_per_token(self, vocab_size: int, context_length: int):
@@ -163,7 +162,7 @@ class QwenDecoderLayer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
+        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
@@ -211,7 +210,7 @@ class QwenTransformer(LlamaTransformer):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
+        self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
@@ -223,7 +222,7 @@ class QwenTransformer(LlamaTransformer):
 class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization):
     transformer: QwenTransformer
     embeddings: LlamaEmbedding  # Can reuse Llama embeddings
-    lm_head: Optional[hnn.Linear]
+    lm_head: hnn.Linear | None
 
     @property
     def config(self) -> QwenConfig:
@@ -236,7 +235,7 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -286,7 +285,7 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
 
         return QwenLMHeadModel(transformer, embeddings, lm_head)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": "model", "embeddings": None}
 
 
@@ -305,10 +304,10 @@ class Qwen3Config(LlamaConfig):
     sliding_window: int = 4096  # Qwen-3 uses sliding window by default
 
     @property  # type: ignore[override]
-    def model_type(self):  # noqa: D401
+    def model_type(self):
         return Qwen3LMHeadModel
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["Qwen3Config"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["Qwen3Config"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
@@ -317,7 +316,7 @@ class Qwen3Config(LlamaConfig):
             HfConfigClass=HfQwen3Config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwen3Config:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfQwen3Config:
         if config_overrides is None:
             config_overrides = {}
 

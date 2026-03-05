@@ -7,7 +7,8 @@ from __future__ import annotations
 import dataclasses
 import functools as ft
 import inspect
-from typing import Any, Callable, Literal, ParamSpec, Protocol, Sequence, TypeVar, overload
+from typing import Any, Literal, ParamSpec, Protocol, TypeVar, overload
+from collections.abc import Callable, Sequence
 
 import equinox as eqx
 import jax
@@ -171,7 +172,7 @@ class ScanCheckpointPolicy:
             raise ValueError(f"Invalid checkpoint policy {remat_policy}")
 
     @staticmethod
-    def _mk(remat_policy: bool | str | "ScanCheckpointPolicy") -> "ScanCheckpointPolicy":
+    def _mk(remat_policy: bool | str | ScanCheckpointPolicy) -> ScanCheckpointPolicy:
         if isinstance(remat_policy, ScanCheckpointPolicy):
             return remat_policy
         else:
@@ -416,9 +417,7 @@ def scan(
                     checkpointed_fn, init, leaves, outer_block_size, reverse=reverse, unroll=unroll, length=axis_size
                 )
             else:
-                carry, ys = jax.lax.scan(
-                    checkpointed_fn, init, leaves, reverse=reverse, unroll=unroll, length=axis_size
-                )
+                carry, ys = jax.lax.scan(checkpointed_fn, init, leaves, reverse=reverse, unroll=unroll, length=axis_size)
 
         ys = jax.tree_util.tree_map(_prepend_named_batch_axis(true_axis), ys, is_leaf=_is_passive_array)
 

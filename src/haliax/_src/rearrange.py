@@ -6,7 +6,7 @@
 import dataclasses
 import typing
 from types import EllipsisType
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 import jax.lax
 import jax.numpy as jnp

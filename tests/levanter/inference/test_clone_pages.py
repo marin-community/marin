@@ -79,9 +79,7 @@ def test_kv_cache_copy_page():
     dst_page = 2
     k_pattern = hax.full_like(kv.kv_pages["page", src_page, "kv_head", 0::2], 7.0)
     v_pattern = hax.full_like(kv.kv_pages["page", src_page, "kv_head", 1::2], 3.0)
-    kv_pattern = hax.stack("inter", [k_pattern, v_pattern]).rearrange(
-        "{inter kv_head} -> ... (kv_head: kv_head inter)"
-    )
+    kv_pattern = hax.stack("inter", [k_pattern, v_pattern]).rearrange("{inter kv_head} -> ... (kv_head: kv_head inter)")
     kv = dataclasses.replace(kv, kv_pages=kv.kv_pages.at["page", src_page].set(kv_pattern))
 
     kv2 = kv.copy_page(src_page, dst_page)

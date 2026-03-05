@@ -273,9 +273,7 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
                 variants.append(BenchVariant(name="pallas_fwd_xw_bf16", implementation="pallas_tpu", fwd_xw_bf16=True))
             if args.compare_fwd_dot_accum_bf16:
                 variants.append(
-                    BenchVariant(
-                        name="pallas_fwd_dot_accum_bf16", implementation="pallas_tpu", fwd_dot_accum_bf16=True
-                    )
+                    BenchVariant(name="pallas_fwd_dot_accum_bf16", implementation="pallas_tpu", fwd_dot_accum_bf16=True)
                 )
             if args.compare_fwd_full_h_dot:
                 variants.append(
@@ -749,9 +747,7 @@ def main() -> None:
     use_shard_map = args.shard_map
     data_shards = args.data_shards or len(jax.devices())
     block_sizes = BlockSizes.get_default() if args.block_sizes == "default" else None
-    explicit_block_sizes = any(
-        value is not None for value in (args.b_block_size, args.h_block_size, args.v_block_size)
-    )
+    explicit_block_sizes = any(value is not None for value in (args.b_block_size, args.h_block_size, args.v_block_size))
     if explicit_block_sizes:
         if args.block_sizes != "default":
             raise ValueError("--b/h/v-block-size overrides require --block-sizes default.")

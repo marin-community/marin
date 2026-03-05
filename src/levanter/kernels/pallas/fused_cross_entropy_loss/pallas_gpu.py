@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from functools import partial
 import os
-from typing import Optional
 
 import jax
 from jax.experimental import pallas as pl
@@ -15,7 +14,6 @@ from jaxtyping import Array, Float, Int
 from .config import BlockSizes
 from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
-
 
 # Empirical launch guardrails from Triton shared-memory launch failures.
 # H100 has 232,448 bytes per-SM shared memory; kernel overhead (input tiles,
@@ -33,7 +31,7 @@ _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
 _GB10_NATIVE_FORWARD_OPT_IN_ENV_VAR = "LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD"
 
 
-def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
+def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: float | None) -> jax.Array:
     if logit_soft_cap is None:
         return logits
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
@@ -58,13 +56,13 @@ def _gb10_native_forward_opt_in_enabled() -> bool:
     return opt_in_raw.lower() in {"1", "true", "yes", "on"}
 
 
-def _max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
+def _max_weight_tile_bytes_for_device(device_kind: str) -> int | None:
     if "nvidia" in device_kind:
         return _NVIDIA_WEIGHT_TILE_BYTES_LIMIT
     return None
 
 
-def _max_h_tiles_for_device(device_kind: str) -> Optional[int]:
+def _max_h_tiles_for_device(device_kind: str) -> int | None:
     if "gb10" in device_kind:
         return _GB10_MAX_H_TILES
     return None
@@ -107,7 +105,7 @@ class PallasUnsupportedError(NotImplementedError):
 
 def _validate_inputs(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
     block_sizes: BlockSizes,
 ) -> None:
@@ -207,7 +205,7 @@ def _forward_pallas_gpu_tile_kernel(
     h_block_size: int,
     num_h_blocks: int,
     v_block_size: int,
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
 ):
     """Compute per-(B block, V block) partials for streaming softmax reduction."""
@@ -273,7 +271,7 @@ def _forward_pallas_gpu_tile_kernel(
 )
 def _linear_softmax_cross_entropy_loss_pallas_gpu_tiled(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
     *,
     b_block_size: int,
@@ -283,7 +281,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_tiled(
     num_v_blocks: int,
     num_h_blocks: int,
     v_block_size: int,
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "NB NV BB"], Float[Array, "NB NV BB"], Float[Array, "NB NV BB"]]:
     """Phase 1: parallel grid over (B-block, V-block) producing reduction partials."""
@@ -360,7 +358,7 @@ def _reduce_partials_flash_style(
 )
 def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
     *,
     b_block_size: int,
@@ -370,7 +368,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
     num_v_blocks: int,
     num_h_blocks: int,
     v_block_size: int,
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     return_argmax: bool = False,
 ) -> (
@@ -383,7 +381,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
     x_blocks = x.reshape((num_b_blocks, b_block_size, h_pad))
     label_blocks = labels.reshape((num_b_blocks, b_block_size)).astype(jnp.int32)
 
-    def block_forward(x_block: Float[Array, "BB H"], labels_block: Int[Array, "BB"]):
+    def block_forward(x_block: Float[Array, "BB H"], labels_block: Int[Array, BB]):
         valid_rows = labels_block >= 0
         running_m = jnp.full((b_block_size,), -jnp.inf, dtype=jnp.float32)
         running_l = jnp.zeros((b_block_size,), dtype=jnp.float32)
@@ -461,16 +459,16 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
 )
 def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes | None = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     gb10_native_forward_opt_in: bool = False,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[Float[Array, B], Float[Array, B]] | tuple[Float[Array, B], Float[Array, B], Int[Array, B]]:
     """GPU Pallas implementation returning per-example loss and logsumexp."""
     device_kind = _device_kind()
     is_gb10 = "gb10" in device_kind
@@ -627,14 +625,14 @@ def _custom_backward_v_block_size(
 @partial(jax.jit, static_argnames=["v_block_size", "logit_soft_cap", "precision"])
 def _backward_streaming_from_lse(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
-    lse: Float[Array, "B"],
-    g_loss: Float[Array, "B"],
-    g_lse: Float[Array, "B"],
+    lse: Float[Array, B],
+    g_loss: Float[Array, B],
+    g_lse: Float[Array, B],
     *,
     v_block_size: int,
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Streaming backward pass over vocab blocks using saved LSE."""
@@ -711,14 +709,14 @@ def _backward_streaming_from_lse(
 @partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6, 7))
 def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
     block_sizes: BlockSizes | None,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     gb10_native_forward_opt_in: bool,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+) -> tuple[Float[Array, B], Float[Array, B]]:
     return _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
         x,
         labels,
@@ -733,11 +731,11 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
 
 def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
     block_sizes: BlockSizes | None,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     gb10_native_forward_opt_in: bool,
 ):
@@ -759,8 +757,8 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
 
 def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
     block_sizes: BlockSizes | None,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     gb10_native_forward_opt_in: bool,
     residuals,
@@ -803,16 +801,16 @@ _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward.defvjp(
 )
 def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes | None = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     gb10_native_forward_opt_in: bool = False,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[Float[Array, B], Float[Array, B]] | tuple[Float[Array, B], Float[Array, B], Int[Array, B]]:
     if return_argmax:
         return _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
             x,
@@ -839,15 +837,15 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
 
 def linear_softmax_cross_entropy_loss_pallas_gpu(
     x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
+    labels: Int[Array, B],
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes | None = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[Float[Array, B], Float[Array, B]] | tuple[Float[Array, B], Float[Array, B], Int[Array, B]]:
     device_kind = _device_kind()
     is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
     if "gb10" in device_kind and not is_gb10_bf16:
@@ -876,4 +874,4 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
     )
 
 
-__all__ = ["linear_softmax_cross_entropy_loss_pallas_gpu", "PallasUnsupportedError"]
+__all__ = ["PallasUnsupportedError", "linear_softmax_cross_entropy_loss_pallas_gpu"]

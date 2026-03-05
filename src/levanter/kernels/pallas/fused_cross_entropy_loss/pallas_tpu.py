@@ -6,9 +6,8 @@
 # Levanter's API and add optional logsumexp penalty, logit soft-cap, and
 # external loss weighting support.
 
-from functools import lru_cache, partial
+from functools import partial, cache
 import math
-from typing import Optional
 
 import jax
 from jax._src import ad_util
@@ -158,7 +157,7 @@ def _bwd_cost_estimate(
     )
 
 
-def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
+def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: float | None) -> jax.Array:
     if logit_soft_cap is None:
         return logits
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
@@ -272,10 +271,10 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
     *,
     v_dim: int,
     v_compute_block_size: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
-    dot_preferred_element_type: Optional[jnp.dtype],
+    dot_preferred_element_type: jnp.dtype | None,
 ):
     """Forward kernel for streaming LSE with an inner fori loop over V subtile blocks."""
     core_index, b_index, v_index, h_index = (pl.program_id(i) for i in range(4))
@@ -350,8 +349,8 @@ def _linear_softmax_lse_forward_fori(
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     v_outer_mult: int,
 ) -> Float[Array, "B"]:
@@ -364,9 +363,7 @@ def _linear_softmax_lse_forward_fori(
     v_compute_block_size = block_sizes.v_block_size
     v_outer_block_size = block_sizes.v_block_size * v_outer_mult
     if v_outer_block_size % NUM_LANES != 0:
-        raise PallasUnsupportedError(
-            f"v_outer_block_size must be a multiple of {NUM_LANES}, got {v_outer_block_size}."
-        )
+        raise PallasUnsupportedError(f"v_outer_block_size must be a multiple of {NUM_LANES}, got {v_outer_block_size}.")
 
     num_v_outer_blocks = math.ceil(v_dim / v_outer_block_size)
     out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
@@ -431,8 +428,8 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
@@ -480,8 +477,8 @@ def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
     x_write_sem,
     w_write_sem,
     *,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
 ):
     """Backward kernel with an explicit core grid axis (per-core w_grad partials)."""
@@ -652,8 +649,8 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Backward Pallas kernel wrapper (combined dx/dw)."""
@@ -759,8 +756,8 @@ def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     return _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
@@ -783,13 +780,13 @@ def _zeros_like_if_needed(ct, like):
     return ct
 
 
-@lru_cache(maxsize=None)
+@cache
 def _make_custom_vjp(
     b_block_size: int,
     h_block_size: int,
     v_block_size: int,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     use_bwd_xla_streaming: bool,
 ):
@@ -864,8 +861,8 @@ def linear_softmax_cross_entropy_loss_pallas(
     w: Float[Array, "H V"],
     *,
     block_sizes: BlockSizes,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:

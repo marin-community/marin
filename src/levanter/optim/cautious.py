@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import chex
 import jax
@@ -26,7 +26,7 @@ class CautiousConfig(OptimizerConfig):
     beta2: float = 0.95
     gamma: float = 0.025
     epsilon: float = 1e-8
-    max_grad_norm: Optional[float] = 1.0
+    max_grad_norm: float | None = 1.0
     adamc_weight_decay: bool = False
     """
     If set, use the AdamC corrected weight decay, which keeps
@@ -79,7 +79,7 @@ def scale_by_cautious(
     b2: float = 0.999,
     eps: float = 1e-8,
     eps_root: float = 0.0,
-    mu_dtype: Optional[Any] = None,
+    mu_dtype: Any | None = None,
 ) -> optax.GradientTransformation:
     r"""Rescale updates according to the Cautious algorithm.
 

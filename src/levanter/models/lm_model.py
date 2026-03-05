@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Generic, Optional, Type, TypeVar, cast
+from typing import Generic, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -15,7 +15,6 @@ from haliax import Axis, NamedArray, NamedOrNumeric
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.loss import maybe_fused_next_token_loss
-
 
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
 LmT = TypeVar("LmT", bound="LmHeadModel")
@@ -30,10 +29,10 @@ class LmExample(eqx.Module):
     def causal(
         tokens: hax.NamedArray,
         *,
-        loss_weight: Optional[hax.NamedArray] = None,
-        ignore_id: Optional[int] = None,
-        eos_id: Optional[int] = None,
-        segment_ids: Optional[hax.NamedArray] = None,
+        loss_weight: hax.NamedArray | None = None,
+        ignore_id: int | None = None,
+        eos_id: int | None = None,
+        segment_ids: hax.NamedArray | None = None,
         sliding_window: int | None = None,
         block_cross_document_attention: bool = True,
     ) -> "LmExample":
@@ -83,7 +82,7 @@ class LmExample(eqx.Module):
         tokens: hax.NamedArray,
         prompt_length: NamedOrNumeric,
         *,
-        ignore_id: Optional[int] = None,
+        ignore_id: int | None = None,
         all_causal: bool = True,
         sliding_window: int | None = None,
     ) -> "LmExample":
@@ -104,7 +103,7 @@ class LmExample(eqx.Module):
         return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     @staticmethod
-    def causal_loss_mask(Pos: Axis, prompt_length: Optional[int] = None) -> NamedArray:
+    def causal_loss_mask(Pos: Axis, prompt_length: int | None = None) -> NamedArray:
         loss_weight = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
 
         if prompt_length is not None:
@@ -122,7 +121,7 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
 
     @property
     @abc.abstractmethod
-    def model_type(cls) -> Type[LmT]:
+    def model_type(cls) -> type[LmT]:
         pass
 
     @property
@@ -138,10 +137,10 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
     def Embed(self) -> Axis:
         pass
 
-    def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         return None
 
-    def total_trainable_params(self, vocab_size: int) -> Optional[float]:
+    def total_trainable_params(self, vocab_size: int) -> float | None:
         return None
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "LmT":
@@ -188,7 +187,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     def __call__(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -218,7 +217,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -244,7 +243,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         raise NotImplementedError("get_lm_head not implemented")
 
     @abc.abstractmethod
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "LmHeadModel[LmConfigT]":
+    def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "LmHeadModel[LmConfigT]":
         """
         Resizes the vocabulary of the model. Key may be provided to use random initialization, otherwise, there
         should be some deterministic initialization of any new parameters.
@@ -260,11 +259,11 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         example: LmExample,
         *,
         key=None,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
-        reduction_axis: Optional[hax.AxisSelection] = None,
-        logsumexp_weight: Optional[float] = None,
-        loss_dtype: Optional[jnp.dtype] = jnp.float32,
-        logit_soft_cap: Optional[float] = None,
+        reduction: hax.ReductionFunction | None = cast(hax.ReductionFunction | None, hax.mean),
+        reduction_axis: hax.AxisSelection | None = None,
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype | None = jnp.float32,
+        logit_soft_cap: float | None = None,
     ) -> jnp.ndarray | NamedArray:
         """
         Compute next-token cross-entropy for a language modeling example.

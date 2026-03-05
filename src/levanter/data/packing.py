@@ -12,7 +12,8 @@ This achieves about a 90% "real token" rate, compared to like 10% without packin
 """
 import asyncio
 from dataclasses import dataclass
-from typing import Iterable, Iterator, Literal, Sequence, TypeVar
+from typing import Literal, TypeVar
+from collections.abc import Iterable, Iterator, Sequence
 
 import haliax as hax
 import jax
@@ -481,9 +482,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         super().__init__()
 
         if slice_strategy not in ["left", "right", "raise", "drop"]:
-            raise ValueError(
-                f"slice_strategy must be one of 'left', 'right', 'raise', or 'drop', got {slice_strategy}"
-            )
+            raise ValueError(f"slice_strategy must be one of 'left', 'right', 'raise', or 'drop', got {slice_strategy}")
 
         self.dataset = dataset
         self.max_length = max_length

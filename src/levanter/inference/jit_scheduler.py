@@ -828,9 +828,7 @@ class DecodeState(eqx.Module):
             tokens=new_tokens,
             # set log probs to nan for the prefix tokens
             logprobs=(
-                self.logprobs.at["seq", local_slot_id, "position", :].set(jnp.nan)
-                if self.logprobs is not None
-                else None
+                self.logprobs.at["seq", local_slot_id, "position", :].set(jnp.nan) if self.logprobs is not None else None
             ),
             finished=self.finished.at["seq", local_slot_id].set(False),
         )

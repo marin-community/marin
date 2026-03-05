@@ -16,13 +16,13 @@ from .tuned_block_sizes import (
 )
 
 __all__ = [
-    "BlockSizes",
-    "IMPLEMENTATIONS",
-    "Implementation",
     "DEFAULT_DEVICE_KEY",
+    "IMPLEMENTATIONS",
     "SHAPE_BUCKETS",
-    "ShapeBucket",
     "TUNED_BLOCK_SIZES",
+    "BlockSizes",
+    "Implementation",
+    "ShapeBucket",
     "fused_cross_entropy_loss_and_logsumexp_penalty",
     "infer_block_sizes",
 ]

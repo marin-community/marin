@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import typing
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import jax
 import numpy as np
@@ -28,7 +28,7 @@ class TrackioTracker(Tracker):
     name: str = "trackio"
     run: TrackioRun
 
-    def __init__(self, run: Optional[TrackioRun] = None):
+    def __init__(self, run: TrackioRun | None = None):
         import trackio
 
         if run is None:
@@ -56,7 +56,7 @@ class TrackioTracker(Tracker):
         to_log = {f"summary/{k}": _convert_value_to_loggable_rec(v) for k, v in metrics.items()}
         trackio.log(to_log)
 
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):
         del name, type
         logger.warning("Trackio does not currently support artifacts. Skipping upload for %s", artifact_path)
 
@@ -104,11 +104,11 @@ class TrackioConfig(TrackerConfig):
     """Configuration for Trackio."""
 
     project: str = "levanter"
-    name: Optional[str] = None
-    space_id: Optional[str] = None
-    dataset_id: Optional[str] = None
+    name: str | None = None
+    space_id: str | None = None
+    dataset_id: str | None = None
     config: dict[str, Any] = field(default_factory=dict)
-    mode: Optional[str] = None
+    mode: str | None = None
     """Controls how Trackio logs.
 
     "online" logs normally, "offline" is synonymous with online since Trackio is
@@ -118,7 +118,7 @@ class TrackioConfig(TrackerConfig):
 
     resume: str = "auto"
 
-    def init(self, run_id: Optional[str]) -> Tracker:
+    def init(self, run_id: str | None) -> Tracker:
         import trackio
 
         # Only the primary process should log by default.

@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Generic, Iterable, Mapping, Sequence, TypeVar, Union
+from typing import Any, Generic, TypeVar, Union
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 import pyarrow as pa
-
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
@@ -47,7 +47,7 @@ class BatchProcessor(Generic[T_contra, U_co], ABC):
         raise NotImplementedError
 
     @property
-    def resources(self) -> Dict[str, float]:
+    def resources(self) -> dict[str, float]:
         """Any resources that this processor needs to run. Ray uses this to schedule tasks."""
         return {}
 
@@ -63,7 +63,7 @@ class BatchProcessor(Generic[T_contra, U_co], ABC):
 
     @property
     @abstractmethod
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         """Any metadata that changes the behavior of this processor."""
         raise NotImplementedError
 
@@ -237,7 +237,7 @@ def dict_from_record_batch(b) -> dict:
     return {b.field(i).name: to_hf_batched(b.column(i).to_numpy(zero_copy_only=False)) for i in range(b.num_columns)}
 
 
-def _canonicalize_batch(batch: Union[dict, list[dict]]) -> list[dict]:
+def _canonicalize_batch(batch: dict | list[dict]) -> list[dict]:
     if isinstance(batch, pa.RecordBatch):
         batch = dict_from_record_batch(batch)
 
@@ -273,5 +273,5 @@ class IdentityProcessor(BatchProcessor[T, T]):
         return 0.1
 
     @property
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         return {}

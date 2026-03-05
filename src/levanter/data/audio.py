@@ -8,7 +8,8 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Iterator, Mapping, Sequence
 
 import braceexpand
 import datasets
@@ -38,7 +39,7 @@ from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
 
-silence_transformer_nag()  # noqa
+silence_transformer_nag()
 from transformers import (  # noqa
     BatchEncoding,
     BatchFeature,
@@ -47,17 +48,14 @@ from transformers import (  # noqa
     SequenceFeatureExtractor,
 )
 
-
 logger = logging.getLogger("levanter.data.audio")
 
-AudioTextDict = TypedDict(
-    "AudioTextDict",
-    {
-        "input_features": np.ndarray,
-        "input_ids": np.ndarray,
-        "attention_mask": np.ndarray,
-    },
-)
+
+class AudioTextDict(TypedDict):
+    input_features: np.ndarray
+    input_ids: np.ndarray
+    attention_mask: np.ndarray
+
 
 AudioTextDict_exemplar = {
     "input_features": np.zeros((1, 1), dtype=np.float32),
@@ -66,7 +64,7 @@ AudioTextDict_exemplar = {
 }
 
 
-class BatchAudioProcessor(BatchProcessor[Tuple[np.ndarray, int, str], AudioTextDict]):
+class BatchAudioProcessor(BatchProcessor[tuple[np.ndarray, int, str], AudioTextDict]):
     """
     A batch processor that converts raw audio into the expected inputs of a model.
     """
@@ -95,7 +93,7 @@ class BatchAudioProcessor(BatchProcessor[Tuple[np.ndarray, int, str], AudioTextD
 
         self.override_resources = override_resources
 
-    def __call__(self, batch: Sequence[Tuple[np.ndarray, int, str]]) -> Sequence[AudioTextDict]:
+    def __call__(self, batch: Sequence[tuple[np.ndarray, int, str]]) -> Sequence[AudioTextDict]:
         """
         Process a batch of data.
         """
@@ -126,7 +124,7 @@ class BatchAudioProcessor(BatchProcessor[Tuple[np.ndarray, int, str], AudioTextD
         return out  # type: ignore
 
     @property
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         return {
             "tokenizer": self.bt.metadata,
             "processor": self.feature_extractor.to_dict(),
@@ -150,8 +148,8 @@ class BatchAudioProcessor(BatchProcessor[Tuple[np.ndarray, int, str], AudioTextD
 class AudioDatasetSourceConfig:
     """This class represents a dataset source with URLs or hf name/id."""
 
-    id: Optional[str] = None  # id (or path) for hf dataset
-    name: Optional[str] = None  # name for hf dataset
+    id: str | None = None  # id (or path) for hf dataset
+    name: str | None = None  # name for hf dataset
 
     plaintext: bool = False
     stream: bool = True  # whether to use streaming when doing hf
@@ -161,11 +159,11 @@ class AudioDatasetSourceConfig:
 
     train_split: str = "train"
     validation_split: str = "validation"
-    train_urls: List[str] = ()  # type: ignore
-    validation_urls: List[str] = ()  # type:ignore
+    train_urls: list[str] = ()  # type: ignore
+    validation_urls: list[str] = ()  # type:ignore
     cache_dir: str = "cache/"
 
-    def get_shard_source(self, split) -> Optional[ShardedDataSource[Tuple[np.ndarray, int, str]]]:
+    def get_shard_source(self, split) -> ShardedDataSource[tuple[np.ndarray, int, str]] | None:
         if self.id is not None:
             try:
                 ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
@@ -193,7 +191,7 @@ class AudioDatasetSourceConfig:
                 return None
             return AudioTextUrlDataSource(split_urls, self.text_key, self.audio_key, sampling_rate=self.sampling_rate)
 
-    def doc_iterator(self, split: str) -> Iterator[Tuple[np.ndarray, int, str]]:
+    def doc_iterator(self, split: str) -> Iterator[tuple[np.ndarray, int, str]]:
         if self.id is not None:
             data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
             for doc in data:
@@ -225,7 +223,7 @@ class AudioDatasetSourceConfig:
 @dataclass
 class AudioTaskConfig(abc.ABC):
     processor: str = "openai/whisper-tiny"
-    tokenizer: Optional[str] = None
+    tokenizer: str | None = None
     enforce_bos: bool = True  # whether to append bos even if the tokenizer doesn't
     enforce_eos: bool = True  # whether to append eos even if the tokenizer doesn't
     max_length: int = 448
@@ -254,7 +252,7 @@ class AudioTaskConfig(abc.ABC):
         self,
         options: CacheOptions = CacheOptions.default(),
         *,
-        key: Optional[PRNGKeyArray] = None,
+        key: PRNGKeyArray | None = None,
     ) -> AsyncDataset[AudioTextDict]:
         pass
 
@@ -289,7 +287,7 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
     @staticmethod
     def build_or_load(
         cache_dir: str,
-        source: ShardedDataSource[Tuple[np.ndarray, int, str]],
+        source: ShardedDataSource[tuple[np.ndarray, int, str]],
         processor: ProcessorMixin,
         tokenizer: PreTrainedTokenizerBase,
         enforce_bos=True,
@@ -348,14 +346,14 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
         self,
         options: CacheOptions = CacheOptions.default(),
         *,
-        key: Optional[PRNGKeyArray] = None,
+        key: PRNGKeyArray | None = None,
     ) -> ProcessedAudioCache:
         ds = self.build_or_load_cache(self.train_split)
         if ds is None:
             raise ValueError("No training set!")
         return ds
 
-    def validation_set(self) -> Optional[ProcessedAudioCache]:
+    def validation_set(self) -> ProcessedAudioCache | None:
         return self.build_or_load_cache(self.validation_split)
 
     def validation_sets(self) -> Mapping[str, ProcessedAudioCache]:
@@ -371,9 +369,7 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
             return True
 
         if self.id is not None:
-            dataset = datasets.load_dataset(
-                self.id, name=self.name, streaming=self.stream, split=self.validation_split
-            )
+            dataset = datasets.load_dataset(self.id, name=self.name, streaming=self.stream, split=self.validation_split)
             try:
                 next(iter(dataset))
                 return True
@@ -386,7 +382,7 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
         self,
         split: str,
         cache_options: CacheOptions = CacheOptions.default(),
-    ) -> Optional[ProcessedAudioCache]:
+    ) -> ProcessedAudioCache | None:
         split_cache_dir = os.path.join(self.cache_dir, split)
 
         try:
@@ -420,8 +416,8 @@ class AudioTextDataset(MappedAsyncDataset[AudioTextDict, AudioTextExample]):
         TextPos: Axis,
         AudioPos: hax.AxisSelector,
         KPos: Axis,
-        key: Optional[PRNGKeyArray] = None,
-        ignore_index: Optional[int] = None,
+        key: PRNGKeyArray | None = None,
+        ignore_index: int | None = None,
     ):
         self.dataset = dataset
         self.TextPos = TextPos
@@ -457,12 +453,12 @@ class AudioTextDataset(MappedAsyncDataset[AudioTextDict, AudioTextExample]):
 class AudioMixtureDatasetConfig(AudioTaskConfig):
     """This class represents a mixture of datasets with their associated weights."""
 
-    cache_dir: Optional[str] = "cache/"
+    cache_dir: str | None = "cache/"
 
     # data source configs and weights
-    configs: Dict[str, AudioDatasetSourceConfig] = field(default_factory=dict)
+    configs: dict[str, AudioDatasetSourceConfig] = field(default_factory=dict)
     """ configuration of each dataset source (urls, hf dataset id, etc.) """
-    train_weights: Dict[str, float] = field(default_factory=dict)
+    train_weights: dict[str, float] = field(default_factory=dict)
     """ weights for each dataset source. They will be normalized to sum to 1. """
     shuffle: bool | int = False
     """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
@@ -485,7 +481,7 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
         self,
         options: CacheOptions = CacheOptions.default(),
         *,
-        key: Optional[PRNGKeyArray] = None,
+        key: PRNGKeyArray | None = None,
     ) -> AsyncDataset[AudioTextDict]:
         audio_datasets = self.training_sets()
 
@@ -529,7 +525,7 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
         doc_caches = self.build_caches("validation")
         return doc_caches
 
-    def build_caches(self, split: str) -> Dict[str, ProcessedAudioCache]:
+    def build_caches(self, split: str) -> dict[str, ProcessedAudioCache]:
         # this is a bit gross, but we want to forward all "Task" config fields to the AudioIODatasetConfig for building.
         # We do this by just grabbing all the fields from the AudioTaskConfig and forwarding them.
         task_config_fields = set(x.name for x in dataclasses.fields(AudioTaskConfig))

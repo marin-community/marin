@@ -474,7 +474,7 @@ class Gemma2Config(GemmaConfig):
 
     # ---------- Convenience ----------
     @property  # type: ignore[override]
-    def model_type(self):  # noqa: D401 – property returns type, not a str
+    def model_type(self):
         """Return the Levanter model class for Gemma-2."""
         return Gemma2LMHeadModel
 
@@ -810,7 +810,7 @@ class Gemma3Config(Gemma2Config):
 
     # ---------- Convenience ----------
     @property  # type: ignore[override]
-    def model_type(self):  # noqa: D401
+    def model_type(self):
         return Gemma3LMHeadModel
 
     # ---------- HF helpers ----------

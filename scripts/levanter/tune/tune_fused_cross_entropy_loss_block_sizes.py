@@ -144,9 +144,7 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also benchmark infer/default behavior (block_sizes=None) for pallas_tpu.",
     )
-    parser.add_argument(
-        "--skip-label-logits", action="store_true", help="Skip label-logit extraction (benchmark-only)."
-    )
+    parser.add_argument("--skip-label-logits", action="store_true", help="Skip label-logit extraction (benchmark-only).")
     parser.add_argument("--fwd-xw-bf16", action="store_true", help="Use bf16 xw_tiled in forward (benchmark-only).")
     parser.add_argument(
         "--fwd-dot-accum-bf16",
@@ -331,9 +329,7 @@ def _build_variants(args: argparse.Namespace) -> list[BenchVariant]:
                 BenchVariant(name="pallas_fwd_dot_accum_bf16", implementation="pallas_tpu", fwd_dot_accum_bf16=True)
             )
         if args.compare_fwd_full_h_dot:
-            variants.append(
-                BenchVariant(name="pallas_fwd_full_h_dot", implementation="pallas_tpu", fwd_full_h_dot=True)
-            )
+            variants.append(BenchVariant(name="pallas_fwd_full_h_dot", implementation="pallas_tpu", fwd_full_h_dot=True))
         if args.compare_fwd_split_label_dot:
             variants.append(
                 BenchVariant(

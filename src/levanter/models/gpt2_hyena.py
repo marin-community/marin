@@ -5,7 +5,6 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Type
 
 import equinox as eqx
 import jax
@@ -58,14 +57,14 @@ class Gpt2HyenaConfig(LmConfig):
     Mlp = property(lambda self: Axis(name="mlp", size=self.Embed.size * self.mlp_scale))
 
     @property
-    def model_type(cls) -> Type["Gpt2HyenaModel"]:
+    def model_type(cls) -> type["Gpt2HyenaModel"]:
         return Gpt2HyenaModel
 
     def __post_init__(self):
         if self.hyena.max_seq_len != self.max_seq_len:
             object.__setattr__(self, "hyena", dataclasses.replace(self.hyena, max_seq_len=self.max_seq_len))
 
-    def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         # TODO: implement
         return None
 
@@ -134,7 +133,7 @@ class Gpt2HyenaBackbone(ModuleWithStateDictSerialization):
 
         return x
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"blocks": "h"}
 
 
@@ -170,7 +169,7 @@ class Gpt2HyenaModel(LmHeadModel[Gpt2HyenaConfig]):
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -188,9 +187,9 @@ class Gpt2HyenaModel(LmHeadModel[Gpt2HyenaConfig]):
     def get_lm_head(self) -> hax.NamedArray:
         return self.embeddings.token_embeddings.weight
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "Gpt2HyenaModel":
+    def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "Gpt2HyenaModel":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, embeddings=new_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"backbone": None, "embeddings": None}

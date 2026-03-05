@@ -8,7 +8,6 @@ Script to import HuggingFace models and save them as Levanter Tensorstore checkp
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Union
 
 import jax.numpy as jnp
 from iris.marin_fs import url_to_fs
@@ -28,7 +27,7 @@ logger = logging.getLogger(__name__)
 class ImportHfConfig:
     """Configuration for importing HuggingFace models to Levanter checkpoints."""
 
-    hf_checkpoint: Union[str, RepoRef]
+    hf_checkpoint: str | RepoRef
     """HF repository reference or path (e.g., 'meta-llama/Llama-2-7b-hf' or 'gs://bucket/path')"""
 
     output_path: str
@@ -40,10 +39,10 @@ class ImportHfConfig:
     use_hf_model_config: bool = True
     """If True, use the model configuration from the HF checkpoint instead of the provided model config"""
 
-    tokenizer: Optional[str] = None
+    tokenizer: str | None = None
     """Override tokenizer path/name. If None, will use tokenizer from HF checkpoint"""
 
-    dtype: Optional[str] = "bfloat16"
+    dtype: str | None = "bfloat16"
     """Target dtype for the saved checkpoint (e.g., 'float32', 'bfloat16', 'float16')"""
 
     resize_vocab_to_match_tokenizer: bool = False
@@ -51,7 +50,7 @@ class ImportHfConfig:
     (e.g., Qwen) intentionally pad their embedding matrices beyond the tokenizer vocab size for hardware efficiency."""
 
 
-def _coerce_to_repo_ref(checkpoint: Union[str, RepoRef]) -> RepoRef:
+def _coerce_to_repo_ref(checkpoint: str | RepoRef) -> RepoRef:
     """Convert string or RepoRef to RepoRef."""
     if isinstance(checkpoint, str):
         return RepoRef.from_string(checkpoint)

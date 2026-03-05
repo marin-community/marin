@@ -3,7 +3,8 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union, cast
+from typing import cast
+from collections.abc import Callable
 
 import equinox as eqx
 import jax
@@ -74,8 +75,8 @@ class LlamaConfig(HFCompatConfig):
 
     # Attention-related config
     upcast_attn: bool = False
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = None
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     scan_layers: bool = True
@@ -85,7 +86,7 @@ class LlamaConfig(HFCompatConfig):
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
     reference_checkpoint: str = "NousResearch/Llama-2-7b-hf"
-    tokenizer: Optional[str] = None
+    tokenizer: str | None = None
 
     # Axis
     @property
@@ -104,7 +105,7 @@ class LlamaConfig(HFCompatConfig):
             self.num_heads % self.num_kv_heads == 0
         ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["LlamaConfig"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["LlamaConfig"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
@@ -131,7 +132,7 @@ class LlamaConfig(HFCompatConfig):
             rope=rope_config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfLlamaConfig:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfLlamaConfig:
         """Convert to HuggingFace's LlamaConfig
 
         Args:
@@ -182,7 +183,7 @@ class LlamaConfig(HFCompatConfig):
         )
 
     @property
-    def model_type(self) -> Type["LlamaLMHeadModel"]:
+    def model_type(self) -> type["LlamaLMHeadModel"]:
         return LlamaLMHeadModel
 
     @property
@@ -268,7 +269,7 @@ class LlamaMlp(eqx.Module):
     def init(
         Embed: AxisSpec,
         Mlp: AxisSpec,
-        activation_fn: Union[ActivationFunctionEnum, Callable],
+        activation_fn: ActivationFunctionEnum | Callable,
         *,
         key,
         use_bias: bool = False,
@@ -299,8 +300,8 @@ class LlamaDecoderLayer(eqx.Module):
     mlp: LlamaMlp
     input_layernorm: hnn.RmsNorm
     post_attention_layernorm: hnn.RmsNorm
-    post_attn_layernorm: Optional[hnn.RmsNorm] = None
-    post_mlp_layernorm: Optional[hnn.RmsNorm] = None
+    post_attn_layernorm: hnn.RmsNorm | None = None
+    post_mlp_layernorm: hnn.RmsNorm | None = None
 
     @staticmethod
     def init(config: LlamaConfig, *, key) -> "LlamaDecoderLayer":
@@ -326,7 +327,7 @@ class LlamaDecoderLayer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
+        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
@@ -406,7 +407,7 @@ class LlamaTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
+        self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
@@ -476,7 +477,7 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
     """
 
     token_embeddings: hnn.Embedding
-    norm: Optional[hnn.RmsNorm] = None
+    norm: hnn.RmsNorm | None = None
 
     @staticmethod
     def init(Vocab: Axis, config: LlamaConfig, *, key) -> "LlamaEmbedding":
@@ -504,10 +505,10 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
     def unembed(self, x: NamedArray):
         return self.token_embeddings.unembed(x)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"token_embeddings": "model.embed_tokens"}
 
-    def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
+    def resize_embeddings(self, new_size: int, key: PRNGKeyArray | None = None):
         new_weights = self.token_embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, token_embeddings=new_weights)
 
@@ -515,7 +516,7 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
 class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig]):
     transformer: LlamaTransformer
     embeddings: LlamaEmbedding
-    lm_head: Optional[hnn.Linear]
+    lm_head: hnn.Linear | None
 
     @property
     def config(self):
@@ -544,7 +545,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
     def __call__(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
+        attn_mask: NamedArray | AttentionMask | None = None,
         pos_ids: NamedArray | None = None,
         *,
         key=None,
@@ -573,7 +574,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -612,7 +613,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": "model", "embeddings": None}
 
     def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:

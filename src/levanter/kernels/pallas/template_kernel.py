@@ -133,8 +133,8 @@ def template_op(
 
 
 __all__ = [
-    "Implementation",
     "IMPLEMENTATIONS",
+    "Implementation",
     "pallas_tpu_impl_batched",
     "reference_impl_batched",
     "template_op",

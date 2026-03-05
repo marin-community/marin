@@ -6,7 +6,7 @@ import re
 import warnings
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import draccus
 import equinox as eqx
@@ -120,7 +120,7 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
     """fraction of training steps to use as decay, or steps to use. None means full decay"""
     rewarmup: int | float = 0.0
     "If using a cycle, how much of the cycle to use as re-warmup. 0.0 means no re-warmup."
-    cooldown: Optional[float] = None
+    cooldown: float | None = None
     """Deprecated, as its semantics are confusing."""
     cycle_length: int | float | None | list[int] = None
     """ Length of cycle. If <= 1, it is treated as a fraction of the total number of steps. None is equivalent to 1.0."""
@@ -128,17 +128,17 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
     """Number of cycles or a list of cycle endpoints. Can use at most one of cycle_length, cycles, or haps."""
 
     lr_schedule: LrSchedule | str = "cosine"  # constant, cosine, linear
-    haps: Optional[list[int]] = None
+    haps: list[int] | None = None
     """Deprecated."""
-    weight_decay_modules: Optional[list[str] | str] = None
+    weight_decay_modules: list[str] | str | None = None
     """A regex or a list of strings to identify where to mask weight.
     For nano-GPT, this field can be set as `r".*attn.*weight|.*mlp.*weight|.*token_embeddings|.*position_embeddings"`"""
-    default_weight_decay_mask: Optional[bool] = None
+    default_weight_decay_mask: bool | None = None
     """Whether to apply a default reasonable weight decay to modules not explicitly masked. None means it will if
     no weight_decay_modules are set. False means it will not. True means it will regardless of weight_decay_modules."""
 
     @classmethod
-    def default_choice_name(cls) -> Optional[str]:
+    def default_choice_name(cls) -> str | None:
         return "adam"
 
     @abc.abstractmethod
@@ -343,9 +343,7 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
                 cycle_length = _convert_frac_or_steps(self.cycle_length, total_main_steps)
                 cooldown_points = [i * cycle_length for i in range(1, total_main_steps // cycle_length)]
                 if total_main_steps % cycle_length != 0:
-                    warnings.warn(
-                        "Cycle length does not divide total number of steps. The last cycle will be shorter."
-                    )
+                    warnings.warn("Cycle length does not divide total number of steps. The last cycle will be shorter.")
 
             elif isinstance(self.cycle_length, list):
                 lengths = np.array(self.cycle_length)
@@ -413,9 +411,9 @@ class AdamConfig(OptimizerConfig):
     # https://x.com/giffmana/status/1692641748445438301
     beta2: float = 0.95
     epsilon: float = 1e-8
-    max_grad_norm: Optional[float] = 1.0
+    max_grad_norm: float | None = 1.0
     nesterov: bool = False
-    update_rms_clipping: Optional[float] = None
+    update_rms_clipping: float | None = None
     """
     If set, this will use RMS clipping on the update, a la Adafactor or StableAdamW (https://arxiv.org/pdf/2304.13013)
 
@@ -424,7 +422,7 @@ class AdamConfig(OptimizerConfig):
     A value of 1.0 is recommended for most models, but you can set it to None to disable RMS clipping.
     """
 
-    clip_update_norm: Optional[ClipUpdateNormConfig] = None
+    clip_update_norm: ClipUpdateNormConfig | None = None
     """
     If set, this will clip the update norm based on the historical mean and standard deviation of update norms. A less extreme version of skip_bad_steps.
     """
@@ -512,7 +510,7 @@ class LionConfig(OptimizerConfig):
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
-    max_grad_norm: Optional[float] = 1.0
+    max_grad_norm: float | None = 1.0
 
     def build(self, num_train_steps):
         """Creates the optimizer"""

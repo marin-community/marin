@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
-from typing import Optional, Type, cast
+from typing import cast
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -27,9 +27,9 @@ class AudioTextExample(eqx.Module):
         audio: hax.NamedArray,
         tokens: hax.NamedArray,
         *,
-        attn_mask: Optional[hax.NamedArray | AttentionMask] = None,
-        loss_weight: Optional[hax.NamedArray] = None,
-        ignore_id: Optional[int] = None,
+        attn_mask: hax.NamedArray | AttentionMask | None = None,
+        loss_weight: hax.NamedArray | None = None,
+        ignore_id: int | None = None,
     ) -> "AudioTextExample":
         if tokens.ndim != 1:
             raise ValueError("tokens must be a 1D array")
@@ -59,7 +59,7 @@ class ASRConfig(LmConfig):
 
     @property
     @abc.abstractmethod
-    def asr_model_type(cls) -> Type["ASRMixin"]:
+    def asr_model_type(cls) -> type["ASRMixin"]:
         pass
 
 
@@ -79,7 +79,7 @@ class ASRMixin(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "ASRMixin":
+    def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "ASRMixin":
         """
         Resizes the vocabulary of the ASR Output space. Key may be provided to use random initialization, otherwise,
         there should be some deterministic initialization of any new parameters.
@@ -91,7 +91,7 @@ class ASRMixin(abc.ABC):
         self,
         mel: NamedArray,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
     ) -> NamedArray:
@@ -102,8 +102,8 @@ class ASRMixin(abc.ABC):
         example: AudioTextExample,
         *,
         key=None,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
-        reduction_axis: Optional[hax.AxisSelection] = None,
+        reduction: hax.ReductionFunction | None = cast(hax.ReductionFunction | None, hax.mean),
+        reduction_axis: hax.AxisSelection | None = None,
     ) -> jnp.ndarray | NamedArray:
         """
         Computes the cross-entropy loss for predicted ASR tokens. If reduction is not None, the loss is reduced

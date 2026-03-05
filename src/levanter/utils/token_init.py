@@ -6,7 +6,7 @@ Utilities for (re)initializing token-specific parameters such as embeddings and
 LM heads when expanding or adapting vocabularies.
 """
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import jax.random as jrandom
 from lenses import lens

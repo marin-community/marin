@@ -4,7 +4,8 @@
 import asyncio
 import functools
 import warnings
-from typing import List, Mapping, Sequence, Tuple, TypeVar
+from typing import TypeVar
+from collections.abc import Mapping, Sequence
 
 import jax
 import numpy as np
@@ -17,7 +18,6 @@ from levanter.data import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
 from levanter.utils.thread_utils import blocking_wait, future_from_value
-
 
 T = TypeVar("T")
 
@@ -50,7 +50,7 @@ class MixtureDataset(AsyncDataset[T]):
     def __init__(
         self,
         datasets: Mapping[str, AsyncDataset[T]],
-        weights: dict[str, float] | List[Tuple[int, dict[str, float]]],
+        weights: dict[str, float] | list[tuple[int, dict[str, float]]],
         block_size: int,
         *,
         randomize_blocks: bool = True,
@@ -402,8 +402,8 @@ def _compute_block_assignment(base_ids, index, key):
 
 
 def rescale_mixture_schedule_for_batch_schedule(
-    mixture_schedule: Sequence[Tuple[int, dict[str, float]]], batch_schedule: BatchSchedule
-) -> List[Tuple[int, dict[str, float]]]:
+    mixture_schedule: Sequence[tuple[int, dict[str, float]]], batch_schedule: BatchSchedule
+) -> list[tuple[int, dict[str, float]]]:
     """
     Rescale the mixture schedule to match the batch schedule. MixtureDataset expects the mixture schedule to be in terms
      of example indices, but the batch schedule is in terms of batch indices/steps. So, given a mixture schedule

@@ -4,7 +4,8 @@
 
 # Pooling operations, inspired by Flax
 from functools import reduce
-from typing import Callable, Literal
+from typing import Literal
+from collections.abc import Callable
 
 import jax
 

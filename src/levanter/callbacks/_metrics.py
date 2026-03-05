@@ -4,7 +4,6 @@
 import copy
 import logging as pylogging
 from datetime import timedelta
-from typing import Optional
 
 import jax
 from fray.v1.cluster.device_flops import device_flops_for_jax_device
@@ -20,7 +19,7 @@ from levanter.utils.jax_utils import jnp_to_python
 logger = pylogging.getLogger(__name__)
 
 
-def log_step_info(total_steps: Optional[int]):
+def log_step_info(total_steps: int | None):
     def log_step_info_inner(step: StepInfo):
         metrics = {"train/loss": step.loss, "global_step": step.step}
         if total_steps:
@@ -34,8 +33,8 @@ def log_step_info(total_steps: Optional[int]):
 def log_performance_stats(
     tokens_per_example: int,
     batch_schedule: int | BatchSchedule,
-    flops_per_example: Optional[float] = None,
-    prefix: Optional[str] = "throughput",
+    flops_per_example: float | None = None,
+    prefix: str | None = "throughput",
 ):
     if isinstance(batch_schedule, int):
         batch_schedule = BatchSchedule(batch_schedule)

@@ -3,7 +3,7 @@
 
 # Standard Library Imports
 from dataclasses import dataclass
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 # Third-Party Imports
 import chex
@@ -23,7 +23,7 @@ class RMSPropMomentumConfig(OptimizerConfig):
     beta1: float = 0.9
     beta2: float = 0.99
     eps: float = 1e-30
-    max_grad_norm: Optional[float] = 1.0
+    max_grad_norm: float | None = 1.0
     weight_decay: float = 0.1
 
     def build(self, num_train_steps):

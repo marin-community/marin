@@ -7,7 +7,8 @@ import json
 import warnings
 import zlib
 from dataclasses import fields
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, TypeVar
+from collections.abc import Callable
 
 import equinox as eqx
 import haliax as hax
@@ -124,7 +125,7 @@ def parameter_count(model: PyTree):
 _sync_counter = 0
 
 
-def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: float = 200.0) -> X:
+def multihost_broadcast_sync(obj: X, is_source: bool | None = None, timeout: float = 200.0) -> X:
     """
     Uses jax's unpublished distributed api to sync a value across hosts using json dump. If is_source is None, then
     process_index 0 is the source.
@@ -177,7 +178,7 @@ def barrier_sync(timeout: float = 200):
 
         DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 
-    client: Optional[DistributedRuntimeClient] = distributed.global_state.client
+    client: DistributedRuntimeClient | None = distributed.global_state.client
 
     if client is None:
         raise RuntimeError("barrier_sync requires jax distributed client to be initialized")
@@ -201,9 +202,9 @@ def _isnamedtupleinstance(x):
 
 def leaf_key_paths(
     pytree,
-    prefix: Optional[str] = "",
+    prefix: str | None = "",
     *,
-    is_leaf: Optional[Callable[[Any], bool]] = None,
+    is_leaf: Callable[[Any], bool] | None = None,
     use_state_dict_keys: bool = False,
 ):
     """Creates unique, hopefully meaningful key paths for each leaf in a pytree. This is useful for
@@ -370,7 +371,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         return sharding
 
 
-def estimated_free_device_memory(device=None) -> Optional[float]:
+def estimated_free_device_memory(device=None) -> float | None:
     """
     Returns free memory in GiB. If the device doesn't support memory stats, returns None. If no device is provided,
     sums across all devices.
@@ -402,7 +403,7 @@ def estimated_free_device_memory(device=None) -> Optional[float]:
     return total
 
 
-def zeros_like_tree(tree: T, axis_mapping: Optional[ResourceMapping] = None, dtype: Optional[jnp.dtype] = None) -> T:
+def zeros_like_tree(tree: T, axis_mapping: ResourceMapping | None = None, dtype: jnp.dtype | None = None) -> T:
     """
     Creates a tree of zeros with the same structure as the input tree. If the input tree contains NamedArrays, then
     those will be sharded according to the axis_mapping (or the context axis mapping if not provided).
@@ -484,7 +485,7 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
     return out
 
 
-def tree_broadcast_to(prefix: PyTree[L], t: T, *, is_leaf: Optional[Callable[[Any], bool]] = None) -> T:
+def tree_broadcast_to(prefix: PyTree[L], t: T, *, is_leaf: Callable[[Any], bool] | None = None) -> T:
     """
     Broadcasts a prefix tree to match the structure of a full tree. This is useful when you need to
     tree_map over t and prefix (using t as the leaves) but prefix is a tree prefix of t.
@@ -561,7 +562,7 @@ def sync_global_devices(name: str):
 
 
 def sharded_tree_size(
-    tree, mesh: Optional[haliax.partitioning.MeshLike] | None = None, mapping: ResourceMapping | None = None
+    tree, mesh: haliax.partitioning.MeshLike | None | None = None, mapping: ResourceMapping | None = None
 ) -> int:
     """
     Returns the size of a sharded tree, in bytes. If the tree is sharded, this returns the size of a per-device shard.

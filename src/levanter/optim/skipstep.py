@@ -122,7 +122,7 @@ class SkipStepConfig:
                 valid_mask=valid_mask,
             )
 
-        def update_fn(updates, state: SkipStepState, params, *, loss: Optional[jax.Array] = None, **extra_args):
+        def update_fn(updates, state: SkipStepState, params, *, loss: jax.Array | None = None, **extra_args):
             if loss is None:
                 raise ValueError(
                     "Loss must be provided as a keyword argument to the update function when using SkipStepOptimizer."

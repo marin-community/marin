@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Type, cast
+from typing import cast
 
 import equinox as eqx
 import haliax as hax
@@ -105,7 +105,7 @@ class ApertusConfig(LlamaConfig):
     )
     reference_checkpoint: str = "swiss-ai/Apertus-8B-2509"
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["ApertusConfig"]:
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["ApertusConfig"]:
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
@@ -144,13 +144,13 @@ class ApertusConfig(LlamaConfig):
             use_qk_norm=getattr(hf_config, "qk_norm", True),
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfApertusConfig:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfApertusConfig:
         if config_overrides is None:
             config_overrides = {}
 
         rope_theta, rope_config = self.rope.to_hf_config()
         rope_scaling = rope_config
-        rope_parameters: Optional[Dict[str, float | int | str]] = None
+        rope_parameters: dict[str, float | int | str] | None = None
         if rope_config is not None:
             rope_parameters = dict(rope_config)
             rope_parameters["rope_theta"] = rope_theta
@@ -181,7 +181,7 @@ class ApertusConfig(LlamaConfig):
         return hf_config
 
     @property
-    def model_type(self) -> Type["ApertusLMHeadModel"]:
+    def model_type(self) -> type["ApertusLMHeadModel"]:
         return ApertusLMHeadModel
 
     def flops_per_token(self, vocab_size: int, context_length: int):
@@ -459,7 +459,7 @@ class ApertusLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[ApertusCo
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": "model", "embeddings": None}
 
     def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:

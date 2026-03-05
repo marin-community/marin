@@ -5,7 +5,7 @@ import asyncio
 import os
 import threading
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import jax.numpy as jnp
 import numpy as np
@@ -14,7 +14,6 @@ import tensorstore as ts
 from levanter.tensorstore_serialization import build_kvstore_spec
 from levanter.utils import fsspec_utils
 from levanter.utils.thread_utils import future_from_value
-
 
 CACHE_BYTES_LIMIT = int(os.getenv("LEVANTER_TS_CACHE_LIMIT", "1000000000"))
 
@@ -63,7 +62,7 @@ class PreparedBatch:
 
     data: np.ndarray
     offsets: np.ndarray
-    shapes: Optional[np.ndarray]
+    shapes: np.ndarray | None
 
     @property
     def byte_size(self):
@@ -77,7 +76,7 @@ class PreparedBatch:
         return len(self.offsets)
 
     @staticmethod
-    def from_batch(items: Sequence[np.ndarray], item_rank: Optional[int] = None) -> "PreparedBatch":
+    def from_batch(items: Sequence[np.ndarray], item_rank: int | None = None) -> "PreparedBatch":
         data, offsets, shapes = _prepare_batch(items, item_rank)
         return PreparedBatch(data, offsets, shapes)
 
@@ -130,15 +129,15 @@ class JaggedArrayStore:
     # Note that offsets, data and shapes have very large length and you shouldn't read() them directly without slicing
     offsets: ts.TensorStore  # offsets of the start of each array, except that index[0] is the number of arrays
     data: ts.TensorStore
-    shapes: Optional[ts.TensorStore]  # (len(offsets), len(data.shape)-1)
+    shapes: ts.TensorStore | None  # (len(offsets), len(data.shape)-1)
     item_rank: int = 1
     _cache_metadata: bool = False
-    _cached_num_rows: Optional[int] = None
-    _cached_data_size: Optional[int] = None
+    _cached_num_rows: int | None = None
+    _cached_data_size: int | None = None
 
     @staticmethod
     async def open_async(
-        path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False
+        path: str | None, *, mode="a", item_rank=1, dtype, cache_metadata: bool = False
     ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
         offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode)
@@ -157,7 +156,7 @@ class JaggedArrayStore:
         )
 
     @staticmethod
-    def open(path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False) -> "JaggedArrayStore":
+    def open(path: str | None, *, mode="a", item_rank=1, dtype, cache_metadata: bool = False) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
         offsets = _ts_open_sync(offset_path, jnp.int64, [1], mode=mode)
 
@@ -446,7 +445,7 @@ class JaggedArrayStore:
         data = [d.result() for d in data_futs]
 
         if self.shapes is not None:
-            shapes = [s.result() for s in shapes_futs]  # noqa
+            shapes = [s.result() for s in shapes_futs]
             data = [d.reshape(*s, -1) for d, s in zip(data, shapes)]
 
         return data
@@ -571,7 +570,7 @@ def _ts_open_kwargs(mode: str) -> dict:
     return {"context": ts.Context({"cache_pool": {}})}
 
 
-def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
+def _ts_open_sync(path: str | None, dtype: jnp.dtype, shape, *, mode):
     spec = _get_spec(path, shape)
     mode_config = _mode_to_open_mode(mode)
     open_kwargs = _ts_open_kwargs(mode)
@@ -609,7 +608,7 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             raise e
 
 
-async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
+async def _ts_open_async(path: str | None, dtype: jnp.dtype, shape, *, mode):
     spec = _get_spec(path, shape)
     mode_config = _mode_to_open_mode(mode)
     open_kwargs = _ts_open_kwargs(mode)
@@ -678,7 +677,7 @@ def _mode_to_open_mode(mode: str):
         raise ValueError(f"Invalid mode: {mode}")
 
 
-def _extend_path(path: Optional[str], extra: str):
+def _extend_path(path: str | None, extra: str):
     if path == "memory" or path is None:
         return path
     else:

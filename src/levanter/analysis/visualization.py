@@ -5,7 +5,7 @@ import html
 import os
 import re
 from functools import partial
-from typing import Any, List, Optional
+from typing import Any
 
 import jax
 from iris.marin_fs import open_url
@@ -19,7 +19,7 @@ from levanter.utils.hf_utils import HfTokenizer
 
 
 def visualize_log_probs(
-    tokens: List[List[str]], log_probs: np.ndarray, output_path: str, argmaxes: Optional[List[List[Any]]] = None
+    tokens: list[list[str]], log_probs: np.ndarray, output_path: str, argmaxes: list[list[Any]] | None = None
 ):
     """
     Visualizes token log probabilities by embedding data attributes in spans and computing
@@ -135,7 +135,7 @@ def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, te
 
 
 def visualize_log_prob_diff(
-    tokens: List[List[str]],
+    tokens: list[list[str]],
     log_probs_a: np.ndarray,
     log_probs_b: np.ndarray,
     output_path: str,

@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union
+from collections.abc import Callable
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -24,7 +24,6 @@ from levanter.models.lm_model import LmConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-
 
 silence_transformer_nag()
 from transformers import GPT2Config as HfGpt2Config  # noqa: E402
@@ -58,9 +57,9 @@ class Gpt2Config(HFCompatConfig):
 
     use_bias: bool = True
 
-    use_flash_attention: Optional[bool] = None
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
+    use_flash_attention: bool | None = None
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = None
 
     # Axes
     @property
@@ -73,10 +72,10 @@ class Gpt2Config(HFCompatConfig):
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
     @property
-    def model_type(self) -> Type["Gpt2LMHeadModel"]:
+    def model_type(self) -> type["Gpt2LMHeadModel"]:
         return Gpt2LMHeadModel
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["Gpt2Config"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["Gpt2Config"]:  # type: ignore
         # We trust this code because it's in our hub repo
         return HFCheckpointConverter(self.__class__, reference_checkpoint="gpt2", ignore_prefix="transformer")
 
@@ -117,7 +116,7 @@ class Gpt2Config(HFCompatConfig):
             upcast_attn=hf_config.reorder_and_upcast_attn,
         )
 
-    def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.hidden_dim * self.mlp_scale,
@@ -137,7 +136,7 @@ class Gpt2Mlp(eqx.Module):
 
     @staticmethod
     def init(
-        Embed: Axis, Mlp: Axis, activation_fn: Union[ActivationFunctionEnum, Callable], *, key, use_bias: bool = True
+        Embed: Axis, Mlp: Axis, activation_fn: ActivationFunctionEnum | Callable, *, key, use_bias: bool = True
     ) -> "Gpt2Mlp":
         k_fc, k_proj = jrandom.split(key, 2)
         c_fc = hnn.Linear.init(Out=Mlp, In=Embed, key=k_fc, use_bias=use_bias, out_first=False)
@@ -180,7 +179,7 @@ class Gpt2Attention(eqx.Module):
         return Gpt2Attention(config, c_attn, c_proj, inference=False)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
+    def __call__(self, x: NamedArray, mask: AttentionMask | NamedArray | None, layer_idx, *, key):
         k_drop, k_attn, k_out = hax.jax_utils.maybe_rng_split(key, 3)
         qkv_out = self.c_attn(x, key=k_attn).rearrange((..., "qkv", "heads", "position", "head_size"))
         q, k, v = qkv_out.unbind("qkv")
@@ -235,7 +234,7 @@ class Gpt2Block(eqx.Module):
         return Gpt2Block(ln_1, attn, ln_2, mlp, resid_dropout)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
+    def __call__(self, x: NamedArray, mask: AttentionMask | NamedArray | None, layer_idx, *, key):
         k1, k2, k3, k4 = haliax.jax_utils.maybe_rng_split(key, 4)
 
         attn_output = self.attn(self.ln_1(x), mask=mask, layer_idx=layer_idx, key=k1)
@@ -266,14 +265,14 @@ class Gpt2Transformer(ModuleWithStateDictSerialization):
         return Gpt2Transformer(config, blocks, ln_f)
 
     @named_call
-    def __call__(self, x: NamedArray, attn_mask: Optional[AttentionMask | NamedArray], *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, attn_mask: AttentionMask | NamedArray | None, *, key=None) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), key=keys)
         x = self.ln_f(x)
 
         return x
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"blocks": "h"}
 
 
@@ -309,10 +308,10 @@ class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
     def unembed(self, x: NamedArray):
         return hax.dot(x, self.token_embeddings.weight, axis="embed")
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"token_embeddings": "wte", "position_embeddings": "wpe"}
 
-    def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
+    def resize_embeddings(self, new_size: int, key: PRNGKeyArray | None = None):
         new_token_embeddings = self.token_embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_token_embeddings)
 
@@ -344,7 +343,7 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -360,9 +359,9 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
     def get_lm_head(self) -> hax.NamedArray:
         return self.embeddings.token_embeddings.weight
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "Gpt2LMHeadModel":
+    def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "Gpt2LMHeadModel":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, embeddings=new_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": None, "embeddings": None}

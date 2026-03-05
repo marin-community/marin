@@ -10,7 +10,6 @@ import equinox as eqx
 import jax.numpy as jnp
 import optax
 
-
 S = TypeVar("S")
 M = TypeVar("M")
 

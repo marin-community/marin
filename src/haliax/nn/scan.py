@@ -8,17 +8,15 @@ import re
 import warnings
 from typing import (
     Any,
-    Callable,
     Concatenate,
     Generic,
     Protocol,
-    Sequence,
-    Type,
     TypeVar,
     cast,
     overload,
     ParamSpec,
 )
+from collections.abc import Callable, Sequence
 
 import equinox as eqx
 import jax
@@ -91,9 +89,9 @@ class BlockFoldable(Protocol[M]):
 
     @classmethod
     def init(
-        cls: Type[S],
+        cls: type[S],
         Block: Axis,
-        module: Type[M],
+        module: type[M],
         *,
         gradient_checkpointing: ScanCheckpointSpec = False,
         prevent_cse: bool = False,
@@ -172,9 +170,9 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
     @classmethod
     def init(
-        cls: Type[S],
+        cls: type[S],
         Block: Axis,
-        module: Type[M],
+        module: type[M],
         *,
         gradient_checkpointing: ScanCheckpointSpec = False,
         prevent_cse: bool | None = None,
@@ -461,7 +459,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
     def init(
         cls,
         Block: Axis,
-        module: Type[M],
+        module: type[M],
         *,
         gradient_checkpointing: ScanCheckpointSpec = False,
         prevent_cse: bool | None = None,

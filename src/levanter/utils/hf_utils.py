@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import logical_cpu_core_count
 
-
 silence_transformer_nag()
 
 _HF_TOKENIZER_OFF_VALUES = {"off", "false", "f", "no", "n", "0"}
@@ -61,6 +60,6 @@ def byte_length_of_token(tokenizer, idx: int) -> int:
         return len(bytes.fromhex(m.group(1)))
     else:
         extra_token = tokenizer(".", add_special_tokens=False)["input_ids"][0]
-        excess_bytes = len(".".encode("utf-8"))
+        excess_bytes = len(b".")
         decoded = tokenizer.decode([extra_token, idx]).encode("utf-8")
         return len(decoded) - excess_bytes

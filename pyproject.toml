@@ -292,6 +292,14 @@ ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+# Levanter/Haliax originally only enforced E+F rules with a generous ignore list.
+# Gradually tighten these as the code is cleaned up.
+"src/levanter/**" = ["A", "B", "E203", "E266", "E501", "E731", "F821", "NPY", "RUF", "UP", "W605"]
+"tests/levanter/**" = ["A", "B", "E203", "E266", "E501", "E731", "F821", "NPY", "RUF", "UP", "W605"]
+"infra/levanter/**" = ["A", "B", "E203", "E266", "E501", "E731", "F821", "NPY", "RUF", "UP", "W605"]
+"scripts/levanter/**" = ["A", "B", "E203", "E266", "E501", "E731", "F821", "NPY", "RUF", "UP", "W605"]
+"src/haliax/**" = ["A", "B", "E203", "E266", "E501", "E731", "F821", "NPY", "RUF", "UP", "W605"]
+"tests/haliax/**" = ["A", "B", "E203", "E266", "E501", "E731", "F821", "NPY", "RUF", "UP", "W605"]
 
 [tool.mypy]
 python_version = "3.10"

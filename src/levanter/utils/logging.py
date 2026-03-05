@@ -5,17 +5,17 @@ import logging as pylogging
 import os
 import time
 from pathlib import Path
-from typing import Iterable, Iterator, List, TypeVar, Union
+from typing import TypeVar
+from collections.abc import Iterable, Iterator
 
 import jax
-
 
 pylogger = pylogging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
-def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.INFO) -> None:
+def init_logging(log_dir: str | Path, run_id: str, level: int = pylogging.INFO) -> None:
     """
     Initialize logging.Logger with the appropriate name, console, and file handlers.
 
@@ -31,7 +31,7 @@ def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.
     # use ISO 8601 format for timestamps, except no TZ, because who cares
     date_format = "%Y-%m-%dT%H:%M:%S"
 
-    handlers: List[pylogging.Handler] = [pylogging.FileHandler(path, mode="a"), pylogging.StreamHandler()]
+    handlers: list[pylogging.Handler] = [pylogging.FileHandler(path, mode="a"), pylogging.StreamHandler()]
 
     # Create Root Logger w/ Base Formatting
     pylogging.basicConfig(format=log_format, datefmt=date_format, handlers=handlers, force=True)

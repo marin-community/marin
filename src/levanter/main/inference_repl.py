@@ -22,7 +22,7 @@ import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from collections.abc import Callable
 
 import equinox as eqx
 import haliax as hax
@@ -181,7 +181,7 @@ class InferenceReplConfig:
     max_tokens: int = 64
 
     # CLI mode parameters
-    command: Optional[str] = None
+    command: str | None = None
     args: str = ""
 
 
@@ -189,7 +189,7 @@ class ReplContext:
     """Command handler for both REPL and CLI modes."""
 
     server: InferenceServer | None
-    model_name: Optional[str]
+    model_name: str | None
     config: InferenceReplConfig
 
     def __init__(self, config: InferenceReplConfig):
@@ -197,7 +197,7 @@ class ReplContext:
         self.server = None
         self.model_name = None
 
-        self.commands: Dict[str, Callable] = {
+        self.commands: dict[str, Callable] = {
             "load": self.load,
             "unload": self.unload,
             "chat": self.chat,
@@ -222,7 +222,7 @@ class ReplContext:
         else:
             console.print(f"[red]Unknown command: {cmd_name}[/red]")
 
-    def load(self, path: str, tokenizer: Optional[str] = None, **kwargs):
+    def load(self, path: str, tokenizer: str | None = None, **kwargs):
         """Load a model from checkpoint or HuggingFace."""
         console.print(f"[blue]Loading {path}...[/blue]")
 
@@ -273,7 +273,7 @@ class ReplContext:
         else:
             console.print("[yellow]No model loaded[/yellow]")
 
-    def chat(self, message: Optional[str] = None):
+    def chat(self, message: str | None = None):
         """Chat with the model."""
         if not self.server:
             console.print("[red]No model loaded. Use 'load' command first[/red]")

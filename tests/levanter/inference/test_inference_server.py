@@ -648,9 +648,7 @@ def test_logprobs_match_full_forward_pass(test_client, loaded_model, trainer_con
             log_z = jax.nn.logsumexp(logits_at_pos)
             token_logprob = token_logit - log_z
             model_logprobs.append(float(token_logprob))
-            print(
-                f"Token {i} (id={token_id}): logit={token_logit:.6f}, log_z={log_z:.6f}, logprob={token_logprob:.6f}"
-            )
+            print(f"Token {i} (id={token_id}): logit={token_logit:.6f}, log_z={log_z:.6f}, logprob={token_logprob:.6f}")
 
     print(f"Model logprobs: {model_logprobs}")
 

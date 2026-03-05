@@ -3,7 +3,8 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence, TypeVar, Union, cast
+from typing import Any, Literal, TypeVar, cast
+from collections.abc import Sequence
 
 import jax
 from jax.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, SequenceKey
@@ -14,7 +15,6 @@ from levanter.analysis.tree_stats import summary_statistics_for_tree
 from levanter.callbacks import JitCallback
 from levanter.tracker.histogram import Histogram
 from levanter.trainer_state import InsideJitInfo, TrainerState
-
 
 Target = Literal["grads", "params", "opt_state", "updates"]
 M = TypeVar("M", bound=PyTree)
@@ -137,7 +137,7 @@ def compute_watch_stats(
 
 @dataclass(frozen=True)
 class WatchConfig:
-    watch_targets: Union[list[Target], Target] = dataclasses.field(default_factory=lambda: ["grads", "params"])
+    watch_targets: list[Target] | Target = dataclasses.field(default_factory=lambda: list[Target](["grads", "params"]))
     """
     What to watch during training. Can be a single target or a list of targets.
     Valid targets are: 'grads', 'params', 'opt_state', 'updates'.
@@ -180,7 +180,7 @@ class WatchCallback(JitCallback[S, M, dict[str, jax.Array | Histogram]]):
 
     def __init__(
         self,
-        watch_targets: Union[Sequence[str], str] = ("grads", "params"),
+        watch_targets: Sequence[str] | str = ("grads", "params"),
         include_norms: bool = True,
         include_per_parameter_norms: bool = True,
         include_histogram: bool = False,

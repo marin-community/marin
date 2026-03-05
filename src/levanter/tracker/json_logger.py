@@ -4,7 +4,8 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any
+from collections.abc import Mapping
 
 import jax
 
@@ -58,7 +59,7 @@ class JsonLoggerTracker(Tracker):
 
     name: str = "json_logger"
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(self, logger: logging.Logger | None = None):
         self.logger = logger or logging.getLogger("levanter.json_logger")
         self._last_metrics: dict[str, Any] = {}
         self._summary_metrics: dict[str, Any] = {}
@@ -76,7 +77,7 @@ class JsonLoggerTracker(Tracker):
         except TypeError as e:
             logger.info(f"Oh noes... {e}")
 
-    def log(self, metrics: Mapping[str, Any], *, step: Optional[int], commit: Optional[bool] = None):
+    def log(self, metrics: Mapping[str, Any], *, step: int | None, commit: bool | None = None):
         del commit
         record = _to_jsonable(
             {
@@ -101,7 +102,7 @@ class JsonLoggerTracker(Tracker):
         self.logger.info(json.dumps(record))
         self._summary_metrics.update(_flatten(metrics))
 
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):
         record = _to_jsonable(
             {
                 "tracker": self.name,
@@ -133,7 +134,7 @@ class JsonLoggerConfig(TrackerConfig):
     logger_name: str = "levanter.json_logger"
     level: int = logging.INFO
 
-    def init(self, run_id: Optional[str]) -> JsonLoggerTracker:
+    def init(self, run_id: str | None) -> JsonLoggerTracker:
         del run_id
         log = logging.getLogger(self.logger_name)
         log.setLevel(self.level)

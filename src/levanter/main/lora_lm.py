@@ -4,7 +4,6 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 import jax.random as jrandom
 
@@ -27,7 +26,6 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -39,12 +37,12 @@ class LoraLmConfig:
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
-    peft_save_path: Optional[str] = None  # path to save peft-compatible checkpoints
-    peft_hf_upload: Optional[str] = None
+    peft_save_path: str | None = None  # path to save peft-compatible checkpoints
+    peft_hf_upload: str | None = None
     hf_save_steps: int = 1000
 
-    merged_hf_save_path: Optional[str] = None  # path to save merged hf checkpoints
-    merged_hf_upload: Optional[str] = None
+    merged_hf_save_path: str | None = None  # path to save merged hf checkpoints
+    merged_hf_upload: str | None = None
 
     trust_remote_code: bool = False
     train_seq_len: int = 4096

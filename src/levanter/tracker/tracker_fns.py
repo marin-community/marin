@@ -24,7 +24,6 @@ from levanter.tracker.tracker import DictTracker
 from levanter.tracker.wandb import WandbTracker
 from levanter.utils.jax_utils import is_inside_jit
 
-
 logger = logging.getLogger(__name__)
 
 _should_use_callback = True
@@ -42,7 +41,7 @@ def _log_missing_tracker_once() -> None:
     logger.info("No global tracker set; tracker logs are being dropped.")
 
 
-def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int], commit: Optional[bool] = None):
+def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: int | None, commit: bool | None = None):
     """
     Log metrics to the global tracker.
 
@@ -68,9 +67,7 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
 
 
 # deprecated in favor of log()
-def log_metrics(
-    metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int], commit: Optional[bool] = None
-):
+def log_metrics(metrics: typing.Mapping[str, LoggableValue | Any], *, step: int | None, commit: bool | None = None):
     """
     Deprecated. Use log instead.
     """
@@ -185,7 +182,7 @@ def log_hyperparameters(hparams: dict[str, Any]):
     _global_tracker.log_hyperparameters(hparams)
 
 
-def log_configuration(hparams: Any, config_name: Optional[str] = None):
+def log_configuration(hparams: Any, config_name: str | None = None):
     """
      Logs a configuration object to the global tracker. If the configuration object is a dataclass,
         it is dumped to a yaml file and logged as an artifact.
@@ -209,7 +206,7 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
                     draccus.dump(hparams, f, encoding="utf-8")
                     name = config_name or "config.yaml"
                     _global_tracker.log_artifact(config_path, name=name, type="config")
-            except Exception:  # noqa
+            except Exception:
                 logger.warning("Failed to dump config to yaml. Skipping logging as artifact.", exc_info=True)
 
 
@@ -248,7 +245,7 @@ def current_tracker(tracker: "Tracker") -> typing.ContextManager:
 
 
 def current_tracker(
-    tracker: Optional[Tracker] = None,
+    tracker: Tracker | None = None,
 ) -> Tracker | typing.ContextManager:
     """
     Get or set the global tracker. Note that setting the global tracker is not thread-safe,

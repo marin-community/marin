@@ -55,8 +55,7 @@ from levanter.utils.jax_utils import key_iterator
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.utils.logging import silence_transformer_nag
 
-
-silence_transformer_nag()  # noqa
+silence_transformer_nag()
 
 T_co = TypeVar("T_co", covariant=True)
 
@@ -482,9 +481,7 @@ def dataset_for_component(
         effective_pack = pack
         if effective_pack == "pad":
             raise NotImplementedError("Padding mode not yet implemented.")
-        max_segments = (
-            64 if effective_pack is True else (int(effective_pack) if isinstance(effective_pack, int) else 1)
-        )
+        max_segments = 64 if effective_pack is True else (int(effective_pack) if isinstance(effective_pack, int) else 1)
         mask_user_turns = fmt.mask_user_turns
         return ChatDataset(
             cache,
@@ -726,9 +723,7 @@ class LmDataConfig:
         shuffle_cfg = self.shuffle
         perm_type = self.permutation_type
         if perm_type is None and shuffle_cfg is not False and not isinstance(shuffle_cfg, BlockShuffleConfig):
-            logger.warning(
-                "Defaulting to linear permutation for shuffling. This will change to Feistel in the future."
-            )
+            logger.warning("Defaulting to linear permutation for shuffling. This will change to Feistel in the future.")
             perm_type = "linear"
 
         def shuffle_ds(ds, k):
@@ -765,9 +760,7 @@ class LmDataConfig:
             datasets = sliced_datasets
 
         if self.max_train_batches is not None:
-            assert (
-                initial_batch_size is not None
-            ), "initial_batch_size must be provided if max_train_batches is provided"
+            assert initial_batch_size is not None, "initial_batch_size must be provided if max_train_batches is provided"
             for name, ds in datasets.items():
                 if name in self.max_train_batches:
                     num_sequences = self.max_train_batches[name] * initial_batch_size
@@ -825,18 +818,14 @@ class LmDataConfig:
                 if not fsspec_utils.exists(cache_path):
                     logger.warning(f"No source for {name} in {split} split and no cache at {cache_path}, skipping")
                     continue
-                caches[name] = load_lm_dataset_cache(
-                    cache_path, component.format, self.the_tokenizer, self.enforce_eos
-                )
+                caches[name] = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
                 continue
 
             cache_path = os.path.join(cache_root, split)
             if not self.auto_build_caches:
                 if not fsspec_utils.exists(cache_path):
                     raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
-                caches[name] = load_lm_dataset_cache(
-                    cache_path, component.format, self.the_tokenizer, self.enforce_eos
-                )
+                caches[name] = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
                 continue
 
             caches[name] = build_lm_dataset_cache(

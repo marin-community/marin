@@ -11,7 +11,7 @@ from haliax import NamedArray
 
 from levanter.inference.utils import INVALID, is_valid
 
-__all__ = ["PageTable", "PageTableSpec", "PageBatchInfo"]
+__all__ = ["PageBatchInfo", "PageTable", "PageTableSpec"]
 
 
 @dataclasses.dataclass(frozen=True)

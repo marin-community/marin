@@ -9,7 +9,6 @@ import shutil
 import tempfile
 import time
 import urllib.parse
-from typing import Optional
 
 import fsspec
 import jax
@@ -132,7 +131,7 @@ _sync_count = 0
 
 
 @contextlib.contextmanager
-def temp_dir_before_upload(path, process_should_upload: Optional[bool] = None):
+def temp_dir_before_upload(path, process_should_upload: bool | None = None):
     """
     Creates a temp_dir, yields it, then uploads it to the given path or url on exit using fsspec.
     If it's a local path instead of a url, it just yields the path.
@@ -147,7 +146,7 @@ def temp_dir_before_upload(path, process_should_upload: Optional[bool] = None):
         return urllib.parse.urlparse(path).scheme != ""
 
     try:
-        tmpdir: Optional[str] = None
+        tmpdir: str | None = None
         if _is_url_like(path):
             tmpdir = tempfile.mkdtemp()
             local_path = tmpdir

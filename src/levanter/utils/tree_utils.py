@@ -3,7 +3,8 @@
 
 import dataclasses
 import functools
-from typing import Sequence, TypeVar, cast
+from typing import TypeVar, cast
+from collections.abc import Sequence
 
 import jax.numpy as jnp
 

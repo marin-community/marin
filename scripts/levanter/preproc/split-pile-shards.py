@@ -9,7 +9,6 @@ from pathlib import Path
 import tqdm
 from iris.marin_fs import open_url
 
-
 OUT_PATH = "gs://levanter-data/pile-domains"
 
 categories_to_out_names = {

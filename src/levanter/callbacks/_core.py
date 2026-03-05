@@ -5,12 +5,12 @@ import abc
 import inspect
 from abc import ABC
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
+from collections.abc import Callable
 
 from jaxtyping import PyTree
 
 from levanter.trainer_state import InsideJitInfo, TrainerState
-
 
 M = TypeVar("M")  # Model
 M_con = TypeVar("M_con", bound=PyTree, contravariant=True)

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import dataclasses
-from typing import Optional, Tuple, cast
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -39,7 +39,6 @@ from jax import lax
 import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, NamedArray
-
 
 # ---------- small utilities ----------
 
@@ -60,7 +59,7 @@ def _l2norm(x: NamedArray, axis: hax.AxisSelector, eps: float = 1e-6) -> NamedAr
 
 
 def _causal_depthwise_conv1d_full(
-    x_ncl: jnp.ndarray, w_ck: jnp.ndarray, bias_c: Optional[jnp.ndarray] = None
+    x_ncl: jnp.ndarray, w_ck: jnp.ndarray, bias_c: jnp.ndarray | None = None
 ) -> jnp.ndarray:
     """Depthwise 1D convolution with *causal* semantics (left padding).
 
@@ -99,7 +98,7 @@ def _causal_depthwise_conv1d_full(
 def _causal_depthwise_conv1d_update(
     x_ncl_1: jnp.ndarray,  # (N, C, 1)
     w_ck: jnp.ndarray,  # (C, K)
-    bias_c: Optional[jnp.ndarray],
+    bias_c: jnp.ndarray | None,
     prev_state_nck: jnp.ndarray,  # (N, C, K)
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Single-step streaming update for the causal depthwise conv.
@@ -146,7 +145,7 @@ class GatedRmsNorm(eqx.Module):
     eps: float = eqx.field(default=1e-6, static=True)
 
     @staticmethod
-    def init(axis: Axis, eps: float = 1e-6) -> "GatedRmsNorm":
+    def init(axis: Axis, eps: float = 1e-6) -> GatedRmsNorm:
         return GatedRmsNorm(axis=axis, weight=hax.ones(axis), eps=eps)
 
     def __call__(self, x: NamedArray, gate: NamedArray) -> NamedArray:
@@ -253,10 +252,10 @@ def recurrent_gated_delta_rule(
     g: NamedArray,  # [batch, position, heads] (log-decay; α = exp(g))
     beta: NamedArray,  # [batch, position, heads] (β ∈ (0,1))
     *,
-    initial_state: Optional[jnp.ndarray] = None,  # (B, H, dk, dv)
+    initial_state: jnp.ndarray | None = None,  # (B, H, dk, dv)
     output_final_state: bool = False,
     use_qk_l2norm_in_kernel: bool = True,
-) -> Tuple[NamedArray, Optional[jnp.ndarray]]:
+) -> tuple[NamedArray, jnp.ndarray | None]:
     """Sequential (decode) GDN kernel
 
     For each t:
@@ -365,10 +364,10 @@ def chunk_gated_delta_rule(
     beta: NamedArray,  # [batch, position, heads]  (β)
     *,
     chunk_size: int = 64,
-    initial_state: Optional[jnp.ndarray] = None,  # (B,H,dk,dv)
+    initial_state: jnp.ndarray | None = None,  # (B,H,dk,dv)
     output_final_state: bool = False,
     use_qk_l2norm_in_kernel: bool = True,
-) -> tuple[NamedArray, Optional[jnp.ndarray]]:
+) -> tuple[NamedArray, jnp.ndarray | None]:
     """Chunkwise-parallel GDN (DeltaNet UT/WY extended with decay).
 
     High-level sketch (per head):
@@ -526,7 +525,7 @@ def chunk_gated_delta_rule(
         # Update cross-chunk state S with the *tail* decay and innovations
         g_tail = gcum_i[..., -1]  # last position's cumulative g
         decay_tail = jnp.exp(g_tail)[..., None, None]  # α at the chunk tail
-        decay_weights = jnp.exp((g_tail[..., None] - gcum_i))[..., None]  # exp(g_tail - g_pos)
+        decay_weights = jnp.exp(g_tail[..., None] - gcum_i)[..., None]  # exp(g_tail - g_pos)
 
         add = jnp.einsum("bhid,bhim->bhdm", k_i * decay_weights, v_new)
         S_new = S_prev * decay_tail + add
@@ -591,7 +590,7 @@ class GatedDeltaNet(eqx.Module):
 
     # depthwise conv parameters over concatenated [Q|K|V] channels
     conv_weight: jnp.ndarray
-    conv_bias: Optional[jnp.ndarray]
+    conv_bias: jnp.ndarray | None
 
     # discretization params per V head (Mamba2-style)
     A_log: jnp.ndarray
@@ -602,7 +601,7 @@ class GatedDeltaNet(eqx.Module):
     out_proj: hnn.Linear  # [VHeads, VHeadDim] -> [Embed]
 
     @staticmethod
-    def init(config: GatedDeltaNetConfig, *, key) -> "GatedDeltaNet":
+    def init(config: GatedDeltaNetConfig, *, key) -> GatedDeltaNet:
         """Initializer mirrors the HF defaults: no biases in projections/out_proj;
         A_log ~ log U(0,16), dt_bias = 1, small conv kernel."""
         k_qkvz, k_ba, k_conv, k_out = jax.random.split(key, 4)
@@ -651,7 +650,7 @@ class GatedDeltaNet(eqx.Module):
         self,
         mixed_qkvz: NamedArray,  # [B, Pos, qkvz]
         mixed_ba: NamedArray,  # [B, Pos, 2*num_v_heads]
-    ) -> Tuple[NamedArray, NamedArray, NamedArray, NamedArray, NamedArray, NamedArray]:
+    ) -> tuple[NamedArray, NamedArray, NamedArray, NamedArray, NamedArray, NamedArray]:
         """Split packed projections into per-head tensors and align head layout. (match HF version)
 
         Input shapes:
@@ -705,9 +704,9 @@ class GatedDeltaNet(eqx.Module):
         *,
         inference: bool = True,
         chunk_size: int = 64,
-        attention_mask: Optional[NamedArray] = None,
-        decode_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None,  # (conv_state, S_state)
-    ) -> Tuple[NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
+        attention_mask: NamedArray | None = None,
+        decode_state: tuple[jnp.ndarray, jnp.ndarray] | None = None,  # (conv_state, S_state)
+    ) -> tuple[NamedArray, tuple[jnp.ndarray, jnp.ndarray] | None]:
         """Run the full GDN token mixer.
 
         Args:
@@ -745,7 +744,7 @@ class GatedDeltaNet(eqx.Module):
         qkv_ch = hax.concatenate("channels", [q_ch, k_ch, v_ch])  # [B, Pos, channels]
         qkv_ncl = hax.rearrange(qkv_ch, ("batch", "channels", "position")).array  # (N, C, L)
 
-        S_state: Optional[jnp.ndarray] = None
+        S_state: jnp.ndarray | None = None
         if decode_state is not None and x.axis_size("position") == 1:
             # Streaming decode: cheap single-step conv update + carry conv_state
             conv_state, S_state = decode_state
@@ -844,7 +843,7 @@ class GatedDeltaNet(eqx.Module):
         y_out = self.out_proj(y_norm.astype(x.dtype))
 
         # State packing for streaming
-        new_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None
+        new_state: tuple[jnp.ndarray, jnp.ndarray] | None = None
         if inference and (new_conv_state is not None) and (S_new is not None):
             new_state = (new_conv_state, S_new)
         return y_out, new_state
@@ -860,7 +859,7 @@ class GatedDeltaNet(eqx.Module):
             "out_proj.weight": jnp.array(self.out_proj.weight.array),
         }
 
-    def load_state_dict(self, state: dict[str, jnp.ndarray]) -> "GatedDeltaNet":
+    def load_state_dict(self, state: dict[str, jnp.ndarray]) -> GatedDeltaNet:
         cfg = self.config
 
         def _assign_linear_weight(named_linear: hnn.Linear, np_weight: jnp.ndarray, out_axis: Axis, in_axis: Axis):
@@ -894,7 +893,7 @@ class GatedDeltaNet(eqx.Module):
         )
 
     @classmethod
-    def from_state_dict(cls, config: GatedDeltaNetConfig, state: dict[str, jnp.ndarray], *, key) -> "GatedDeltaNet":
+    def from_state_dict(cls, config: GatedDeltaNetConfig, state: dict[str, jnp.ndarray], *, key) -> GatedDeltaNet:
         """
         Build a fresh layer from config + state dict.
         """

@@ -52,8 +52,8 @@ def coreweave_runtime() -> KubernetesRuntime:
 
     from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
 
-    iris_root = Path(__file__).resolve().parents[2]
-    config = load_config(iris_root / "examples" / "coreweave.yaml")
+    repo_root = Path(__file__).resolve().parents[3]
+    config = load_config(repo_root / "examples" / "iris" / "coreweave.yaml")
     namespace = config.platform.coreweave.namespace or "iris"
 
     endpoint = config.platform.coreweave.object_storage_endpoint

@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
 
 import numpy as np
 from transformers import PreTrainedTokenizer
@@ -24,7 +23,7 @@ class PassthroughTokenizer(PreTrainedTokenizer):
     def get_vocab(self):
         return self._vocab
 
-    def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str, ...]:
+    def save_vocabulary(self, save_directory: str, filename_prefix: str | None = None) -> tuple[str, ...]:
         return ()
 
     def _tokenize(self, text, **kwargs):

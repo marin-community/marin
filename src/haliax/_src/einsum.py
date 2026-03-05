@@ -163,9 +163,7 @@ def _output_only_named_einsum(equation, arrays, rhs, axis_aliases):
                 name = ax_name
 
             if name in out_axes:
-                raise_parse_error(
-                    f"Axis capture {name} occurs multiple times on the rhs", equation, capture.char_range
-                )
+                raise_parse_error(f"Axis capture {name} occurs multiple times on the rhs", equation, capture.char_range)
 
             if name not in input_axis_names:
                 raise_parse_error(f"Axis {name} not found in any of the input arrays", equation, capture.char_range)
@@ -287,9 +285,7 @@ def _positional_einsum_spec(equation, arrays, lhses, rhs, axis_aliases):
             if name_mappings_for_einsum.get(name) is not None:
                 letter = name_mappings_for_einsum[name]
             else:
-                raise_parse_error(
-                    f"Axis name {name} does not occur on the left hand side", equation, capture.char_range
-                )
+                raise_parse_error(f"Axis name {name} does not occur on the left hand side", equation, capture.char_range)
 
             named_on_left_but_not_right.discard(letter)
 
@@ -304,9 +300,7 @@ def _positional_einsum_spec(equation, arrays, lhses, rhs, axis_aliases):
         rhs_named_names = {axis_name(ax) for ax in rhs_named_axes}
         contracted_axes = {axis_name(table.dealias_binding(name)) for name in named_on_left_but_not_right}
         ellipsis_axes = [
-            ax
-            for ax in all_input_axes
-            if axis_name(ax) not in rhs_named_names and axis_name(ax) not in contracted_axes
+            ax for ax in all_input_axes if axis_name(ax) not in rhs_named_names and axis_name(ax) not in contracted_axes
         ]
 
         expanded_out: list[Axis] = []

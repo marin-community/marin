@@ -10,7 +10,8 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
+from typing import Any, Optional, TypeVar
+from collections.abc import Sequence
 
 import deepdiff
 import jax
@@ -121,7 +122,7 @@ class TreeCache(AsyncDataset[T_co]):
             indices = range(indices.start or 0, indices.stop or len(self), indices.step or 1)
         return await self.store.get_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None):
+    def get_batch_sync(self, indices_or_slice, *, timeout: float | None = None):
         if isinstance(indices_or_slice, slice):
             indices_or_slice = range(
                 indices_or_slice.start or 0,
@@ -159,10 +160,10 @@ class TreeCache(AsyncDataset[T_co]):
 @dataclass
 class CacheLedger:
     total_num_rows: int
-    shard_rows: Dict[str, int]
+    shard_rows: dict[str, int]
     is_finished: bool = False
-    finished_shards: List[str] = dataclasses.field(default_factory=list)
-    field_counts: Dict[str, int] = dataclasses.field(default_factory=dict)
+    finished_shards: list[str] = dataclasses.field(default_factory=list)
+    field_counts: dict[str, int] = dataclasses.field(default_factory=dict)
     metadata: "CacheMetadata" = dataclasses.field(default_factory=lambda: CacheMetadata({}))
 
     @staticmethod
@@ -201,7 +202,7 @@ class CacheLedger:
 @dataclass_json
 @dataclass(frozen=True)
 class CacheMetadata:
-    preprocessor_metadata: Optional[dict[str, Any]] = None
+    preprocessor_metadata: dict[str, Any] | None = None
 
     def compare_to(self, other: "CacheMetadata") -> deepdiff.DeepDiff:
         if other.preprocessor_metadata is None:
@@ -555,7 +556,7 @@ def _safe_remove(path: str):
     try:
         if fsspec_exists(path):
             fsspec_remove(path, recursive=True)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(f"Failed to remove temporary cache path {path}")
 
 
@@ -586,7 +587,7 @@ async def _extend_cache_with_other_cache(
         await asyncio.gather(*jax.tree.leaves(futures))
         logger.info(f"Finished copying data from {source_path} to {dest_path}.")
         return source_num_rows
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception(f"Failed to copy data from {source_path} to {dest_path}: {e}")
         raise
 
@@ -659,7 +660,7 @@ async def _extend_cache_metadata_with_other(
         await asyncio.gather(*jax.tree.leaves(futures))
         logger.info(f"Finished copying metadata from {source_path} to {dest_path}.")
         return source_num_rows
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception(f"Failed to copy metadata from {source_path} to {dest_path}: {e}")
         raise
 
@@ -676,7 +677,7 @@ def _sanitize_shard_name(name: str) -> str:
     return safe or "shard"
 
 
-def _canonicalize_batch(batch: Union[dict, List[dict]]) -> List[dict]:
+def _canonicalize_batch(batch: dict | list[dict]) -> list[dict]:
     if isinstance(batch, pa.RecordBatch):
         batch = dict_from_record_batch(batch)
 
@@ -701,11 +702,11 @@ def _try_load(path, metadata):
 
 
 __all__ = [
-    "TreeCache",
-    "build_or_load_cache",
-    "SerialCacheWriter",
     "CacheLedger",
     "CacheMetadata",
     "CacheOptions",
+    "SerialCacheWriter",
+    "TreeCache",
+    "build_or_load_cache",
     "consolidate_shard_caches",
 ]

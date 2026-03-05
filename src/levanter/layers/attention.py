@@ -9,7 +9,7 @@ import warnings
 from dataclasses import dataclass
 from enum import StrEnum
 from numbers import Integral
-from typing import Literal, Optional, Union, cast, overload
+from typing import Literal, Union, cast, overload
 
 import equinox as eqx
 import jax
@@ -90,20 +90,20 @@ def dot_product_attention(
     query: NamedArray,
     key: NamedArray,
     value: NamedArray,
-    mask: Optional[Union["AttentionMask", NamedArray]] = None,
-    bias: Optional[NamedArray] = None,
-    attention_dtype: Optional[jnp.dtype] = None,
+    mask: Union["AttentionMask", NamedArray] | None = None,
+    bias: NamedArray | None = None,
+    attention_dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
-    use_flash: Optional[bool] = None,
-    attn_backend: Optional[AttentionBackend] = None,
-    flash_block_size: Optional[int] = None,
+    use_flash: bool | None = None,
+    attn_backend: AttentionBackend | None = None,
+    flash_block_size: int | None = None,
     dropout: float = 0.0,
     *,
     logits_soft_cap: float | None = None,
     scaling_factor: float | None = None,
     inference: bool = True,
     prng: PRNGKeyArray | None = None,
-    attn_sink: Optional[NamedArray] = None,
+    attn_sink: NamedArray | None = None,
 ):
     """
     This method is similar to [haliax.nn.attention.dot_product_attention][] but it can use different backends for
@@ -304,8 +304,8 @@ def _materialize_sink_as_dummy_kv(
     key: NamedArray,
     value: NamedArray,
     attn_sink: NamedArray,
-    mask: Optional[Union["AttentionMask", NamedArray]],
-    bias: Optional[NamedArray],
+    mask: Union["AttentionMask", NamedArray] | None,
+    bias: NamedArray | None,
 ):
     """
     Preprocess for dot-product attention variant with a learned sink term per head.
@@ -359,16 +359,16 @@ def simple_attention_with_dropout(
     query: NamedArray,
     key: NamedArray,
     value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    mask: Union[NamedArray, "AttentionMask"] | None = None,
+    bias: NamedArray | None = None,
     inference: bool = False,
     dropout: float = 0.0,
-    attention_dtype: Optional[jnp.dtype] = None,
+    attention_dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
     *,
-    prng: Optional[PRNGKeyArray] = None,
+    prng: PRNGKeyArray | None = None,
     scaling_factor: float | None = None,
-    logits_soft_cap: Optional[float] = None,
+    logits_soft_cap: float | None = None,
 ):
     QPos = query.resolve_axis(QPos)
     KPos = key.resolve_axis(KPos)
@@ -411,19 +411,19 @@ def _try_te_attention(
     query: NamedArray,
     key: NamedArray,
     value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    mask: Union[NamedArray, "AttentionMask"] | None = None,
+    bias: NamedArray | None = None,
     dropout: float = 0.0,
     inference: bool = False,
     *,
-    prng: Optional[PRNGKeyArray] = None,
-    attention_dtype: Optional[jnp.dtype] = None,
+    prng: PRNGKeyArray | None = None,
+    attention_dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
-    flash_block_size: Optional[int] = None,
+    flash_block_size: int | None = None,
     force_te: bool,
     scaling_factor: float,
-    logits_soft_cap: Optional[float] = None,
-    attn_sink: Optional[NamedArray] = None,  # NEW
+    logits_soft_cap: float | None = None,
+    attn_sink: NamedArray | None = None,  # NEW
 ):
     """
     Try NVTE fused attention. If unsupported, either raise (when forced) or warn and return None.
@@ -468,7 +468,7 @@ def _try_te_attention(
 
         return None
     except NotImplementedError as e:
-        message = f"Could not use transformer_engine for flash attention: {str(e)}."
+        message = f"Could not use transformer_engine for flash attention: {e!s}."
         if force_te:
             raise NotImplementedError(message)
 
@@ -505,23 +505,23 @@ def _te_flash_attention(
     query: NamedArray,
     key: NamedArray,
     value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    mask: Union[NamedArray, "AttentionMask"] | None = None,
+    bias: NamedArray | None = None,
     dropout: float = 0.0,
     inference: bool = False,
     *,
-    prng: Optional[PRNGKeyArray] = None,
-    attention_dtype: Optional[jnp.dtype] = None,
+    prng: PRNGKeyArray | None = None,
+    attention_dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
-    block_size: Optional[int] = None,
+    block_size: int | None = None,
     scaling_factor: float,
-    logits_soft_cap: Optional[float] = None,
+    logits_soft_cap: float | None = None,
 ):
     from transformer_engine.jax.attention import (  # type: ignore[import]
         AttnBiasType,
         QKVLayout,
         SequenceDescriptor,
-        fused_attn,  # noqa: F401
+        fused_attn,
     )
 
     if logits_soft_cap is not None:
@@ -888,9 +888,9 @@ class AttentionMask(eqx.Module):
     # ``j <= i + causal_offset``. A ``None`` offset means a static offset of 0 (i.e., standard causal masking).
     is_causal: bool = eqx.field(default=False, static=True)
     causal_offset: None | NamedArray = None
-    explicit_mask: Optional[NamedArray] = None
+    explicit_mask: NamedArray | None = None
     segment_ids: tuple[NamedArray, NamedArray] | None = None
-    sliding_window: Optional[int] = eqx.field(default=None, static=True)
+    sliding_window: int | None = eqx.field(default=None, static=True)
     # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
     # TODO: add prefixlm
     # cf https://github.com/google-research/t5x/blob/51a99bff8696c373cc03918707ada1e98cbca407/t5x/examples/decoder_only/layers.py#L978
@@ -899,9 +899,9 @@ class AttentionMask(eqx.Module):
         self,
         QPos: Axis,
         KPos: Axis,
-        q_slice: Optional[haliax.dslice] = None,
-        k_slice: Optional[haliax.dslice] = None,
-    ) -> Optional[NamedArray]:
+        q_slice: haliax.dslice | None = None,
+        k_slice: haliax.dslice | None = None,
+    ) -> NamedArray | None:
         """
         Materialize the mask as a NamedArray. This is useful for attention functions that don't support masks,
         or for the inner loop
@@ -941,9 +941,7 @@ class AttentionMask(eqx.Module):
         mask = combine_masks_and(causal, explicit)
 
         if self.sliding_window is not None:
-            sw_mask = _materialize_sliding_window_mask(
-                self.sliding_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice
-            )
+            sw_mask = _materialize_sliding_window_mask(self.sliding_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice)
             mask = combine_masks_and(mask, sw_mask)
 
         if self.segment_ids is not None:
@@ -957,7 +955,7 @@ class AttentionMask(eqx.Module):
     @staticmethod
     def causal(
         *,
-        sliding_window: Optional[int] = None,
+        sliding_window: int | None = None,
         offset: int | NamedArray | None = None,
         segment_ids: tuple[NamedArray, NamedArray] | None = None,
     ) -> "AttentionMask":
@@ -1123,28 +1121,28 @@ def materialize_mask(
     mask: NamedArray | AttentionMask,
     QPos: Axis,
     KPos: Axis,
-    q_slice: Optional[haliax.dslice] = None,
-    k_slice: Optional[haliax.dslice] = None,
+    q_slice: haliax.dslice | None = None,
+    k_slice: haliax.dslice | None = None,
 ) -> NamedArray: ...
 
 
 @overload
 def materialize_mask(
-    mask: Optional[NamedArray | AttentionMask],
+    mask: NamedArray | AttentionMask | None,
     QPos: Axis,
     KPos: Axis,
-    q_slice: Optional[haliax.dslice] = None,
-    k_slice: Optional[haliax.dslice] = None,
-) -> Optional[NamedArray]: ...
+    q_slice: haliax.dslice | None = None,
+    k_slice: haliax.dslice | None = None,
+) -> NamedArray | None: ...
 
 
 def materialize_mask(
-    mask: Optional[NamedArray | AttentionMask],
+    mask: NamedArray | AttentionMask | None,
     QPos: Axis,
     KPos: Axis,
-    q_slice: Optional[haliax.dslice] = None,
-    k_slice: Optional[haliax.dslice] = None,
-) -> Optional[NamedArray]:
+    q_slice: haliax.dslice | None = None,
+    k_slice: haliax.dslice | None = None,
+) -> NamedArray | None:
     """
     Materialize an attention mask if it is an AttentionMask. Otherwise, just return it.
     """
@@ -1176,20 +1174,20 @@ def _try_tpu_splash_attention(
     query: NamedArray,
     key: NamedArray,
     value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    mask: Union[NamedArray, "AttentionMask"] | None = None,
+    bias: NamedArray | None = None,
     dropout: float = 0.0,
     inference: bool = False,
     *,
     force_flash: bool,
-    prng: Optional[PRNGKeyArray] = None,
-    attention_dtype: Optional[jnp.dtype] = None,
+    prng: PRNGKeyArray | None = None,
+    attention_dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
-    block_size: Optional[int] = None,
+    block_size: int | None = None,
     scaling_factor: float,
     logits_soft_cap: float | None,
-    attn_sink: Optional[NamedArray] = None,
-) -> Optional[NamedArray]:
+    attn_sink: NamedArray | None = None,
+) -> NamedArray | None:
     if dropout != 0.0:
         if force_flash:
             raise NotImplementedError("Splash attention does not support dropout.")
@@ -1249,19 +1247,19 @@ def _tpu_splash_attention(
     query: NamedArray,
     key: NamedArray,
     value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    mask: Union[NamedArray, "AttentionMask"] | None = None,
+    bias: NamedArray | None = None,
     dropout: float = 0.0,
     inference: bool = False,
     *,
-    prng: Optional[PRNGKeyArray] = None,
-    attention_dtype: Optional[jnp.dtype] = None,
+    prng: PRNGKeyArray | None = None,
+    attention_dtype: jnp.dtype | None = None,
     precision: PrecisionLike = None,
-    block_size: Optional[int] = None,
+    block_size: int | None = None,
     scaling_factor: float,
     logits_soft_cap: float | None = None,
-    attn_sink: Optional[NamedArray] = None,
-) -> Optional[NamedArray]:
+    attn_sink: NamedArray | None = None,
+) -> NamedArray | None:
     from jax.experimental.pallas.ops.tpu.splash_attention import (
         SegmentIds as SplashSegmentIds,
         splash_attention_kernel,
@@ -1518,13 +1516,11 @@ def _tpu_splash_attention(
     return attn_output
 
 
-def _find_batch_axis_for_segment_ids(Pos, segment_ids) -> Optional[int]:
+def _find_batch_axis_for_segment_ids(Pos, segment_ids) -> int | None:
     index_of_seq_dim = segment_ids.axes.index(Pos)
     other_indices = [i for i in range(len(segment_ids.axes)) if i != index_of_seq_dim]
     if len(other_indices) > 1:
-        raise NotImplementedError(
-            f"Only one batch axis is supported in segment_ids right now (got {segment_ids.axes})"
-        )
+        raise NotImplementedError(f"Only one batch axis is supported in segment_ids right now (got {segment_ids.axes})")
     elif len(other_indices) == 1:
         segment_batch_axis = other_indices[0]
     else:
@@ -1573,15 +1569,15 @@ class AttentionConfig:
     num_kv_heads: int
     head_dim: int | None = None
     use_bias: bool = False
-    use_output_bias: Optional[bool] = None  # If None, uses use_bias
+    use_output_bias: bool | None = None  # If None, uses use_bias
     upcast_attn: bool = False
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
-    rope: Optional[RotaryEmbeddingsConfig] = None
-    sliding_window: Optional[int] = None
-    scaling_factor: Optional[float] = None
-    logits_soft_cap: Optional[float] = None
-    qk_norm: Optional[LayerNormConfigBase] = None
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = None
+    rope: RotaryEmbeddingsConfig | None = None
+    sliding_window: int | None = None
+    scaling_factor: float | None = None
+    logits_soft_cap: float | None = None
+    qk_norm: LayerNormConfigBase | None = None
     gated: Literal["none", "headwise", "elementwise"] = "none"
 
     def __post_init__(self):
@@ -1654,9 +1650,9 @@ class Attention(eqx.Module):
     k_proj: hnn.Linear
     v_proj: hnn.Linear
     o_proj: hnn.Linear
-    q_norm: Optional[LayerNormBase] = None
-    k_norm: Optional[LayerNormBase] = None
-    rot_embs: Optional[RotaryEmbeddings] = None
+    q_norm: LayerNormBase | None = None
+    k_norm: LayerNormBase | None = None
+    rot_embs: RotaryEmbeddings | None = None
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "Attention":
@@ -1714,7 +1710,7 @@ class Attention(eqx.Module):
     def __call__(
         self,
         x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
+        mask: NamedArray | AttentionMask | None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -1843,7 +1839,7 @@ class GatedAttention(Attention):
     to the attention output before the output projection.
     """
 
-    gate_proj: Optional[hnn.Linear] = None  # always set by init(); default for dataclass ordering
+    gate_proj: hnn.Linear | None = None  # always set by init(); default for dataclass ordering
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "GatedAttention":
@@ -1902,7 +1898,7 @@ class GatedAttention(Attention):
     def __call__(
         self,
         x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
+        mask: NamedArray | AttentionMask | None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -2318,11 +2314,11 @@ class MultiHeadLatentAttentionConfig:
     v_head_dim: int = 128
     use_bias: bool = False
     upcast_attn: bool = False
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
-    rope: Optional[RotaryEmbeddingsConfig] = None
-    scaling_factor: Optional[float] = None
-    logits_soft_cap: Optional[float] = None
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = None
+    rope: RotaryEmbeddingsConfig | None = None
+    scaling_factor: float | None = None
+    logits_soft_cap: float | None = None
 
     @property
     def Heads(self) -> Axis:
@@ -2361,11 +2357,11 @@ class MultiHeadLatentAttention(eqx.Module):
     o_proj: hnn.Linear
 
     q_proj: hnn.Linear = None
-    q_a_proj: Optional[hnn.Linear] = None
-    q_a_norm: Optional[LayerNormBase] = None
-    q_b_proj: Optional[hnn.Linear] = None
+    q_a_proj: hnn.Linear | None = None
+    q_a_norm: LayerNormBase | None = None
+    q_b_proj: hnn.Linear | None = None
 
-    rot_embs: Optional[RotaryEmbeddings] = eqx.field(default=None)
+    rot_embs: RotaryEmbeddings | None = eqx.field(default=None)
 
     @staticmethod
     def init(config: MultiHeadLatentAttentionConfig, *, key) -> "MultiHeadLatentAttention":
@@ -2444,7 +2440,7 @@ class MultiHeadLatentAttention(eqx.Module):
     def __call__(
         self,
         x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
+        mask: NamedArray | AttentionMask | None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -2557,7 +2553,7 @@ class AttentionWithSink(Attention):
     def __call__(
         self,
         x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
+        mask: NamedArray | AttentionMask | None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,

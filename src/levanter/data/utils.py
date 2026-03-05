@@ -1,13 +1,13 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Iterable, Iterator, List, TypeVar
-
+from typing import TypeVar
+from collections.abc import Iterable, Iterator
 
 T = TypeVar("T")
 
 
-def batched(iterable: Iterable[T], batch_size: int) -> Iterator[List[T]]:
+def batched(iterable: Iterable[T], batch_size: int) -> Iterator[list[T]]:
     """Yields batches of the given size from the given iterable."""
     batch = []
     for item in iterable:

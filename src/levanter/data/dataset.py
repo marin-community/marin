@@ -3,7 +3,8 @@
 
 import abc
 import logging
-from typing import Callable, Generic, Optional, Sequence, TypeAlias, TypeVar
+from typing import Generic, TypeAlias, TypeVar
+from collections.abc import Callable, Sequence
 
 import jax.random
 import numpy as np
@@ -11,7 +12,6 @@ from jaxtyping import PRNGKeyArray
 
 from levanter.data._prp import PermType
 from levanter.utils import thread_utils
-
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class AsyncDataset(DatasetBase[T_co]):
     def map_batches(self, fn: MapFunction[Sequence[U]], *extra_args, **extra_kwargs) -> "BatchMappedAsyncDataset[U]":
         return BatchMappedAsyncDataset(self, fn, *extra_args, **extra_kwargs)
 
-    def slice_dataset(self, start_index: Optional[int] = None, end_index: Optional[int] = None):
+    def slice_dataset(self, start_index: int | None = None, end_index: int | None = None):
         """
         Slices the dataset from `start_index` to `end_index`.
         """
@@ -198,10 +198,10 @@ class AsyncifiedDataset(AsyncDataset[T_co]):
         return self.dataset[index]
 
     def __repr__(self):
-        return f"WrappedAsyncDataset({repr(self.dataset)})"
+        return f"WrappedAsyncDataset({self.dataset!r})"
 
     def __str__(self):
-        return f"WrappedAsyncDataset({str(self.dataset)})"
+        return f"WrappedAsyncDataset({self.dataset!s})"
 
 
 class ListAsyncDataset(AsyncDataset[T]):
@@ -275,8 +275,8 @@ class SlicedAsyncDataset(AsyncDataset[U]):
     def __init__(
         self,
         dataset: AsyncDataset[U],
-        start_index: Optional[int] = None,
-        end_index: Optional[int] = None,
+        start_index: int | None = None,
+        end_index: int | None = None,
     ):
         if start_index is None:
             start_index = 0
@@ -375,7 +375,7 @@ class EpochDataset(AsyncDataset[T_co]):
     :param max_epochs: The maximum number of epochs to cycle through. If None, cycle indefinitely.
     """
 
-    def __init__(self, dataset: AsyncDataset[T_co], max_epochs: Optional[int] = None):
+    def __init__(self, dataset: AsyncDataset[T_co], max_epochs: int | None = None):
         super().__init__()
         self.dataset = dataset
         self.max_epochs = max_epochs
@@ -393,7 +393,7 @@ class EpochDataset(AsyncDataset[T_co]):
         # EpochDataset can be finite if max_epochs is set.
         return self.max_epochs is not None
 
-    async def current_len(self) -> Optional[int]:
+    async def current_len(self) -> int | None:
         # If max_epochs is None, the dataset is effectively infinite.
         if self.max_epochs is None:
             return None

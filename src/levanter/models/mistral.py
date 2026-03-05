@@ -3,7 +3,6 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Type, Union
 
 import jax.random as jrandom
 
@@ -21,7 +20,6 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-
 
 silence_transformer_nag()
 from transformers import MistralConfig as HfMistralConfig  # noqa: E402
@@ -59,9 +57,9 @@ class MistralConfig(LlamaConfig):
 
     # Attention-related config
     upcast_attn: bool = False
-    use_flash_attention: Optional[bool] = True
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
+    use_flash_attention: bool | None = True
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = None
 
     gradient_checkpointing: bool = True
 
@@ -80,7 +78,7 @@ class MistralConfig(LlamaConfig):
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
     def hf_checkpoint_converter(
-        self, ref_checkpoint: Optional[str] = None
+        self, ref_checkpoint: str | None = None
     ) -> HFCheckpointConverter["MistralConfig"]:  # type: ignore
         hf_model_path = "mistralai/Mistral-7B-v0.1" if ref_checkpoint is None else ref_checkpoint
 
@@ -110,7 +108,7 @@ class MistralConfig(LlamaConfig):
             rope=rope_config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfMistralConfig:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfMistralConfig:
         """Convert to HuggingFace's MistralConfig
 
         Args:
@@ -144,7 +142,7 @@ class MistralConfig(LlamaConfig):
         )
 
     @property
-    def model_type(cls) -> Type["MistralLMHeadModel"]:
+    def model_type(cls) -> type["MistralLMHeadModel"]:
         return MistralLMHeadModel
 
     def flops_per_token(self, vocab_size: int, context_length: int) -> float:
@@ -205,7 +203,7 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
+        attn_mask: NamedArray | AttentionMask | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,
@@ -232,5 +230,5 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
 
         return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": "model", "embeddings": None}

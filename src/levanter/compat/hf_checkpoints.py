@@ -16,7 +16,8 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Generic, Optional, TypeVar, cast
+from collections.abc import Callable
 
 import draccus
 import equinox as eqx
@@ -82,7 +83,7 @@ DEFAULT_MAX_SHARD_SIZE = int(5e9)
 logger = logging.getLogger(__name__)
 
 
-def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
+def _convert_to_hf_url(model_id: str, revision: str | None = None) -> str:
     """Convert a HuggingFace model ID to an hf:// URL for fsspec streaming.
 
     Args:
@@ -128,7 +129,7 @@ class RepoRef:
     """
 
     model_name_or_path: str
-    revision: Optional[str] = None
+    revision: str | None = None
 
     @staticmethod
     def from_string(s: str) -> "RepoRef":
@@ -153,7 +154,7 @@ draccus.encode.register(RepoRef, str)
 
 class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
     @abc.abstractmethod
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> HfConfig:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfConfig:
         pass
 
     @classmethod
@@ -202,7 +203,7 @@ class LmWithHfSerializationMixin(LmHeadModel, ModelWithHfSerializationMixin[MCon
         pass
 
 
-def _coerce_to_rr(s: Union[str, RepoRef]) -> RepoRef:
+def _coerce_to_rr(s: str | RepoRef) -> RepoRef:
     if isinstance(s, RepoRef):
         return s
     else:
@@ -220,7 +221,7 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
 
 
 def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
-    import torch  # noqa: F401
+    import torch
 
     device = torch.device("cpu")
     with contextlib.ExitStack() as stack:
@@ -278,9 +279,7 @@ def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
 # NB: for large models this will be jitted several times (once for each unique subset of keys at least)
 # but it means we get to benefit from dead code elimination and other goodness
 @eqx.filter_jit
-def _to_state_dict_with_dtype(
-    model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None
-) -> StateDict:
+def _to_state_dict_with_dtype(model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None) -> StateDict:
     """
     Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
     and optionally subsetting to a given set of keys.
@@ -330,11 +329,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
     HF checkpoints can be saved with params and config, and optionally with the tokenizer and code.
     """
 
-    LevConfigClass: Type[LevConfig]
-    reference_checkpoint: Optional[RepoRef]
+    LevConfigClass: type[LevConfig]
+    reference_checkpoint: RepoRef | None
     "A reference HF Hub checkpoint to extract non-parameter files (like model code an config from)"
 
-    HfConfigClass: Type
+    HfConfigClass: type
     "The HFConfig class to use. If None is provided, will be inferred from the reference_checkpoint"
 
     tokenizer: PreTrainedTokenizerFast | PreTrainedTokenizer
@@ -343,26 +342,26 @@ class HFCheckpointConverter(Generic[LevConfig]):
     feature_extractor: Optional["FeatureExtractionMixin"] = None
     "The non-text preprocessor to use for multi-modality."
 
-    config_overrides: Optional[dict] = None
+    config_overrides: dict | None = None
     "A dictionary of config overrides to apply to the HFConfig when saving. typically used for auto_map"
 
     trust_remote_code: bool = False
     "If True, will trust the remote code and not download it locally."
 
-    ignore_prefix: Optional[str] = None
+    ignore_prefix: str | None = None
     """A prefix to optionally ignore when loading checkpoints. For "gpt2" this is 'transformer' to deal with the
     fact that some models are saved as XXXPreTrainedModel and others are saved as XXXLMHeadModel"""
 
     def __init__(
         self,
-        LevConfigClass: Type[LevConfig],
-        reference_checkpoint: Optional[Union[RepoRef, str]] = None,
-        HfConfigClass: Optional[Union[str, Type]] = None,
-        tokenizer: Optional[Union[str, PreTrainedTokenizer, PreTrainedTokenizerFast]] = None,
+        LevConfigClass: type[LevConfig],
+        reference_checkpoint: RepoRef | str | None = None,
+        HfConfigClass: str | type | None = None,
+        tokenizer: str | PreTrainedTokenizer | PreTrainedTokenizerFast | None = None,
         feature_extractor: Optional["FeatureExtractionMixin"] = None,
-        config_overrides: Optional[dict] = None,
+        config_overrides: dict | None = None,
         trust_remote_code: bool = False,
-        ignore_prefix: Optional[str] = None,
+        ignore_prefix: str | None = None,
     ):
         # stupid python won't let you have a custom constructor with a frozen dataclass
 
@@ -382,7 +381,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         )
 
     @staticmethod
-    def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HFCheckpointConverter":
+    def from_hf(model_name_or_path: RepoRef | str, trust_remote_code: bool = False) -> "HFCheckpointConverter":
         ref = _coerce_to_rr(model_name_or_path)
         config_class = HFCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
         tokenizer = HFCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
@@ -408,10 +407,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def replaced(
         self,
-        reference_checkpoint: Optional[Union[RepoRef, str]] = None,
-        tokenizer: Optional[Union[str, PreTrainedTokenizerBase]] = None,
+        reference_checkpoint: RepoRef | str | None = None,
+        tokenizer: str | PreTrainedTokenizerBase | None = None,
         feature_extractor: Optional["FeatureExtractionMixin"] = None,
-        trust_remote_code: Optional[bool] = None,
+        trust_remote_code: bool | None = None,
     ) -> "HFCheckpointConverter":
         replacements: dict = {}
         if reference_checkpoint is not None:
@@ -425,9 +424,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return dataclasses.replace(self, **replacements)  # type: ignore
 
-    def with_tokenizer_padded_to_match_model(
-        self, ref: Optional[Union[str, RepoRef]] = None
-    ) -> "HFCheckpointConverter":
+    def with_tokenizer_padded_to_match_model(self, ref: str | RepoRef | None = None) -> "HFCheckpointConverter":
         """
         Returns a new converter with the tokenizer padded to match the model's vocab size.
 
@@ -500,7 +497,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     @staticmethod
     def _infer_tokenizer(
         tokenizer, ref, trust_remote_code: bool = False
-    ) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+    ) -> PreTrainedTokenizer | PreTrainedTokenizerFast:
         if tokenizer is None:
             if ref is None:
                 raise ValueError("Must provide either tokenizer or reference_checkpoint")
@@ -529,7 +526,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def default_config(self) -> LevConfig:
         return self.config_from_hf_config(self.default_hf_config)
 
-    def HFAutoModelClass(self, auto_class: Type[AutoModel] = AutoModelForCausalLM) -> Type[AutoModel]:
+    def HFAutoModelClass(self, auto_class: type[AutoModel] = AutoModelForCausalLM) -> type[AutoModel]:
         # first, see if it's a built-in model
         try:
             return auto_class._model_mapping[self.HfConfigClass]
@@ -558,29 +555,29 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def Vocab(self) -> Axis:
         return Axis("vocab", len(self.tokenizer))
 
-    def config_from_hf_config(self, hf_config, overrides: Optional[dict] = None) -> LevConfig:
+    def config_from_hf_config(self, hf_config, overrides: dict | None = None) -> LevConfig:
         config = self.LevConfigClass.from_hf_config(hf_config)
         if overrides is not None:
             config = dataclasses.replace(config, **overrides)  # type: ignore
         return config
 
-    def hf_config_from_config(self, config: LevConfig, vocab_size: Optional[int] = None) -> HfConfig:
+    def hf_config_from_config(self, config: LevConfig, vocab_size: int | None = None) -> HfConfig:
         if vocab_size is None:
             vocab_size = self.Vocab.size
         return config.to_hf_config(vocab_size=vocab_size)
 
-    def config_from_hf_checkpoint(self, ref: Optional[Union[str, RepoRef]] = None) -> LevConfig:
+    def config_from_hf_checkpoint(self, ref: str | RepoRef | None = None) -> LevConfig:
         config = self.hf_config_from_hf_checkpoint(ref)
         return self.config_from_hf_config(config)
 
-    def hf_config_from_hf_checkpoint(self, ref: Optional[Union[str, RepoRef]] = None) -> HfConfig:
+    def hf_config_from_hf_checkpoint(self, ref: str | RepoRef | None = None) -> HfConfig:
         path, rev = self._get_ref(ref)
 
         with _patch_hf_hub_download():
             config = AutoConfig.from_pretrained(path, revision=rev, trust_remote_code=self.trust_remote_code)
         return config
 
-    def _get_ref(self, ref) -> Tuple[str, Optional[str]]:
+    def _get_ref(self, ref) -> tuple[str, str | None]:
         if ref is None:
             if self.reference_checkpoint is None:
                 raise ValueError("Must provide a reference checkpoint to load HFConfig from")
@@ -588,7 +585,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         ref = _coerce_to_rr(ref)
         return ref.model_name_or_path, ref.revision
 
-    def load_state_dict(self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None) -> dict:
+    def load_state_dict(self, ref: str | RepoRef | None = None, dtype: jnp.dtype | None = None) -> dict:
         """Load a state dict from either HF Hub or a GCS path.
 
         HuggingFace model IDs are converted to hf:// URLs and streamed directly
@@ -636,7 +633,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             return state_dict
 
-    def _load_shards(self, id: str, index_file: str, rev: Optional[str], dtype) -> dict:
+    def _load_shards(self, id: str, index_file: str, rev: str | None, dtype) -> dict:
         """Load model from sharded files based on the provided index."""
         with _patch_hf_hub_download() as hf_hub_download:
             index_path = os.path.join(id, index_file)
@@ -668,7 +665,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return final_state_dict
 
-    def _load_from_remote(self, url: str, dtype: Optional[jnp.dtype] = None) -> dict:
+    def _load_from_remote(self, url: str, dtype: jnp.dtype | None = None) -> dict:
         """Load a state dict from a remote URL understood by fsspec."""
 
         final_state_dict = {}
@@ -737,12 +734,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def load_pretrained(
         self,
-        lm_model_cls: Type[ModelWithHfSerializationMixin],
-        ref: Optional[Union[str, RepoRef]] = None,
-        config: Optional[HFCompatConfig] = None,
-        axis_mapping: Optional[ResourceMapping] = None,
+        lm_model_cls: type[ModelWithHfSerializationMixin],
+        ref: str | RepoRef | None = None,
+        config: HFCompatConfig | None = None,
+        axis_mapping: ResourceMapping | None = None,
         resize_vocab_to_match_tokenizer: bool = False,
-        dtype: Optional[jnp.dtype] = None,
+        dtype: jnp.dtype | None = None,
     ) -> ModelWithHfSerializationMixin:
         """
         Loads a levanter model from a huggingface checkpoint.
@@ -769,7 +766,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # AFAICT neither torch state dicts nor safetensors support this.
         state_dict = self.load_state_dict(ref, dtype)
 
-        ignore_prefix: Optional[str] = None
+        ignore_prefix: str | None = None
         if self.ignore_prefix:
             for k in state_dict.keys():
                 if k.startswith(f"{self.ignore_prefix}."):
@@ -810,7 +807,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return lev_model
 
-    def _resolve_save_reference_code(self, save_reference_code: Optional[bool]) -> bool:
+    def _resolve_save_reference_code(self, save_reference_code: bool | None) -> bool:
         """Determine whether reference code should be bundled with the checkpoint."""
         #  the way we determine this is if the config class is in the HF package or not
         if save_reference_code is None:
@@ -831,7 +828,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # sufficient for most built-in architectures.
             base_config = None
             logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
                 warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
                 dict_config["auto_map"] = {
@@ -875,12 +872,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
         self,
         model: ModelWithHfSerializationMixin,
         path,
-        upload_to_hf: Union[bool, str, RepoRef] = False,
-        save_reference_code: Optional[bool] = None,
+        upload_to_hf: bool | str | RepoRef = False,
+        save_reference_code: bool | None = None,
         save_tokenizer: bool = True,
         max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
         save_feature_extractor: bool = False,
-        dtype: Optional[jnp.dtype] = None,
+        dtype: jnp.dtype | None = None,
         **hf_upload_kwargs,
     ):
         """
@@ -909,7 +906,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         if not _is_url_like(path):
             os.makedirs(path, exist_ok=True)
 
-        hf_repo_ref: Optional[RepoRef] = None
+        hf_repo_ref: RepoRef | None = None
         if upload_to_hf is True:
             if self.reference_checkpoint is None:
                 raise ValueError("No reference checkpoint provided, so no repo name to upload to")
@@ -949,8 +946,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         def _maybe_upload(
             local_dir: str,
             *,
-            files: Optional[list[str]] = None,
-            commit_message: Optional[str] = None,
+            files: list[str] | None = None,
+            commit_message: str | None = None,
             source_is_temp: bool,
         ):
             if hf_repo_ref is None:
@@ -1002,7 +999,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     logger.info(f"Saving shard {shard_name} to {path} via temp path {local_path}")
 
                 os.makedirs(local_path, exist_ok=True)
-                subset_arg: Optional[tuple[str, ...]]
+                subset_arg: tuple[str, ...] | None
                 if len(subset_keys) == 0:
                     subset_arg = None
                 else:
@@ -1147,8 +1144,8 @@ def _is_url_like(path):
 def save_hf_checkpoint_callback(
     base_path,
     converter: HFCheckpointConverter,
-    upload_to_hf: Union[bool, str, RepoRef] = False,
-    save_dtype: Optional[jnp.dtype] = None,
+    upload_to_hf: bool | str | RepoRef = False,
+    save_dtype: jnp.dtype | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1235,9 +1232,7 @@ def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trus
         )
 
 
-def load_processor(
-    model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True
-) -> "ProcessorMixin":
+def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> "ProcessorMixin":
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
     from transformers import AutoProcessor
 
@@ -1253,7 +1248,7 @@ def load_processor(
 _sync_count = 0
 
 
-def upload_to_hub(local_path: str, repo_ref: Union[str, RepoRef], **hf_upload_kwargs):
+def upload_to_hub(local_path: str, repo_ref: str | RepoRef, **hf_upload_kwargs):
     ref = _coerce_to_rr(repo_ref)
 
     if jax.process_index() == 0:
@@ -1386,9 +1381,7 @@ def _shard_hf_checkpoint(
     for idx, shard in enumerate(sharded_state_dicts):
         # NOTE(dlwh): this is how it is in the HF code. it hurts me
         shard_file = weights_name.replace(".bin", f"-{idx + 1:05d}-of-{len(sharded_state_dicts):05d}.bin")
-        shard_file = shard_file.replace(
-            ".safetensors", f"-{idx + 1:05d}-of-{len(sharded_state_dicts):05d}.safetensors"
-        )
+        shard_file = shard_file.replace(".safetensors", f"-{idx + 1:05d}-of-{len(sharded_state_dicts):05d}.safetensors")
         shards[shard_file] = shard
         for key in shard.keys():
             weight_map[key] = shard_file

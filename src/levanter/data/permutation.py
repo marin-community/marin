@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import jax.random
 from async_lru import alru_cache
@@ -35,7 +35,7 @@ class PermutationDataset(AsyncDataset[T_co]):
     def __init__(self, dataset: AsyncDataset[T_co], key: PRNGKeyArray, perm_type: PermType = "feistel"):
         self.dataset = dataset
         self.key = _key_on_local_cpu(key)
-        self._permutation: Optional[Permutation] = None
+        self._permutation: Permutation | None = None
         self._perm_type = perm_type
 
     async def async_len(self) -> int:
@@ -138,10 +138,10 @@ class EraShufflingDataset(AsyncDataset[T_co]):
         return await self.dataset.get_batch([await self._get_index(i) for i in indices])
 
     def __repr__(self):
-        return f"EraShufflingDataset({repr(self.dataset)}, era_length={self.era_length})"
+        return f"EraShufflingDataset({self.dataset!r}, era_length={self.era_length})"
 
     def __str__(self):
-        return f"EraShufflingDataset({str(self.dataset)})"
+        return f"EraShufflingDataset({self.dataset!s})"
 
 
 @dataclass(frozen=True)
@@ -217,7 +217,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         self._window_tail_key = window_tail_key
 
         self._state: _BlockShuffleState | None = None
-        self._full_block_permutation: Optional[Permutation] = None
+        self._full_block_permutation: Permutation | None = None
 
     def is_finite(self) -> bool:
         return self.dataset.is_finite()
@@ -303,7 +303,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         )
 
     @lru_cache(maxsize=4)
-    def _window_full_region_permutation(self, window_id: int) -> Optional[Permutation]:
+    def _window_full_region_permutation(self, window_id: int) -> Permutation | None:
         layout = self._window_layout(window_id)
         if layout.full_region_size <= 1:
             return None
@@ -311,7 +311,7 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
         return Permutation.make(self._perm_type, layout.full_region_size, key)
 
     @lru_cache(maxsize=4)
-    def _window_tail_region_permutation(self, window_id: int) -> Optional[Permutation]:
+    def _window_tail_region_permutation(self, window_id: int) -> Permutation | None:
         layout = self._window_layout(window_id)
         if layout.tail_size <= 1:
             return None
@@ -363,13 +363,13 @@ class BlockShufflingDataset(AsyncDataset[T_co]):
     def __repr__(self):
         return (
             "BlockShufflingDataset("
-            f"{repr(self.dataset)}, io_block_size={self.io_block_size}, "
+            f"{self.dataset!r}, io_block_size={self.io_block_size}, "
             f"window_blocks={self.window_blocks})"
         )
 
     def __str__(self):
         return (
             "BlockShufflingDataset("
-            f"{str(self.dataset)}, io_block_size={self.io_block_size}, "
+            f"{self.dataset!s}, io_block_size={self.io_block_size}, "
             f"window_blocks={self.window_blocks})"
         )

@@ -7,7 +7,7 @@ import logging
 import os
 import struct
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple, Iterable
+from collections.abc import Callable, Iterable
 
 import fsspec
 import humanfriendly
@@ -21,7 +21,7 @@ from fsspec.asyn import AsyncFileSystem
 
 logger = logging.getLogger(__name__)
 
-_SAFETENSOR_DTYPE_MAP: Dict[str, np.dtype] = {
+_SAFETENSOR_DTYPE_MAP: dict[str, np.dtype] = {
     "F16": np.dtype("float16"),
     "BF16": np.dtype(jnp.bfloat16),
     "F32": np.dtype("float32"),
@@ -38,7 +38,7 @@ _SAFETENSOR_DTYPE_MAP: Dict[str, np.dtype] = {
 }
 
 
-ShardingFunction = Callable[[Tuple[int, ...]], Optional[jax.sharding.Sharding]]
+ShardingFunction = Callable[[tuple[int, ...]], jax.sharding.Sharding | None]
 
 DEFAULT_CHUNK_SIZE_BYTES = int(os.environ.get("LEVANTER_FSSPEC_CHUNK_BYTES", 2 * 1024**3))
 MAX_CONCURRENT_CHUNKS = int(os.environ.get("LEVANTER_FSSPEC_MAX_CONCURRENT_CHUNKS", "4"))
@@ -48,7 +48,7 @@ MAX_CONCURRENT_CHUNKS = int(os.environ.get("LEVANTER_FSSPEC_MAX_CONCURRENT_CHUNK
 class TensorRecord:
     key: str
     dtype: np.dtype
-    shape: Tuple[int, ...]
+    shape: tuple[int, ...]
     file_path: str
     byte_start: int
     byte_end: int
@@ -91,13 +91,13 @@ class _AsyncifyingFileSystemWrapper(AsyncFileSystem):
 # # - 8 bytes: little-endian uint64 header length N
 # # - N bytes: UTF-8 JSON header of shapes/dtypes/data offsets
 # # - remaining bytes: raw tensor data blobs
-async def _read_metadata_async(fs: AsyncFileSystem, path: str) -> Dict[str, TensorRecord]:
+async def _read_metadata_async(fs: AsyncFileSystem, path: str) -> dict[str, TensorRecord]:
     header_len_bytes = await fs._cat_file(path, start=0, end=8)
     (header_len,) = struct.unpack("<Q", header_len_bytes)
     metadata_bytes = await fs._cat_file(path, start=8, end=8 + header_len)
     metadata = json.loads(metadata_bytes.decode("utf-8"))
 
-    tensors: Dict[str, TensorRecord] = {}
+    tensors: dict[str, TensorRecord] = {}
     data_offset_base = 8 + header_len
 
     for key, meta in metadata.items():
@@ -126,24 +126,24 @@ class ChunkSpec:
     file_path: str
     byte_start: int
     byte_end: int
-    tensors: Tuple[TensorRecord, ...]
+    tensors: tuple[TensorRecord, ...]
 
     @property
     def size(self) -> int:
         return self.byte_end - self.byte_start
 
 
-def _build_chunks(tensors: Iterable[TensorRecord], chunk_limit: int) -> List[ChunkSpec]:
+def _build_chunks(tensors: Iterable[TensorRecord], chunk_limit: int) -> list[ChunkSpec]:
     if chunk_limit <= 0:
         raise ValueError("chunk_limit must be positive")
 
     sorted_records = sorted(tensors, key=lambda t: (t.file_path, t.byte_start))
-    chunks: List[ChunkSpec] = []
+    chunks: list[ChunkSpec] = []
 
-    current: List[TensorRecord] = []
+    current: list[TensorRecord] = []
     current_start = 0
     current_end = 0
-    current_path: Optional[str] = None
+    current_path: str | None = None
 
     for record in sorted_records:
         if not current:
@@ -203,10 +203,10 @@ def _materialize_sharded_tensor_from_host_array(
 async def read_safetensors_fsspec(
     path: str,
     *,
-    dtype_override: Optional[jnp.dtype] = None,
-    sharding_fn: Optional[ShardingFunction] = None,
-    fs: Optional[AbstractFileSystem] = None,
-) -> Dict[str, jax.Array]:
+    dtype_override: jnp.dtype | None = None,
+    sharding_fn: ShardingFunction | None = None,
+    fs: AbstractFileSystem | None = None,
+) -> dict[str, jax.Array]:
     """
     Stream tensors from a safetensors file using fsspec, optionally sharding the outputs.
     """
@@ -227,7 +227,7 @@ async def read_safetensors_fsspec(
     chunk_specs = _build_chunks(records.values(), DEFAULT_CHUNK_SIZE_BYTES)
 
     sharding_fn = sharding_fn or (lambda _: None)
-    sharding_map: Dict[str, Optional[jax.sharding.Sharding]] = {}
+    sharding_map: dict[str, jax.sharding.Sharding | None] = {}
 
     for record in records.values():
         sharding = sharding_fn(record.shape)
@@ -248,11 +248,11 @@ async def read_safetensors_fsspec(
     progress_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(max(1, min(MAX_CONCURRENT_CHUNKS, len(chunk_specs))))
 
-    async def _materialize_chunk(chunk: ChunkSpec) -> Dict[str, jax.Array]:
+    async def _materialize_chunk(chunk: ChunkSpec) -> dict[str, jax.Array]:
         async with semaphore:
             raw = await async_fs._cat_file(chunk.file_path, start=chunk.byte_start, end=chunk.byte_end)
             chunk_view = memoryview(raw)
-            chunk_results: Dict[str, jax.Array] = {}
+            chunk_results: dict[str, jax.Array] = {}
 
             for record in chunk.tensors:
                 offset = record.byte_start - chunk.byte_start
@@ -283,7 +283,7 @@ async def read_safetensors_fsspec(
     chunk_dicts = await asyncio.gather(*(_materialize_chunk(chunk) for chunk in chunk_specs))
     pbar.close()
 
-    result: Dict[str, jax.Array] = {}
+    result: dict[str, jax.Array] = {}
     for chunk_dict in chunk_dicts:
         result.update(chunk_dict)
     return result

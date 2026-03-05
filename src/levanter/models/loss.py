@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal, Optional, cast, overload
+from typing import Literal, cast, overload
 
 import jax
 import jax.numpy as jnp
@@ -25,13 +25,13 @@ def maybe_fused_next_token_loss(
     pred_embeddings: NamedArray,
     pred_lm_head: NamedArray,
     true_ids: NamedArray,
-    loss_weight: Optional[NamedArray] = None,
-    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
-    reduction_axis: Optional[hax.AxisSelection] = None,
-    logsumexp_weight: Optional[float] = None,
+    loss_weight: NamedArray | None = None,
+    reduction: hax.ReductionFunction | None = DEFAULT_REDUCTION,
+    reduction_axis: hax.AxisSelection | None = None,
+    logsumexp_weight: float | None = None,
     block_size: int | None = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
 ) -> NamedArray:
     """
@@ -92,10 +92,10 @@ def next_token_loss(
     Vocab: hax.AxisSelector,
     logits: NamedArray,
     true_ids: NamedArray,
-    loss_weight: Optional[NamedArray] = None,
-    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
-    reduction_axis: Optional[hax.AxisSelection] = None,
-    logsumexp_weight: Optional[float] = None,
+    loss_weight: NamedArray | None = None,
+    reduction: hax.ReductionFunction | None = DEFAULT_REDUCTION,
+    reduction_axis: hax.AxisSelection | None = None,
+    logsumexp_weight: float | None = None,
 ):
     """
     Compute the next token loss with optional logsumexp penalty.
@@ -142,9 +142,9 @@ def cross_entropy_and_logsumexp_penalty(
     pred_y: NamedArray,
     target_y: NamedArray,
     *,
-    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
-    reduction_axis: Optional[hax.AxisSelection] = None,
-    weight: Optional[NamedArray] = None,
+    reduction: hax.ReductionFunction | None = DEFAULT_REDUCTION,
+    reduction_axis: hax.AxisSelection | None = None,
+    weight: NamedArray | None = None,
     logsumexp_weight=0.0,
 ) -> NamedArray:
     """A loss function that combines cross entropy loss with a logsumexp penalty."""
@@ -165,13 +165,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     Label: hax.AxisSelector,
     target_y: NamedArray,
     *,
-    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
-    reduction_axis: Optional[hax.AxisSelection] = None,
-    weight: Optional[NamedArray] = None,
+    reduction: hax.ReductionFunction | None = DEFAULT_REDUCTION,
+    reduction_axis: hax.AxisSelection | None = None,
+    weight: NamedArray | None = None,
     logsumexp_weight: float | None = 0.0,
     block_size: int | None = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: Literal[False] = False,
 ) -> NamedArray: ...
@@ -185,13 +185,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     Label: hax.AxisSelector,
     target_y: NamedArray,
     *,
-    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
-    reduction_axis: Optional[hax.AxisSelection] = None,
-    weight: Optional[NamedArray] = None,
+    reduction: hax.ReductionFunction | None = DEFAULT_REDUCTION,
+    reduction_axis: hax.AxisSelection | None = None,
+    weight: NamedArray | None = None,
     logsumexp_weight: float | None = 0.0,
     block_size: int | None = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: Literal[True] = True,
 ) -> tuple[NamedArray, NamedArray]: ...
@@ -204,13 +204,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     Label: hax.AxisSelector,
     target_y: NamedArray,
     *,
-    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
-    reduction_axis: Optional[hax.AxisSelection] = None,
-    weight: Optional[NamedArray] = None,
+    reduction: hax.ReductionFunction | None = DEFAULT_REDUCTION,
+    reduction_axis: hax.AxisSelection | None = None,
+    weight: NamedArray | None = None,
     logsumexp_weight: float | None = 0.0,
     block_size: int | None = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
 ) -> NamedArray | tuple[NamedArray, NamedArray]:

@@ -4,7 +4,6 @@
 import warnings as _warnings
 from typing import TYPE_CHECKING
 
-
 # Re-export of the rotary embedding utilities that were moved to `levanter.layers.rotary`.
 # Accessing them through this module is still supported for backward-compatibility but
 # will raise a `DeprecationWarning`. Please update your imports to
@@ -29,12 +28,11 @@ from levanter.layers.rotary import RotaryEmbeddingsConfig as _RotaryEmbeddingsCo
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig as _YarnRotaryEmbeddingsConfig
 from levanter.layers.rotary import rotary_pos_emb as _rotary_pos_emb
 
-
 __all__ = [
-    "RotaryEmbeddings",
-    "RotaryEmbeddingsConfig",
     "DefaultRotaryEmbeddingsConfig",
     "Llama3RotaryEmbeddingsConfig",
+    "RotaryEmbeddings",
+    "RotaryEmbeddingsConfig",
     "YarnRotaryEmbeddingsConfig",
     "rotary_pos_emb",
 ]
@@ -55,7 +53,7 @@ _deprecation_message = (
 )
 
 
-def __getattr__(name):  # noqa: D401   # simple function; flake8 D401 false-positive
+def __getattr__(name):  # simple function; flake8 D401 false-positive
     """Dynamically fetch attributes while emitting a deprecation warning.
 
     This hook (PEP 562) lets us lazily forward attribute access so we can emit the

@@ -4,7 +4,7 @@
 import abc
 import dataclasses
 import typing
-from typing import Any, List, Optional
+from typing import Any
 
 import draccus
 
@@ -30,7 +30,7 @@ class Tracker(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def log(self, metrics: typing.Mapping[str, typing.Any], *, step: Optional[int], commit: Optional[bool] = None):
+    def log(self, metrics: typing.Mapping[str, typing.Any], *, step: int | None, commit: bool | None = None):
         """
         Log metrics to the tracker. Step is always required.
 
@@ -46,7 +46,7 @@ class Tracker(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):
         pass
 
     @abc.abstractmethod
@@ -62,7 +62,7 @@ class Tracker(abc.ABC):
 
         if hasattr(self, "_tracker_cm"):
             raise RuntimeError("This tracker is already set as the global tracker")
-        setattr(self, "_tracker_cm", tracker_fns.current_tracker(self))
+        self._tracker_cm = tracker_fns.current_tracker(self)
         self._tracker_cm.__enter__()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -73,7 +73,7 @@ class Tracker(abc.ABC):
 
 
 class CompositeTracker(Tracker):
-    def __init__(self, loggers: List[Tracker]):
+    def __init__(self, loggers: list[Tracker]):
         self.loggers = loggers
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
@@ -88,7 +88,7 @@ class CompositeTracker(Tracker):
         for tracker in self.loggers:
             tracker.log_summary(metrics)
 
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):
         for tracker in self.loggers:
             tracker.log_artifact(artifact_path, name=name, type=type)
 
@@ -108,11 +108,11 @@ class TrackerConfig(draccus.PluginRegistry, abc.ABC):
     discover_packages_path = "levanter.tracker"
 
     @abc.abstractmethod
-    def init(self, run_id: Optional[str]) -> Tracker:
+    def init(self, run_id: str | None) -> Tracker:
         raise NotImplementedError
 
     @classmethod
-    def default_choice_name(cls) -> Optional[str]:
+    def default_choice_name(cls) -> str | None:
         return "wandb"
 
 
@@ -122,13 +122,13 @@ class NoopTracker(Tracker):
     def log_hyperparameters(self, hparams: dict[str, Any]):
         pass
 
-    def log(self, metrics: typing.Mapping[str, Any], *, step, commit: Optional[bool] = None):
+    def log(self, metrics: typing.Mapping[str, Any], *, step, commit: bool | None = None):
         pass
 
     def log_summary(self, metrics: dict[str, Any]):
         pass
 
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):
         pass
 
     def finish(self):
@@ -138,7 +138,7 @@ class NoopTracker(Tracker):
 @TrackerConfig.register_subclass("noop")
 @dataclasses.dataclass
 class NoopConfig(TrackerConfig):
-    def init(self, run_id: Optional[str]) -> Tracker:
+    def init(self, run_id: str | None) -> Tracker:
         return NoopTracker()
 
 
@@ -153,7 +153,7 @@ class DictTracker(Tracker):
     def log_hyperparameters(self, hparams: dict[str, Any]):
         self.metrics["hparams"] = hparams
 
-    def log(self, metrics: typing.Mapping[str, Any], *, step: Optional[int], commit: Optional[bool] = None):
+    def log(self, metrics: typing.Mapping[str, Any], *, step: int | None, commit: bool | None = None):
         if step is not None:
             self.metrics[f"step_{step}"] = metrics
         else:
@@ -162,7 +162,7 @@ class DictTracker(Tracker):
     def log_summary(self, metrics: dict[str, Any]):
         self.metrics["summary"] = metrics
 
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):
         self.metrics["artifact"] = {"path": artifact_path, "name": name, "type": type}
 
     def finish(self):

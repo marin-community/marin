@@ -44,7 +44,7 @@ for experimentation.
 import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Optional, Protocol, TypeAlias
+from typing import Any, NamedTuple, Protocol, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -65,13 +65,12 @@ from levanter.optim.util import (
 )
 from levanter.utils.jax_utils import leaf_key_paths
 
-
 PyTree: TypeAlias = Any
 Scalar: TypeAlias = float | jax.Array
 
 
 class _AdamWFallbackConfig(Protocol):
-    adam_weight_decay: Optional[float]
+    adam_weight_decay: float | None
     weight_decay: float
     max_grad_norm: float
     beta1: float
@@ -158,7 +157,7 @@ class NamoConfig(OptimizerConfig):
     backend_steps: int = 5
     muon_epsilon: float = 1e-8
     scale_coeff: float = 0.2
-    adam_weight_decay: Optional[float] = None
+    adam_weight_decay: float | None = None
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
@@ -208,7 +207,7 @@ class NamoDConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     scale_coeff: float = 0.2
     col_state_clamp_c: float = 0.75
-    adam_weight_decay: Optional[float] = None
+    adam_weight_decay: float | None = None
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
@@ -313,7 +312,7 @@ def scale_with_namo(
         flat_params = flatten_linear_layers(params)
         momentum_buffer = otu.tree_zeros_like(flat_params)
 
-        def init_v(node: Any) -> Optional[jax.Array]:
+        def init_v(node: Any) -> jax.Array | None:
             if isinstance(node, Linear):
                 return jnp.zeros(node.weight.array.shape[:-2], dtype=jnp.float32)
             return None
@@ -328,7 +327,7 @@ def scale_with_namo(
     def update_fn(
         updates: optax.Updates,
         state: ScaleByNamoState,
-        params: Optional[optax.Params] = None,
+        params: optax.Params | None = None,
     ) -> tuple[optax.Updates, ScaleByNamoState]:
         if params is None:
             raise ValueError("NAMO requires params to apply adaptive weight decay")
@@ -360,8 +359,8 @@ def scale_with_namo(
             param_node: Any,
             grad_node: Any,
             m_node: Any,
-            v_prev: Optional[jax.Array],
-        ) -> tuple[Any, Optional[jax.Array]]:
+            v_prev: jax.Array | None,
+        ) -> tuple[Any, jax.Array | None]:
             if m_node is None:
                 return grad_node, v_prev
             if not isinstance(m_node, Linear):
@@ -444,7 +443,7 @@ def scale_with_namod(
         flat_params = flatten_linear_layers(params)
         momentum_buffer = otu.tree_zeros_like(flat_params)
 
-        def init_v(node: Any) -> Optional[jax.Array]:
+        def init_v(node: Any) -> jax.Array | None:
             if isinstance(node, Linear):
                 shape = node.weight.array.shape
                 return jnp.zeros(shape[:-2] + (shape[-1],), dtype=jnp.float32)
@@ -460,7 +459,7 @@ def scale_with_namod(
     def update_fn(
         updates: optax.Updates,
         state: ScaleByNamoDState,
-        params: Optional[optax.Params] = None,
+        params: optax.Params | None = None,
     ) -> tuple[optax.Updates, ScaleByNamoDState]:
         if params is None:
             raise ValueError("NAMO-D requires params to apply adaptive weight decay")
@@ -492,8 +491,8 @@ def scale_with_namod(
             param_node: Any,
             grad_node: Any,
             m_node: Any,
-            v_prev: Optional[jax.Array],
-        ) -> tuple[Any, Optional[jax.Array]]:
+            v_prev: jax.Array | None,
+        ) -> tuple[Any, jax.Array | None]:
             if m_node is None:
                 return grad_node, v_prev
             if not isinstance(m_node, Linear):
@@ -528,9 +527,7 @@ def scale_with_namod(
                 coefficient_type=coefficient_type,
             )
 
-            delta = param_arr * (jnp.expand_dims(decay, axis=-2) - 1.0) - orth_dir * jnp.expand_dims(
-                col_lr_up, axis=-2
-            )
+            delta = param_arr * (jnp.expand_dims(decay, axis=-2) - 1.0) - orth_dir * jnp.expand_dims(col_lr_up, axis=-2)
             return dataclasses.replace(grad_node, weight=dataclasses.replace(grad_node.weight, array=delta)), v_new
 
         new_flat_updates = jax.tree_util.tree_map(

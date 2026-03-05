@@ -62,7 +62,7 @@ def compile_cache(cacheable_fn):
         user_fn = _strip_wrapped_partial(user_fn)
         # Best-effort attempt to clear the cache of old and unused entries.
         cache_key: Any
-        if type(user_fn) is types.FunctionType:  # noqa: E721
+        if type(user_fn) is types.FunctionType:
             cache_key = user_fn
         else:
             cache_key = _default_cache_key
@@ -82,7 +82,7 @@ def compile_cache(cacheable_fn):
 
     def delete(user_fn):
         user_fn = _strip_wrapped_partial(user_fn)
-        if type(user_fn) is types.FunctionType:  # noqa: E721
+        if type(user_fn) is types.FunctionType:
             try:
                 del cache[user_fn]
             except KeyError:

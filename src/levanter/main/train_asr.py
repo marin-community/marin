@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Union, cast
+from typing import cast
 
 import jax
 import jax.random as jrandom
@@ -24,13 +24,12 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
-
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class TrainASRConfig:
-    data: Union[AudioIODatasetConfig, AudioMixtureDatasetConfig] = field(default_factory=AudioMixtureDatasetConfig)
+    data: AudioIODatasetConfig | AudioMixtureDatasetConfig = field(default_factory=AudioMixtureDatasetConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     model: ASRConfig = field(default_factory=WhisperConfig)
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
@@ -38,16 +37,16 @@ class TrainASRConfig:
     train_seq_len: int = 448  # in tokens
 
     # config related to continued pretraining
-    initialize_from_hf: Union[bool, str] = False
+    initialize_from_hf: bool | str = False
     """if provided, this will override the model config in the config. if true, use the default hf checkpoint for this model class"""
     use_hf_model_config: bool = False  # if true, replace the model config with the hf config from the checkpoint
-    data_seed: Optional[int] = None  # if provided, will override the data seed from the trainer
+    data_seed: int | None = None  # if provided, will override the data seed from the trainer
 
     # TODO: atm we don't support loading from a checkpoint that has a different tokenizer. this is a bit annoying
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
-    hf_save_path: Optional[str] = None
-    hf_upload: Optional[str] = None
+    hf_save_path: str | None = None
+    hf_upload: str | None = None
     hf_save_steps: int = 10000
 
 
@@ -92,8 +91,8 @@ def main(config: TrainASRConfig):
         example: AudioTextExample,
         *,
         key=None,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
-        reduction_axis: Optional[hax.AxisSelection] = None,
+        reduction: hax.ReductionFunction | None = cast(hax.ReductionFunction | None, hax.mean),
+        reduction_axis: hax.AxisSelection | None = None,
     ) -> jax.numpy.ndarray | hax.NamedArray:
         return m.compute_loss(example, key=key, reduction=reduction, reduction_axis=reduction_axis)
 

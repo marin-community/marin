@@ -4,7 +4,7 @@ import logging
 import time
 from contextlib import ExitStack
 from dataclasses import dataclass, field
-from typing import Optional, cast
+from typing import cast
 
 import equinox as eqx
 import haliax as hax
@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 class SampleLmConfig:
     """Configuration for simple text sampling."""
 
-    checkpoint_path: Optional[str] = None
-    hf_checkpoint: Optional[RepoRef] = None
+    checkpoint_path: str | None = None
+    hf_checkpoint: RepoRef | None = None
 
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     model: LmConfig = field(default_factory=LlamaConfig)
@@ -61,7 +61,7 @@ class SampleLmConfig:
     # Optional JAX profiling
     profile: bool = False
 
-    log_kernel_jaxprs_path: Optional[str] = None
+    log_kernel_jaxprs_path: str | None = None
 
 
 def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:

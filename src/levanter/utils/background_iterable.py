@@ -5,12 +5,12 @@ import asyncio
 import queue
 import sys
 import threading
-from typing import AsyncIterator, Callable, Iterable, Iterator, Optional, TypeVar, Union
+from typing import TypeVar
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 
 import tblib
 
 from levanter.utils.thread_utils import AsyncIteratorWrapper
-
 
 Ex = TypeVar("Ex", covariant=True)
 
@@ -26,8 +26,8 @@ class BackgroundIterable(Iterable[Ex]):
 
     def __init__(
         self,
-        producer_fn: Callable[[], Union[Iterator[Ex], AsyncIterator[Ex]]],
-        max_capacity: Optional[int] = None,
+        producer_fn: Callable[[], Iterator[Ex] | AsyncIterator[Ex]],
+        max_capacity: int | None = None,
     ):
         self.max_capacity = max_capacity
         self._producer_fn = producer_fn
@@ -40,7 +40,7 @@ class BackgroundIterator(Iterator[Ex]):
     def __init__(
         self,
         producer_fn: Callable[[], Iterator[Ex] | AsyncIterator[Ex]] | Iterator[Ex] | AsyncIterator[Ex],
-        max_capacity: Optional[int],
+        max_capacity: int | None,
     ):
         self.max_capacity = max_capacity
         if not callable(producer_fn):
@@ -51,7 +51,7 @@ class BackgroundIterator(Iterator[Ex]):
 
         if self.max_capacity is None or self.max_capacity >= 0:
             self.q: queue.Queue = queue.Queue(self.max_capacity or 0)
-            self.thread: Optional[threading.Thread] = threading.Thread(target=self._fill_queue_with_batches)
+            self.thread: threading.Thread | None = threading.Thread(target=self._fill_queue_with_batches)
             self.thread.daemon = True
             self.thread.start()
         else:

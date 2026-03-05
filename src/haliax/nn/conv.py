@@ -4,7 +4,8 @@
 
 import string
 from functools import cached_property
-from typing import Sequence, TypeVar
+from typing import TypeVar
+from collections.abc import Sequence
 
 import equinox as eqx
 import jax
@@ -204,9 +205,7 @@ class Conv(_ConvBase):
         # jax's conv_general_dilated only supports exactly one batch dimension (not 0), so we vmap over any others.
         # We could choose instead to flatten them, but then we'd definitely lose sharding.
         batch_dims = without_axes(inputs.axes, unsize_axes(self.weight.axes))
-        flat_inputs, unflatten = haliax.core.flatten_all_axes_but(
-            inputs, "__batch__", batch_dims, reorder_to_front=True
-        )
+        flat_inputs, unflatten = haliax.core.flatten_all_axes_but(inputs, "__batch__", batch_dims, reorder_to_front=True)
         x = self._do_conv(flat_inputs)
         x = unflatten(x)
 
@@ -338,9 +337,7 @@ class ConvTranspose(_ConvBase):
         del key
 
         batch_dims = without_axes(inputs.axes, unsize_axes(self.weight.axes))
-        flat_inputs, unflatten = haliax.core.flatten_all_axes_but(
-            inputs, "__batch__", batch_dims, reorder_to_front=True
-        )
+        flat_inputs, unflatten = haliax.core.flatten_all_axes_but(inputs, "__batch__", batch_dims, reorder_to_front=True)
         x = self._do_conv(flat_inputs)
         x = unflatten(x)
 

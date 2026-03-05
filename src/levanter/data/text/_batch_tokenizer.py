@@ -4,7 +4,8 @@
 import os
 from functools import cached_property
 from itertools import chain
-from typing import Sequence, Any
+from typing import Any
+from collections.abc import Sequence
 
 import numpy as np
 import regex

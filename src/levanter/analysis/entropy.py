@@ -4,7 +4,8 @@
 """Functions for computing and visualizing token-level entropy."""
 
 import logging
-from typing import Callable, TypeVar
+from typing import TypeVar
+from collections.abc import Callable
 
 import equinox as eqx
 import jax
@@ -20,7 +21,6 @@ from levanter.callbacks import StepInfo
 
 from ..data import DataLoader
 from ..tracker.histogram import Histogram
-
 
 B = TypeVar("B")
 

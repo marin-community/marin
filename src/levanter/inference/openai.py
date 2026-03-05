@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Optional, Union
+from typing import Literal
 
 import haliax as hax
 import jax.numpy as jnp
@@ -54,60 +54,60 @@ class ChatMessage(BaseModel):
     """A single chat message in the conversation."""
 
     role: Literal["system", "user", "assistant", "tool", "function", "developer"]
-    content: Optional[str] = None
-    name: Optional[str] = None
-    tool_calls: Optional[List[Dict]] = None
-    tool_call_id: Optional[str] = None
-    function_call: Optional[Dict] = None
+    content: str | None = None
+    name: str | None = None
+    tool_calls: list[dict] | None = None
+    tool_call_id: str | None = None
+    function_call: dict | None = None
 
 
 class ChatCompletionRequest(BaseModel):
     """Request model for chat completions endpoint."""
 
     model: str
-    messages: List[ChatMessage]
-    frequency_penalty: Optional[float] = None
-    logit_bias: Optional[Dict[str, int]] = None
+    messages: list[ChatMessage]
+    frequency_penalty: float | None = None
+    logit_bias: dict[str, int] | None = None
     logprobs: bool = Field(default=False, description="Whether to include logprobs in the response")
-    top_logprobs: Optional[int] = None
+    top_logprobs: int | None = None
     max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
-    n: Optional[int] = None
-    presence_penalty: Optional[float] = None
-    response_format: Optional[Dict] = None
-    seed: Optional[int] = None
-    service_tier: Optional[str] = None
-    stop: Optional[Union[str, List[str]]] = None
-    stream: Optional[bool] = None
-    stream_options: Optional[Dict] = None
+    n: int | None = None
+    presence_penalty: float | None = None
+    response_format: dict | None = None
+    seed: int | None = None
+    service_tier: str | None = None
+    stop: str | list[str] | None = None
+    stream: bool | None = None
+    stream_options: dict | None = None
     temperature: float = Field(default=1.0, description="Sampling temperature")
-    top_p: Optional[float] = None
-    tools: Optional[List[Dict]] = None
-    tool_choice: Optional[Union[str, Dict]] = None
-    parallel_tool_calls: Optional[bool] = None
-    user: Optional[str] = None
+    top_p: float | None = None
+    tools: list[dict] | None = None
+    tool_choice: str | dict | None = None
+    parallel_tool_calls: bool | None = None
+    user: str | None = None
 
 
 class CompletionRequest(BaseModel):
     """Request model for text completions endpoint."""
 
     model: str
-    prompt: Union[str, List[str]]
-    best_of: Optional[int] = None
-    echo: Optional[bool] = None
-    frequency_penalty: Optional[float] = None
-    logit_bias: Optional[Dict[str, int]] = None
-    logprobs: Optional[int] = None
+    prompt: str | list[str]
+    best_of: int | None = None
+    echo: bool | None = None
+    frequency_penalty: float | None = None
+    logit_bias: dict[str, int] | None = None
+    logprobs: int | None = None
     max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
-    n: Optional[int] = None
-    presence_penalty: Optional[float] = None
-    seed: Optional[int] = None
-    stop: Optional[Union[str, List[str]]] = None
-    stream: Optional[bool] = None
-    stream_options: Optional[Dict] = None
-    suffix: Optional[str] = None
+    n: int | None = None
+    presence_penalty: float | None = None
+    seed: int | None = None
+    stop: str | list[str] | None = None
+    stream: bool | None = None
+    stream_options: dict | None = None
+    suffix: str | None = None
     temperature: float = Field(default=1.0, description="Sampling temperature")
-    top_p: Optional[float] = None
-    user: Optional[str] = None
+    top_p: float | None = None
+    user: str | None = None
 
 
 class TokensRequest(BaseModel):
@@ -154,10 +154,10 @@ class InferenceRequest:
     """Internal request structure for the inference thread"""
 
     request_id: str
-    prompt_tokens: List[int]
+    prompt_tokens: list[int]
     max_tokens: int
     temperature: float
-    stop_tokens: List[int] | None
+    stop_tokens: list[int] | None
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
@@ -169,10 +169,10 @@ class InferenceResponse:
 
     request_id: str
     text: str
-    tokens: List[int]
+    tokens: list[int]
     prompt_tokens: int
     completion_tokens: int
-    logprobs: Optional[List[float]] = None
+    logprobs: list[float] | None = None
 
 
 class InferenceBatch(list):
@@ -187,7 +187,7 @@ class InferenceBatch(list):
 WeightSource = collections.abc.Callable[[LmHeadModel], LmHeadModel]
 
 
-def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
+def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> list:
     """Fetch all items from `q` which arrive within `timeout` seconds."""
     deadline = time.time() + timeout
     items = []
@@ -263,10 +263,10 @@ class InferenceContext:
 
     def submit_request(
         self,
-        prompt_tokens: List[int],
+        prompt_tokens: list[int],
         max_tokens: int,
         temperature: float,
-        stop_tokens: Optional[List[int]],
+        stop_tokens: list[int] | None,
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
@@ -505,7 +505,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
             )
 
         # Wait for all results
-        results: List[List[InferenceResponse]] = await asyncio.gather(*futures)
+        results: list[list[InferenceResponse]] = await asyncio.gather(*futures)
 
         # Format responses
         choice_idx = 0
@@ -563,7 +563,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _compute_tokens(messages: list[ChatMessage], tokenizer: PreTrainedTokenizer) -> List[int]:
+def _compute_tokens(messages: list[ChatMessage], tokenizer: PreTrainedTokenizer) -> list[int]:
     try:
         dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
         return tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True)
@@ -622,7 +622,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
         )
 
         # Wait for result
-        results: List[InferenceResponse] = await future
+        results: list[InferenceResponse] = await future
 
         # Format response
         choices = []

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import jax
 from iris.marin_fs import url_to_fs
@@ -28,7 +28,7 @@ def get_jax_compilation_cache_dir() -> str | None:
     read = getattr(jax.config, "read", None)
     if callable(read):
         try:
-            cache_dir = cast(Optional[str], read("jax_compilation_cache_dir"))
+            cache_dir = cast(str | None, read("jax_compilation_cache_dir"))
         except Exception:
             cache_dir = None
     if not cache_dir:

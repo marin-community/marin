@@ -6,7 +6,7 @@ import numbers
 import os
 import typing
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import jax
 from iris.marin_fs import url_to_fs
@@ -18,7 +18,7 @@ from levanter.tracker.histogram import Histogram
 pylogger = logging.getLogger(__name__)
 
 if typing.TYPE_CHECKING:
-    from tensorboardX import SummaryWriter  # noqa: F401
+    from tensorboardX import SummaryWriter
 
 
 def _is_scalar(v) -> bool:
@@ -93,7 +93,7 @@ class TensorboardTracker(Tracker):
             else:
                 pylogger.error(f"Unsupported metric type: {type(v)} for key {k}")
 
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):
         log_path = self.writer.logdir
         # sync the artifact to the logdir via fsspec
         try:
@@ -111,21 +111,21 @@ class TensorboardTracker(Tracker):
 @dataclass
 class TensorboardConfig(TrackerConfig):
     logdir: str = "tblogs"
-    comment: Optional[str] = ""
-    purge_step: Optional[int] = None
-    max_queue: Optional[int] = 10
-    flush_secs: Optional[int] = 120
-    filename_suffix: Optional[str] = ""
-    write_to_disk: Optional[bool] = True
+    comment: str | None = ""
+    purge_step: int | None = None
+    max_queue: int | None = 10
+    flush_secs: int | None = 120
+    filename_suffix: str | None = ""
+    write_to_disk: bool | None = True
 
-    def init(self, run_id: Optional[str]) -> TensorboardTracker:
+    def init(self, run_id: str | None) -> TensorboardTracker:
         dir_to_write = self.logdir
         if run_id is not None:
             dir_to_write = os.path.join(dir_to_write, run_id)
 
         pylogger.info(f"Writing Tensorboard logs to {dir_to_write}")
 
-        from tensorboardX import SummaryWriter  # noqa: F811
+        from tensorboardX import SummaryWriter
 
         writer = SummaryWriter(
             dir_to_write,

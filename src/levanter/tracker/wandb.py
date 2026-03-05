@@ -8,7 +8,7 @@ import typing
 import warnings
 import json
 from dataclasses import dataclass
-from typing import Any, List, Optional, Union
+from typing import Any, Union
 
 import jax
 import numpy as np
@@ -20,7 +20,6 @@ from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_r
 from levanter.tracker.histogram import Histogram
 from levanter.tracker.tracker import TrackerConfig
 from levanter.utils import jax_utils
-
 
 if typing.TYPE_CHECKING:
     import wandb.sdk.lib.disabled
@@ -37,7 +36,7 @@ class WandbTracker(Tracker):
     name: str = "wandb"
     run: WandbRun
 
-    def __init__(self, run: Optional[WandbRun], replicate_path: Optional[str] = None):
+    def __init__(self, run: WandbRun | None, replicate_path: str | None = None):
         import wandb
 
         if run is None:
@@ -97,7 +96,7 @@ class WandbTracker(Tracker):
     def log_summary(self, metrics: typing.Mapping[str, Any]):
         self.run.summary.update(_convert_value_to_loggable_rec(metrics))
 
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+    def log_artifact(self, artifact_path, *, name: str | None = None, type: str | None = None):
         self.run.log_artifact(artifact_path, name=name, type=type)
 
     def finish(self):
@@ -203,14 +202,14 @@ class WandbConfig(TrackerConfig):
     Configuration for wandb.
     """
 
-    entity: Optional[str] = None  # An entity is a username or team name where you send runs
-    project: Optional[str] = "levanter"  # The name of the project where you are sending the enw run.
-    name: Optional[str] = None  # A short display name for this run, which is how you'll identify this run in the UI.
-    tags: List[str] = field(default_factory=list)  # Will populate the list of tags on this run in the UI.
-    id: Optional[str] = None  # A unique ID for this run, used for resuming. It must be unique in the project
-    group: Optional[str] = None  # Specify a group to organize individual runs into a larger experiment.
-    mode: Optional[str] = None  # Can be "online", "offline" or "disabled". If None, it will be whatever W&B decides.
-    resume: Optional[Union[bool, str]] = "allow"
+    entity: str | None = None  # An entity is a username or team name where you send runs
+    project: str | None = "levanter"  # The name of the project where you are sending the enw run.
+    name: str | None = None  # A short display name for this run, which is how you'll identify this run in the UI.
+    tags: list[str] = field(default_factory=list)  # Will populate the list of tags on this run in the UI.
+    id: str | None = None  # A unique ID for this run, used for resuming. It must be unique in the project
+    group: str | None = None  # Specify a group to organize individual runs into a larger experiment.
+    mode: str | None = None  # Can be "online", "offline" or "disabled". If None, it will be whatever W&B decides.
+    resume: bool | str | None = "allow"
     """
     Set the resume behavior. Options: "allow", "must", "never", "auto" or None.
     By default, if the new run has the same ID as a previous run, this run overwrites that data.
@@ -218,17 +217,17 @@ class WandbConfig(TrackerConfig):
     document for more details.
     """
 
-    save_code: Union[bool, str] = True
+    save_code: bool | str = True
     """If string, will save code from that directory. If True, will attempt to sniff out the main directory (since we
     typically don't run from the root of the repo)."""
 
     save_xla_dumps: bool = False
     """If True, will save the XLA code to wandb (as configured by XLA_FLAGS). This is useful for debugging."""
 
-    replicate_path: Optional[str] = None
+    replicate_path: str | None = None
     """If set, write config and summary to this path (local or GCS) on finish()."""
 
-    def init(self, run_id: Optional[str]) -> WandbTracker:
+    def init(self, run_id: str | None) -> WandbTracker:
         import wandb
 
         if run_id is not None and self.id is not None and run_id != self.id:
@@ -284,9 +283,7 @@ class WandbConfig(TrackerConfig):
                 id=r.id,
                 group=r.group,
             )
-            metadata_to_share = jax_utils.multihost_broadcast_sync(
-                metadata_to_share, is_source=jax.process_index() == 0
-            )
+            metadata_to_share = jax_utils.multihost_broadcast_sync(metadata_to_share, is_source=jax.process_index() == 0)
 
             # if jax.process_index() != 0:
             # assert r.mode == "disabled", f"Only the primary worker should be using wandb. Got {r.mode}"
@@ -333,7 +330,7 @@ class WandbConfig(TrackerConfig):
 
         return other_settings
 
-    def _get_git_sha(self, code_dir) -> Optional[str]:
+    def _get_git_sha(self, code_dir) -> str | None:
         if "GIT_COMMIT" in os.environ:
             return os.environ["GIT_COMMIT"]
 

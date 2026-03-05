@@ -5,7 +5,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
-from typing import List, Optional, Tuple, Union
 
 import haliax as hax
 import jax
@@ -33,16 +32,16 @@ class SoapConfig(OptimizerConfig):
     beta2: float = 0.95
     shampoo_beta: float = 0.95
     epsilon: float = 1e-8
-    max_grad_norm: Optional[float] = 1.0
-    haps: Optional[list[int]] = None
-    schedule_list: Optional[list[str]] = None
+    max_grad_norm: float | None = 1.0
+    haps: list[int] | None = None
+    schedule_list: list[str] | None = None
     precondition_frequency: int = 10
     max_precond_dim: int = 10000
     merge_small_dims: bool = True
     one_diag: bool = False
     target_merged_dim_size: int = 2048
-    mu_dtype: Optional[Union[str, jnp.dtype]] = None
-    precond_dtype: Optional[Union[str, jnp.dtype]] = None
+    mu_dtype: str | jnp.dtype | None = None
+    precond_dtype: str | jnp.dtype | None = None
     partition_grads_into_blocks: bool = True
     block_size: int = 256
 
@@ -114,12 +113,12 @@ def scale_by_soap(
     precondition_frequency: int = 1,
     max_precond_dim: int = 10000,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-    mu_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    partition_grads_into_blocks: Optional[bool] = True,
-    block_size: Optional[int] = 256,
-    lax_map_scanned_layers: Optional[bool] = True,
-    lax_map_batch_size: Optional[int] = 4,
+    mu_dtype: str | jnp.dtype | None = None,
+    precond_dtype: str | jnp.dtype | None = None,
+    partition_grads_into_blocks: bool | None = True,
+    block_size: int | None = 256,
+    lax_map_scanned_layers: bool | None = True,
+    lax_map_batch_size: int | None = 4,
     merge_small_dims: bool = False,
     target_merged_dim_size: int = 2048,
     one_diag: bool = False,
@@ -670,7 +669,7 @@ def scale_by_soap(
 
         return norm_updates, new_state
 
-    def update_fn(updates: Updates, state: dict, params: Optional[Updates] = None) -> tuple[Updates, dict]:
+    def update_fn(updates: Updates, state: dict, params: Updates | None = None) -> tuple[Updates, dict]:
         count_inc = jnp.asarray(optax.safe_int32_increment(state["count"]))
         state["count"] = count_inc
         scanned_layers_ = jax.tree.map(
@@ -697,10 +696,10 @@ def scale_by_soap(
 
 def update_preconditioner(
     grad: Array,
-    GG: List[Union[Array, None]],
+    GG: list[Array | None],
     beta: float,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-) -> List[Union[Array, None]]:
+) -> list[Array | None]:
     if grad.ndim == 1:
         return [lerp(GG[0], jnp.matmul(grad[:, None], grad[None, :], precision=precision), 1 - beta)]  # type: ignore
 
@@ -722,11 +721,11 @@ def update_preconditioner(
 
 def project(
     grad: Array,
-    Q: List[Union[Array, None]],
+    Q: list[Array | None],
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
 ) -> Array:
     for mat in Q:
-        if mat is not None:  # noqa: SIM108
+        if mat is not None:
             grad = jnp.tensordot(
                 grad,
                 mat,
@@ -742,11 +741,11 @@ def project(
 
 def project_back(
     grad: Array,
-    Q: List[Union[Array, None]],
+    Q: list[Array | None],
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
 ) -> Array:
     for mat in Q:
-        if mat is not None:  # noqa: SIM108
+        if mat is not None:
             grad = jnp.tensordot(
                 grad,
                 mat,
@@ -759,8 +758,8 @@ def project_back(
     return grad
 
 
-def get_orthogonal_matrix(GG: List[Union[Array, None]], epsilon: float) -> List[Union[Array, None]]:
-    Q: List[Union[Array, None]] = []
+def get_orthogonal_matrix(GG: list[Array | None], epsilon: float) -> list[Array | None]:
+    Q: list[Array | None] = []
     for gg in GG:
         if gg is None:
             Q.append(None)
@@ -771,14 +770,14 @@ def get_orthogonal_matrix(GG: List[Union[Array, None]], epsilon: float) -> List[
 
 
 def get_orthogonal_matrix_QR(
-    GG: List[Union[Array, None]],
-    Q: List[Union[Array, None]],
+    GG: list[Array | None],
+    Q: list[Array | None],
     exp_avg_sq: Array,
-    precond_dtype: Optional[Union[str, jnp.dtype]],
-    mu_dtype: Optional[Union[str, jnp.dtype]],
+    precond_dtype: str | jnp.dtype | None,
+    mu_dtype: str | jnp.dtype | None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-) -> tuple[List[Union[Array, None]], Array]:
-    final_Q: List[Union[Array, None]] = []
+) -> tuple[list[Array | None], Array]:
+    final_Q: list[Array | None] = []
     for ind, (m, o) in enumerate(zip(GG, Q)):
         if m is None or o is None:
             final_Q.append(None)
@@ -810,7 +809,7 @@ def lerp(
     return start + weight * (end - start)
 
 
-def _get_preconditioner_types(shape: Tuple[int, ...], max_precond_dim: int, one_diag: bool) -> List[bool]:
+def _get_preconditioner_types(shape: tuple[int, ...], max_precond_dim: int, one_diag: bool) -> list[bool]:
     if len(shape) == 0:
         return [False]
 
@@ -832,7 +831,7 @@ def _get_preconditioner_types(shape: Tuple[int, ...], max_precond_dim: int, one_
     return new_result
 
 
-def init_conditioner(p_shape, max_precond_dim: int, dtype: Optional[Union[str, jnp.dtype]], one_diag: bool):
+def init_conditioner(p_shape, max_precond_dim: int, dtype: str | jnp.dtype | None, one_diag: bool):
     if len(p_shape) == 1:
         return ([jnp.zeros((p_shape[0], p_shape[0]), dtype=dtype)], [PartitionSpec()])
 
@@ -982,7 +981,7 @@ def _unstack_and_unpad_matrices(stacked_array, shapes):
 
 
 # unused fns (can be used for stacking partitions without padding):
-def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
+def _sort_and_group_matrices(matrix_shapes: list[tuple[int, ...]]):
     indexed_list = list(enumerate(matrix_shapes))
     sorted_indexed = sorted(indexed_list, key=lambda x: x[1])
     sorted_shapes = [shape for _, shape in sorted_indexed]
@@ -1025,7 +1024,7 @@ def _unstack_matrices(stacked_arrays, revert_indices):
 
 def _merge_small_dims(
     shape_to_merge, max_dim, null_dims
-) -> Tuple[List[int], List[bool], Optional[Tuple]] | Tuple[List[int], List[bool]]:
+) -> tuple[list[int], list[bool], tuple | None] | tuple[list[int], list[bool]]:
     if not shape_to_merge:  # handles scalar shape ()
         return [], [True]
     if np.all(np.array(shape_to_merge) == 1):  # handles shape (1,)

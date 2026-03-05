@@ -4,7 +4,6 @@
 import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Optional
 
 import equinox as eqx
 import haliax
@@ -28,13 +27,13 @@ class ConvertLmConfig:
     trainer: TrainerConfig
     checkpoint_path: str
     output_dir: str
-    upload_to_hf: Optional[RepoRef] = None  # if specified, attempt to upload this checkpoint to the hf hub
+    upload_to_hf: RepoRef | None = None  # if specified, attempt to upload this checkpoint to the hf hub
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
     tokenizer: str | None = None  # if specified, use this tokenizer instead of the one from the model config
-    override_vocab_size: Optional[int] = None  # if specified, override the vocab size in the config
-    config_overrides: Optional[dict] = None  # if specified, override the config with these values
+    override_vocab_size: int | None = None  # if specified, override the vocab size in the config
+    config_overrides: dict | None = None  # if specified, override the config with these values
 
     use_cpu: bool = False
 

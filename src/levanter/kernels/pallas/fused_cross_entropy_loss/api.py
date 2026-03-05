@@ -6,7 +6,7 @@ from functools import lru_cache
 import hashlib
 import logging
 import time
-from typing import Literal, Optional, TypeAlias, cast, overload
+from typing import Literal, TypeAlias, cast, overload
 import warnings
 
 import jax
@@ -20,7 +20,6 @@ from .config import BlockSizes
 from .tuned_block_sizes import infer_block_sizes, infer_block_sizes_with_tuned_match
 from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
-
 
 Implementation: TypeAlias = Literal[
     "pallas_tpu",
@@ -159,8 +158,8 @@ def _autotune_jaxpr_hash(
     x: jax.Array,
     labels: jax.Array,
     w: jax.Array,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
 ) -> str | None:
@@ -192,8 +191,8 @@ def _autotune_cache_key(
     labels: jax.Array,
     w: jax.Array,
     inferred: BlockSizes,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
 ) -> str:
@@ -272,8 +271,8 @@ def _benchmark_block_sizes_candidate(
     x: jax.Array,
     labels: jax.Array,
     w: jax.Array,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
 ) -> float:
@@ -325,8 +324,8 @@ def _autotune_block_sizes_on_miss(
     labels: jax.Array,
     w: jax.Array,
     inferred: BlockSizes,
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    dtype: jnp.dtype | None,
+    logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
 ) -> BlockSizes:
@@ -399,12 +398,12 @@ def _validate_inputs(x: jax.Array, labels: jax.Array, w: jax.Array) -> None:
 
 
 def _resolve_block_sizes(
-    block_size: Optional[int],
-    block_sizes: Optional[BlockSizes],
+    block_size: int | None,
+    block_sizes: BlockSizes | None,
     *,
     x: jax.Array,
     w: jax.Array,
-    dtype: Optional[jnp.dtype],
+    dtype: jnp.dtype | None,
 ) -> BlockSizes:
     if block_sizes is None:
         if block_size is None:
@@ -418,7 +417,7 @@ def _resolve_block_sizes(
     return block_sizes
 
 
-def _apply_reduction(loss: jax.Array, reduction: Reduction, weight: Optional[jax.Array]) -> jax.Array:
+def _apply_reduction(loss: jax.Array, reduction: Reduction, weight: jax.Array | None) -> jax.Array:
     if weight is not None:
         weight = weight.astype(loss.dtype)
         loss = loss * weight
@@ -442,12 +441,12 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     w: Float[Array, "H V"],
     *,
     reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
-    logsumexp_weight: Optional[float] = 0.0,
-    block_size: Optional[int] = None,
-    block_sizes: Optional[BlockSizes] = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    weight: Float[Array, "B"] | None = None,
+    logsumexp_weight: float | None = 0.0,
+    block_size: int | None = None,
+    block_sizes: BlockSizes | None = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
     return_argmax: Literal[False] = False,
@@ -461,12 +460,12 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     w: Float[Array, "H V"],
     *,
     reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
-    logsumexp_weight: Optional[float] = 0.0,
-    block_size: Optional[int] = None,
-    block_sizes: Optional[BlockSizes] = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    weight: Float[Array, "B"] | None = None,
+    logsumexp_weight: float | None = 0.0,
+    block_size: int | None = None,
+    block_sizes: BlockSizes | None = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
     return_argmax: Literal[True] = True,
@@ -479,12 +478,12 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     w: Float[Array, "H V"],
     *,
     reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
-    logsumexp_weight: Optional[float] = 0.0,
-    block_size: Optional[int] = None,
-    block_sizes: Optional[BlockSizes] = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    weight: Float[Array, "B"] | None = None,
+    logsumexp_weight: float | None = 0.0,
+    block_size: int | None = None,
+    block_sizes: BlockSizes | None = None,
+    dtype: jnp.dtype | None = jnp.float32,
+    logit_soft_cap: float | None = None,
     precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
     return_argmax: bool = False,
@@ -632,9 +631,9 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
 
 __all__ = [
+    "IMPLEMENTATIONS",
     "BlockSizes",
     "Implementation",
-    "IMPLEMENTATIONS",
     "Reduction",
     "fused_cross_entropy_loss_and_logsumexp_penalty",
 ]

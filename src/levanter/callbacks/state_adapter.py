@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
+from collections.abc import Callable
 
 import jax
 from jaxtyping import PyTree
 
 from levanter.callbacks._core import Callback, LambdaCallback, StepInfo
-
 
 S = TypeVar("S")
 

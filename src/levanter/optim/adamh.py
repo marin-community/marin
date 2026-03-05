@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import NamedTuple, Optional, Any
+from typing import NamedTuple, Any
 
 import chex
 import jax
@@ -38,7 +38,7 @@ class AdamHConfig(OptimizerConfig):
     # https://x.com/giffmana/status/1692641748445438301
     beta2: float = 0.95
     epsilon: float = 1e-8
-    max_grad_norm: Optional[float] = 1.0
+    max_grad_norm: float | None = 1.0
     nesterov: bool = False
     adam_lr: float = 6e-4  # learning rate used for weight without weight decay
 
@@ -108,7 +108,7 @@ def scale_by_adamh(
     b2: float = 0.999,
     eps: float = 1e-8,
     learning_rate: float = 0.02,
-    mu_dtype: Optional[Any] = None,
+    mu_dtype: Any | None = None,
 ) -> optax.GradientTransformation:
     r"""Rescale updates according to the AdamH algorithm.
 

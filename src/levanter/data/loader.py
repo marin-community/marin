@@ -40,7 +40,6 @@ from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
 
-
 Ex = TypeVar("Ex")
 
 _TensorSliceIndex = tuple[slice, ...]
@@ -450,9 +449,7 @@ class DataLoaderIterator(Iterator[Ex]):
             global_indices_for_each_batch.append(global_indices_for_this_batch)
 
         # flattened view so we can load all the data at once
-        indices_for_this_batch_of_batches: list[int] = [
-            i for indices in global_indices_for_each_batch for i in indices
-        ]
+        indices_for_this_batch_of_batches: list[int] = [i for indices in global_indices_for_each_batch for i in indices]
         individual_datums = await self.run_and_report_slowness(
             self.dl.data_store.get_batch(indices_for_this_batch_of_batches),
             f"Waiting for {len(indices_for_this_batch_of_batches)} items.",

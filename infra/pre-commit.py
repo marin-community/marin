@@ -547,7 +547,12 @@ class PrecommitConfig:
 
 PRECOMMIT_CONFIGS = [
     PrecommitConfig(
-        patterns=["src/levanter/**/*.py"],
+        patterns=[
+            "src/levanter/**/*.py",
+            "tests/levanter/**/*.py",
+            "infra/levanter/**/*.py",
+            "scripts/levanter/**/*.py",
+        ],
         checks=[
             check_ruff,
             lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
@@ -556,7 +561,10 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
-        patterns=["src/haliax/**/*.py"],
+        patterns=[
+            "src/haliax/**/*.py",
+            "tests/haliax/**/*.py",
+        ],
         checks=[
             check_ruff,
             lambda files, fix: check_black(files, fix, config=HALIAX_BLACK_CONFIG),
@@ -565,7 +573,15 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["src/levanter/**", "src/haliax/**", "**/vendor/**"],
+        exclude_patterns=[
+            "src/levanter/**",
+            "tests/levanter/**",
+            "infra/levanter/**",
+            "scripts/levanter/**",
+            "src/haliax/**",
+            "tests/haliax/**",
+            "**/vendor/**",
+        ],
         checks=[
             check_ruff,
             check_black,

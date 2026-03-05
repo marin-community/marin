@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type
+from collections.abc import Callable
 
 import equinox as eqx
 import jax
@@ -24,7 +24,6 @@ from levanter.models.asr_model import ASRConfig, ASRMixin
 from levanter.models.lm_model import LmConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
-
 
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
@@ -57,15 +56,15 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
     # Attention-related config
     upcast_attn: bool = True
     use_flash_attention: bool = False
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = None
 
     @property
-    def model_type(self) -> Type["WhisperModel"]:
+    def model_type(self) -> type["WhisperModel"]:
         return WhisperModel
 
     @property
-    def asr_model_type(self) -> Type["WhisperASRModel"]:
+    def asr_model_type(self) -> type["WhisperASRModel"]:
         return WhisperASRModel
 
     def hf_checkpoint_converter(
@@ -184,7 +183,7 @@ class WhisperAttention(eqx.Module):
         return WhisperAttention(config, q_proj, k_proj, v_proj, out_proj, inference=False)
 
     @named_call
-    def __call__(self, x: NamedArray, xa: Optional[NamedArray] = None, mask: Optional[AttentionMask] = None, *, key):
+    def __call__(self, x: NamedArray, xa: NamedArray | None = None, mask: AttentionMask | None = None, *, key):
         k_k, k_v, k_q, k_out, k_drop = hax.jax_utils.maybe_rng_split(key, 5)
         q = self.q_proj(x, key=k_q).rearrange((..., "heads", "position", "head_size"))
         kv_in = x if xa is None else xa
@@ -220,8 +219,8 @@ class WhisperLayer(ModuleWithStateDictSerialization, eqx.Module):
     self_attn: WhisperAttention
     attn_ln: hnn.LayerNorm
 
-    encoder_attn: Optional[WhisperAttention]
-    encoder_attn_ln: Optional[hnn.LayerNorm]
+    encoder_attn: WhisperAttention | None
+    encoder_attn_ln: hnn.LayerNorm | None
 
     mlp: WhisperMlp
     mlp_ln: hnn.LayerNorm
@@ -248,7 +247,7 @@ class WhisperLayer(ModuleWithStateDictSerialization, eqx.Module):
         return WhisperLayer(self_attn, attn_ln, encoder_attn, encoder_attn_ln, mlp, mlp_ln)
 
     @named_call
-    def __call__(self, x: NamedArray, xa: Optional[NamedArray] = None, mask: Optional[AttentionMask] = None, *, key):
+    def __call__(self, x: NamedArray, xa: NamedArray | None = None, mask: AttentionMask | None = None, *, key):
         k1, k2, k3 = haliax.jax_utils.maybe_rng_split(key, 3)
 
         attn_output = self.self_attn(self.attn_ln(x), mask=mask, key=k1)
@@ -265,7 +264,7 @@ class WhisperLayer(ModuleWithStateDictSerialization, eqx.Module):
 
         return x
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {
             "mlp": None,
             "mlp_ln": "final_layer_norm",
@@ -298,8 +297,8 @@ class WhisperTransformer(ModuleWithStateDictSerialization):
     def __call__(
         self,
         x: NamedArray,
-        xa: Optional[NamedArray] = None,
-        attn_mask: Optional[AttentionMask] = None,
+        xa: NamedArray | None = None,
+        attn_mask: AttentionMask | None = None,
         *,
         key=None,
     ) -> NamedArray:
@@ -352,11 +351,11 @@ class WhisperEncoder(ModuleWithStateDictSerialization):
         x = self.transformer(x, key=k_transformer)
         return x
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperDecoder":
+    def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "WhisperDecoder":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, embeddings=new_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": None}
 
 
@@ -390,11 +389,11 @@ class WhisperDecoderEmbeddings(eqx.Module):
     def unembed(self, x: NamedArray):
         return hax.dot(x, self.token_embeddings.weight, axis="embed_dim")
 
-    def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
+    def resize_embeddings(self, new_size: int, key: PRNGKeyArray | None = None):
         new_token_embeddings = self.token_embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_token_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"token_embeddings": "embed_tokens", "position_embeddings": "embed_positions"}
 
 
@@ -434,7 +433,7 @@ class WhisperDecoder(ModuleWithStateDictSerialization):
         self,
         input_ids: NamedArray,
         audio_embeds: NamedArray,
-        attn_mask: Optional[AttentionMask] = None,
+        attn_mask: AttentionMask | None = None,
         *,
         key=None,
     ) -> NamedArray:
@@ -448,11 +447,11 @@ class WhisperDecoder(ModuleWithStateDictSerialization):
 
         return lm_logits
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperDecoder":
+    def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "WhisperDecoder":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, embeddings=new_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": None, "embeddings": None}
 
 
@@ -472,7 +471,7 @@ class WhisperModel(eqx.Module, ModelWithHfSerializationMixin[WhisperConfig]):
     def Vocab(self) -> Axis:
         return self.decoder.embeddings.Vocab
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperModel":
+    def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "WhisperModel":
         new_decoder = self.decoder.resize_vocab(new_size, key)
         return dataclasses.replace(self, decoder=new_decoder)
 
@@ -488,7 +487,7 @@ class WhisperModel(eqx.Module, ModelWithHfSerializationMixin[WhisperConfig]):
         self,
         mel: NamedArray,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         *,
         key=None,
     ) -> NamedArray:
