@@ -80,7 +80,7 @@ class StepSpec:
         """
         from marin.execution.artifact import Artifact
         from marin.execution.disk_cache import disk_cache
-        from marin.execution.distributed_lock import distributed_lock
+        from marin.execution.executor_step_status import distributed_lock
         from marin.execution.remote import RemoteCallable
 
         raw_fn = self.fn.fn if isinstance(self.fn, RemoteCallable) else self.fn
