@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Inspect training data at a given step.
@@ -121,11 +121,14 @@ def _submit_to_cluster(
         asyncio.run(_run())
 
 
-def _resolve_config(executor_step: ExecutorStep, prefix: str) -> TrainLmOnPodConfig:
-    """Resolve InputName references in the config using the Executor."""
+def _resolve_config(executor_step: ExecutorStep, prefix: str) -> tuple[TrainLmOnPodConfig, str]:
+    """Resolve InputName references in the config using the Executor.
+
+    Returns (resolved_config, step_output_path).
+    """
     executor = Executor(prefix=prefix, executor_info_base_path=os.path.join(prefix, "experiments"))
     executor.compute_version(executor_step, is_pseudo_dep=False)
-    return executor.configs[executor_step]
+    return executor.configs[executor_step], executor.output_paths[executor_step]
 
 
 def _build_dataset(train_config):
@@ -191,9 +194,9 @@ def _fetch_step_examples(dataset, batch_schedule, tokenizer, step: int) -> list[
     sources = _get_source_names(dataset, indices)
     results = []
     for i, (ex, src) in enumerate(zip(examples, sources, strict=True)):
-        tokens = ex.tokens.tolist()
-        lw = ex.loss_weight
-        pct_masked = float((lw == 0).sum()) / len(lw) * 100
+        tokens = ex.tokens.array.tolist()
+        lw = ex.loss_weight.array
+        pct_masked = float((lw == 0).sum()) / lw.size * 100
         results.append(
             {
                 "index": i,
@@ -473,7 +476,7 @@ def _run_tui_on_cluster(cluster: str, experiment: str, step: int, var: str | Non
                 prefix = prefix or os.environ.get("MARIN_PREFIX")
                 mod = _load_module(experiment_path)
                 executor_step = _find_training_step(mod, var)
-                resolved = _resolve_config(executor_step, prefix)
+                resolved, _ = _resolve_config(executor_step, prefix)
                 train_config = resolved.train_config
                 self.tokenizer = train_config.data.the_tokenizer
                 self.dataset, self.batch_schedule = _build_dataset(train_config)
@@ -531,7 +534,7 @@ def main(
 
     # When submitted as a Ray job, the script runs on the cluster without --cluster.
     # Detect this via RAY_JOB_ID which Ray sets automatically for submitted jobs.
-    on_cluster_node = os.environ.get("RAY_JOB_ID") is not None
+    on_cluster_node = os.environ.get("RAY_JOB_ID") is not None or os.environ.get("MARIN_PREFIX") is not None
 
     if not cluster and not on_cluster_node:
         raise click.ClickException("Must specify --cluster.")
@@ -561,7 +564,7 @@ def main(
 
     mod = _load_module(experiment)
     executor_step = _find_training_step(mod, var)
-    resolved_config = _resolve_config(executor_step, prefix)
+    resolved_config, step_output_path = _resolve_config(executor_step, prefix)
     train_config = resolved_config.train_config
     tokenizer = train_config.data.the_tokenizer
 
@@ -588,7 +591,15 @@ def main(
         if output:
             out.close()
 
-    if output:
+    if output and on_cluster_node:
+        import gcsfs
+
+        gcs_output = os.path.join(step_output_path, "debug", output)
+        fs = gcsfs.GCSFileSystem()
+        fs.put(output, gcs_output)
+        click.echo(f"Wrote {total_examples} examples to {gcs_output}")
+        click.echo(f"Download with: gsutil cp {gcs_output} .")
+    elif output:
         click.echo(f"Wrote {total_examples} examples to {output}")
 
 
