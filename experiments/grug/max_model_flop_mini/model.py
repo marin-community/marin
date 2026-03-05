@@ -180,8 +180,8 @@ class CausalSelfAttention(eqx.Module):
             ve_embed=ve_embed,
             value_lambda=jnp.full((), 0.5, dtype=jnp.float32),
             ve_lambda=jnp.full((), 0.5, dtype=jnp.float32),
-            ve_gate=jnp.zeros((g, m), dtype=jnp.float32),
-            attn_gate=jnp.zeros((g, n), dtype=jnp.float32),
+            ve_gate=reshard(jnp.zeros((g, m), dtype=jnp.float32), P(None, None)),
+            attn_gate=reshard(jnp.zeros((g, n), dtype=jnp.float32), P(None, None)),
             cfg=cfg,
         )
 
