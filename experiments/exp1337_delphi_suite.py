@@ -1,10 +1,10 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exp2166: Scaling Ladder Analysis for Nemotron.
+"""Scaling Ladder Analysis for Completed AdamH v6 recipe on Nemotron.
 
 This experiment runs scaling ladder analysis on the isoflop training sweeps
-for the Nemotron (nemo-wider-depth-adapt) dataset.
+for Nemotron using the CompletedAdamH v6 recipe (sqrt batch LR, no /H on adam_lr).
 
 The scaling ladder:
 1. Fits scaling laws from IsoFLOP sweep data to find compute-optimal configurations
@@ -32,30 +32,33 @@ from levanter.utils.mesh import MeshConfig
 from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import (
     IsoFlopAnalysisConfig,
-    MARIN_2025_RECIPE,
-    MARIN_SCALING_SUITES,
+    SCALING_SUITES,
     nemotron_mix,
     run_isoflop_analysis_step,
 )
 from experiments.llama import llama3_tokenizer
+from experiments.scaling_law_sweeps.completed_adamh import RECIPE
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
-from marin.scaling_laws.tpu_utils import pick_v5p_type, HBM_PER_CHIP_GIB
+
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Get training steps from the isoflop sweep
-nemotron_training, _ = MARIN_SCALING_SUITES["nemotron"]
+adamh_training, _ = SCALING_SUITES["nemotron-completed-adamh"]
 
 # --- Configuration ---
-TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20, 1e21, 1e22, 1e23, 1e24]
-EXPERIMENT_NAME = "exp2166-scaling-ladder-nemotron-validation"
-LABEL = "nemo-wider-depth-adapt"
+TARGET_BUDGETS: dict[float, tuple[str, int]] = {
+    1e21: ("v4-128", 512),
+    1e22: ("v4-512", 1024),
+    1e23: ("v4-1024", 2048),
+}
+EXPERIMENT_NAME = "adamh-scaling-ladder-nemotron"
+LABEL = "adamh_scaling_v6"
 SEQ_LEN = 4096
-MAX_TPU_TYPE = "v5p-64"  # Cap TPU size; use gradient accumulation for larger models
 
 
 @dataclass(frozen=True)
@@ -63,30 +66,17 @@ class OptimalTrainingConfig:
     """Config for training a compute-optimal model based on scaling law analysis."""
 
     analysis_output_path: str
-    """Path to the analysis output containing scaling fits."""
-
     target_budget: float
-    """Target compute budget in FLOPs."""
-
+    tpu_type: str
+    batch_size: int
     label: str
-    """Dataset/experiment label to use for scaling fit lookup."""
-
     output_path: str
-    """Output path for checkpoints and logs."""
-
     tokenized: LMMixtureDatasetConfig
-    """Tokenized dataset for training. Executor will resolve InputName and unwrap VersionedValue."""
-
     validation_configs: dict[str, DatasetComponent] | None = None
-    """Validation set configs. Passed through config so executor resolves InputName paths."""
 
 
 def run_optimal_training(config: OptimalTrainingConfig) -> None:
-    """Run compute-optimal training at the given budget.
-
-    Reads scaling fits from analysis output, predicts optimal config,
-    builds training config, and runs training directly.
-    """
+    """Run compute-optimal training at the given budget."""
     result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
     fs, _, _ = fsspec.get_fs_token_paths(result_path)
 
@@ -103,7 +93,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
         scaling_fits=scaling_fits,
         target_flops=config.target_budget,
         label=config.label,
-        recipe=MARIN_2025_RECIPE,
+        recipe=RECIPE,
         seq_len=SEQ_LEN,
     )
 
@@ -112,53 +102,36 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
             f"Could not find optimal config for budget {config.target_budget:.2e} and label '{config.label}'"
         )
 
-    params = candidate.model_config.total_trainable_params(MARIN_2025_RECIPE.vocab_size)
-    estimated_memory = MARIN_2025_RECIPE.estimate_memory_bytes(candidate)
+    params = candidate.model_config.total_trainable_params(RECIPE.vocab_size)
+    hidden_dim = candidate.model_config.hidden_dim
+    tpu_type = config.tpu_type
+    cores = int(tpu_type.split("-")[1])
+    chips = cores // 2
 
-    # Compute TPU type and gradient accumulation settings
-    max_cores = int(MAX_TPU_TYPE.split("-")[1])
-    num_chips = max_cores // 2
-    max_memory = num_chips * HBM_PER_CHIP_GIB * 1024**3
+    # Compute minimum TP needed so hidden_dim is divisible by data-axis size
+    tp = 1
+    while hidden_dim % (chips // tp) != 0:
+        tp *= 2
 
-    per_device_parallelism: int | None = None
-    if estimated_memory <= max_memory:
-        # Fits without gradient accumulation
-        tpu_type = pick_v5p_type(estimated_memory)
-    else:
-        # Need gradient accumulation to fit in MAX_TPU_TYPE
-        tpu_type = MAX_TPU_TYPE
-        microbatch_size = candidate.batch_size
-        while (microbatch_size / candidate.batch_size) * estimated_memory > max_memory:
-            microbatch_size //= 2
-        if microbatch_size < num_chips:
-            raise ValueError(
-                f"Cannot fit model in {MAX_TPU_TYPE}: need microbatch >= {num_chips}, got {microbatch_size}"
-            )
-        per_device_parallelism = microbatch_size // num_chips
+    batch_size = config.batch_size
+    tokens = candidate.tokens
+    train_steps = round(tokens / (batch_size * SEQ_LEN))
+
+    optimizer_config = RECIPE.build_optimizer_config(batch_size, tokens)
+    candidate = replace(candidate, batch_size=batch_size, train_steps=train_steps, optimizer_config=optimizer_config)
 
     print(
         f"Optimal config for {config.target_budget:.2e} FLOPs:\n"
-        f"  hidden_dim={candidate.model_config.hidden_dim}, layers={candidate.model_config.num_layers}\n"
+        f"  hidden_dim={hidden_dim}, layers={candidate.model_config.num_layers}\n"
         f"  params={params:.2e}, tokens={candidate.tokens:.2e}\n"
         f"  batch_size={candidate.batch_size}, train_steps={candidate.train_steps}\n"
-        f"  estimated_memory={estimated_memory / 1e9:.2f} GB -> {tpu_type}\n"
-        f"  per_device_parallelism={per_device_parallelism or 'None (no grad accum)'}"
+        f"  tpu_type={tpu_type}, tp={tp}"
     )
 
-    # For very large models, use aggressive gradient checkpointing to reduce memory
-    # Following exp1295_32b.py pattern: offload only carries, not inputs
     model_config = candidate.model_config
-    if config.target_budget >= 1e21:
-        from haliax import ScanCheckpointPolicy
 
-        model_config = replace(model_config, gradient_checkpointing=ScanCheckpointPolicy(save_carries="offload"))
-        logger.info("Using offload carries gradient checkpointing for large model")
-
-    # Build TrainLmConfig directly (like old run_scaling_ladder_rung)
-    # config.tokenized is already processed by executor's instantiate_config
     data = config.tokenized
     if config.validation_configs:
-        # Merge validation components into the data mixture with weight 0
         new_components = {
             **data.components,
             **{k: v for k, v in config.validation_configs.items() if k not in data.components},
@@ -169,7 +142,6 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
                 **{name: 0.0 for name in config.validation_configs if name not in data.train_weights},
             }
         else:
-            # Varying weights case
             new_weights = [
                 (step_idx, {**weights, **{name: 0.0 for name in config.validation_configs if name not in weights}})
                 for step_idx, weights in data.train_weights
@@ -180,9 +152,11 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
         data=data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
+                entity="marin-community",
                 project="marin",
                 tags=[
                     "optimal-training",
+                    "completed-adamh",
                     f"FLOPs={config.target_budget:.1e}",
                     f"label={config.label}",
                     f"N={params:.1e}",
@@ -190,7 +164,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=candidate.batch_size,
-            per_device_parallelism=per_device_parallelism if per_device_parallelism else -1,
+            per_device_parallelism=-1,
             num_train_steps=candidate.train_steps,
             steps_per_eval=1000,
             checkpointer=CheckpointerConfig(
@@ -198,6 +172,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
                 keep=[dict(every=5000)],
             ),
             mesh=MeshConfig(
+                axes={"data": -1, "replica": 1, "model": tp},
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
@@ -221,34 +196,32 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
 
 
 # --- Step 1: IsoFLOP Analysis ---
-# Creates scaling law fits from the training runs
 analysis_step = ExecutorStep(
     name=f"{EXPERIMENT_NAME}-analysis",
     fn=run_isoflop_analysis_step,
     config=IsoFlopAnalysisConfig(
-        training_runs=[r.as_input_name() for r in nemotron_training],
+        training_runs=[r.as_input_name() for r in adamh_training],
         output_path=this_output_path(),
     ),
 )
 
 # --- Create validation configs ---
-# Convert validation TokenizerSteps to DatasetComponent at module import time.
-# This way instantiate_config resolves InputName paths before run_optimal_training runs.
 validation_steps = default_validation_sets(tokenizer=llama3_tokenizer)
 validation_configs = {
     name: step_to_lm_mixture_component(step, include_raw_paths=False) for name, step in validation_steps.items()
 }
 
 # --- Step 2: Optimal Training Runs ---
-# Train compute-optimal models at each target budget
 optimal_runs: list[ExecutorStep] = []
-for budget in TARGET_BUDGETS:
+for budget, (tpu_type, batch_size) in TARGET_BUDGETS.items():
     step = ExecutorStep(
-        name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}",
+        name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}-v5",
         fn=run_optimal_training,
         config=OptimalTrainingConfig(
             analysis_output_path=analysis_step.as_input_name(),
             target_budget=budget,
+            tpu_type=tpu_type,
+            batch_size=batch_size,
             label=LABEL,
             output_path=this_output_path(),
             tokenized=nemotron_mix,
@@ -257,7 +230,6 @@ for budget in TARGET_BUDGETS:
     )
     optimal_runs.append(step)
 
-# All steps for this experiment
 all_steps = [analysis_step, *optimal_runs]
 
 if __name__ == "__main__":

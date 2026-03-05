@@ -221,16 +221,6 @@ class FitScalingLawsResult:
     """Quadratic fit coefficients {(label, flops): QuadraticFitCoeffs} for plotting."""
 
 
-# ---------------- Candidate Config Generation ----------------
-
-
-def round_to_power_of_two(x: float) -> int:
-    """Round ``x`` to the nearest power of two."""
-    if x <= 1:
-        return 1
-    return 2 ** math.ceil(math.log2(x))
-
-
 def round_flops_to_bucket(flops: float, base: float = 1.1) -> float:
     """Round FLOP count to the nearest power of base.
 

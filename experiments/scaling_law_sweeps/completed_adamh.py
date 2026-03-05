@@ -19,13 +19,13 @@ Close-to-CompletedP heuristic scaling for AdamH.
 Let r = (batch_size * seq_len) / tokens, r0 = (B0 * seq_len) / T0.
 
 Formulas:
-- Learning rate: lr = lr0 * sqrt(r/r0)
-- Adam LR: adam_lr = adam_lr0 * sqrt(r/r0) * (H0/H)        [muP constraint]
+- Learning rate: lr = lr0 * sqrt(B/B0) * (T0/T)^0.3         [sqrt batch, 0.3-power token]
+- Adam LR: adam_lr = adam_lr0 * sqrt(r/r0)
 - Epsilon: epsilon = epsilon0 * sqrt(r0/r)
 - Beta1: fixed at 0.9
 - Beta2: beta2 = clip(beta2_0^(B/B0), 0.9, 0.9999)         [constant token half-life]
 
-Reference 0 (B0=8, H0=512, T0=1e9, seq_len=4096): optimal AdamH for Qwen3 ~130M on Nemotron Mix.
+Reference 0 (B0=64, H0=512, T0=2.5e9, seq_len=4096): optimal AdamH for Qwen3 ~130M on Nemotron Mix.
 """
 
 import math
@@ -46,6 +46,7 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws import CandidateConfig, pick_v4_type
+from marin.scaling_laws.tpu_utils import V4_CORES_PER_CHIP
 
 # --- Constants ---
 SEQ_LEN: int = 4096
@@ -57,6 +58,24 @@ def _round_to_power_of_two(x: float) -> int:
     if x <= 1:
         return 1
     return 2 ** math.ceil(math.log2(x))
+
+
+def _compute_tensor_parallel_size(tpu_type: str, batch_size: int, hidden_dim: int, max_tp: int = 4) -> int:
+    """Compute TP degree when batch_size < num_chips on the selected TPU."""
+    cores = int(tpu_type.split("-")[1])
+    num_chips = cores // V4_CORES_PER_CHIP
+    min_tp = 1 if batch_size >= num_chips else _round_to_power_of_two(math.ceil(num_chips / batch_size))
+    tp = min_tp
+
+    while tp <= max_tp:
+        if num_chips % tp == 0 and hidden_dim % (num_chips // tp) == 0:
+            return tp
+        tp *= 2
+
+    raise ValueError(
+        f"Could not find valid tensor_parallel_size for tpu_type={tpu_type}, "
+        f"batch_size={batch_size}, hidden_dim={hidden_dim}, max_tp={max_tp}"
+    )
 
 
 def _format_run_name(
@@ -86,21 +105,20 @@ class CompletedAdamHRecipe:
     def vocab_size(self) -> int:
         return get_vocab_size_for_tokenizer(self.tokenizer)
 
-    # --- Reference point (B0=8, H0=512, T0=1e9, seq_len=4096) ---
+    # --- Reference point (B0=64, H0=512, T0=2.5e9, seq_len=4096) ---
     # Optimal AdamH for Qwen3 ~130M on Nemotron Mix
-    reference_batch_size: int = 8
-    reference_tokens: float = 1e9
-    reference_hidden_dim: int = 512
-
+    reference_batch_size: int = 64
+    reference_tokens: float = 2.5e9
     # --- Base hyperparameters (at reference point) ---
-    lr_base: float = 0.0010013084985803517
-    adam_lr_base: float = 0.0005204192548239702 * 512  # adam_lr = adam_lr_base * sqrt(r/r0) / hidden_dim
-    epsilon_base: float = 9.309976507000956e-08
+    lr_base: float = 0.00630
+    adam_lr_base: float = 0.000656
+    epsilon_base: float = 1.85e-08
     beta1: float = 0.9  # fixed
-    beta2_base: float = 0.9998999999999991  # beta2 = clip(beta2_0^(B/B0), 0.9, 0.9999)
+    beta2_base: float = 0.9999  # beta2 = clip(beta2_0^(B/B0), 0.9, 0.9999)
 
     # --- Fixed hyperparameters (not scaled) ---
-    max_grad_norm: float = 0.102
+    max_grad_norm: float = 0.1
+    z_loss_weight: float = 1.0e-07
     nesterov: bool = False
 
     # --- Schedule ---
@@ -130,6 +148,9 @@ class CompletedAdamHRecipe:
     min_beta2: float = 0.9
     max_beta2: float = 0.9999
 
+    # --- Token/param ratio ---
+    max_tokens_per_param: float = 250
+
     # --- Search step sizes ---
     small_budget_step_size: int = 128
     large_budget_step_size: int = 256
@@ -143,15 +164,16 @@ class CompletedAdamHRecipe:
         return (batch_size * self.reference_tokens) / (self.reference_batch_size * tokens)
 
     def _compute_learning_rate(self, batch_size: int, tokens: float) -> float:
-        """lr = lr0 * sqrt(r/r0)"""
-        ratio = self._compute_scaling_ratio(batch_size, tokens)
-        lr = self.lr_base * math.sqrt(ratio)
+        """lr = lr0 * sqrt(B/B0) * (T0/T)^0.3"""
+        batch_ratio = batch_size / self.reference_batch_size
+        token_ratio = self.reference_tokens / tokens
+        lr = self.lr_base * math.sqrt(batch_ratio) * (token_ratio ** 0.3)
         return min(self.max_learning_rate, lr)
 
-    def _compute_adam_lr(self, hidden_dim: int, batch_size: int, tokens: float) -> float:
-        """adam_lr = adam_lr0 * sqrt(r/r0) * (H0/H)"""
+    def _compute_adam_lr(self, batch_size: int, tokens: float) -> float:
+        """adam_lr = adam_lr_base * sqrt(r/r0)"""
         ratio = self._compute_scaling_ratio(batch_size, tokens)
-        adam_lr = self.adam_lr_base * math.sqrt(ratio) / hidden_dim
+        adam_lr = self.adam_lr_base * math.sqrt(ratio)
         return min(self.max_learning_rate, adam_lr)
 
     def _compute_epsilon(self, batch_size: int, tokens: float) -> float:
@@ -164,16 +186,23 @@ class CompletedAdamHRecipe:
         exponent = batch_size / self.reference_batch_size
         return max(self.min_beta2, min(self.max_beta2, self.beta2_base**exponent))
 
-    def _any_cap_hit(self, batch_size: int, tokens: float, hidden_dim: int) -> bool:
-        """Return True if any hyperparameter would be clamped at this configuration."""
-        ratio = self._compute_scaling_ratio(batch_size, tokens)
-        lr = self.lr_base * math.sqrt(ratio)
-        adam_lr = self.adam_lr_base * math.sqrt(ratio) / hidden_dim
-        beta2 = self.beta2_base ** (batch_size / self.reference_batch_size)
-        return (
-            lr > self.max_learning_rate
-            or adam_lr > self.max_learning_rate
-            or beta2 < self.min_beta2
+    def build_optimizer_config(self, batch_size: int, tokens: float) -> AdamHConfig:
+        lr = self._compute_learning_rate(batch_size, tokens)
+        adam_lr = self._compute_adam_lr(batch_size, tokens)
+        epsilon = self._compute_epsilon(batch_size, tokens)
+        beta2 = self._compute_beta2(batch_size)
+        return AdamHConfig(
+            learning_rate=lr,
+            adam_lr=adam_lr,
+            min_lr_ratio=self.min_lr_ratio,
+            warmup=self.warmup,
+            beta1=self.beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+            max_grad_norm=self.max_grad_norm,
+            lr_schedule=self.lr_schedule,
+            decay=self.decay,
+            nesterov=self.nesterov,
         )
 
     def _compute_num_layers(self, hidden_size: int) -> int:
@@ -251,12 +280,16 @@ class CompletedAdamHRecipe:
         flops_budget: float,
         seq_len: int = SEQ_LEN,
     ) -> CandidateConfig | None:
-        hidden_dim = model_config.hidden_dim
         batch_exact = tokens / (STEPS_PER_RUN * seq_len)
         batch_size = _round_to_power_of_two(batch_exact)
 
         # Reduce batch size (extend steps) until all hyperparameters are within valid range
-        while self._any_cap_hit(batch_size, tokens, hidden_dim) and batch_size > self.min_batch_size:
+        while batch_size > self.min_batch_size:
+            lr = self._compute_learning_rate(batch_size, tokens)
+            adam_lr = self._compute_adam_lr(batch_size, tokens)
+            beta2 = self._compute_beta2(batch_size)
+            if lr < self.max_learning_rate and adam_lr < self.max_learning_rate and beta2 > self.min_beta2:
+                break
             batch_size //= 2
 
         if batch_size < self.min_batch_size or batch_size > self.max_batch_size:
@@ -265,25 +298,7 @@ class CompletedAdamHRecipe:
         train_steps = round(tokens / (batch_size * seq_len))
         actual_tokens = batch_size * train_steps * seq_len
 
-        # Compute all scaled hyperparameters
-        lr = self._compute_learning_rate(batch_size, tokens)
-        adam_lr = self._compute_adam_lr(hidden_dim, batch_size, tokens)
-        epsilon = self._compute_epsilon(batch_size, tokens)
-        beta2 = self._compute_beta2(batch_size)
-
-        optimizer_config = AdamHConfig(
-            learning_rate=lr,
-            adam_lr=adam_lr,
-            min_lr_ratio=self.min_lr_ratio,
-            warmup=self.warmup,
-            beta1=self.beta1,
-            beta2=beta2,
-            epsilon=epsilon,
-            max_grad_norm=self.max_grad_norm,
-            lr_schedule=self.lr_schedule,
-            decay=self.decay,
-            nesterov=self.nesterov,
-        )
+        optimizer_config = self.build_optimizer_config(batch_size, tokens)
 
         return CandidateConfig(
             model_config=model_config,
@@ -302,6 +317,8 @@ class CompletedAdamHRecipe:
                 continue
             flops_per_token = model_config.flops_per_token(self.vocab_size, seq_len)
             tokens = budget / (3 * flops_per_token)
+            if tokens / params > self.max_tokens_per_param:
+                continue
             candidate = self._build_candidate_config(model_config, tokens, budget, seq_len)
             if candidate is not None:
                 yield candidate
@@ -325,6 +342,8 @@ def create_isoflop_sweep_steps(
         train_batch_size=1,
         num_train_steps=50_000,
         learning_rate=1.0,
+        z_loss_weight=RECIPE.z_loss_weight,
+        env_vars={"LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=16000"},
     )
 
     train_steps: list[ExecutorStep] = []
@@ -354,6 +373,8 @@ def create_isoflop_sweep_steps(
             "optimizer=completed-adamh",
         )
 
+        tp = _compute_tensor_parallel_size(tpu_type, candidate.batch_size, model_config.hidden_dim)
+
         train_cfg = replace(
             base_train_config,
             train_batch_size=candidate.batch_size,
@@ -361,6 +382,7 @@ def create_isoflop_sweep_steps(
             num_train_steps=candidate.train_steps,
             resources=ResourceConfig.with_tpu(tpu_type),
             optimizer_config=candidate.optimizer_config,
+            tensor_parallel_size=tp,
         )
 
         train_step = default_train(

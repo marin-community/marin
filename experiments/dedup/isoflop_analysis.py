@@ -131,7 +131,6 @@ analysis_step = ExecutorStep(
     config=IsoFlopAnalysisConfig(
         training_runs=[r.as_input_name() for r in training_steps],
         output_path=this_output_path(),
-        recipe=MARIN_2025_RECIPE,
     ),
 )
 
