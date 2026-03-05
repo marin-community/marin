@@ -608,12 +608,13 @@ def _group_items_by_hash(
     Returns:
         Dict mapping shard index to list of chunks for that shard
     """
-    # When sort_fn is provided, sort by composite (group_key, sort_key)
+    # When sort_fn is provided, sort by composite (group_key, sort_key).
+    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
     if sort_fn is not None:
-        _sort = sort_fn
+        captured_sort_fn = sort_fn
 
         def chunk_sort_key(item):
-            return (key_fn(item), _sort(item))
+            return (key_fn(item), captured_sort_fn(item))
 
     else:
         chunk_sort_key = key_fn
@@ -659,12 +660,13 @@ def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = Non
     for chunk_data in shard.iter_chunks():
         chunk_iterators.append(iter(chunk_data))
 
-    # Merge by composite key when sort_fn is provided, but group by key_fn only
+    # Merge by composite key when sort_fn is provided, but group by key_fn only.
+    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
     if sort_fn is not None:
-        _sort = sort_fn
+        captured_sort_fn = sort_fn
 
         def merge_key(item):
-            return (key_fn(item), _sort(item))
+            return (key_fn(item), captured_sort_fn(item))
 
     else:
         merge_key = key_fn
