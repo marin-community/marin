@@ -105,7 +105,6 @@ def dedup_fuzzy_document(
         Yields {bucket: str, id: Any} for each bucket hit.
         """
         pipeline = [
-            dupekit.Transformation.ResolveIds(text_col=text_field, id_col="id", output_col="resolved_id"),
             dupekit.Transformation.CleanText(input_col=text_field, output_col="clean_text"),
             dupekit.Transformation.MinHash(
                 input_col="clean_text",
@@ -117,12 +116,12 @@ def dedup_fuzzy_document(
             dupekit.Transformation.MinHashLSH(
                 input_col="signature", output_col="buckets", num_bands=fuzzy_minhash_num_bands
             ),
-            dupekit.Transformation.SelectColumns(columns=["resolved_id", "buckets"]),
+            dupekit.Transformation.SelectColumns(columns=["id", "buckets"]),
         ]
 
         result_batch = dupekit.transform(batch, pipeline)
 
-        ids = result_batch["resolved_id"]
+        ids = result_batch["id"]
         buckets = result_batch["buckets"]
 
         for doc_id, doc_buckets in zip(ids, buckets, strict=True):
