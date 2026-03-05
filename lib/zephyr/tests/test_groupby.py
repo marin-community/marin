@@ -210,6 +210,37 @@ def test_group_by_with_hash_key_large(zephyr_ctx, large_document_dataset):
     assert len(set(hashes)) == 100
 
 
+def test_group_by_generator_reducer(zephyr_ctx):
+    """Test group_by with a generator reducer that yields multiple items per group."""
+    data = [
+        {"cat": "A", "val": 1},
+        {"cat": "B", "val": 2},
+        {"cat": "A", "val": 3},
+        {"cat": "B", "val": 5},
+    ]
+
+    def explode_reducer(key, items):
+        """Generator reducer: yield each item individually with group metadata."""
+        for item in items:
+            yield {"cat": key, "val": item["val"], "from_group": True}
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=explode_reducer,
+    )
+
+    results = list(zephyr_ctx.execute(ds))
+
+    # Generator reducer should flatten: 4 items total (2 from A, 2 from B)
+    assert len(results) == 4
+
+    results = sorted(results, key=lambda x: (x["cat"], x["val"]))
+    assert results[0] == {"cat": "A", "val": 1, "from_group": True}
+    assert results[1] == {"cat": "A", "val": 3, "from_group": True}
+    assert results[2] == {"cat": "B", "val": 2, "from_group": True}
+    assert results[3] == {"cat": "B", "val": 5, "from_group": True}
+
+
 def test_group_by_with_none_and_filter(zephyr_ctx):
     """Test group_by with None results followed by filter operations."""
     data = [
