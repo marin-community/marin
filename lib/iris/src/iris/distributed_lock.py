@@ -1,11 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generic distributed locking with GCS generation-based atomicity.
+"""Generic distributed locking with lease-based semantics.
 
-Provides a ``DistributedLock`` that works on both GCS and local filesystems.
-On GCS, uses generation-based conditional writes for atomicity.
-On local filesystems, uses ``fcntl`` file locking.
+Provides a ``DistributedLock`` that works on GCS, local filesystems, and any
+fsspec-compatible filesystem as a best-effort fallback.
+
+- **GCS**: generation-based conditional writes for atomicity.
+- **Local**: ``fcntl`` file locking for mutual exclusion.
+- **Other** (any fsspec filesystem): best-effort write-then-read-back.
+  Not fully atomic, but sufficient for advisory locking where races are
+  unlikely and the worst case is duplicate work.
 
 The lock is lease-based: holders must periodically refresh the lease,
 and stale leases (older than ``HEARTBEAT_TIMEOUT``) can be taken over
@@ -18,6 +23,8 @@ import os
 import threading
 import time
 from dataclasses import asdict, dataclass
+
+import fsspec
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +48,24 @@ def default_holder_id() -> str:
     return f"{os.uname()[1]}-{threading.get_ident()}"
 
 
+def _is_local_path(path: str) -> bool:
+    return not path.startswith("gs://") and "://" not in path
+
+
+def _is_gcs_path(path: str) -> bool:
+    return path.startswith("gs://")
+
+
 class DistributedLock:
     """Lease-based distributed lock backed by a single lock file.
 
     On GCS (paths starting with ``gs://``), uses generation-based conditional
     writes for atomicity.  On local filesystems, uses ``fcntl`` for mutual
-    exclusion.
+    exclusion.  On any other fsspec filesystem, uses a best-effort
+    write-then-read-back approach.
 
     Args:
-        lock_path: Path to the lock file (``gs://...`` or local path).
+        lock_path: Path to the lock file (``gs://...``, local, or any fsspec URL).
         holder_id: Unique identifier for this lock holder.
     """
 
@@ -57,76 +73,135 @@ class DistributedLock:
         self.lock_path = lock_path
         self.holder_id = holder_id or default_holder_id()
 
-    @property
-    def _is_gcs(self) -> bool:
-        return self.lock_path.startswith("gs://")
+    def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
+        """Read lock file and its generation. Returns (0, None) if doesn't exist."""
+        if _is_gcs_path(self.lock_path):
+            return self._read_gcs()
+        elif _is_local_path(self.lock_path):
+            return self._read_local()
+        else:
+            return self._read_fsspec()
 
-    def _parse_gcs_path(self, path: str) -> tuple[str, str]:
+    def _write_lock(self, lease: Lease, if_generation_match: int) -> None:
+        """Write lock file with generation/concurrency precondition."""
+        if _is_gcs_path(self.lock_path):
+            self._write_gcs(lease, if_generation_match)
+        elif _is_local_path(self.lock_path):
+            self._write_local(lease)
+        else:
+            self._write_fsspec(lease)
+
+    # -- GCS backend ----------------------------------------------------------
+
+    @staticmethod
+    def _parse_gcs_path(path: str) -> tuple[str, str]:
         """Parse gs://bucket/path into (bucket, blob_path)."""
-        path = path[5:]  # Remove gs:// prefix
+        path = path[5:]  # Remove gs://
         bucket, _, blob_path = path.partition("/")
         return (bucket, blob_path)
 
-    def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
-        """Read lock file and its generation. Returns (0, None) if doesn't exist."""
-        if self._is_gcs:
-            from google.cloud import storage
+    def _read_gcs(self) -> tuple[int, Lease | None]:
+        from google.cloud import storage
 
-            client = storage.Client()
-            bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
-            bucket = client.bucket(bucket_name)
-            blob = bucket.get_blob(blob_path)
-            if blob is None:
-                return (0, None)
-            data = json.loads(blob.download_as_string())
-            return (blob.generation, Lease(**data))
-        else:
-            import fcntl
+        client = storage.Client()
+        bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.get_blob(blob_path)
+        if blob is None:
+            return (0, None)
+        data = json.loads(blob.download_as_string())
+        return (blob.generation, Lease(**data))
 
-            try:
-                with open(self.lock_path, "r") as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                    content = f.read()
-                    if not content:
-                        return (0, None)
-                    data = json.loads(content)
-                return (1, Lease(**data))
-            except FileNotFoundError:
-                return (0, None)
+    def _write_gcs(self, lease: Lease, if_generation_match: int) -> None:
+        from google.cloud import storage
 
-    def _write_lock(self, lease: Lease, if_generation_match: int) -> None:
-        """Write lock file with generation precondition.
+        client = storage.Client()
+        bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_path)
+        blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
 
-        On GCS, uses generation-based conditional writes.
-        On local, uses fcntl for mutual exclusion.
-        """
-        data = json.dumps(asdict(lease))
+    def _delete_gcs(self) -> None:
+        from google.cloud import storage
 
-        if self._is_gcs:
-            from google.cloud import storage
+        client = storage.Client()
+        bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_path)
+        blob.delete()
 
-            client = storage.Client()
-            bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(blob_path)
-            blob.upload_from_string(data, if_generation_match=if_generation_match)
-        else:
-            import fcntl
+    # -- Local backend --------------------------------------------------------
 
-            parent = os.path.dirname(self.lock_path)
-            os.makedirs(parent, exist_ok=True)
+    def _read_local(self) -> tuple[int, Lease | None]:
+        import fcntl
 
-            with open(self.lock_path, "a+") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                f.seek(0)
+        try:
+            with open(self.lock_path, "r") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
                 content = f.read()
-                if content:
-                    current = Lease(**json.loads(content))
-                    if not current.is_stale() and current.holder_id != lease.holder_id:
-                        raise FileExistsError(f"Lock held by {current.holder_id}")
-                f.seek(0)
-                f.truncate()
-                f.write(data)
+                if not content:
+                    return (0, None)
+                data = json.loads(content)
+            return (1, Lease(**data))
+        except FileNotFoundError:
+            return (0, None)
+
+    def _write_local(self, lease: Lease) -> None:
+        import fcntl
+
+        parent = os.path.dirname(self.lock_path)
+        os.makedirs(parent, exist_ok=True)
+
+        with open(self.lock_path, "a+") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            f.seek(0)
+            content = f.read()
+            if content:
+                current = Lease(**json.loads(content))
+                if not current.is_stale() and current.holder_id != lease.holder_id:
+                    raise FileExistsError(f"Lock held by {current.holder_id}")
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(asdict(lease)))
+
+    # -- fsspec best-effort backend -------------------------------------------
+
+    def _get_fs(self) -> tuple[fsspec.AbstractFileSystem, str]:
+        """Return (fs, path) for the lock path via fsspec."""
+        return fsspec.core.url_to_fs(self.lock_path)
+
+    def _read_fsspec(self) -> tuple[int, Lease | None]:
+        fs, path = self._get_fs()
+        try:
+            with fs.open(path, "r") as f:
+                content = f.read()
+            if not content:
+                return (0, None)
+            data = json.loads(content)
+            return (1, Lease(**data))
+        except FileNotFoundError:
+            return (0, None)
+
+    def _write_fsspec(self, lease: Lease) -> None:
+        """Best-effort lock: write lease, then read back to check if we won."""
+        fs, path = self._get_fs()
+        data = json.dumps(asdict(lease))
+        parent = path.rsplit("/", 1)[0] if "/" in path else ""
+        if parent:
+            fs.makedirs(parent, exist_ok=True)
+        with fs.open(path, "w") as f:
+            f.write(data)
+        # Read back and check if our write stuck (best-effort race detection)
+        time.sleep(0.1)
+        try:
+            with fs.open(path, "r") as f:
+                readback = json.loads(f.read())
+            if readback.get("holder_id") != lease.holder_id:
+                raise FileExistsError(f"Lock race lost to {readback.get('holder_id')}")
+        except FileNotFoundError as err:
+            raise FileExistsError("Lock file disappeared after write") from err
+
+    # -- public API -----------------------------------------------------------
 
     def try_acquire(self) -> bool:
         """Try to acquire the lock. Returns True if acquired."""
@@ -149,7 +224,7 @@ class DistributedLock:
             logger.debug("[%s] Lost lock race for %s", self.holder_id, self.lock_path)
             return False
         except Exception as e:
-            if self._is_gcs and "PreconditionFailed" in type(e).__name__:
+            if _is_gcs_path(self.lock_path) and "PreconditionFailed" in type(e).__name__:
                 logger.debug("[%s] Lost lock race for %s", self.holder_id, self.lock_path)
                 return False
             raise
@@ -172,13 +247,13 @@ class DistributedLock:
         try:
             _, lock_data = self._read_lock_with_generation()
             if lock_data and lock_data.holder_id == self.holder_id:
-                if self._is_gcs:
-                    from iris.marin_fs import url_to_fs
-
-                    fs = url_to_fs(self.lock_path, use_listings_cache=False)[0]
-                    fs.rm(self.lock_path.replace("gs://", "", 1) if hasattr(fs, "_fs") else self.lock_path)
-                else:
+                if _is_gcs_path(self.lock_path):
+                    self._delete_gcs()
+                elif _is_local_path(self.lock_path):
                     os.remove(self.lock_path)
+                else:
+                    fs, path = self._get_fs()
+                    fs.rm(path)
                 logger.debug("[%s] Released lock %s", self.holder_id, self.lock_path)
         except FileNotFoundError:
             pass

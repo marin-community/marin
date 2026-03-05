@@ -9,14 +9,17 @@ marin regional bucket, automatically copying them to the local zone on first
 access.
 
 Semantics:
-  - **Reads**: If the file exists in the local zone bucket, serve it directly.
+  - **Reads**: If the file exists in the local prefix, serve it directly.
     Otherwise, scan all other ``marin-*`` data buckets.  When found, acquire a
-    distributed lock on the destination path, copy the file to the local zone,
+    distributed lock on the destination path, copy the file to the local prefix,
     and release the lock.
-  - **Writes**: Go directly to the local zone bucket.
+  - **Writes**: Go directly to the local prefix.
   - **Copy budget**: The filesystem tracks cumulative bytes copied across
     regions.  If the total exceeds ``MIRROR_COPY_LIMIT_BYTES`` (default 10 GB),
     ``MirrorCopyLimitExceeded`` is raised.
+
+The local prefix is determined by ``marin_prefix()`` — this works whether we're
+on GCS (``gs://marin-us-east5``), or running locally (``/tmp/marin``).
 
 Usage::
 
@@ -28,7 +31,6 @@ Usage::
 """
 
 import logging
-import os
 from typing import Any
 
 import fsspec
@@ -36,9 +38,7 @@ import fsspec
 from iris.distributed_lock import DistributedLock, default_holder_id
 from iris.marin_fs import (
     REGION_TO_DATA_BUCKET,
-    _REGION_TO_MARIN_BUCKET_OVERRIDES,
     marin_prefix,
-    marin_region,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,26 +50,20 @@ class MirrorCopyLimitExceeded(Exception):
     """Raised when cumulative cross-region copies exceed the budget."""
 
 
-def _local_bucket() -> str | None:
-    """Return the local marin data bucket name, or None if not on GCS."""
-    prefix = marin_prefix()
-    if not prefix.startswith("gs://"):
-        return None
-    # gs://marin-us-central2 → marin-us-central2
-    return prefix.split("/")[2]
-
-
-def _all_data_buckets() -> list[str]:
-    """Return all known marin data bucket names."""
-    return list(REGION_TO_DATA_BUCKET.values())
+def _all_data_bucket_prefixes() -> list[str]:
+    """Return gs:// prefixes for all known marin data buckets."""
+    return [f"gs://{bucket}" for bucket in REGION_TO_DATA_BUCKET.values()]
 
 
 class MirrorFileSystem(fsspec.AbstractFileSystem):
     """Fsspec filesystem that mirrors files across marin regional buckets.
 
-    Reads check the local bucket first, then scan other regions.  Files found
-    in a remote region are copied to the local bucket under a distributed lock.
-    Writes always target the local bucket.
+    Reads check the local prefix first, then scan other regions.  Files found
+    in a remote region are copied to the local prefix under a distributed lock.
+    Writes always target the local prefix.
+
+    The local prefix comes from ``marin_prefix()`` — it may be a GCS bucket
+    or a local directory like ``/tmp/marin``.
     """
 
     protocol = "mirror"
@@ -81,54 +75,82 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
-        self._local_bucket = _local_bucket()
-        self._all_buckets = _all_data_buckets()
+        self._local_prefix = marin_prefix()
+        self._remote_prefixes = [p for p in _all_data_bucket_prefixes() if not self._local_prefix.startswith(p)]
         self._copy_limit_bytes = copy_limit_bytes
         self._bytes_copied: int = 0
         self._holder_id = default_holder_id()
-        # Underlying GCS filesystem for actual I/O
-        self._gcs: fsspec.AbstractFileSystem = fsspec.filesystem("gcs")
 
-    # -- path helpers ---------------------------------------------------------
+    # -- underlying fs helpers ------------------------------------------------
 
-    def _local_gcs_path(self, path: str) -> str:
-        """Convert a mirror path to a full GCS path in the local bucket."""
-        return f"{self._local_bucket}/{path}"
+    def _get_fs_and_path(self, url: str) -> tuple[Any, str]:
+        """Return (fsspec_fs, path) for a full URL or local path."""
+        return fsspec.core.url_to_fs(url)
 
-    def _remote_gcs_path(self, bucket: str, path: str) -> str:
-        """Convert a mirror path to a full GCS path in a given bucket."""
-        return f"{bucket}/{path}"
+    def _local_url(self, path: str) -> str:
+        """Convert a mirror-relative path to a full URL under the local prefix."""
+        return f"{self._local_prefix}/{path}"
+
+    def _remote_url(self, prefix: str, path: str) -> str:
+        """Convert a mirror-relative path to a full URL under a remote prefix."""
+        return f"{prefix}/{path}"
 
     def _lock_path_for(self, path: str) -> str:
         """Return the lock file path for a mirror copy operation."""
-        return f"gs://{self._local_bucket}/.mirror_locks/{path}.lock"
+        return f"{self._local_prefix}/.mirror_locks/{path}.lock"
+
+    def _fs_exists(self, url: str) -> bool:
+        """Check if a file exists at a full URL."""
+        try:
+            fs, fspath = self._get_fs_and_path(url)
+            return fs.exists(fspath)
+        except Exception:
+            return False
+
+    def _fs_size(self, url: str) -> int:
+        """Return file size at a full URL, or 0 on error."""
+        try:
+            fs, fspath = self._get_fs_and_path(url)
+            return fs.size(fspath) or 0
+        except Exception:
+            return 0
+
+    def _fs_copy(self, src_url: str, dst_url: str) -> None:
+        """Copy a file from src_url to dst_url, potentially cross-filesystem."""
+        src_fs, src_path = self._get_fs_and_path(src_url)
+        dst_fs, dst_path = self._get_fs_and_path(dst_url)
+
+        # Ensure parent directory exists
+        parent = dst_path.rsplit("/", 1)[0] if "/" in dst_path else ""
+        if parent:
+            try:
+                dst_fs.makedirs(parent, exist_ok=True)
+            except Exception:
+                pass
+
+        if type(src_fs) is type(dst_fs):
+            src_fs.copy(src_path, dst_path)
+        else:
+            data = src_fs.cat_file(src_path)
+            with dst_fs.open(dst_path, "wb") as f:
+                f.write(data)
 
     # -- cross-region copy ----------------------------------------------------
 
-    def _find_in_remote_buckets(self, path: str) -> str | None:
-        """Scan non-local marin buckets for *path*. Returns bucket name or None."""
-        for bucket in self._all_buckets:
-            if bucket == self._local_bucket:
-                continue
-            remote_path = self._remote_gcs_path(bucket, path)
-            try:
-                if self._gcs.exists(remote_path):
-                    return bucket
-            except Exception:
-                logger.debug("Error checking %s in bucket %s", path, bucket, exc_info=True)
+    def _find_in_remote_prefixes(self, path: str) -> str | None:
+        """Scan non-local marin prefixes for *path*. Returns the prefix or None."""
+        for prefix in self._remote_prefixes:
+            remote_url = self._remote_url(prefix, path)
+            if self._fs_exists(remote_url):
+                return prefix
         return None
 
-    def _copy_to_local(self, source_bucket: str, path: str) -> None:
-        """Copy a file from *source_bucket* to the local bucket under a lock."""
-        local_path = self._local_gcs_path(path)
-        remote_path = self._remote_gcs_path(source_bucket, path)
+    def _copy_to_local(self, source_prefix: str, path: str) -> None:
+        """Copy a file from *source_prefix* to the local prefix under a lock."""
+        local_url = self._local_url(path)
+        remote_url = self._remote_url(source_prefix, path)
 
-        # Check size and enforce copy budget
-        try:
-            size = self._gcs.size(remote_path)
-        except Exception:
-            size = 0
-
+        size = self._fs_size(remote_url)
         if size and (self._bytes_copied + size) > self._copy_limit_bytes:
             raise MirrorCopyLimitExceeded(
                 f"Copying {path} ({size / (1024**3):.2f} GB) would exceed the "
@@ -140,89 +162,85 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         lock = DistributedLock(self._lock_path_for(path), self._holder_id)
 
         if not lock.try_acquire():
-            # Another process is copying this file; wait for it.
             import time
 
             for _ in range(60):
                 time.sleep(2)
-                if self._gcs.exists(local_path):
+                if self._fs_exists(local_url):
                     return
                 if not lock.has_active_holder():
                     break
-            # Try once more after waiting
-            if self._gcs.exists(local_path):
+            if self._fs_exists(local_url):
                 return
-            # Fall through and attempt copy ourselves
             if not lock.try_acquire():
                 raise RuntimeError(f"Could not acquire mirror lock for {path} after waiting")
 
         try:
-            # Double-check after acquiring lock (another holder may have finished)
-            if self._gcs.exists(local_path):
+            # Double-check after acquiring lock
+            if self._fs_exists(local_url):
                 return
 
-            logger.info("Mirror: copying gs://%s → gs://%s", remote_path, local_path)
-            # Ensure parent directory exists
-            parent = os.path.dirname(local_path)
-            try:
-                self._gcs.mkdirs(parent, exist_ok=True)
-            except Exception:
-                pass  # mkdirs on GCS is often a no-op
-
-            self._gcs.copy(remote_path, local_path)
-            self._bytes_copied += size or 0
+            logger.info("Mirror: copying %s → %s", remote_url, local_url)
+            self._fs_copy(remote_url, local_url)
+            self._bytes_copied += size
         finally:
             lock.release()
 
     def _resolve_path(self, path: str) -> str:
-        """Resolve a mirror path to a concrete GCS path, copying if needed.
+        """Resolve a mirror path to a concrete URL, copying if needed.
 
-        Returns the GCS path (without gs:// prefix) suitable for self._gcs.
+        Returns a full URL (e.g. ``gs://marin-us-east5/...`` or ``/tmp/marin/...``).
         """
-        local_path = self._local_gcs_path(path)
-        if self._gcs.exists(local_path):
-            return local_path
+        local_url = self._local_url(path)
+        if self._fs_exists(local_url):
+            return local_url
 
-        source_bucket = self._find_in_remote_buckets(path)
-        if source_bucket is None:
+        source_prefix = self._find_in_remote_prefixes(path)
+        if source_prefix is None:
             raise FileNotFoundError(f"mirror://{path} not found in any marin bucket")
 
-        self._copy_to_local(source_bucket, path)
-        return local_path
+        self._copy_to_local(source_prefix, path)
+        return local_url
 
     # -- fsspec interface: info/ls/exists -------------------------------------
 
     def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
         path = self._strip_protocol(path)
         resolved = self._resolve_path(path)
-        info = self._gcs.info(resolved, **kwargs)
+        fs, fspath = self._get_fs_and_path(resolved)
+        info = fs.info(fspath, **kwargs)
         info["name"] = path
         return info
 
     def ls(self, path: str, detail: bool = True, **kwargs: Any) -> list[Any]:
         path = self._strip_protocol(path)
-        local_path = self._local_gcs_path(path)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
         try:
-            results = self._gcs.ls(local_path, detail=detail, **kwargs)
+            results = fs.ls(fspath, detail=detail, **kwargs)
         except FileNotFoundError:
             results = []
 
-        bucket = self._local_bucket or ""
-        prefix = bucket + "/"
+        # Strip the local prefix from result paths so they look like mirror paths
+        prefix = self._local_prefix.rstrip("/") + "/"
+        # For GCS, fsspec strips the scheme, so the prefix in results won't have gs://
+        stripped_prefix = prefix.replace("gs://", "").replace("file://", "")
+
         if detail:
             for entry in results:
-                if entry["name"].startswith(prefix):
-                    entry["name"] = entry["name"][len(prefix) :]
+                name = entry["name"]
+                if name.startswith(stripped_prefix):
+                    entry["name"] = name[len(stripped_prefix) :]
             return results
         else:
-            return [r[len(prefix) :] if r.startswith(prefix) else r for r in results]
+            return [r[len(stripped_prefix) :] if r.startswith(stripped_prefix) else r for r in results]
 
     def exists(self, path: str, **kwargs: Any) -> bool:
         path = self._strip_protocol(path)
-        local_path = self._local_gcs_path(path)
-        if self._gcs.exists(local_path, **kwargs):
+        local_url = self._local_url(path)
+        if self._fs_exists(local_url):
             return True
-        return self._find_in_remote_buckets(path) is not None
+        return self._find_in_remote_prefixes(path) is not None
 
     # -- fsspec interface: read operations ------------------------------------
 
@@ -230,49 +248,60 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         path = self._strip_protocol(path)
         if "r" in mode:
             resolved = self._resolve_path(path)
-            return self._gcs.open(resolved, mode, **kwargs)
+            fs, fspath = self._get_fs_and_path(resolved)
+            return fs.open(fspath, mode, **kwargs)
         else:
-            local_path = self._local_gcs_path(path)
-            return self._gcs.open(local_path, mode, **kwargs)
+            local_url = self._local_url(path)
+            fs, fspath = self._get_fs_and_path(local_url)
+            parent = fspath.rsplit("/", 1)[0] if "/" in fspath else ""
+            if parent:
+                fs.makedirs(parent, exist_ok=True)
+            return fs.open(fspath, mode, **kwargs)
 
     def cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any) -> bytes:
         path = self._strip_protocol(path)
         resolved = self._resolve_path(path)
-        return self._gcs.cat_file(resolved, start=start, end=end, **kwargs)
+        fs, fspath = self._get_fs_and_path(resolved)
+        return fs.cat_file(fspath, start=start, end=end, **kwargs)
 
     # -- fsspec interface: write operations ------------------------------------
 
     def _mkdir(self, path: str, create_parents: bool = True, **kwargs: Any) -> None:
         path = self._strip_protocol(path)
-        local_path = self._local_gcs_path(path)
-        self._gcs.mkdir(local_path, create_parents=create_parents, **kwargs)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.mkdir(fspath, create_parents=create_parents, **kwargs)
 
     def makedirs(self, path: str, exist_ok: bool = False) -> None:
         path = self._strip_protocol(path)
-        local_path = self._local_gcs_path(path)
-        self._gcs.makedirs(local_path, exist_ok=exist_ok)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.makedirs(fspath, exist_ok=exist_ok)
 
     def put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
         rpath = self._strip_protocol(rpath)
-        local_path = self._local_gcs_path(rpath)
-        self._gcs.put_file(lpath, local_path, **kwargs)
+        local_url = self._local_url(rpath)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.put_file(lpath, fspath, **kwargs)
 
     def rm_file(self, path: str) -> None:
         path = self._strip_protocol(path)
-        local_path = self._local_gcs_path(path)
-        self._gcs.rm_file(local_path)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.rm_file(fspath)
 
     def rm(self, path: str, recursive: bool = False, **kwargs: Any) -> None:
         path = self._strip_protocol(path)
-        local_path = self._local_gcs_path(path)
-        self._gcs.rm(local_path, recursive=recursive, **kwargs)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.rm(fspath, recursive=recursive, **kwargs)
 
     def copy(self, path1: str, path2: str, **kwargs: Any) -> None:
         path1 = self._strip_protocol(path1)
         path2 = self._strip_protocol(path2)
-        src = self._resolve_path(path1)
-        dst = self._local_gcs_path(path2)
-        self._gcs.copy(src, dst, **kwargs)
+        resolved_src = self._resolve_path(path1)
+        local_dst = self._local_url(path2)
+        self._fs_copy(resolved_src, local_dst)
 
     # -- copy budget ----------------------------------------------------------
 

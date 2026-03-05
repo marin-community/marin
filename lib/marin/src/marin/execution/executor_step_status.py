@@ -11,10 +11,14 @@ The LOCK file contains JSON with {holder_id, timestamp} and is refreshed periodi
 On GCS, we use generation-based conditional writes for atomicity.
 """
 
+import functools
 import json
 import logging
 import os
 import time
+from collections.abc import Callable
+from threading import Event, Thread
+from typing import TypeVar
 
 from iris.distributed_lock import (
     HEARTBEAT_INTERVAL,
@@ -25,6 +29,8 @@ from iris.distributed_lock import (
 from iris.marin_fs import url_to_fs
 
 logger = logging.getLogger("ray")
+
+T = TypeVar("T")
 
 # Re-export constants so existing callers don't break.
 HEARTBEAT_INTERVAL = HEARTBEAT_INTERVAL
@@ -189,3 +195,54 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
 
         logger.info(f"[{wid}] Lost lock race for {step_name}, retrying...")
         time.sleep(1)
+
+
+# ---------------------------------------------------------------------------
+# Step-level distributed lock decorator
+# ---------------------------------------------------------------------------
+
+
+class StepAlreadyDone(Exception):
+    """Raised by ``distributed_lock`` when the step has already succeeded."""
+
+
+def distributed_lock(fn: Callable[[str], T], *, force_run_failed: bool = True) -> Callable[[str], T]:
+    """Decorator: wrap *fn* with lease-based distributed locking.
+
+    The lock is keyed on the *output_path* argument passed to *fn*.  If
+    another worker already completed the step (``STATUS_SUCCESS``),
+    ``StepAlreadyDone`` is raised so that the caller (typically
+    ``disk_cached``) can load the cached artifact instead.
+
+    While *fn* is executing a heartbeat thread refreshes the lock so that
+    other workers see it as active.
+
+    This decorator does **not** write status or save artifacts — that is the
+    responsibility of the caller.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(output_path: str) -> T:
+        status_file = StatusFile(output_path, worker_id())
+        step_label = output_path.rsplit("/", 1)[-1]
+
+        if not should_run(status_file, step_label, force_run_failed=force_run_failed):
+            raise StepAlreadyDone(output_path)
+
+        stop_event = Event()
+
+        def _heartbeat():
+            while not stop_event.wait(HEARTBEAT_INTERVAL):
+                status_file.refresh_lock()
+
+        heartbeat_thread = Thread(target=_heartbeat, daemon=True)
+        heartbeat_thread.start()
+
+        try:
+            return fn(output_path)
+        finally:
+            stop_event.set()
+            heartbeat_thread.join(timeout=5)
+            status_file.release_lock()
+
+    return wrapper
