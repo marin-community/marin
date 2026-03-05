@@ -7,7 +7,8 @@ import os
 import sys
 
 import draccus
-from fray.v1.cluster import ResourceConfig, create_cluster, set_current_cluster
+from fray import ResourceConfig, set_current_client
+from fray.v2.ray_backend.backend import RayClient
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
@@ -272,17 +273,16 @@ def main(config: ExecutorMainConfig):
             num_cpus=os.cpu_count(),
             _memory=1024 * 1024 * 1024 * 1024,  # 1TB
         )
-        set_current_cluster(create_cluster("ray"))
-
-        # path to synthetic test data
-        synth_data: str = "./tests/quickstart-data"
-        # delete all previous runs
-        if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
-            os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
-        steps = create_steps(experiment_prefix, synth_data)
-        config = dataclasses.replace(config)
-        executor_main(config, steps=steps)
-        logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
+        with set_current_client(RayClient()):
+            # path to synthetic test data
+            synth_data: str = "./tests/quickstart-data"
+            # delete all previous runs
+            if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
+                os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
+            steps = create_steps(experiment_prefix, synth_data)
+            config = dataclasses.replace(config)
+            executor_main(config, steps=steps)
+            logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
         raise e
