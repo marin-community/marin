@@ -19,6 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 from haliax import NamedArray
 from haliax.jax_utils import is_jax_array_like
+from haliax.partitioning import ResourceMapping
 
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
@@ -33,8 +34,6 @@ from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
-from levanter.utils.partitioning import named_jit
-from levanter.utils.types import ResourceMapping
 
 logger = logging.getLogger(__name__)
 
@@ -816,7 +815,9 @@ class InferenceEngine:
         assert config.max_pages is not None
 
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)
-        cache = named_jit(model.initial_cache, axis_resources=axis_resources)(table.spec(), dtype=config.compute_dtype)
+        cache = hax.named_jit(model.initial_cache, axis_resources=axis_resources)(
+            table.spec(), dtype=config.compute_dtype
+        )
         decode_state = DecodeState.init(
             table,
             max_stop_seqs=config.max_stop_seqs,
