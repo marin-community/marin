@@ -69,3 +69,14 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      # `cluster stop` only deletes Pods; NodePools survive and rely on the
+      # CW autoscaler to scale down. Delete them explicitly to avoid lingering
+      # H100 costs. We attempt both even if one fails — cost protection matters
+      # more than clean state.
+      - name: Tear down CoreWeave cluster
+        if: always()
+        run: |
+          .venv/bin/iris -v --config=lib/iris/examples/coreweave.yaml cluster stop || true
+          kubectl --kubeconfig ~/.kube/coreweave-iris \
+            delete nodepool -l iris-iris-managed=true
