@@ -1408,7 +1408,7 @@ def test_log_store_concurrent_append_and_read():
     from iris.cluster.controller.state import ControllerLogStore
     from iris.rpc import logging_pb2
 
-    store = ControllerLogStore(max_entries_per_attempt=5000)
+    store = ControllerLogStore()
     task_id = JobName.from_wire("/job/concurrent/task/0")
     errors: list[Exception] = []
 

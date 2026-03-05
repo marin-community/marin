@@ -16,14 +16,18 @@ state and return results indicating what the caller should do.
 """
 
 import bisect
+import json
 import logging
 import re
 from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from threading import RLock
 from typing import NamedTuple
+
+from google.protobuf import json_format
 
 from iris.cluster.controller.events import (
     Event,
@@ -46,7 +50,7 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -915,33 +919,68 @@ class HeartbeatSnapshot:
 # Controller Log Store
 # =============================================================================
 
-# Maximum log entries kept per task attempt in memory
-_MAX_LOG_ENTRIES_PER_ATTEMPT = 20_000
-
 
 class ControllerLogStore:
-    """In-memory log store for task attempts.
+    """Disk-backed log store for task attempts.
 
-    Accumulates log entries forwarded from workers via heartbeat and serves
-    them for GetTaskLogs requests. Each attempt gets a bounded deque.
+    Appends log entries to per-attempt JSONL files on disk so logs survive
+    controller restarts.  Reads scan the JSONL file with optional filters.
+
+    Directory layout:
+        {log_dir}/{job_wire}/{task_index}/{attempt_id}/logs.jsonl
+
+    When log_dir is None, falls back to in-memory-only mode (for tests).
 
     Thread-safe: heartbeat writers (complete_heartbeat) and RPC readers
     (get_task_logs) may run concurrently.
     """
 
-    def __init__(self, max_entries_per_attempt: int = _MAX_LOG_ENTRIES_PER_ATTEMPT):
-        self._max_entries = max_entries_per_attempt
+    def __init__(self, log_dir: Path | None = None):
+        self._log_dir = log_dir
         self._lock = RLock()
-        self._logs: dict[tuple[JobName, int], deque[cluster_pb2.LogEntry]] = {}
+        # Track which attempts have logs (avoids stat calls on every get_logs)
+        self._known_attempts: set[tuple[JobName, int]] = set()
+        # In-memory fallback when no log_dir
+        self._mem: dict[tuple[JobName, int], list[logging_pb2.LogEntry]] = {}
+
+    def _attempt_path(self, task_id: JobName, attempt_id: int) -> Path:
+        assert self._log_dir is not None
+        task_wire = task_id.to_wire().lstrip("/")
+        return self._log_dir / task_wire / str(attempt_id) / "logs.jsonl"
+
+    @staticmethod
+    def _entry_to_json(entry: logging_pb2.LogEntry) -> str:
+        return json.dumps(
+            json_format.MessageToDict(entry, preserving_proto_field_name=True),
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _json_to_entry(line: str) -> logging_pb2.LogEntry:
+        entry = logging_pb2.LogEntry()
+        json_format.Parse(line, entry)
+        return entry
 
     def append(self, task_id: JobName, attempt_id: int, entries: list) -> None:
+        if not entries:
+            return
+        key = (task_id, attempt_id)
         with self._lock:
-            key = (task_id, attempt_id)
-            buf = self._logs.get(key)
-            if buf is None:
-                buf = deque(maxlen=self._max_entries)
-                self._logs[key] = buf
-            buf.extend(entries)
+            self._known_attempts.add(key)
+
+        if self._log_dir is not None:
+            path = self._attempt_path(task_id, attempt_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lines = "".join(self._entry_to_json(e) + "\n" for e in entries)
+            with open(path, "a") as f:
+                f.write(lines)
+        else:
+            with self._lock:
+                buf = self._mem.get(key)
+                if buf is None:
+                    buf = []
+                    self._mem[key] = buf
+                buf.extend(entries)
 
     def get_logs(
         self,
@@ -952,12 +991,36 @@ class ControllerLogStore:
         regex_filter: re.Pattern[str] | None = None,
         max_lines: int = 0,
     ) -> list:
+        key = (task_id, attempt_id)
+
+        if self._log_dir is not None:
+            path = self._attempt_path(task_id, attempt_id)
+            if not path.exists():
+                return []
+            result: list[logging_pb2.LogEntry] = []
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = self._json_to_entry(line)
+                    except Exception:
+                        continue
+                    if since_ms > 0 and entry.timestamp.epoch_ms <= since_ms:
+                        continue
+                    if regex_filter and not regex_filter.search(entry.data):
+                        continue
+                    result.append(entry)
+                    if max_lines > 0 and len(result) >= max_lines:
+                        break
+            return result
+
+        # In-memory fallback
         with self._lock:
-            key = (task_id, attempt_id)
-            buf = self._logs.get(key)
+            buf = self._mem.get(key)
             if not buf:
                 return []
-            # Snapshot under lock to avoid RuntimeError from concurrent mutation
             snapshot = list(buf)
 
         result = []
@@ -972,14 +1035,22 @@ class ControllerLogStore:
         return result
 
     def has_logs(self, task_id: JobName, attempt_id: int) -> bool:
-        with self._lock:
-            key = (task_id, attempt_id)
-            buf = self._logs.get(key)
-            return buf is not None and len(buf) > 0
+        key = (task_id, attempt_id)
+        if key in self._known_attempts:
+            return True
+        if self._log_dir is not None:
+            return self._attempt_path(task_id, attempt_id).exists()
+        return False
 
     def clear_attempt(self, task_id: JobName, attempt_id: int) -> None:
+        key = (task_id, attempt_id)
         with self._lock:
-            self._logs.pop((task_id, attempt_id), None)
+            self._known_attempts.discard(key)
+            self._mem.pop(key, None)
+        if self._log_dir is not None:
+            path = self._attempt_path(task_id, attempt_id)
+            if path.exists():
+                path.unlink()
 
 
 # =============================================================================
@@ -1011,7 +1082,11 @@ class ControllerState:
        which creates the attempt and commits resources.
     """
 
-    def __init__(self, heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD):
+    def __init__(
+        self,
+        heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
+        log_dir: Path | None = None,
+    ):
         self._lock = RLock()
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
         self._jobs: dict[JobName, ControllerJob] = {}
@@ -1024,7 +1099,7 @@ class ControllerState:
         self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
         self._pending_dispatch: dict[WorkerId, PendingDispatch] = {}  # Buffered heartbeat dispatches
-        self._log_store = ControllerLogStore()
+        self._log_store = ControllerLogStore(log_dir=log_dir)
 
     @property
     def log_store(self) -> ControllerLogStore:
