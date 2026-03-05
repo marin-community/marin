@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dataclasses import dataclass
 
+import pytest
 from fray.v2.types import ResourceConfig
 
 from marin.execution.artifact import Artifact, PathMetadata
@@ -330,6 +331,29 @@ def test_runner_max_concurrent(tmp_path: Path):
 
     train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
+
+
+def test_runner_preserves_underlying_step_exception(tmp_path: Path):
+    """The top-level runner error should retain the original failing exception as a cause."""
+
+    def failing_step(_output_path: str) -> None:
+        raise ValueError("sentinel step failure")
+
+    step = StepSpec(
+        name="failing_step",
+        override_output_path=(tmp_path / "failing_step").as_posix(),
+        fn=failing_step,
+    )
+
+    runner = StepRunner()
+    with pytest.raises(RuntimeError, match=r"1 step\(s\) failed") as exc_info:
+        runner.run([step])
+
+    step_failure = exc_info.value.__cause__
+    assert isinstance(step_failure, RuntimeError)
+    assert "Step failed: failing_step" in str(step_failure)
+    assert isinstance(step_failure.__cause__, ValueError)
+    assert "sentinel step failure" in str(step_failure.__cause__)
 
 
 # ---------------------------------------------------------------------------
