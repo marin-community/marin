@@ -16,6 +16,8 @@ jobs:
     concurrency:
       group: canary-ferry-cw
       cancel-in-progress: true
+    env:
+      RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Checkout code
@@ -55,12 +57,13 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
       - name: Submit canary ferry
+        shell: bash -l {0}
         run: |
           .venv/bin/iris --config=lib/iris/examples/coreweave.yaml \
             job run \
             --memory=16G --disk=16G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-us-west-04a/marin/ \
-            -e CANARY_DATE "$(date -u +%Y-%m-%d)" \
+            -e RUN_ID "$RUN_ID" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
             -- python -m experiments.ferries.canary_ferry_cw
@@ -69,6 +72,39 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      # Keep these profiling post-run steps in sync with
+      # `.github/workflows/marin-canary-ferry.yaml`.
+      - name: Summarize GPU canary profile
+        shell: bash -l {0}
+        run: |
+          .venv/bin/python -m marin.profiling.cli summarize \
+            --run-target "marin-community/marin/$RUN_ID" \
+            --output profile_summary.json
+          .venv/bin/python -m marin.profiling.cli report \
+            --summary profile_summary.json \
+            --output profile_report.md
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+      - name: Add profile digest to step summary
+        shell: bash -l {0}
+        run: |
+          .venv/bin/python -m marin.profiling.cli digest \
+            --summary profile_summary.json \
+            --title "CoreWeave GPU Canary Profile Digest" \
+            --top-k 5 \
+            --output profile_digest.md
+          cat profile_digest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload GPU canary profile artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-canary-profile-${{ env.RUN_ID }}
+          path: |
+            profile_summary.json
+            profile_report.md
+            profile_digest.md
 
       # `cluster stop` only deletes Pods; NodePools survive and rely on the
       # CW autoscaler to scale down. Delete them explicitly to avoid lingering

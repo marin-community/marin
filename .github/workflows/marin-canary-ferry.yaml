@@ -12,6 +12,8 @@ jobs:
     concurrency:
       group: canary-ferry
       cancel-in-progress: true
+    env:
+      RUN_ID: canary-tpu-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Checkout code
@@ -53,6 +55,7 @@ jobs:
         run: |
           .venv/bin/python lib/marin/src/marin/run/ray_run.py \
             --cluster us-central1 \
+            -e RUN_ID "$RUN_ID" \
             -- python experiments/ferries/canary_ferry.py
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
@@ -61,3 +64,36 @@ jobs:
       - name: Validate canary metrics
         shell: bash -l {0}
         run: .venv/bin/python scripts/canary/validate_canary_metrics.py
+
+      # Keep these profiling post-run steps in sync with
+      # `.github/workflows/marin-canary-ferry-cw.yaml`.
+      - name: Summarize TPU canary profile
+        shell: bash -l {0}
+        run: |
+          .venv/bin/python -m marin.profiling.cli summarize \
+            --run-target "marin-community/marin/$RUN_ID" \
+            --output profile_summary.json
+          .venv/bin/python -m marin.profiling.cli report \
+            --summary profile_summary.json \
+            --output profile_report.md
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+      - name: Add profile digest to step summary
+        shell: bash -l {0}
+        run: |
+          .venv/bin/python -m marin.profiling.cli digest \
+            --summary profile_summary.json \
+            --title "TPU Canary Profile Digest" \
+            --top-k 5 \
+            --output profile_digest.md
+          cat profile_digest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload TPU canary profile artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tpu-canary-profile-${{ env.RUN_ID }}
+          path: |
+            profile_summary.json
+            profile_report.md
+            profile_digest.md
