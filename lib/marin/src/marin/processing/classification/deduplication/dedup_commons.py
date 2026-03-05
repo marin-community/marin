@@ -119,7 +119,6 @@ class DupCounters:
     total: int = 0
     dups: int = 0
     unique: int = 0
-    dup_clusters: int = 0
 
     def __add__(self, other: "DupCounters") -> "DupCounters":
         assert isinstance(other, DupCounters)
@@ -130,7 +129,6 @@ class DupCounters:
             total=self.total + other.total,
             dups=self.dups + other.dups,
             unique=self.unique + other.unique,
-            dup_clusters=self.dup_clusters + other.dup_clusters,
         )
 
     def __str__(self) -> str:
@@ -138,8 +136,7 @@ class DupCounters:
             return f"{self.level} total: 0"
         return (
             f"{self.method.capitalize()} {self.level.lower()} total: {self.total:,}, "
-            f"dups: {self.dups:,} ({self.dups / self.total:.2%}), unique: {self.unique:,}, "
-            f"dup_clusters: {self.dup_clusters:,}"
+            f"dups: {self.dups:,} ({self.dups / self.total:.2%}), unique: {self.unique:,}"
         )
 
     def to_dict(self):
@@ -147,7 +144,6 @@ class DupCounters:
             f"dedup/{self.method}/{self.level}/total": self.total,
             f"dedup/{self.method}/{self.level}/dups": self.dups,
             f"dedup/{self.method}/{self.level}/unique": self.unique,
-            f"dedup/{self.method}/{self.level}/dup_clusters": self.dup_clusters,
         }
 
 

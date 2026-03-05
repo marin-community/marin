@@ -44,7 +44,6 @@ def _compute_fuzzy_dedup_stats(shards: list[str] | Sequence[str], method: str, l
                     total=(total := sum(1 for _ in items)),
                     dups=total if total > 1 else 0,
                     unique=1,
-                    dup_clusters=int(total > 1),
                 ),
             )
             .reduce(partial(sum, start=DupCounters(method=method, level=level))),
