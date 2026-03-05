@@ -570,6 +570,7 @@ class Migration:
         self.step_10_merge_agents_md()
         self.step_11_cleanup_empty_lib_dirs()
         self.step_12_scan_remaining_refs()
+        self.step_13_run_precommit()
         log.info("Migration %s.", "complete" if not self.dry_run else "dry-run complete")
 
     # -- helpers -----------------------------------------------------------
@@ -1295,6 +1296,21 @@ class Migration:
             log.info("No remaining lib/ references found.")
         else:
             log.info("Found %d file(s) with remaining lib/ references. Review manually.", hit_count)
+
+    def step_13_run_precommit(self) -> None:
+        """Run pre-commit with --fix to auto-format all files after the migration."""
+        log.info("=== Step 13: Run pre-commit (auto-fix formatting) ===")
+        if self.dry_run:
+            log.info("[dry-run] Would run: ./infra/pre-commit.py --all-files --fix")
+            return
+        result = subprocess.run(
+            ["python", str(self.repo_root / "infra" / "pre-commit.py"), "--all-files", "--fix"],
+            cwd=self.repo_root,
+        )
+        if result.returncode != 0:
+            log.warning("Pre-commit returned non-zero exit code %d. Review output above.", result.returncode)
+        else:
+            log.info("Pre-commit passed.")
 
 
 # ---------------------------------------------------------------------------
