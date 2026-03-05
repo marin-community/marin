@@ -50,6 +50,9 @@ def test_region_from_metadata_returns_none_on_failure():
     "prefix, expected",
     [
         ("gs://marin-us-east1/scratch", "us-east1"),
+        ("gs://marin-us-central2/data", "us-central2"),
+        # Abbreviated bucket name normalizes to canonical GCP region.
+        ("gs://marin-eu-west4/tokenized", "europe-west4"),
         ("gs://other-bucket/foo", None),
         ("", None),
     ],
@@ -90,6 +93,15 @@ def test_marin_region_from_env_prefix():
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-west4/scratch"}),
     ):
         assert marin_region() == "us-west4"
+
+
+def test_marin_region_normalizes_eu_west4():
+    """Regression test: marin-eu-west4 bucket must resolve to europe-west4."""
+    with (
+        patch("iris.marin_fs.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-eu-west4/tokenized"}),
+    ):
+        assert marin_region() == "europe-west4"
 
 
 def test_marin_region_none_when_unresolvable():
@@ -208,6 +220,7 @@ def test_check_gcs_paths_same_region_allows_unknown_region_for_local_runs():
     [
         ("us-central1", "us-central1", True),
         ("US-Central1", "us-central1", True),
+        ("europe-west4", "europe-west4", True),
         ("us-central1", "eu-west4", False),
         ("us-central1", "us", True),
         ("us-east1", "us", True),
