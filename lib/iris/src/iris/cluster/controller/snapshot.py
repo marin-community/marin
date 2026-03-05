@@ -146,7 +146,6 @@ def _snapshot_attempt(attempt: ControllerTaskAttempt) -> snapshot_pb2.TaskAttemp
         attempt_id=attempt.attempt_id,
         worker_id=str(attempt.worker_id) if attempt.worker_id else "",
         state=attempt.state,
-        log_directory=attempt.log_directory or "",
         exit_code=attempt.exit_code or 0,
         error=attempt.error or "",
     )
@@ -341,7 +340,6 @@ def _restore_attempt(snap: snapshot_pb2.TaskAttemptSnapshot) -> ControllerTaskAt
         attempt_id=snap.attempt_id,
         worker_id=WorkerId(snap.worker_id) if snap.worker_id else None,
         state=snap.state,
-        log_directory=snap.log_directory or None,
         created_at=Timestamp.from_proto(snap.created_at),
         started_at=Timestamp.from_proto(snap.started_at) if snap.started_at.epoch_ms else None,
         finished_at=Timestamp.from_proto(snap.finished_at) if snap.finished_at.epoch_ms else None,
