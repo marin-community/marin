@@ -30,7 +30,7 @@ uv run ... \
 ```
 
 Reference:
-- `lib/levanter/docs/Performance-Guide.md`
+- `docs/levanter/Performance-Guide.md`
 - `docs/recipes/add_pallas_kernel.md`
 
 For better profile readability, use `haliax.jax_utils.named_call` and `jax.named_scope` liberally in model code.
@@ -45,7 +45,7 @@ Examples:
 
 ```bash
 # /tmp (ephemeral)
-uv run python lib/marin/tools/profile_summary.py summarize \
+uv run python tools/profile_summary.py summarize \
   --run-target marin-community/marin/<run_id> \
   --download-root /tmp/marin-profiles \
   --breakdown-mode exclusive_global \
@@ -53,7 +53,7 @@ uv run python lib/marin/tools/profile_summary.py summarize \
 
 # in-repo scratch (kept with your workspace)
 mkdir -p scratch/profiles
-uv run python lib/marin/tools/profile_summary.py summarize \
+uv run python tools/profile_summary.py summarize \
   --run-target marin-community/marin/<run_id> \
   --download-root scratch/profiles \
   --breakdown-mode exclusive_global \
@@ -63,7 +63,7 @@ uv run python lib/marin/tools/profile_summary.py summarize \
 ### Option A: From a W&B artifact reference
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py summarize \
+uv run python tools/profile_summary.py summarize \
   --artifact marin-community/marin/run-grug-125m-profile-apples-pallas_tpu-20260217-225239-055ab2-profiler:v0 \
   --download-root /tmp/marin-profiles \
   --output /tmp/profile_summary.json
@@ -72,7 +72,7 @@ uv run python lib/marin/tools/profile_summary.py summarize \
 ### Option B: From a W&B run target (auto-pick latest profile artifact)
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py summarize \
+uv run python tools/profile_summary.py summarize \
   --run-target marin-community/marin/grug-125m-profile-apples-pallas_tpu-20260217-225239-055ab2 \
   --alias latest \
   --download-root /tmp/marin-profiles \
@@ -87,7 +87,7 @@ uv run python lib/marin/tools/profile_summary.py summarize \
 ### Option C: From a local artifact directory
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py summarize \
+uv run python tools/profile_summary.py summarize \
   --profile-dir /path/to/jax_profile_artifact_dir \
   --output /tmp/profile_summary.json
 ```
@@ -95,7 +95,7 @@ uv run python lib/marin/tools/profile_summary.py summarize \
 ### Option D: From a specific trace file
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py summarize \
+uv run python tools/profile_summary.py summarize \
   --trace-file /path/to/perfetto_trace.json.gz \
   --output /tmp/profile_summary.json
 ```
@@ -106,7 +106,7 @@ Summary version tag:
 Generate a deterministic markdown root-cause report:
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py report \
+uv run python tools/profile_summary.py report \
   --summary /tmp/profile_summary.json \
   --output /tmp/profile_report.md
 ```
@@ -119,7 +119,7 @@ Trace quality checks are surfaced in `trace_overview`:
 Top ops:
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py query \
+uv run python tools/profile_summary.py query \
   --summary /tmp/profile_summary.json \
   --question "What are the top 10 ops by exclusive time?"
 ```
@@ -127,7 +127,7 @@ uv run python lib/marin/tools/profile_summary.py query \
 Compute vs comm and collective bottlenecks:
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py query \
+uv run python tools/profile_summary.py query \
   --summary /tmp/profile_summary.json \
   --question "Is comm or compute dominating? Which collective is worst?"
 ```
@@ -135,7 +135,7 @@ uv run python lib/marin/tools/profile_summary.py query \
 Specific pre-op gap lookup:
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py query \
+uv run python tools/profile_summary.py query \
   --summary /tmp/profile_summary.json \
   --question "gap before _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1"
 ```
@@ -149,7 +149,7 @@ This avoids over-attributing stalls to tiny "first op" markers when the actual p
 Hierarchical semantic regions (derived from `tf_op` paths when available):
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py query \
+uv run python tools/profile_summary.py query \
   --summary /tmp/profile_summary.json \
   --question "show hierarchical regions"
 ```
@@ -157,7 +157,7 @@ uv run python lib/marin/tools/profile_summary.py query \
 Contextualize a noisy op (for example, `copy.*`) in model/module terms:
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py query \
+uv run python tools/profile_summary.py query \
   --summary /tmp/profile_summary.json \
   --question "show context for op copy.564"
 ```
@@ -165,7 +165,7 @@ uv run python lib/marin/tools/profile_summary.py query \
 Suggested optimizations from evidence:
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py query \
+uv run python tools/profile_summary.py query \
   --summary /tmp/profile_summary.json \
   --question "What should we try next?"
 ```
@@ -179,7 +179,7 @@ Use a strict workflow:
 4. **Compare**:
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py compare \
+uv run python tools/profile_summary.py compare \
   --before /tmp/profile_before.json \
   --after /tmp/profile_after.json \
   --strict-provenance
@@ -188,7 +188,7 @@ uv run python lib/marin/tools/profile_summary.py compare \
 5. **Track** (thresholded pass/warn/fail + history):
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py track \
+uv run python tools/profile_summary.py track \
   --before /tmp/profile_before.json \
   --after /tmp/profile_after.json \
   --label "pallas-kernel-attempt-3" \
@@ -198,14 +198,14 @@ uv run python lib/marin/tools/profile_summary.py track \
 6. **History summary** (regression trend tracking):
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py history \
+uv run python tools/profile_summary.py history \
   --history /tmp/profile_regression_history.jsonl
 ```
 
 7. **One-shot compare bundle** (if you want all artifacts in one command):
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py bundle \
+uv run python tools/profile_summary.py bundle \
   --before-run-target marin-community/marin/<baseline_run_id> \
   --after-run-target marin-community/marin/<candidate_run_id> \
   --output-dir /tmp/profile_bundle \
@@ -215,7 +215,7 @@ uv run python lib/marin/tools/profile_summary.py bundle \
 8. **Publish summary/report back to W&B** (store alongside experiment artifacts):
 
 ```bash
-uv run python lib/marin/tools/profile_summary.py publish \
+uv run python tools/profile_summary.py publish \
   --summary /tmp/profile_summary.json \
   --report /tmp/profile_report.md \
   --alias latest

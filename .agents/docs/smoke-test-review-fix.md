@@ -2,7 +2,7 @@
 
 ## Issue 1: `from __future__ import annotations` in `debug.py`
 
-**File:** `lib/iris/src/iris/cluster/vm/debug.py`, line 17
+**File:** `src/iris/cluster/vm/debug.py`, line 17
 
 **Problem:** AGENTS.md says "Don't use TYPE_CHECKING. Use the real import." The `from __future__ import annotations` import defers all annotation evaluation, which is the same category of lazy-typing hack. It also breaks runtime type inspection (e.g., `get_type_hints()`). In this file, every annotation is already valid at runtime (`Path | None`, `str | None`, `Iterator[str]`), so the import is unnecessary on Python 3.11+.
 

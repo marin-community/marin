@@ -5,12 +5,12 @@ on:
     branches:
       - main
     paths:
-      - lib/haliax/**
+      - src/haliax/**
       - uv.lock
       - .github/workflows/haliax-*.yaml
   pull_request:
     paths:
-      - lib/haliax/**
+      - src/haliax/**
       - uv.lock
       - .github/workflows/haliax-*.yaml
 
@@ -30,7 +30,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: lib/haliax
+        working-directory: .
 
     steps:
       - uses: actions/checkout@v3

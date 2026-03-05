@@ -330,7 +330,7 @@ In standard LM training, the trainable filter is simply `True` for all params, s
 
 ### Simplify (1 change to Levanter)
 
-**`lib/levanter/src/levanter/trainer_state.py`** - Replace manual tree_map with is_leaf:
+**`src/levanter/trainer_state.py`** - Replace manual tree_map with is_leaf:
 
 ```python
 import haliax as hax
@@ -376,8 +376,8 @@ These changes are minimal, well-targeted fixes that align with Haliax's design p
 
 ## Verification Plan
 
-1. **Run DPO tests**: `pytest lib/levanter/tests/test_dpo.py -v`
-2. **Run full Levanter test suite**: `pytest lib/levanter/tests/ -v`
+1. **Run DPO tests**: `pytest tests/levanter/test_dpo.py -v`
+2. **Run full Levanter test suite**: `pytest tests/levanter/ -v`
 3. **Test the specific regression cases**:
    - `test_vmapped_init_with_sharding_handles_layer_axis` - vmap + sharding
    - `test_partition_for_grad_overwrite_preserves_namedarrays` - quantization fix

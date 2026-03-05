@@ -21,8 +21,7 @@ fi
 
 source "${VENV_PATH}/bin/activate"
 
-uv pip install -e lib/marin >/dev/null
-uv pip install -e lib/levanter >/dev/null
+# Packages are installed from the unified pyproject.toml
 
 RUN_SUFFIX="$(date +%Y%m%d%H%M%S)"
 RUN_NAME="maxtext_mixtral_profile_${RUN_SUFFIX}"
@@ -33,7 +32,7 @@ set -euo pipefail
 cd submodules/maxtext
 export RUN_PREFLIGHT=false
 export REPO_ROOT="$(pwd)/.."
-export PYTHONPATH="$(pwd)/src:${REPO_ROOT}/lib/marin/src:${REPO_ROOT}/lib/levanter/src:${REPO_ROOT}/experiments"
+export PYTHONPATH="$(pwd)/src:${REPO_ROOT}/src:${REPO_ROOT}/experiments"
 export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=81920 --xla_enable_async_all_gather=true --xla_tpu_overlap_compute_collective_tc=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_fuse_all_gather=true"
 REQ_FILE=/tmp/maxtext_profile_requirements.txt
 cat <<'REQ' > "${REQ_FILE}"

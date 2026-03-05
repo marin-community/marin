@@ -4,7 +4,7 @@
 
 ### Inventory of log monitoring code
 
-#### `debug.py` (`lib/iris/src/iris/cluster/vm/debug.py`)
+#### `debug.py` (`src/iris/cluster/vm/debug.py`)
 
 | Function | Lines | Purpose | GCP-specific? |
 |----------|-------|---------|---------------|
@@ -24,7 +24,7 @@
 | `DockerLogStreamer` | 230-335 | Background thread: streams `docker logs -f` from controller/workers via SSH | Yes |
 | `TaskSchedulingMonitor` | 338-391 | Background thread: polls controller RPC for task scheduling state, writes JSON | No |
 
-#### `cluster_manager.py` (`lib/iris/src/iris/cluster/vm/cluster_manager.py`)
+#### `cluster_manager.py` (`src/iris/cluster/vm/cluster_manager.py`)
 
 | Member | Lines | Purpose |
 |--------|-------|---------|

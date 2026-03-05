@@ -3,21 +3,213 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "marin-root"
+name = "marin"
 version = "0.1.0"
-description = "Marin workspace root and experiments"
+description = "Marin: Scalable Training, Data Processing, and Evaluation"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
+
+# Base dependencies: lightweight distributed infra (iris + fray + zephyr).
+# Iris Docker images use `uv sync` with just these deps.
 dependencies = [
-    # workspaces
-    "iris",
-    "fray",
-    "haliax",
-    "levanter",
-    "marin",
-    "zephyr",
-    # top level deps. try to keep these small.
+    # --- iris ---
+    "click>=8.3.1",
+    "cloudpickle>=3.1.2",
+    "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
+    "fsspec>=2025.3.0",
+    "gcsfs>=2024.0.0",
+    "s3fs>=2024.0.0",
+    "grpcio>=1.76.0",
+    "httpx>=0.28.1",
+    "humanfriendly>=10.0",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0",
+    "starlette>=0.50.0",
+    "tabulate>=0.9.0",
+    "typing-extensions>=4.0",
+    "uvicorn[standard]>=0.23.0",
+    # --- fray (above iris) ---
+    "fastapi>=0.100.0",
+    "flask",
+    "mergedeep",
+    "zstandard>=0.22.0",
+    # --- zephyr (above fray) ---
+    "braceexpand>=0.1.0",
+    "msgspec>=0.18.0",
+    "numpy>=2.0",
+    "tqdm-loggable>=0.2",
+    "vortex-data>=0.1.0",
+    # --- root ---
     "watchdog",
+]
+
+[project.scripts]
+iris = "iris.cli:iris"
+iris-run = "iris.cli.run:run"
+fray = "fray.v1.cli:main"
+zephyr = "zephyr.cli:main"
+
+[project.optional-dependencies]
+# Training / ML dependencies (haliax + levanter + marin).
+# Install with: uv sync --extra train
+train = [
+    # --- haliax ---
+    "aqtp>=0.8.2",
+    # --- levanter ---
+    "async-lru~=2.0",
+    "dataclasses-json~=0.6.4",
+    "deepdiff",
+    "draccus>=0.11.5",
+    "einops",
+    "equinox>=0.11.7,!=0.12.0",
+    "filelock~=3.13",
+    "google-api-python-client>=2.175.0",
+    "google-auth",
+    "google-cloud-storage",
+    "google-cloud-storage-transfer",
+    "immutabledict",
+    "jaxtyping>=0.2.34",
+    "jinja2",
+    "jmp>=0.0.4",
+    "lenses",
+    "openai>=1.0.0",
+    "optax>=0.1.9",
+    "protobuf>=6,<7",
+    "pyarrow>=22",
+    "pytimeparse>=1.1.8",
+    "ray[default]==2.53.0",
+    "safetensors[numpy]>=0.4.2,<0.7.0",
+    "tblib>=1.7.0,<4.0.0",
+    "tensorstore>=0.1.73",
+    "tokenizers>=0.15.2",
+    "transformers>=4.57.1,<5.0",
+    "wandb>=0.17.8",
+    # --- marin ---
+    "cryptography>=45",
+    "datasets<4.0.0",
+    "ddsketch",
+    "fasteners>=0.19",
+    "floret",
+    "jax==0.8.0",
+    "jaxopt>=0.8.3",
+    "lxml[html_clean]",
+    "lz4",
+    "markdownify==0.12.1",
+    "multiprocess==0.70.16",
+    "pandas>=2.0",
+    "plotly",
+    "regex",
+    "requests",
+    "resiliparse>=0.17.2",
+    "toml",
+    "tqdm",
+    "warcio",
+]
+
+# Hardware-specific JAX + PyTorch backends.
+gpu = ["jax[cuda12]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
+tpu = ["jax[tpu]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
+cpu = [
+    "jax==0.8.0",
+    "torch==2.9.0",
+    "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision==0.24.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "torchvision==0.24.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+]
+
+# lm-eval harness (large dep tree, pinned to our fork). Isolated because
+# it pulls in many transitive deps that most workflows don't need.
+lm_eval = [
+    "lm-eval[math,api]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+]
+
+# Evalchemy: reasoning-focused evals (AIME, MATH500, HumanEval+, etc.).
+evalchemy = [
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "sympy>=1.12.1,<1.14",
+    "antlr4-python3-runtime==4.11",
+    "bespokelabs-curator",
+    "sqlalchemy",
+    "fire",
+]
+
+# Reinforcement learning.
+rl = [
+    "prime",
+    "sympy>=1.12.1,<1.14",
+    "verifiers==0.1.5",
+]
+
+# vLLM inference on TPU.
+vllm = [
+    "vllm-tpu==0.13.2.post6",
+    "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
+
+# Profiling.
+profiling = ["xprof", "tensorboard>=2.16", "tensorboardX>=2.6"]
+kernels = ["tokamax"]
+vizier = ["google-vizier[jax]"]
+math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
+
+# Optional integrations with local lib/ packages.
+harbor = ["harbor>=0.1.42"]
+dedup = ["dupekit"]
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.2",
+    "pytest-asyncio",
+    "pytest-xdist",
+    "pytest-timeout",
+    "pytest-cov",
+    "pytest-profiling>=1.8.1",
+    "pytest-forked",
+    "pytest-flakefinder>=1.1.0",
+    "soundfile",
+    "librosa>=0.11.0",
+    "tensorboardX>=2.6",
+    "chex>=0.1.86",
+    "httpx>=0.28.1",
+    "trackio>=0.5.0",
+    "numba>=0.62.1",
+    "psutil>=5.9.0",
+    "pip",
+    "openai-responses",
+    "plotly",
+    # Torch deps needed for levanter torch-interop tests.
+    "torch>=2.7.0",
+    "peft>=0.12.0",
+]
+lint = [
+    "ruff==0.14.3",
+    "black==25.9.0",
+    "mypy>=1.4.1",
+    "pyrefly==0.40.0",
+    "types-PyYAML",
+    "types-requests",
+    "types-six",
+    "click>=8.0",
+    "pyyaml>=6.0",
+]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings>=0.24.0",
+    "mkdocstrings-python>=1.7.0",
+    "pymdown-extensions>=10.0.0",
+    "mkdocs-git-revision-date-localized-plugin>=1.2.0",
+    "mkdocs-git-authors-plugin>=0.9.0",
+    "mkdocs-minify-plugin>=0.7.0",
+    "mkdocs-include-markdown-plugin>=7.1.5",
+]
+math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
+metrics = ["google-cloud-logging"]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+    { include-group = "docs" },
+    { include-group = "math" },
 ]
 
 [tool.uv]
@@ -28,38 +220,61 @@ override-dependencies = [
     "python-multipart>=0.0.22",
     "wheel>=0.46.2",
     "datasets>=3.1.0,<4.0.0",
-    "equinox>=0.11.10",  # Override vizier's pin for JAX 0.8 compatibility
+    "equinox>=0.11.10",
 ]
-
-[tool.uv.workspace]
-members = [
-    "lib/iris",
-    "lib/fray",
-    "lib/haliax",
-    "lib/levanter",
-    "lib/marin",
-    "lib/zephyr",
+conflicts = [
+    [
+        { extra = "gpu" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "gpu" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cuda12" },
+    ],
 ]
 
 [tool.uv.sources]
-iris = { workspace = true }
-fray = { workspace = true }
-haliax = { workspace = true }
-levanter = { workspace = true }
-marin = { workspace = true }
-zephyr = { workspace = true }
-# NOTE: dupekit and harbor are optional dependencies. Declaring them as path
-# dependencies (not workspace members) avoids pulling their dev dependency
-# groups into workspace resolution.
+# Non-workspace path deps (stay in lib/)
 dupekit = { path = "lib/dupekit", editable = true }
 harbor = { path = "lib/harbor", editable = true }
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
+    { index = "pytorch-cu128", extra = "gpu" },
+]
+resiliparse = { index = "marin-resiliparse" }
+torch = [
+    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
+]
+
+[[tool.uv.index]]
+name = "marin-resiliparse"
+url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.black]
 line-length = 121
 target-version = ["py310"]
 preview = true
-
-# Note :: Grow more strict over time!
 extend-exclude = """
 (
     scripts/
@@ -69,8 +284,6 @@ extend-exclude = """
 [tool.ruff]
 line-length = 121
 target-version = "py310"
-
-# Note :: Grow more strict over time!
 extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
@@ -80,134 +293,74 @@ ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
 
-
 [tool.mypy]
 python_version = "3.10"
-
-# Note: Grow more strict over time!
 ignore_missing_imports = true
 exclude = ["marin/", "scripts/"]
 
-# Pyrefly type checker configuration
 [tool.pyrefly]
 project-includes = [
-    "lib/marin/src/**/*.py",
-    "lib/levanter/src/**/*.py",
-    "lib/haliax/src/**/*.py",
-    "lib/fray/src/**/*.py",
-    "lib/iris/src/**/*.py",
-    "lib/zephyr/src/**/*.py",
+    "src/**/*.py",
 ]
-
-# Explicitly tell Pyrefly where our editable packages live so it resolves imports
-# against the library sources instead of the top-level `src` directory, which only
-# contains a handful of legacy modules.
-search-path = [
-    "lib/marin/src",
-    "lib/levanter/src",
-    "lib/haliax/src",
-    "lib/zephyr/src",
-    "lib/fray/src",
-    "lib/iris/src",
-]
+search-path = ["src"]
 disable-search-path-heuristics = true
-
-# Prevent pyrefly from querying the Python interpreter for site-packages
-# which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
 use-ignore-files = false
-# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
-# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
-# the entire project when running from those paths.
 disable-project-excludes-heuristics = true
-
-# Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
     "scripts/**",
     "tests/**",
-    "examples/**",           # Example code doesn't need strict typing
-    "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
-    "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
-    # Keep key excludes that pyrefly normally adds heuristically.
+    "examples/**",
+    "src/**/crawl/**",
+    "src/iris/rpc/*_pb2*",
     "**/node_modules",
     "**/__pycache__",
     "**/venv/**",
 ]
 
-# Disable specific error codes that are primarily noise from missing type stubs
-# These can be gradually enabled as the codebase improves
 [tool.pyrefly.errors]
-# Missing imports (824 occurrences) - third-party libs without stubs
 missing-import = false
-
-# Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
 unexpected-keyword = false
-
-# Missing attributes (315 occurrences) - often from untyped libraries like ray, jax, etc.
-# These are mostly false positives from libraries without complete type stubs
 missing-attribute = false
-
-# Additional error types with >10 occurrences that are hard to fix systematically:
-
-# Deprecated APIs (19 occurrences) - would require code changes across multiple files
 deprecated = false
-
-# Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
 unknown-name = false
-
-# Not iterable errors (17 occurrences) - complex type inference issues with JAX/numpy
 not-iterable = false
-
-# No matching overload (16 occurrences) - complex overload resolution issues
 no-matching-overload = false
-
-# Bad index (12 occurrences) - complex dict/list type inference
 bad-index = false
-
-# Library/stub-related noise - disable to focus on real issues:
-
-# Bad argument type (638 occurrences) - mostly third-party library stub issues
-# Common culprits: smart_open, Flax API, JAX/numpy arrays
 bad-argument-type = false
-
-# Bad context manager (30 occurrences) - tqdm and similar libraries
 bad-context-manager = false
-
-# Missing/bad argument count (99 occurrences) - Flax API positional/keyword confusion
 missing-argument = false
 bad-argument-count = false
-
-# Unbound name (64 occurrences) - pyrefly's control flow analysis doesn't understand
-# patterns where variables are guaranteed to be initialized by program logic
 unbound-name = false
-
-# Keep these enabled to catch real type errors:
-# bad-override = true (126 occurrences)
-# bad-assignment = true (94 occurrences)
-# bad-return = true (84 occurrences)
-# unsupported-operation = true (68 occurrences)
-# not-callable = true (27 occurrences)
 
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.hatch.version]
+path = "src/haliax/__about__.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["experiments"]
+packages = ["src/marin", "src/levanter", "src/haliax", "src/iris", "src/fray", "src/zephyr", "experiments"]
 
 [tool.hatch.build.targets.sdist]
-packages = ["experiments"]
+packages = ["src/marin", "src/levanter", "src/haliax", "src/iris", "src/fray", "src/zephyr", "experiments"]
 
 [tool.pytest.ini_options]
 timeout = 60
+pythonpath = ["src", "tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
+    "entry: marks tests as entry point tests",
+    "ray: marks tests that require Ray",
+    "torch: mark tests that use Torch",
+    "tpu: mark tests that require TPU",
+    "docker: marks tests requiring Docker runtime",
+    "e2e: end-to-end cluster tests",
 ]
 testpaths = ["tests", "experiments"]
-
-# Don't run TPU or slow tests by default
 addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"

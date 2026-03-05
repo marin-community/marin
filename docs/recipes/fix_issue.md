@@ -45,9 +45,9 @@ Example:
 > transfer to ~1GB/s (expect 4-7GB/s). No parallelization across shards.
 >
 > **Relevant code**
-> - [`arrow_flight.py#L384`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/arrow_flight.py#L384) - TPU→CPU copy
-> - [`jax.py#L394-L402`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/jax.py#L394-L402) - transfer impl
-> - [`base.py#L32-L35`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/base.py#L32-L35) - transfer mode defs
+> - [`arrow_flight.py#L384`](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/arrow_flight.py#L384) - TPU→CPU copy
+> - [`jax.py#L394-L402`](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/jax.py#L394-L402) - transfer impl
+> - [`base.py#L32-L35`](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/base.py#L32-L35) - transfer mode defs
 
 ### Proposed Fix section
 

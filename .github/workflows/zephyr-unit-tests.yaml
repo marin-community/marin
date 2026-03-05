@@ -5,9 +5,9 @@ on:
       - main
   pull_request:
     paths:
-      - lib/zephyr/**
+      - src/zephyr/**
       # Iris is being actively developed, to avoid bugs sneaking into zephyr, we trigger zephyr tests on iris change
-      - lib/iris/**
+      - src/iris/**
       - uv.lock
       - .github/workflows/zephyr-unit-tests.yaml
 
@@ -44,5 +44,5 @@ jobs:
 
       - name: Test with pytest
         run: |
-          # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
-          uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
+          # important: don't cd into a subdir so that ray uv integration doesn't freak out
+          uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/zephyr/

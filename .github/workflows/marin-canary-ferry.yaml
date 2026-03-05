@@ -51,7 +51,7 @@ jobs:
       - name: Submit canary ferry to Ray cluster
         shell: bash -l {0}
         run: |
-          .venv/bin/python lib/marin/src/marin/run/ray_run.py \
+          .venv/bin/python src/marin/run/ray_run.py \
             --cluster us-central1 \
             -- python experiments/ferries/canary_ferry.py
         env:

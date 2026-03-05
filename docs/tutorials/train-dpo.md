@@ -102,7 +102,7 @@ if __name__ == "__main__":
 Submit the job:
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py --no_wait \
+uv run src/marin/run/ray_run.py --no_wait \
     --env_vars WANDB_API_KEY=${WANDB_API_KEY} \
     -- python experiments/my_dpo_experiment.py
 ```

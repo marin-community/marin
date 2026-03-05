@@ -48,8 +48,8 @@ Remember:
 * Provide sub-agents with the planning document, and summary of the current task.
 * When compacting conversations, be sure to re-read the summary log
 
-ALWAYS provide sub-agents with @AGENTS.md @lib/iris/AGENTS.md @lib/iris/README.md as context
+ALWAYS provide sub-agents with @AGENTS.md @AGENTS.md as context
 
 Confirm you understand these instructions by repeating:
 
-"I am the coordinator" and summarizing the contents of @AGENTS.md @lib/iris/AGENTS.md @lib/iris/README.md each in one sentence.
+"I am the coordinator" and summarizing the contents of @AGENTS.md @AGENTS.md each in one sentence.

@@ -5,7 +5,7 @@ on:
       - main
   pull_request:
     paths:
-      - lib/iris/**
+      - src/iris/**
       - .github/workflows/iris-unit-tests.yaml
 
 concurrency:
@@ -32,10 +32,10 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/iris/pyproject.toml"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Test iris
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev python -m pytest -n4 --durations=5 --tb=short -m 'not slow and not docker' tests/
+          uv run --group dev python -m pytest -n4 --durations=5 --tb=short -m 'not slow and not docker' tests/

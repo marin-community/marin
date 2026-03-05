@@ -45,7 +45,7 @@ For Levanter kernels, we recommend the same pattern:
 - `pallas_gpu.py`: optional GPU/Pallas implementation (if applicable)
 - `api.py`: stable user-facing function with `implementation=` override and fallback order
 
-See `lib/levanter/src/levanter/kernels/pallas/template_kernel.py` for a minimal example of the dispatch pattern.
+See `src/levanter/kernels/pallas/template_kernel.py` for a minimal example of the dispatch pattern.
 
 ## Batching convention (recommended)
 
@@ -138,7 +138,7 @@ absolute diff) in addition to `allclose` so you can quickly spot outliers.
 
 Keep the harness small, deterministic, and fast enough to run locally.
 For long-lived kernels, turn the numerics script into a proper pytest in
-`lib/levanter/tests/kernels/` that compares the **default implementation** to the
+`tests/levanter/kernels/` that compares the **default implementation** to the
 reference baseline. Use small shapes on CPU, and on TPU/GPU pick shapes aligned
 with your block sizes so the fast path runs.
 
@@ -224,7 +224,7 @@ Use `--tpu` to pick the TPU generation/size and pass environment variables with 
 job runtime environment).
 
 ```sh
-RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
+RAY_AUTH_MODE=token uv run src/marin/run/ray_run.py \
   --cluster marin-us-central2-staging \
   --tpu v5p-8 \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
@@ -275,7 +275,7 @@ which TPU types are currently attached.
 For long runs, submit with `--no_wait`, then poll status and stream logs:
 
 ```sh
-RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
+RAY_AUTH_MODE=token uv run src/marin/run/ray_run.py \
   --cluster marin-us-central1 \
   --tpu v5p-8 \
   --no_wait \
@@ -307,7 +307,7 @@ RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-centra
 Whenever possible, use Levanter's built-in profiler wiring so profiles are captured consistently and uploaded via
 Levanter trackers (e.g. Weights & Biases):
 
-- See `lib/levanter/docs/Performance-Guide.md` for details.
+- See `docs/levanter/Performance-Guide.md` for details.
 - Levanter uses JAX profiling and uploads a `jax_profile` artifact to W&B when profiling is enabled.
 - If your benchmark is implemented as (or inside) a Levanter training loop, prefer flags like:
   - `--trainer.profiler.enabled true`
@@ -317,7 +317,7 @@ Levanter trackers (e.g. Weights & Biases):
 
 If you’re writing a standalone microbench script, prefer invoking the profiler directly with
 `levanter.callbacks.profile_ctx` (rather than trying to plumb trainer flags through a non-trainer script). See
-`lib/levanter/src/levanter/main/sample_lm.py` for an example of wrapping a “steady-state” region (skipping the compile
+`src/levanter/main/sample_lm.py` for an example of wrapping a “steady-state” region (skipping the compile
 round) with `profile_ctx(...)`, which then logs a `jax_profile` artifact via the active tracker.
 You will need to set up wandb logging by initializing a Levanter [levanter.tracker.wandb.WandbTracker][] via
 [levanter.tracker.wandb.WandbConfig][].
@@ -337,14 +337,14 @@ For Pallas TPU work, capture compiler diagnostics on every serious benchmark/tun
 3. Record the exact `XLA_FLAGS` and `LIBTPU_INIT_ARGS` used (the benchmark/tuning scripts print these now).
 
 These hooks are available in:
-- `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py`
-- `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`
+- `scripts/levanter/bench/bench_fused_cross_entropy_loss_pallas.py`
+- `scripts/levanter/tune/tune_fused_cross_entropy_loss_block_sizes.py`
 
 Example (bench):
 
 ```sh
 uv run --package levanter --extra tpu \
-  python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py \
+  python scripts/levanter/bench/bench_fused_cross_entropy_loss_pallas.py \
   --implementation pallas_tpu \
   --batch 64 --pos 1024 --embed 1024 --vocab 128256 \
   --xla-dump-dir /tmp/ce_hlo_dumps \
@@ -355,7 +355,7 @@ Example (tune):
 
 ```sh
 uv run --package levanter --extra tpu \
-  python lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py \
+  python scripts/levanter/tune/tune_fused_cross_entropy_loss_block_sizes.py \
   --implementation pallas_tpu \
   --batch 64 --seq-len 1024 --embed 1024 --vocab 128256 \
   --xla-dump-dir /tmp/ce_tune_hlo_dumps \
@@ -441,11 +441,11 @@ Use `agent_driven_profiling` tooling as it matures.
 
 ## Starter template
 
-Use the starter template under `lib/levanter/src/levanter/kernels/pallas/`:
+Use the starter template under `src/levanter/kernels/pallas/`:
 - `template_kernel.py` for baseline + kernel scaffolding
 - `tests/test_template_kernel.py` for the value/grad/speed harness pattern
 
-See also the `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss` kernel for a more
+See also the `src/levanter/kernels/pallas/fused_cross_entropy_loss` kernel for a more
 complete/complex example.
 
 ## Definition of Done

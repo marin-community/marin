@@ -19,7 +19,7 @@ jobs:
         jax-version: ["0.8.0"]
     defaults:
       run:
-        working-directory: lib/levanter
+        working-directory: .
 
     steps:
       - uses: actions/checkout@v4
@@ -29,15 +29,15 @@ jobs:
           version: "0.7.20"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-          working-directory: lib/levanter
+          working-directory: .
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --dev --group test --frozen
       - name: Test with pytest
         run: |
           # Test with specific JAX version, excluding TPU tests
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
+          PYTHONPATH=tests:src:. uv run --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
 
   cpu-ray-tests:
     runs-on: ubuntu-latest
@@ -46,7 +46,7 @@ jobs:
         python-version: ["3.11"]
     defaults:
       run:
-        working-directory: lib/levanter
+        working-directory: .
 
     steps:
       - uses: actions/checkout@v4
@@ -56,14 +56,14 @@ jobs:
           version: "0.7.20"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-          working-directory: lib/levanter
+          working-directory: .
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --dev --group test --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
+          PYTHONPATH=tests:src:. uv run --frozen pytest tests -m "ray" --durations=20
 
   cpu-entry-tests:
     runs-on: ubuntu-latest
@@ -72,7 +72,7 @@ jobs:
         python-version: ["3.11"]
     defaults:
       run:
-        working-directory: lib/levanter
+        working-directory: .
 
     steps:
       - uses: actions/checkout@v4
@@ -82,14 +82,14 @@ jobs:
           version: "0.7.20"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-          working-directory: lib/levanter
+          working-directory: .
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen
+        run: uv sync --dev --group test --frozen
       - name: Test with pytest
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
+          PYTHONPATH=tests:src:. uv run --frozen pytest tests -m "entry" --durations=20
 
   cpu-torch-tests:
     runs-on: ubuntu-latest
@@ -99,7 +99,7 @@ jobs:
         python-version: ["3.11"]
     defaults:
       run:
-        working-directory: lib/levanter
+        working-directory: .
 
     steps:
       - uses: actions/checkout@v4
@@ -109,11 +109,11 @@ jobs:
           version: "0.7.20"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-          working-directory: lib/levanter
+          working-directory: .
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --group test --frozen --extra torch_test --no-install-package torch
+        run: uv sync --dev --group test --frozen --extra torch_test --no-install-package torch
 
       - name: Install locked CPU torch wheel
         run: |
@@ -121,7 +121,7 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          lock = tomllib.loads(Path("../../uv.lock").read_text())
+          lock = tomllib.loads(Path("uv.lock").read_text())
           versions = {
               package["version"]
               for package in lock.get("package", [])
@@ -148,7 +148,7 @@ jobs:
         run: |
           # run directly on CPU to avoid GPU dependency issues
           CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
-#          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
+#          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --frozen --extra torch_test pytest tests -m "torch" --durations=20
 
   tpu-tests:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -201,4 +201,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --group test --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow and not torch' --ignore=lib/levanter/tests/test_audio.py --ignore=lib/levanter/tests/test_new_cache.py --ignore=lib/levanter/tests/test_hf_checkpoints.py --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py --ignore=lib/levanter/tests/test_gdn_layer.py -v --tb=short --log-cli-level=WARNING --durations=20"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --frozen --group test --with 'jax[tpu]==$JAX_VERSION' pytest tests/levanter -m 'not entry and not ray and not slow and not torch' --ignore=tests/levanter/test_audio.py --ignore=tests/levanter/test_new_cache.py --ignore=tests/levanter/test_hf_checkpoints.py --ignore=tests/levanter/test_hf_gpt2_serialize.py --ignore=tests/levanter/test_gdn_layer.py -v --tb=short --log-cli-level=WARNING --durations=20"

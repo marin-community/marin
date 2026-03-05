@@ -398,7 +398,7 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
 #             max_grad_norm=1,
 #             nesterov=False,
 #         ),
-# see available optimizers in lib/levanter/src/levanter/optim
+# see available optimizers in src/levanter/optim
 # =========================
 
 

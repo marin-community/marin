@@ -18,7 +18,7 @@ jobs:
       TPU_TYPE: "v4-32"
     defaults:
       run:
-        working-directory: lib/levanter
+        working-directory: .
 
     steps:
       - name: Checkout code

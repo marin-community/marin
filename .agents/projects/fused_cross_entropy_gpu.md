@@ -2,15 +2,15 @@
 
 ## What I changed
 - Added a true GPU Pallas forward path:
-  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
+  - `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
   - Implements batched `x @ W` streaming in-logit space over V-blocks and writes per-row loss/LSE.
 - Updated tuned block-size lookup for NVIDIA GPUs:
-  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py`
+  - `src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py`
   - Added `NVIDIA`, `NVIDIA A100`, and `NVIDIA H100` keys and a `tiny` bucket.
 - Added non-multiple-shape coverage for GPU in tests:
-  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+  - `tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py`
 - Added GPU-only block-size sweep bench:
-  - `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_gpu_block_sweep.py`
+  - `scripts/levanter/bench/bench_fused_cross_entropy_loss_gpu_block_sweep.py`
 
 ## Notes
 - Current kernel assumes one batch block per program and streams over V-tile(s) internally; there is no GPU-specific backward custom VJP yet, so gradients flow through forward autodiff.
@@ -76,10 +76,10 @@ python -m lib/levanter.scripts.bench.bench_fused_cross_entropy_loss_gpu_block_sw
 - Priority was empirical throughput and numerical behavior, not final kernel cleanliness.
 
 ### Key code changes made in this pass
-- `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
+- `src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
   - Removed the implicit `precision=HIGHEST` override for `pallas_gpu` dispatch when precision is unspecified.
   - Reason: this hurt GB10 fallback performance in practice.
-- `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
+- `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
   - Added GB10 BF16 routing logic:
     - For moderate output sizes, route to full-matmul/reference path (fast and numerically tight on GB10).
     - For larger shapes, route to XLA streaming path with GB10-specific `v_block` tuning.
@@ -89,7 +89,7 @@ python -m lib/levanter.scripts.bench.bench_fused_cross_entropy_loss_gpu_block_sw
     - `B >= 4096` -> `v_block=3072`
     - `B >= 1024` -> `v_block=2048`
   - Kept Pallas tiled path for non-fallback regimes; this log’s speed wins below are primarily from better GB10 dispatch/routing.
-- `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py`
+- `src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py`
   - Added GB10 fallback entry so unsupported default blocks are avoided when no tuned bucket matches.
 
 ### Blackwell/Pallas exploration notes
@@ -154,7 +154,7 @@ Forward+backward aggregate (loss mean, grads wrt `x` and `w`):
 ### What was implemented
 - Added a custom VJP path for:
   - `linear_softmax_cross_entropy_loss_pallas_gpu` in
-    `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`.
+    `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`.
 - Structure:
   - Forward path remains routed by existing GB10 policy (reference / XLA-streaming / tiled Pallas).
   - Backward now has a GB10-specialized streaming kernel (`_backward_streaming_from_lse`) for the large-batch BF16 fallback regime.
@@ -204,7 +204,7 @@ Forward+backward aggregate (loss mean, grads wrt `x` and `w`):
 
 ### Change summary
 - Refined custom backward tuning in
-  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
+  `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
   - Decoupled backward `v_block` from forward fallback `v_block`.
   - Forward fallback (XLA streaming) remains:
     - `B >= 8192` -> `3584`
@@ -273,7 +273,7 @@ Custom-backward `logit_soft_cap` check:
 
 ### Change
 - Updated custom GB10 streaming backward in
-  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
+  `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
   - Keep probability/softmax math in `float32`.
   - Cast `dlogits` to activation dtype (`bf16` on target path) before the two backward GEMMs:
     - `grad_x`: `dlogits @ W^T`
@@ -328,7 +328,7 @@ Custom-backward `logit_soft_cap` check:
 
 ### Change
 - Updated the custom backward label subtraction in
-  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
+  `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
   - Old: per-row indexed scatter (`dlogits.at[row_ids, safe_idx].add(...)`).
   - New: dense one-hot mask (`jax.nn.one_hot`) with masked subtraction.
 - Kept all softmax/logsumexp math and gradient flow unchanged; only the label update primitive changed.
@@ -402,7 +402,7 @@ Custom-backward `logit_soft_cap` check:
 
 ### Code switch
 - Added a GB10-native forward opt-in in
-  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
+  `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`:
   - env var: `LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD=1`
   - requires explicit `block_sizes=BlockSizes(...)` (fails fast otherwise)
 - Default behavior is unchanged (hybrid path remains default).
@@ -446,7 +446,7 @@ Conclusion:
 ## 2026-02-20 backward rewrite + FA retune (GB10)
 
 ### Key implementation change
-- File: `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
+- File: `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
 - Rewrote custom backward accumulation in `_backward_streaming_from_lse`:
   - old: `lax.fori_loop` carrying full `grad_x` and full `grad_w` with per-iteration `dynamic_update_slice`
   - new: `lax.scan` carrying only `grad_x`, emitting `grad_w_block` per vocab tile, then one final reshape/transpose to materialize `grad_w`
@@ -495,7 +495,7 @@ Interpretation note:
   - non-power-of-two `v_block` rejected by current lowering constraints.
 
 ### 2026-02-20 follow-up: tuned block-size inference update
-- Updated `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py`:
+- Updated `src/levanter/kernels/pallas/fused_cross_entropy_loss/tuned_block_sizes.py`:
   - Added GB10 bucket `gb10-large-vocab-mid-batch` (`B in [2048,32768], H in [512,1536], V in [65536,262144]`).
   - Mapped GB10 BF16/FP32 tuned block sizes for that bucket to `BlockSizes(b=1024,h=32,v=1024)`.
 - Validation:
@@ -515,10 +515,10 @@ Interpretation note:
 
 ### Merge + feature completion
 - Resolved merge conflicts in:
-  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
-  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py`
+  - `src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
+  - `src/levanter/kernels/pallas/fused_cross_entropy_loss/xla.py`
 - Added missing GPU argmax support in:
-  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
+  - `src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_gpu.py`
   - `return_argmax` now threads through dispatch and returns per-row argmax ids.
 
 ### GB10 routing/stability fixes
@@ -528,20 +528,20 @@ Interpretation note:
 
 ### Test updates and results
 - Added GPU argmax parity test in:
-  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+  - `tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py`
 - Added GB10 tuned-entry lookup test in:
-  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+  - `tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py`
 - Validation (sequential GPU runs):
-  - `uv run pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+  - `uv run pytest tests/levanter/kernels/test_pallas_fused_cross_entropy_loss.py`
     - `19 passed, 5 skipped`
-  - `uv run pytest lib/levanter/tests/test_loss.py -k fused_loss_returns_argmax`
+  - `uv run pytest tests/levanter/test_loss.py -k fused_loss_returns_argmax`
     - `1 passed`
 - Repo checks:
   - `./infra/pre-commit.py --all-files` passed after formatting.
 
 ### GB10 retune re-run (sequential only, no parallel GPU workloads)
 - Command pattern:
-  - `LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD=1 uv run python -u lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_gpu_block_sweep.py ...`
+  - `LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD=1 uv run python -u scripts/levanter/bench/bench_fused_cross_entropy_loss_gpu_block_sweep.py ...`
 - Primary shape: `B=8192, H=1024, V=128256` (implemented as `--batch 4 --pos 2048`).
 - Selected candidates and measured `tokens/s`:
   - `b=512,h=16,v=1024`: `~239,470`

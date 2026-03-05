@@ -7,15 +7,15 @@ Goal: avoid making `vllm-tpu` a Python dependency inside the Ray runtime env. In
 Implemented (evaluators only; **no RL hot-reload changes**):
 
 - Sidecar container manager:
-  - `lib/marin/src/marin/vllm/docker_server.py` starts a sibling `vllm serve` container and polls `/v1/models`.
+  - `src/marin/vllm/docker_server.py` starts a sibling `vllm serve` container and polls `/v1/models`.
   - Leaves containers around on failure (no `--rm`) so `docker logs`/`docker inspect` are available; error messages redact secrets.
 - TPU vLLM evaluator supports **docker sidecar (default)** and **native** modes:
-  - `lib/marin/src/marin/evaluation/evaluators/vllm_tpu_evaluator.py`
+  - `src/marin/evaluation/evaluators/vllm_tpu_evaluator.py`
   - Sidecar requires `MARIN_VLLM_DOCKER_IMAGE` and a Ray worker environment with `/var/run/docker.sock` mounted.
   - Model paths can be `gs://` / `s3://` and default to `load_format=runai_streamer` (no FUSE required).
   - Defaults TPU logging noise down via `TPU_MIN_LOG_LEVEL=5` and `TPU_STDERR_LOG_LEVEL=5` (overrideable).
 - lm-eval-harness evaluator is wired to talk to the sidecar:
-  - `lib/marin/src/marin/evaluation/evaluators/lm_evaluation_harness_evaluator.py`
+  - `src/marin/evaluation/evaluators/lm_evaluation_harness_evaluator.py`
   - Uses `local-chat-completions` + `/v1/chat/completions` when `apply_chat_template=True`, otherwise `local-completions`.
   - Fixes tokenizer resolution for `gs://...` model ids by:
     - accepting `engine_kwargs["tokenizer"]=<hf_id_or_local_path>`, or
@@ -35,7 +35,7 @@ Open issues / known rough edges:
 - There are already cluster configs for a vLLM-flavored image:
   - `infra/marin-us-central2-vllm.yaml` uses `.../marin/marin_vllm:<tag>`.
 - Marin currently starts vLLM via the `vllm` CLI directly in-process (not via Python API):
-  - `lib/marin/src/marin/evaluation/evaluators/vllm_tpu_evaluator.py` runs `vllm serve ...` and polls `/v1/models`.
+  - `src/marin/evaluation/evaluators/vllm_tpu_evaluator.py` runs `vllm serve ...` and polls `/v1/models`.
 
 ## Decisions / updated direction
 
@@ -95,7 +95,7 @@ We do not rely on gcsfuse for serving weights.
 
 ### Step 1: Add a small vLLM “sidecar manager” module
 
-Create something like `lib/marin/src/marin/vllm/docker_server.py`:
+Create something like `src/marin/vllm/docker_server.py`:
 
 - `@dataclass(frozen=True) class VllmDockerServerConfig:`
   - `image: str` (e.g. `vllm/vllm-tpu:<tag>` or `us-<region>-docker.pkg.dev/.../marin/vllm_tpu_sidecar:<tag>`)
@@ -133,7 +133,7 @@ Notes:
 
 ### Step 2: Wire `VllmTpuEvaluator` to use the sidecar
 
-In `lib/marin/src/marin/evaluation/evaluators/vllm_tpu_evaluator.py`:
+In `src/marin/evaluation/evaluators/vllm_tpu_evaluator.py`:
 
 - Add an evaluator-level switch:
   - `vllm_mode: Literal["native", "docker"] = "docker"` (or pick based on env var like `MARIN_VLLM_MODE`).
@@ -247,7 +247,7 @@ Rollout:
 
 ## RL hot-reload addendum (`inference_ctx/vllm.py`)
 
-Context: `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py` hot-reloads weights by calling vLLM internals:
+Context: `src/marin/rl/environments/inference_ctx/vllm.py` hot-reloads weights by calling vLLM internals:
 
 - `self.llm.llm_engine.model_executor.driver_worker.sync_weights(...)`
 - `self.llm.llm_engine.reset_prefix_cache()`
@@ -275,7 +275,7 @@ This is **not** expressible via the OpenAI HTTP API, so moving RL serving into a
 
 **Milestone 2: RL (true hot-reload)**
 
-- Scope: `lib/marin/src/marin/rl/environments/inference_ctx/vllm.py`.
+- Scope: `src/marin/rl/environments/inference_ctx/vllm.py`.
 - Goal: preserve true hot-reload semantics (on-policy / high throughput).
 - Requires a long-lived sidecar per TPU VM for the duration of training (not per rollout batch).
 

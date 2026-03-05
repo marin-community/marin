@@ -3,6 +3,7 @@
 
 import os
 import subprocess
+import sys
 import tempfile
 
 import pytest
@@ -16,7 +17,17 @@ def test_integration_test_run():
     # don't name dir `test` because tokenizer gets mad that you're trying to train on test
     with tempfile.TemporaryDirectory(prefix="executor-integration") as temp_dir:
         result = subprocess.run(
-            ["python", os.path.join(MARIN_ROOT, "tests/integration_test.py"), "--prefix", temp_dir],
+            [sys.executable, os.path.join(MARIN_ROOT, "tests/integration_test.py"), "--prefix", temp_dir],
+            cwd=MARIN_ROOT,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    [
+                        os.path.join(MARIN_ROOT, "src"),
+                        os.path.join(MARIN_ROOT, "tests"),
+                    ]
+                ),
+            },
             capture_output=False,
             text=True,
         )

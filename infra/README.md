@@ -124,8 +124,8 @@ uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB script.py
 
 ### Documentation
 
-- **Quick start**: See `lib/zephyr/README.md`
-- **Design & API**: See `lib/zephyr/docs/design.md`
+- **Quick start**: See `docs/zephyr/README.md`
+- **Design & API**: See `docs/zephyr/design.md`
 - **Migration patterns**: See `.agents/docs/zephyr-migration.md` for patterns like bounded parallel map, flat_map for file processing, and nested parallelism
 
 ### Design Principles

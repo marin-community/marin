@@ -34,11 +34,11 @@ import tomllib
 import yaml
 
 ROOT_DIR = pathlib.Path(__file__).parent.parent
-LEVANTER_LICENSE = ROOT_DIR / "lib/levanter/etc/license_header.txt"
-HALIAX_LICENSE = ROOT_DIR / "lib/haliax/etc/license_header.txt"
+LEVANTER_LICENSE = ROOT_DIR / "etc/levanter/license_header.txt"
+HALIAX_LICENSE = ROOT_DIR / "etc/haliax/license_header.txt"
 MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
-LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
-HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
+LEVANTER_BLACK_CONFIG = ROOT_DIR / "pyproject.toml"
+HALIAX_BLACK_CONFIG = ROOT_DIR / "pyproject.toml"
 
 EXCLUDE_PATTERNS = [
     ".git/**",
@@ -547,7 +547,7 @@ class PrecommitConfig:
 
 PRECOMMIT_CONFIGS = [
     PrecommitConfig(
-        patterns=["lib/levanter/**/*.py"],
+        patterns=["src/levanter/**/*.py"],
         checks=[
             check_ruff,
             lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
@@ -556,7 +556,7 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
-        patterns=["lib/haliax/**/*.py"],
+        patterns=["src/haliax/**/*.py"],
         checks=[
             check_ruff,
             lambda files, fix: check_black(files, fix, config=HALIAX_BLACK_CONFIG),
@@ -565,7 +565,7 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/**/vendor/**"],
+        exclude_patterns=["src/levanter/**", "src/haliax/**", "**/vendor/**"],
         checks=[
             check_ruff,
             check_black,
@@ -574,12 +574,12 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=[
-            "lib/marin/src/**/*.py",
-            "lib/levanter/src/**/*.py",
-            "lib/haliax/src/**/*.py",
-            "lib/fray/src/**/*.py",
-            "lib/iris/src/**/*.py",
-            "lib/zephyr/src/**/*.py",
+            "src/marin/**/*.py",
+            "src/levanter/**/*.py",
+            "src/haliax/**/*.py",
+            "src/fray/**/*.py",
+            "src/iris/**/*.py",
+            "src/zephyr/**/*.py",
         ],
         checks=[
             check_pyrefly,
