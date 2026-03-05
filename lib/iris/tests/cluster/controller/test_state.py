@@ -1362,9 +1362,9 @@ def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
     )
     state.complete_heartbeat(snapshot, response)
 
-    logs = state.log_store.get_logs(task.task_id, task.current_attempt_id)
-    assert len(logs) == 1
-    assert logs[0].data == "hello world"
+    log_result = state.log_store.get_logs(task.task_id, task.current_attempt_id)
+    assert len(log_result.entries) == 1
+    assert log_result.entries[0].data == "hello world"
 
 
 def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata):
@@ -1395,9 +1395,9 @@ def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata)
         )
         state.complete_heartbeat(snapshot, response)
 
-    logs = state.log_store.get_logs(task.task_id, task.current_attempt_id)
-    assert len(logs) == 3
-    assert [e.data for e in logs] == ["line 0", "line 1", "line 2"]
+    log_result = state.log_store.get_logs(task.task_id, task.current_attempt_id)
+    assert len(log_result.entries) == 3
+    assert [e.data for e in log_result.entries] == ["line 0", "line 1", "line 2"]
 
 
 def test_log_store_concurrent_append_and_read():
@@ -1408,7 +1408,7 @@ def test_log_store_concurrent_append_and_read():
     from iris.cluster.controller.state import ControllerLogStore
     from iris.rpc import logging_pb2
 
-    store = ControllerLogStore(max_entries_per_attempt=5000)
+    store = ControllerLogStore()
     task_id = JobName.from_wire("/job/concurrent/task/0")
     errors: list[Exception] = []
 
