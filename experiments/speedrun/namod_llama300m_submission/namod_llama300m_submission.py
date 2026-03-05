@@ -43,7 +43,7 @@ DEFAULT_TOKENIZED_CACHE_PATH = os.environ.get(
 AUTHOR = Author(
     name="Suraj Ranganath",
     affiliation="UC San Diego",
-    url="https://github.com/suraj-ranganath",
+    url="https://www.linkedin.com/in/suraj-ranganath/",
 )
 
 
