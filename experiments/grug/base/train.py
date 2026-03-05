@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def build_tagged_evaluator(
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
-        per_pos_loss = model.compute_next_token_loss(
+        per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
@@ -224,6 +224,22 @@ class GrugTrainState:
     ema_params: Transformer
 
 
+def initial_state(
+    model_config: GrugModelConfig,
+    *,
+    optimizer: optax.GradientTransformation,
+    mp: jmp.Policy,
+    key: PRNGKeyArray,
+) -> GrugTrainState:
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    return GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=params,
+    )
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -246,7 +262,7 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.compute_next_token_loss(
+            return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
@@ -339,12 +355,11 @@ def run_grug(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            params = trainer.mp.cast_to_param(Transformer.init(config.model, key=model_rng))
-            return GrugTrainState(
-                step=jnp.array(0, dtype=jnp.int32),
-                params=params,
-                opt_state=optimizer.init(params),
-                ema_params=params,
+            return initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=trainer.mp,
+                key=model_rng,
             )
 
         state = _init_state(model_key)
@@ -475,5 +490,6 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "initial_state",
     "run_grug",
 ]

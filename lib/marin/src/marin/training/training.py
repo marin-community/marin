@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -186,31 +186,36 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return replace(config, train_config=inner_config)
 
 
-_LOCAL_COMPILATION_CACHE_DIR = "/tmp/jax-compilation-cache"
-
-
 def _normalize_jax_compilation_cache_dir(path: str) -> str:
-    """Normalize cache dir to a form accepted by JAX compilation cache config.
+    """Normalize cache dir to a form accepted by JAX's compilation cache.
 
-    JAX accepts local filesystem paths and ``gs://`` URIs for
-    ``jax_compilation_cache_dir``.  However:
-
-    - ``file://`` URIs raise during initialization in our training jobs.
-    - ``s3://`` URIs crash at runtime because XLA's C++ autotune cache writer
-      (``xla_gpu_per_fusion_autotune_cache_dir``) doesn't implement S3.
-
-    For unsupported schemes we fall back to a local path.
+    JAX's ``LRUCache`` delegates I/O to ``etils.epath.Path`` which supports
+    local paths, ``gs://`` (via gcsfs), and ``s3://`` (via s3fs/fsspec).
+    The only scheme that causes problems is ``file://`` which raises during
+    initialization.
     """
     if path.startswith("file://"):
         return path.removeprefix("file://")
-    if path.startswith("s3://"):
-        logger.warning(
-            "JAX compilation cache does not support S3; falling back to %s (was %s)",
-            _LOCAL_COMPILATION_CACHE_DIR,
-            path,
-        )
-        return _LOCAL_COMPILATION_CACHE_DIR
     return path
+
+
+def _disable_xla_autotune_subcache(env: dict) -> None:
+    """Disable XLA's per-fusion autotune sub-cache for remote compilation caches.
+
+    JAX automatically places XLA sub-caches (autotune, kernel cache) as
+    subdirectories of the compilation cache dir.  The autotune cache uses
+    XLA's C++ ``tsl::Env`` which only supports local paths — it crashes on
+    ``gs://`` and ``s3://``.  Since the autotune cache is ephemeral (skipped
+    entirely on a JAX cache hit) and only saves minutes on cold compiles,
+    we disable it via the JAX config rather than trying to redirect it.
+    """
+    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", "")
+    if "://" not in cache_dir:
+        return
+    if "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" in env:
+        return
+    env["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
+    logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
@@ -251,9 +256,20 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
             marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
         )
         logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
+    _disable_xla_autotune_subcache(env)
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    model_config = config.train_config.model
+    logger.info(
+        "Model config: type=%s seq_len=%d hidden=%d batch=%s device=%s",
+        type(model_config).__name__,
+        model_config.max_seq_len,
+        model_config.Embed.size,
+        config.train_config.trainer.train_batch_size,
+        config.resources.device,
+    )
 
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
@@ -315,6 +331,7 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
             marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
         )
         logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
+    _disable_xla_autotune_subcache(env)
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
@@ -413,6 +430,11 @@ def _add_run_env_variables(env: dict):
         env["TPU_MIN_LOG_LEVEL"] = "2"
     if "TPU_STDERR_LOG_LEVEL" not in env:
         env["TPU_STDERR_LOG_LEVEL"] = "2"
+
+    # Allow the caller (or iris -e) to override the compilation cache dir.
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        if val := os.environ.get("JAX_COMPILATION_CACHE_DIR"):
+            env["JAX_COMPILATION_CACHE_DIR"] = val
 
     return env
 

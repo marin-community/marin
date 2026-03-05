@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """RPC-based cluster client implementation."""
@@ -8,7 +8,7 @@ import time
 
 from iris.cluster.client.protocol import TaskStateLogger
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, is_job_finished, validate_tpu_replicas
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry
@@ -65,6 +65,7 @@ class RemoteClusterClient:
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
+        validate_tpu_replicas(resources.device if resources.HasField("device") else None, replicas)
 
         if environment is None:
             environment = EnvironmentSpec().to_proto()
@@ -259,9 +260,12 @@ class RemoteClusterClient:
         self._client.unregister_endpoint(request)
 
     def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
-        request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
-        response = self._client.list_endpoints(request)
-        return list(response.endpoints)
+        def _call():
+            request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
+            response = self._client.list_endpoints(request, timeout_ms=10_000)
+            return list(response.endpoints)
+
+        return call_with_retry("list_endpoints", _call)
 
     def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
         """List all workers registered with the controller."""
@@ -363,5 +367,9 @@ class RemoteClusterClient:
         Returns:
             GetAutoscalerStatusResponse proto with autoscaler status and recent actions
         """
-        request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
-        return self._client.get_autoscaler_status(request)
+
+        def _call():
+            request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
+            return self._client.get_autoscaler_status(request)
+
+        return call_with_retry("get_autoscaler_status", _call)

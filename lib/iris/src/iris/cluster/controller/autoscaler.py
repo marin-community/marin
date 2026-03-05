@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Autoscaler manages scaling across scale groups.
@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import difflib
 import logging
+import math
 from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -33,10 +33,10 @@ from iris.cluster.platform.base import (
     QuotaExhaustedError,
     RemoteWorkerHandle,
 )
-from iris.cluster.types import DeviceType, REGION_ATTRIBUTE_KEY, VmWorkerStatusMap, ZONE_ATTRIBUTE_KEY
+from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -96,13 +96,260 @@ class DemandEntry:
     invalid_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class AdditiveReq:
+    """Additive (packable) resource request for one non-coscheduled entry."""
+
+    cpu_millicores: int
+    memory_bytes: int
+    disk_bytes: int
+
+
+def additive_req(entry: DemandEntry) -> AdditiveReq:
+    """Extract additive resource dimensions from a demand entry."""
+    return AdditiveReq(
+        cpu_millicores=entry.resources.cpu_millicores,
+        memory_bytes=entry.resources.memory_bytes,
+        disk_bytes=entry.resources.disk_bytes,
+    )
+
+
 @dataclass
-class PendingGroup:
-    name: str
-    pending_slices: int
-    remaining_slices: int
+class VmBin:
+    """Represents one VM's remaining capacity during bin packing."""
+
+    cpu_remaining: int
+    memory_remaining: int
+    disk_remaining: int
+
+    def can_fit(self, req: AdditiveReq) -> bool:
+        return (
+            req.cpu_millicores <= self.cpu_remaining
+            and req.memory_bytes <= self.memory_remaining
+            and req.disk_bytes <= self.disk_remaining
+        )
+
+    def place(self, req: AdditiveReq) -> None:
+        self.cpu_remaining -= req.cpu_millicores
+        self.memory_remaining -= req.memory_bytes
+        self.disk_remaining -= req.disk_bytes
+
+
+def first_fit_decreasing(reqs: list[AdditiveReq], vm_capacity: AdditiveReq) -> int:
+    """Pack requests into VMs using first-fit decreasing, returning VMs needed.
+
+    This estimates required capacity for the autoscaler. It does not model
+    placement onto existing READY workers — the scheduler handles that.
+
+    Args:
+        reqs: List of additive resource requests to pack.
+        vm_capacity: Per-VM resource capacity used as the template for new bins.
+
+    Returns:
+        Number of VMs required to fit all requests.
+    """
+    if not reqs:
+        return 0
+    reqs_sorted = sorted(
+        reqs,
+        key=lambda r: (r.disk_bytes, r.memory_bytes, r.cpu_millicores),
+        reverse=True,
+    )
+    used: list[VmBin] = []
+    for req in reqs_sorted:
+        placed = False
+        for b in used:
+            if b.can_fit(req):
+                b.place(req)
+                placed = True
+                break
+        if not placed:
+            b = VmBin(
+                cpu_remaining=vm_capacity.cpu_millicores,
+                memory_remaining=vm_capacity.memory_bytes,
+                disk_remaining=vm_capacity.disk_bytes,
+            )
+            b.place(req)
+            used.append(b)
+    return len(used)
+
+
+def compute_required_slices(group: ScalingGroup, entries: list[DemandEntry]) -> int:
+    """Compute the number of slices required to serve a group's routed entries.
+
+    Coscheduled entries each consume one full slice. Non-coscheduled entries
+    are bin-packed by additive resources (CPU, memory, disk) to estimate how
+    many VMs are needed, then converted to slices via ceil(vms / num_vms).
+
+    If the group has no per-VM resources configured, falls back to treating
+    each entry as requiring one slice (the pre-packing behavior).
+    """
+    if not entries:
+        return 0
+
+    vm_capacity = _effective_vm_capacity(group)
+    if vm_capacity is None:
+        return len(entries)
+
+    coscheduled_count = 0
+    accel_vm_count = 0
+    noncsc_reqs: list[AdditiveReq] = []
+    for entry in entries:
+        if entry.coschedule_group_id:
+            coscheduled_count += 1
+        elif entry.device_type != DeviceType.CPU:
+            # Accelerator entries are not bin-packable — each task needs
+            # exclusive access to the device, so treat as 1 VM per entry.
+            accel_vm_count += 1
+        else:
+            noncsc_reqs.append(additive_req(entry))
+
+    required_vms = first_fit_decreasing(noncsc_reqs, vm_capacity) if noncsc_reqs else 0
+    required_vms += accel_vm_count
+
+    num_vms = group.num_vms
+    required_slices_for_noncsc = math.ceil(required_vms / num_vms) if required_vms > 0 else 0
+    return coscheduled_count + required_slices_for_noncsc
+
+
+def _effective_vm_capacity(group: ScalingGroup) -> AdditiveReq | None:
+    """Per-VM capacity for bin packing, with 0-means-unlimited semantics. None if unconfigured."""
+    resources = group.resources
+    if resources is None:
+        return None
+    return AdditiveReq(
+        cpu_millicores=resources.cpu_millicores or 2**63,
+        memory_bytes=resources.memory_bytes or 2**63,
+        disk_bytes=resources.disk_bytes or 2**63,
+    )
+
+
+@dataclass
+class RoutingBudget:
+    """Per-group routing state with per-VM bin packing for fungible resources.
+
+    During routing, entries are packed into VmBin objects representing individual
+    VMs. This prevents premature overflow to lower-priority groups when multiple
+    entries fit in a single VM (e.g. 4x 32GB entries in a 128GB VM).
+    """
+
+    group: ScalingGroup
+    vm_capacity: AdditiveReq | None  # None = no resources configured → 1 entry per VM
+    max_vms: int  # (ready + inflight + headroom) * num_vms
+    packable_bins: list[VmBin]
+    coscheduled_slices: int
     assigned_entries: list[DemandEntry]
-    reason: str
+
+    @property
+    def name(self) -> str:
+        return self.group.name
+
+    @property
+    def vms_used(self) -> int:
+        return self.coscheduled_slices * self.group.num_vms + len(self.packable_bins)
+
+    @property
+    def required_slices(self) -> int:
+        """Slices needed to serve all assigned entries, derived from bin packing."""
+        if not self.assigned_entries:
+            return 0
+        noncsc = math.ceil(len(self.packable_bins) / self.group.num_vms) if self.packable_bins else 0
+        return self.coscheduled_slices + noncsc
+
+    def try_assign(self, entry: DemandEntry) -> bool:
+        """Try to assign a demand entry. Checks categorical filters, per-VM fit,
+        and attempts bin packing. Returns True if placed successfully.
+        """
+        group = self.group
+        if not _matches_filters(group, entry):
+            return False
+        if entry.invalid_reason:
+            return False
+        if not group.can_fit_resources(entry.resources):
+            return False
+
+        if entry.coschedule_group_id:
+            if group.num_vms != len(entry.task_ids):
+                return False
+            return self._assign_coscheduled(entry)
+        return self._assign_packable(entry)
+
+    def _assign_packable(self, entry: DemandEntry) -> bool:
+        if self.vm_capacity is None:
+            if self.vms_used >= self.max_vms:
+                return False
+            self.packable_bins.append(VmBin(cpu_remaining=0, memory_remaining=0, disk_remaining=0))
+            self.assigned_entries.append(entry)
+            return True
+
+        req = additive_req(entry)
+        for b in self.packable_bins:
+            if b.can_fit(req):
+                b.place(req)
+                self.assigned_entries.append(entry)
+                return True
+        if self.vms_used >= self.max_vms:
+            return False
+        cap = self.vm_capacity
+        b = VmBin(
+            cpu_remaining=cap.cpu_millicores,
+            memory_remaining=cap.memory_bytes,
+            disk_remaining=cap.disk_bytes,
+        )
+        b.place(req)
+        self.packable_bins.append(b)
+        self.assigned_entries.append(entry)
+        return True
+
+    def _assign_coscheduled(self, entry: DemandEntry) -> bool:
+        needed = self.group.num_vms
+        if self.vms_used + needed > self.max_vms:
+            return False
+        self.coscheduled_slices += 1
+        self.assigned_entries.append(entry)
+        return True
+
+
+def _make_routing_budget(group: ScalingGroup) -> RoutingBudget:
+    counts = group.slice_state_counts()
+    inflight = (
+        counts.get(SliceLifecycleState.REQUESTING, 0)
+        + counts.get(SliceLifecycleState.BOOTING, 0)
+        + counts.get(SliceLifecycleState.INITIALIZING, 0)
+    )
+    ready = counts.get(SliceLifecycleState.READY, 0)
+    current = sum(counts.values())
+    headroom = max(0, group.max_slices - current)
+
+    return RoutingBudget(
+        group=group,
+        vm_capacity=_effective_vm_capacity(group),
+        max_vms=(ready + inflight + headroom) * group.num_vms,
+        packable_bins=[],
+        coscheduled_slices=0,
+        assigned_entries=[],
+    )
+
+
+def _make_committed_budget(group: ScalingGroup) -> RoutingBudget | None:
+    """Create a requesting-capped budget for groups with in-flight slices.
+
+    Returns None if the group has no requesting slices. The committed budget
+    limits routing to the capacity already being provisioned, preventing
+    demand from being re-routed away when other groups exit cooldown.
+    """
+    counts = group.slice_state_counts()
+    requesting = counts.get(SliceLifecycleState.REQUESTING, 0)
+    if requesting == 0:
+        return None
+    return RoutingBudget(
+        group=group,
+        vm_capacity=_effective_vm_capacity(group),
+        max_vms=requesting * group.num_vms,
+        packable_bins=[],
+        coscheduled_slices=0,
+        assigned_entries=[],
+    )
 
 
 @dataclass
@@ -114,6 +361,7 @@ class UnmetDemand:
 @dataclass
 class RoutingDecision:
     group_to_launch: dict[str, int]
+    group_required_slices: dict[str, int]
     routed_entries: dict[str, list[DemandEntry]]
     unmet_entries: list[UnmetDemand]
     group_reasons: dict[str, str]
@@ -130,12 +378,7 @@ class GroupRoutingStatus:
     reason: str
 
 
-def _diagnose_no_matching_group(
-    entry: DemandEntry,
-    groups: list[ScalingGroup],
-    group_region: Callable[[ScalingGroup], str | None],
-    group_zone: Callable[[ScalingGroup], str | None],
-) -> str:
+def _diagnose_no_matching_group(entry: DemandEntry, groups: list[ScalingGroup]) -> str:
     """Produce a concise, actionable reason when no group matches a demand entry.
 
     Checks filters in order (device → preemptible → zone → region) and reports
@@ -156,7 +399,7 @@ def _diagnose_no_matching_group(
         device_matches = preempt_matches
 
     if entry.required_zones:
-        available_zones = {group_zone(g) for g in device_matches} - {None}
+        available_zones = {g.zone for g in device_matches} - {None}
         requested = sorted(entry.required_zones)
         msg = f"no_matching_group: no groups in zone {', '.join(requested)}"
         for req_zone in requested:
@@ -172,12 +415,31 @@ def _diagnose_no_matching_group(
     return f"no_matching_group: no groups match device={entry.device_type.value}:{entry.device_variant or '*'}"
 
 
-def _matches_filters(
-    group: ScalingGroup,
+def _diagnose_no_capacity(
     entry: DemandEntry,
-    group_region: Callable[[ScalingGroup], str | None],
-    group_zone: Callable[[ScalingGroup], str | None],
-) -> bool:
+    matching_groups: list[ScalingGroup],
+    budgets: dict[str, RoutingBudget],
+    ts: Timestamp,
+) -> str:
+    """Produce a specific reason when matching groups exist but none can accept demand.
+
+    This replaces the opaque "no_capacity" with the actual blocking condition
+    per group (e.g. at_max_slices, backoff, quota_exceeded, or exhausted).
+    """
+    per_group: list[str] = []
+    for g in matching_groups:
+        avail = g.availability(ts)
+        if not g.can_accept_demand(ts):
+            per_group.append(f"{g.name}={avail.status.value}")
+        elif g.name in budgets:
+            per_group.append(f"{g.name}=exhausted")
+        else:
+            per_group.append(f"{g.name}=unknown")
+
+    return f"no_capacity: {', '.join(per_group)}"
+
+
+def _matches_filters(group: ScalingGroup, entry: DemandEntry) -> bool:
     """Check device type, preemptible preference, region, and zone constraints.
 
     Does NOT check resource capacity or accept-demand readiness.
@@ -186,181 +448,20 @@ def _matches_filters(
         return False
     if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
         return False
-    if entry.required_regions:
-        region = group_region(group)
-        if region not in entry.required_regions:
-            return False
-    if entry.required_zones:
-        zone = group_zone(group)
-        if zone not in entry.required_zones:
-            return False
+    if entry.required_regions and group.region not in entry.required_regions:
+        return False
+    if entry.required_zones and group.zone not in entry.required_zones:
+        return False
     return True
 
 
-def route_demand(
-    groups: list[ScalingGroup],
-    demand_entries: list[DemandEntry],
-    timestamp: Timestamp | None = None,
-) -> RoutingDecision:
-    """Route demand to groups based on requirements and priority."""
-    ts = timestamp or Timestamp.now()
-    sorted_groups = sorted(groups, key=lambda g: g.config.priority or 100)
-    group_by_name = {g.name: g for g in sorted_groups}
-
-    pending: dict[str, PendingGroup] = {}
-    routed: dict[str, list[DemandEntry]] = {}
-    unmet: list[UnmetDemand] = []
-    group_reasons: dict[str, str] = {}
-
-    def group_region(group: ScalingGroup) -> str | None:
-        if group.config.HasField("worker"):
-            region = group.config.worker.attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
-            if region:
-                return region
-        template = group.config.slice_template
-        if template.HasField("gcp") and template.gcp.zone:
-            return template.gcp.zone.rsplit("-", 1)[0]
-        if template.HasField("coreweave") and template.coreweave.region:
-            return template.coreweave.region
-        return None
-
-    def group_zone(group: ScalingGroup) -> str | None:
-        if group.config.HasField("worker"):
-            zone = group.config.worker.attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
-            if zone:
-                return zone
-        template = group.config.slice_template
-        if template.HasField("gcp") and template.gcp.zone:
-            return template.gcp.zone
-        if template.HasField("coreweave") and template.coreweave.region:
-            return template.coreweave.region
-        return None
-
-    def can_fit_group(group: ScalingGroup, entry: DemandEntry, *, check_accept: bool = True) -> bool:
-        if not _matches_filters(group, entry, group_region, group_zone):
-            return False
-        if entry.invalid_reason:
-            return False
-        if entry.coschedule_group_id and group.num_vms != len(entry.task_ids):
-            return False
-        if check_accept and not group.can_accept_demand(ts):
-            return False
-        if not group.can_fit_resources(entry.resources):
-            return False
-        return True
-
-    def can_fit_pending(pg: PendingGroup, group: ScalingGroup, entry: DemandEntry) -> bool:
-        if pg.remaining_slices <= 0:
-            return False
-        return can_fit_group(group, entry, check_accept=False)
-
-    def assign(pg: PendingGroup, entry: DemandEntry) -> None:
-        pg.remaining_slices -= 1
-        pg.assigned_entries.append(entry)
-        routed.setdefault(pg.name, []).append(entry)
-
-    def make_pending(group: ScalingGroup) -> PendingGroup:
-        counts = group.slice_state_counts()
-        inflight = (
-            counts.get(SliceLifecycleState.REQUESTING, 0)
-            + counts.get(SliceLifecycleState.BOOTING, 0)
-            + counts.get(SliceLifecycleState.INITIALIZING, 0)
-        )
-        ready = counts.get(SliceLifecycleState.READY, 0)
-        current = sum(counts.values())
-        headroom = group.max_slices - current
-
-        if headroom > 0:
-            # Group can still create new slices. Only count in-flight
-            # slices as pending capacity; headroom determines how many
-            # new demand entries can trigger scale-ups.
-            return PendingGroup(
-                name=group.name,
-                pending_slices=inflight,
-                remaining_slices=inflight + headroom,
-                assigned_entries=[],
-                reason="demand-routed",
-            )
-
-        # Group is at max_slices (AT_CAPACITY). Include ready slices so
-        # demand can still be routed here for demand tracking. Without
-        # this, current_demand drops to 0 when a group hits max_slices,
-        # causing immediate scale-down of newly ready slices.
-        existing_capacity = inflight + ready
-        return PendingGroup(
-            name=group.name,
-            pending_slices=existing_capacity,
-            remaining_slices=existing_capacity,
-            assigned_entries=[],
-            reason="demand-routed",
-        )
-
-    for group in sorted_groups:
-        if group.availability(ts).status == GroupAvailability.REQUESTING:
-            pending[group.name] = make_pending(group)
-
-    for entry in demand_entries:
-        if entry.invalid_reason:
-            unmet.append(UnmetDemand(entry=entry, reason=entry.invalid_reason))
-            continue
-
-        matching_groups = [g for g in sorted_groups if _matches_filters(g, entry, group_region, group_zone)]
-        if not matching_groups:
-            reason = _diagnose_no_matching_group(entry, sorted_groups, group_region, group_zone)
-            unmet.append(UnmetDemand(entry=entry, reason=reason))
-            continue
-
-        if entry.coschedule_group_id and not any(g.num_vms == len(entry.task_ids) for g in matching_groups):
-            group_sizes = [g.num_vms for g in matching_groups]
-            reason = (
-                f"coschedule_mismatch: job needs {len(entry.task_ids)} tasks coscheduled"
-                f" but matching groups have num_vms={group_sizes}"
-            )
-            unmet.append(UnmetDemand(entry=entry, reason=reason))
-            continue
-
-        fit_reasons = [g.check_resource_fit(entry.resources) for g in matching_groups]
-        if all(r is not None for r in fit_reasons):
-            details = "; ".join(r for r in fit_reasons if r is not None)
-            reason = f"insufficient_resources: {details}"
-            unmet.append(UnmetDemand(entry=entry, reason=reason))
-            continue
-
-        matched_pending = False
-        for name, pg in pending.items():
-            group = group_by_name.get(name)
-            if group is None:
-                continue
-            if can_fit_pending(pg, group, entry):
-                assign(pg, entry)
-                matched_pending = True
-                break
-        if matched_pending:
-            continue
-
-        matched_group = False
-        for group in sorted_groups:
-            if not can_fit_group(group, entry):
-                continue
-            if group.name not in pending:
-                pending[group.name] = make_pending(group)
-            if pending[group.name].remaining_slices <= 0:
-                continue
-            assign(pending[group.name], entry)
-            matched_group = True
-            group_reasons.setdefault(group.name, "demand-routed")
-            break
-
-        if not matched_group:
-            unmet.append(UnmetDemand(entry=entry, reason="no_capacity"))
-
-    group_to_launch: dict[str, int] = {}
-    for name, pg in pending.items():
-        if not pg.assigned_entries:
-            continue
-        needed = max(0, len(pg.assigned_entries) - pg.pending_slices)
-        group_to_launch[name] = needed
-
+def _build_group_statuses(
+    sorted_groups: list[ScalingGroup],
+    routed: dict[str, list[DemandEntry]],
+    group_to_launch: dict[str, int],
+    group_reasons: dict[str, str],
+    ts: Timestamp,
+) -> list[GroupRoutingStatus]:
     group_statuses: list[GroupRoutingStatus] = []
     for group in sorted_groups:
         name = group.name
@@ -377,8 +478,11 @@ def route_demand(
         elif availability.status == GroupAvailability.REQUESTING:
             decision = "requesting"
             reason = availability.reason
-        elif availability.status == GroupAvailability.AT_CAPACITY:
-            decision = "at_capacity"
+        elif availability.status == GroupAvailability.COOLDOWN:
+            decision = "cooldown"
+            reason = availability.reason
+        elif availability.status == GroupAvailability.AT_MAX_SLICES:
+            decision = "blocked"
             reason = "at max_slices"
         else:
             decision = "idle"
@@ -394,9 +498,115 @@ def route_demand(
                 reason=reason,
             )
         )
+    return group_statuses
+
+
+def route_demand(
+    groups: list[ScalingGroup],
+    demand_entries: list[DemandEntry],
+    timestamp: Timestamp | None = None,
+) -> RoutingDecision:
+    """Route demand to groups using two-phase routing with committed budgets.
+
+    Phase 1 routes entries to committed budgets (capped at requesting slice capacity)
+    so that in-flight provisioning isn't orphaned when other groups exit cooldown.
+    Phase 2 routes remaining entries through the normal priority-based waterfall
+    with full-capacity budgets.
+    """
+    ts = timestamp or Timestamp.now()
+    sorted_groups = sorted(groups, key=lambda g: g.config.priority or 100)
+
+    routed: dict[str, list[DemandEntry]] = {}
+    unmet: list[UnmetDemand] = []
+    group_reasons: dict[str, str] = {}
+
+    # Phase 1 budgets: requesting-capped for groups with in-flight slices
+    committed_budgets: dict[str, RoutingBudget] = {}
+    for group in sorted_groups:
+        if not group.can_accept_demand(ts):
+            continue
+        budget = _make_committed_budget(group)
+        if budget is not None:
+            committed_budgets[group.name] = budget
+
+    # Phase 2 budgets: full capacity for all accepting groups
+    full_budgets: dict[str, RoutingBudget] = {}
+    for group in sorted_groups:
+        if group.can_accept_demand(ts):
+            full_budgets[group.name] = _make_routing_budget(group)
+
+    for entry in demand_entries:
+        if entry.invalid_reason:
+            unmet.append(UnmetDemand(entry=entry, reason=entry.invalid_reason))
+            continue
+
+        matching_groups = [g for g in sorted_groups if _matches_filters(g, entry)]
+        if not matching_groups:
+            unmet.append(UnmetDemand(entry=entry, reason=_diagnose_no_matching_group(entry, sorted_groups)))
+            continue
+
+        if entry.coschedule_group_id and not any(g.num_vms == len(entry.task_ids) for g in matching_groups):
+            group_sizes = [g.num_vms for g in matching_groups]
+            reason = (
+                f"coschedule_mismatch: job needs {len(entry.task_ids)} tasks coscheduled"
+                f" but matching groups have num_vms={group_sizes}"
+            )
+            unmet.append(UnmetDemand(entry=entry, reason=reason))
+            continue
+
+        fit_reasons = [g.check_resource_fit(entry.resources) for g in matching_groups]
+        if all(r is not None for r in fit_reasons):
+            details = "; ".join(r for r in fit_reasons if r is not None)
+            unmet.append(UnmetDemand(entry=entry, reason=f"insufficient_resources: {details}"))
+            continue
+
+        matched = False
+
+        # Phase 1: try committed budgets first (groups with requesting slices)
+        for budget in committed_budgets.values():
+            if budget.try_assign(entry):
+                # Mirror into full budget so phase 2 sees consumed capacity
+                full_budgets[budget.name].try_assign(entry)
+                routed.setdefault(budget.name, []).append(entry)
+                group_reasons.setdefault(budget.name, "demand-routed")
+                matched = True
+                break
+
+        # Phase 2: fall through to full waterfall
+        if not matched:
+            for budget in full_budgets.values():
+                if budget.try_assign(entry):
+                    routed.setdefault(budget.name, []).append(entry)
+                    group_reasons.setdefault(budget.name, "demand-routed")
+                    matched = True
+                    break
+
+        if not matched:
+            unmet.append(
+                UnmetDemand(entry=entry, reason=_diagnose_no_capacity(entry, matching_groups, full_budgets, ts))
+            )
+
+    group_to_launch: dict[str, int] = {}
+    group_required_slices: dict[str, int] = {}
+    for name, budget in full_budgets.items():
+        required = budget.required_slices
+        group_required_slices[name] = required
+        if not budget.assigned_entries:
+            continue
+        counts = budget.group.slice_state_counts()
+        capacity_slices = (
+            counts.get(SliceLifecycleState.READY, 0)
+            + counts.get(SliceLifecycleState.BOOTING, 0)
+            + counts.get(SliceLifecycleState.INITIALIZING, 0)
+            + counts.get(SliceLifecycleState.REQUESTING, 0)
+        )
+        group_to_launch[name] = max(0, required - capacity_slices)
+
+    group_statuses = _build_group_statuses(sorted_groups, routed, group_to_launch, group_reasons, ts)
 
     return RoutingDecision(
         group_to_launch=group_to_launch,
+        group_required_slices=group_required_slices,
         routed_entries=routed,
         unmet_entries=unmet,
         group_reasons=group_reasons,
@@ -593,37 +803,38 @@ class Autoscaler:
 
         decisions = []
         for name, group in self._groups.items():
-            allocated_entries = result.routed_entries.get(name, [])
-            demand = len(allocated_entries)
-            group.update_demand(demand)
-            decision = self._evaluate_group(group, demand, ts)
-            if decision:
-                decisions.append(decision)
+            required_slices = result.group_required_slices.get(name, 0)
+            group.update_demand(required_slices)
+            decisions.extend(self._evaluate_group(group, required_slices, ts))
 
         return decisions
 
     def _evaluate_group(
         self,
         group: ScalingGroup,
-        demand: int,
+        required_slices: int,
         ts: Timestamp,
-    ) -> ScalingDecision | None:
-        """Evaluate scaling decision for a single group."""
+    ) -> list[ScalingDecision]:
+        """Evaluate scaling decisions for a single group.
+
+        Returns multiple SCALE_UP decisions when demand exceeds capacity by
+        more than one slice, allowing multi-slice scale-up in a single cycle.
+        """
         counts = group.slice_state_counts()
         ready = counts[SliceLifecycleState.READY]
         requesting = counts[SliceLifecycleState.REQUESTING]
         pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING] + requesting
         total = sum(counts.values())
 
-        capacity = ready + pending
+        capacity_slices = ready + pending
 
         logger.debug(
-            "Evaluating group %s: total=%d, ready=%d, pending=%d, demand=%d, min=%d, max=%d",
+            "Evaluating group %s: total=%d, ready=%d, pending=%d, required_slices=%d, min=%d, max=%d",
             group.name,
             total,
             ready,
             pending,
-            demand,
+            required_slices,
             group.min_slices,
             group.max_slices,
         )
@@ -637,27 +848,36 @@ class Autoscaler:
                     total,
                     group.min_slices,
                 )
-                return None
+                return []
 
-            return ScalingDecision(
-                scale_group=group.name,
-                action=ScalingAction.SCALE_UP,
-                reason=f"below min_slices ({total} < {group.min_slices})",
-            )
+            return [
+                ScalingDecision(
+                    scale_group=group.name,
+                    action=ScalingAction.SCALE_UP,
+                    reason=f"below min_slices ({total} < {group.min_slices})",
+                )
+            ]
 
-        # Priority 2: Scale UP for demand exceeding capacity
-        if demand > capacity and total < group.max_slices:
+        # Priority 2: Scale UP when required slices exceed available capacity
+        if required_slices > capacity_slices and total < group.max_slices:
             if not group.can_scale_up(ts):
                 logger.debug("Scale group %s: scale up blocked", group.name)
-                return None
+                return []
 
-            return ScalingDecision(
-                scale_group=group.name,
-                action=ScalingAction.SCALE_UP,
-                reason=f"demand={demand} > capacity={capacity}",
-            )
+            slices_to_add = min(required_slices - capacity_slices, group.max_slices - total)
+            return [
+                ScalingDecision(
+                    scale_group=group.name,
+                    action=ScalingAction.SCALE_UP,
+                    reason=(
+                        f"required_slices={required_slices} > capacity={capacity_slices}"
+                        f" (scaling {i + 1}/{slices_to_add})"
+                    ),
+                )
+                for i in range(slices_to_add)
+            ]
 
-        return None
+        return []
 
     def execute(
         self,
@@ -677,6 +897,14 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
+                if not group.acquire_scale_up_token(timestamp):
+                    logger.info("Rate-limited scale-up for %s: %s", decision.scale_group, decision.reason)
+                    self._log_action(
+                        "rate_limited",
+                        decision.scale_group,
+                        reason=decision.reason,
+                    )
+                    continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
 
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
@@ -819,14 +1047,15 @@ class Autoscaler:
 
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
-            scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
-            if scaled_down:
-                self._unregister_slice_workers(scaled_down.slice_id)
+            ready_before = group.ready_slice_count()
+            scaled_down_handles = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp)
+            for handle in scaled_down_handles:
+                self._unregister_slice_workers(handle.slice_id)
                 self._log_action(
                     "scale_down",
                     group.name,
-                    slice_id=scaled_down.slice_id,
-                    reason=f"idle slice (target={target_capacity}, ready={group.ready_slice_count() + 1})",
+                    slice_id=handle.slice_id,
+                    reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
 
     def update(
@@ -856,8 +1085,25 @@ class Autoscaler:
         self.refresh(vm_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
+    def to_tracked_worker_snapshots(self) -> list[snapshot_pb2.TrackedWorkerSnapshot]:
+        """Serialize tracked worker state for checkpointing."""
+
+        return [
+            snapshot_pb2.TrackedWorkerSnapshot(
+                worker_id=tw.worker_id,
+                slice_id=tw.slice_id,
+                scale_group=tw.scale_group,
+                internal_address=tw.handle.internal_address,
+            )
+            for tw in self._workers.values()
+        ]
+
+    def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
+        """Restore tracked worker state from a snapshot. Called before loops start."""
+        self._workers.update(workers)
+
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get worker info by ID from the centralized worker registry."""
+        """Get VM info by platform worker ID from the centralized worker registry."""
         tracked = self._workers.get(vm_id)
         if not tracked:
             return None
@@ -881,7 +1127,7 @@ class Autoscaler:
         )
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get bootstrap log for a worker from the centralized worker registry."""
+        """Get bootstrap log for a VM by platform worker ID."""
         tracked = self._workers.get(vm_id)
         if not tracked:
             return ""

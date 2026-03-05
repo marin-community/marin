@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -30,6 +30,12 @@ class TokenizeMetadata:
 class TrainMetadata:
     tokens_seen: int
     checkpoint_path: str
+
+
+@dataclass
+class NestedMetadata:
+    path: str
+    resources: ResourceConfig
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +120,17 @@ def test_artifact_save_and_load_untyped(tmp_path: Path):
     assert isinstance(loaded, dict)
     assert loaded["path"] == "/tokenized"
     assert loaded["num_tokens"] == 42
+
+
+def test_artifact_save_nested_dataclass(tmp_path: Path):
+    artifact = NestedMetadata(path="/nested", resources=ResourceConfig(cpu=2, ram="4g"))
+    Artifact.save(artifact, tmp_path.as_posix())
+
+    loaded = Artifact.load(tmp_path.as_posix())
+    assert isinstance(loaded, dict)
+    assert loaded["path"] == "/nested"
+    assert loaded["resources"]["cpu"] == 2
+    assert loaded["resources"]["ram"] == "4g"
 
 
 def test_artifact_roundtrip_through_pipeline(tmp_path: Path):
@@ -377,35 +394,35 @@ def test_resolve_executor_step_picks_up_remote_decorator():
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert isinstance(resolved.fn, RemoteCallable)
     assert resolved.fn.resources == ResourceConfig.with_cpu()
 
 
-def test_explicit_resources_override_remote_decorator():
-    """ExecutorStep.resources should take precedence over @remote decorator resources."""
-    explicit = ResourceConfig.with_cpu(cpu=8, ram="32g")
+def test_remote_decorator_resources_are_preserved():
+    """@remote decorator resources should be preserved through resolve_executor_step."""
+    custom = ResourceConfig.with_cpu(cpu=8, ram="32g")
 
-    @remote(resources=ResourceConfig.with_cpu(cpu=2))
+    @remote(resources=custom)
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=explicit)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources == explicit
+    assert resolved.fn.resources == custom
 
 
-def test_step_without_remote_or_resources_is_plain_fn():
-    """A plain function with no @remote and no ExecutorStep.resources should not be RemoteCallable."""
+def test_step_without_remote_is_plain_fn():
+    """A plain function with no @remote should not be RemoteCallable."""
 
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert not isinstance(resolved.fn, RemoteCallable)

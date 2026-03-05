@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -15,6 +15,7 @@ from typing import Any
 
 import jmp
 from fray.v2 import ResourceConfig
+from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -206,16 +207,18 @@ def default_tokenize(
     return ExecutorStep(
         name=os.path.join("tokenized", name),
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=tokenize,
+        fn=remote(
+            tokenize,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+            pip_dependency_groups=["cpu"],
+            env_vars={
+                "TRANSFORMERS_NO_TORCH": "1",
+                "TRANSFORMERS_NO_TORCHVISION": "1",
+                "USE_TORCH": "0",
+                "TORCH_DISABLE_GLOBAL_DEPS": "1",
+            },
+        ),
         config=config,
-        resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
-        pip_dependency_groups=["cpu"],
-        env_vars={
-            "TRANSFORMERS_NO_TORCH": "1",
-            "TRANSFORMERS_NO_TORCHVISION": "1",
-            "USE_TORCH": "0",
-            "TORCH_DISABLE_GLOBAL_DEPS": "1",
-        },
     )
 
 

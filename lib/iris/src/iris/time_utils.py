@@ -1,8 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import math
 import random
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -367,9 +368,85 @@ class RateLimiter:
         elapsed = time.monotonic() - self._last_run
         return max(0.0, self._interval - elapsed)
 
+    def mark_run(self) -> None:
+        """Record that an iteration is starting now.
+
+        Use this when composing the limiter with an external wait mechanism
+        (e.g., threading.Event.wait) instead of using the built-in wait().
+        """
+        self._last_run = time.monotonic()
+
+    def wait(self, cancel: threading.Event | None = None) -> bool:
+        """Block until the rate limit interval has elapsed since the last run.
+
+        Uses the time remaining from the last run to avoid drift: if the work
+        between calls takes longer than the interval, returns immediately so
+        the loop stays as close to the target cadence as possible.
+
+        Args:
+            cancel: Optional event that, when set, interrupts the wait early.
+
+        Returns:
+            True if the interval elapsed normally, False if cancelled.
+        """
+        remaining = self.time_until_next()
+        if remaining > 0:
+            if cancel is not None:
+                cancel.wait(timeout=remaining)
+                if cancel.is_set():
+                    return False
+            else:
+                time.sleep(remaining)
+        self.mark_run()
+        return True
+
     def reset(self) -> None:
         """Reset rate limiter to allow immediate run."""
         self._last_run = None
+
+
+class TokenBucket:
+    """Token bucket rate limiter with rolling replenishment.
+
+    Allows up to `capacity` actions per `refill_period`, with smooth
+    per-second refill. Thread-safe. Supports deterministic testing via
+    Timestamp-based `try_acquire(now=...)`.
+
+    Example:
+        bucket = TokenBucket(capacity=5, refill_period=Duration.from_minutes(1))
+        if bucket.try_acquire():
+            create_vm()
+    """
+
+    def __init__(self, capacity: int, refill_period: Duration):
+        self._capacity = capacity
+        self._tokens = float(capacity)
+        self._refill_rate = capacity / refill_period.to_seconds()  # tokens/sec
+        self._last_refill = Timestamp.from_ms(0)
+        self._lock = threading.Lock()
+
+    def try_acquire(self, n: int = 1, now: Timestamp | None = None) -> bool:
+        """Try to consume n tokens. Returns True if successful."""
+        now = now or Timestamp.now()
+        with self._lock:
+            self._refill(now)
+            if self._tokens >= n:
+                self._tokens -= n
+                return True
+            return False
+
+    def _refill(self, now: Timestamp) -> None:
+        elapsed_ms = now.epoch_ms() - self._last_refill.epoch_ms()
+        if elapsed_ms <= 0:
+            return
+        elapsed_seconds = elapsed_ms / 1000.0
+        self._tokens = min(self._capacity, self._tokens + elapsed_seconds * self._refill_rate)
+        self._last_refill = now
+
+    @property
+    def available(self) -> int:
+        """Current available tokens (approximate, no refill)."""
+        return int(self._tokens)
 
 
 class ExponentialBackoff:

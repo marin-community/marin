@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Job management via command passthrough (replaces ``iris-run``).
@@ -11,7 +11,6 @@ Usage:
 import json
 import logging
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -28,6 +27,7 @@ from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.types import (
     Constraint,
+    CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     JobName,
@@ -174,32 +174,61 @@ def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
     return result
 
 
+KNOWN_GPU_VARIANTS: frozenset[str] = frozenset(
+    {
+        "A100",
+        "A10G",
+        "B100",
+        "B200",
+        "GB200",
+        "H100",
+        "H200",
+        "L4",
+        "L40",
+        "L40S",
+        "RTX4090",
+        "T4",
+        "V100",
+    }
+)
+
+_GPU_VARIANT_LOOKUP: dict[str, str] = {v.lower(): v for v in KNOWN_GPU_VARIANTS}
+
+
 def parse_gpu_spec(spec: str) -> tuple[str, int]:
     """Parse a GPU spec string into (variant, count).
 
     Accepts: 'H100x8' → ("H100", 8), '8' → ("", 8), 'H100' → ("H100", 1).
-    Only a trailing 'x<digits>' is treated as a count separator, so variants
-    like 'rtx4090' are not misinterpreted.
+    The variant must be a known GPU name from KNOWN_GPU_VARIANTS (case-insensitive).
     """
     if not spec:
         raise ValueError("GPU spec must not be empty")
 
-    # Only treat 'x' as a count separator for trailing x<1-3 digits>,
-    # so model names like 'rtx4090' (4+ digit suffix) aren't misinterpreted.
-    m = re.fullmatch(r"(\w+)x(\d{1,3})", spec)
-    if m:
-        variant, count = m.group(1), int(m.group(2))
-        if count <= 0:
-            raise ValueError(f"GPU count must be positive, got {count}")
-        return variant, count
     if spec.isdigit():
         count = int(spec)
         if count <= 0:
             raise ValueError(f"GPU count must be positive, got {count}")
         return "", count
-    if not spec.isalnum():
-        raise ValueError(f"Invalid GPU spec: {spec!r}")
-    return spec, 1
+
+    spec_lower = spec.lower()
+    for known_lower, canonical in _GPU_VARIANT_LOOKUP.items():
+        if not spec_lower.startswith(known_lower):
+            continue
+        rest = spec[len(known_lower) :]
+        if not rest:
+            return canonical, 1
+        if rest[0] == "x" and rest[1:].isdigit():
+            count = int(rest[1:])
+            if count <= 0:
+                raise ValueError(f"GPU count must be positive, got {count}")
+            return canonical, count
+
+    known = ", ".join(sorted(KNOWN_GPU_VARIANTS))
+    raise ValueError(
+        f"Unknown GPU spec: {spec!r}. "
+        f"Expected a known variant (e.g., H100), VARIANTxCOUNT (e.g., H100x8), "
+        f"or a bare count (e.g., 8). Known variants: {known}"
+    )
 
 
 def build_resources(
@@ -260,6 +289,54 @@ def generate_job_name(command: list[str]) -> str:
     return f"iris-run-{script_name}-{timestamp}"
 
 
+def resolve_multinode_tpu_defaults(
+    tpu: str | None,
+    replicas: int | None,
+) -> tuple[int, CoschedulingConfig | None]:
+    """Auto-detect multinode TPU topology and set replicas/coscheduling.
+
+    When a multinode TPU (vm_count > 1) is requested and the caller did not
+    explicitly set replicas, this function sets replicas to the topology's
+    vm_count and enables coscheduling by ``tpu-name`` so that all tasks land
+    on workers in the same TPU slice.
+
+    Args:
+        tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
+        replicas: Explicit replica count from the caller, or ``None`` if not
+            specified (meaning the default should be inferred).
+
+    Returns:
+        A ``(replicas, coscheduling)`` tuple.  ``coscheduling`` is ``None``
+        for single-host TPUs or non-TPU jobs.
+    """
+    if not tpu:
+        return replicas or 1, None
+
+    try:
+        topo = get_tpu_topology(tpu)
+    except ValueError:
+        return replicas or 1, None
+
+    if topo.vm_count <= 1:
+        return replicas or 1, None
+
+    # Multinode TPU: auto-set replicas and coscheduling.
+    if replicas is None:
+        replicas = topo.vm_count
+        logger.info(
+            f"Multinode TPU '{tpu}' detected (vm_count={topo.vm_count}). "
+            f"Auto-setting replicas={replicas} and coscheduling by tpu-name."
+        )
+    else:
+        logger.info(
+            f"Multinode TPU '{tpu}' detected (vm_count={topo.vm_count}). "
+            f"Using explicit replicas={replicas} with coscheduling by tpu-name."
+        )
+
+    coscheduling = CoschedulingConfig(group_by="tpu-name")
+    return replicas, coscheduling
+
+
 def run_iris_job(
     command: list[str],
     env_vars: dict[str, str],
@@ -271,7 +348,7 @@ def run_iris_job(
     disk: str = "5GB",
     wait: bool = True,
     job_name: str | None = None,
-    replicas: int = 1,
+    replicas: int | None = None,
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
@@ -300,6 +377,8 @@ def run_iris_job(
     job_name = job_name or generate_job_name(command)
     extras = extras or []
 
+    replicas, coscheduling = resolve_multinode_tpu_defaults(tpu, replicas)
+
     constraints: list[Constraint] = []
     if regions:
         constraints.append(region_constraint(list(regions)))
@@ -320,6 +399,10 @@ def run_iris_job(
     if resources.device and resources.device.HasField("gpu"):
         gpu_dev = resources.device.gpu
         logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
+    if replicas > 1:
+        logger.info(f"Replicas: {replicas}")
+    if coscheduling:
+        logger.info(f"Coscheduling: group_by={coscheduling.group_by}")
     if regions:
         logger.info(f"Region constraint: {', '.join(regions)}")
     if zone:
@@ -342,6 +425,7 @@ def run_iris_job(
         include_children_logs=include_children_logs,
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
+        coscheduling=coscheduling,
         user=user,
         reservation=reservation,
     )
@@ -361,6 +445,7 @@ def _submit_and_wait_job(
     include_children_logs: bool = True,
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
+    coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
 ) -> int:
@@ -379,6 +464,7 @@ def _submit_and_wait_job(
         resources=resources,
         environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
         constraints=constraints,
+        coscheduling=coscheduling,
         replicas=replicas,
         max_retries_failure=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
@@ -456,7 +542,9 @@ Examples:
 @click.option("--no-wait", is_flag=True, help="Don't wait for job completion")
 @click.option("--job-name", type=str, help="Custom job name (default: auto-generated)")
 @click.option("--user", type=str, help="Override the user prefix for the submitted job.")
-@click.option("--replicas", type=int, default=1, help="Number of tasks for gang scheduling (default: 1)")
+@click.option(
+    "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
+)
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
@@ -490,7 +578,7 @@ def run(
     no_wait: bool,
     job_name: str | None,
     user: str | None,
-    replicas: int,
+    replicas: int | None,
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
@@ -507,6 +595,17 @@ def run(
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
+
+    # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
+    # instead of --reserve) into cmd. Catch any flags that leaked through
+    # before the actual command starts — these were meant for iris, not the
+    # user's program.
+    for arg in command:
+        if not arg.startswith("-"):
+            break
+        raise click.UsageError(
+            f"Unknown option {arg!r}. " f"Iris options must come before '--'. Did you mean a different flag?"
+        )
 
     env_vars_dict = load_env_vars(env_vars)
 

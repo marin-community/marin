@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Speedruns using the C-AdamC optimizer for various Llama model sizes (Chinchilla optimal steps).

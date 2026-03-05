@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """High-level client with automatic job hierarchy and namespace-based actor discovery.
@@ -52,6 +52,7 @@ from iris.cluster.types import (
     ReservationEntry,
     ResourceSpec,
     merge_constraints,
+    validate_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -632,6 +633,7 @@ class IrisClient:
             raise ValueError("Job name cannot contain '/'")
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
+        validate_tpu_replicas(resources.device, replicas)
 
         # Get parent job ID from context
         ctx = get_iris_ctx()

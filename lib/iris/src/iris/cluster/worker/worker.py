@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Unified worker managing all components and lifecycle."""
@@ -30,7 +30,7 @@ from iris.cluster.task_logging import FsspecLogSink, LogSink, LogSinkConfig, Pro
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.logging import get_global_buffer
+from iris.logging import get_global_buffer, slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -55,7 +55,7 @@ class WorkerConfig:
     resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
     log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
-    heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
+    heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(600.0))
     accelerator_type: int = 0
     accelerator_variant: str = ""
     gpu_count: int = 0
@@ -98,7 +98,7 @@ def worker_config_from_proto(
         heartbeat_timeout=(
             Duration.from_ms(proto.heartbeat_timeout.milliseconds)
             if proto.HasField("heartbeat_timeout")
-            else Duration.from_seconds(60.0)
+            else Duration.from_seconds(600.0)
         ),
         accelerator_type=proto.accelerator_type,
         accelerator_variant=proto.accelerator_variant,
@@ -309,7 +309,7 @@ class Worker:
         worker_id = self._worker_id or "unknown"
         self._process_log_sink = ProcessLogSink(
             prefix=prefix,
-            worker_id=worker_id,
+            process_name=f"worker/{worker_id}",
             log_buffer=get_global_buffer(),
         )
         logger.info("Process log sink enabled: %s", self._process_log_sink.log_path)
@@ -479,33 +479,17 @@ class Worker:
             self._kill_task_attempt(task_id_wire, current.attempt_id)  # type: ignore[union-attr]
 
         task_id.require_task()
-        num_tasks = request.num_tasks
-        attempt_id = request.attempt_id
 
-        # Allocate requested ports
-        port_names = list(request.ports)
-        allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
-        ports = dict(zip(port_names, allocated_ports, strict=True))
-
-        # Create task working directory with attempt isolation
-        # Use safe path component for hierarchical task IDs (e.g., "/my-exp/0" -> "__my-exp__0")
-        safe_task_id = task_id.to_safe_token()
-        workdir = self._cache_dir / "workdirs" / f"{safe_task_id}_attempt_{attempt_id}"
-        workdir.mkdir(parents=True, exist_ok=True)
-
-        # Create TaskAttempt to handle the full execution lifecycle
+        # Create a minimal TaskAttemptConfig. Expensive setup (port allocation,
+        # workdir creation, log sink init) is deferred to TaskAttempt.run() so
+        # the heartbeat RPC returns quickly.
         config = TaskAttemptConfig(
             task_id=task_id,
-            num_tasks=num_tasks,
+            num_tasks=request.num_tasks,
             attempt_id=attempt_id,
             request=request,
-            ports=ports,
-            workdir=workdir,
             cache_dir=self._cache_dir,
         )
-
-        # Create log sink for task logs
-        log_sink = self.create_log_sink(task_id.to_wire(), attempt_id)
 
         attempt = TaskAttempt(
             config=config,
@@ -519,7 +503,7 @@ class Worker:
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
-            log_sink=log_sink,
+            log_sink_factory=lambda: self.create_log_sink(task_id.to_wire(), attempt_id),
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
@@ -583,99 +567,126 @@ class Worker:
 
         Processes tasks_to_run and tasks_to_kill, reconciles expected_tasks against
         actual state, and returns current running/completed tasks.
+
+        Kill operations are performed asynchronously in daemon threads to avoid
+        blocking the heartbeat RPC. The task's should_stop flag is set immediately,
+        and the container stop/wait/force-kill sequence runs in the background.
         """
         # Reset heartbeat deadline
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
 
-        # Start new tasks
-        for run_req in request.tasks_to_run:
-            try:
-                self.submit_task(run_req)
-                logger.info("Heartbeat: submitted task %s", run_req.task_id)
-            except Exception as e:
-                logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
+        with slow_log(logger, "handle_heartbeat", threshold_ms=2000):
+            # Start new tasks
+            with slow_log(logger, "heartbeat submit_tasks", threshold_ms=200):
+                for run_req in request.tasks_to_run:
+                    try:
+                        self.submit_task(run_req)
+                        logger.info("Heartbeat: submitted task %s", run_req.task_id)
+                    except Exception as e:
+                        logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
 
-        # Kill requested tasks
-        for task_id in request.tasks_to_kill:
-            try:
-                self.kill_task(task_id)
-                logger.info("Heartbeat: killed task %s", task_id)
-            except Exception as e:
-                logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
+            # Kill requested tasks asynchronously so the heartbeat returns immediately
+            with slow_log(logger, "heartbeat kill_tasks", threshold_ms=100):
+                for task_id in request.tasks_to_kill:
+                    try:
+                        current = self._get_current_attempt(task_id)
+                        if current:
+                            self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
+                            logger.info("Heartbeat: initiated async kill for task %s", task_id)
+                    except Exception as e:
+                        logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
 
-        tasks: list[cluster_pb2.Controller.WorkerTaskStatus] = []
+            tasks: list[cluster_pb2.Controller.WorkerTaskStatus] = []
 
-        with self._lock:
-            # Reconcile expected_tasks against actual state
-            for expected_entry in request.expected_tasks:
-                task_id = expected_entry.task_id
-                expected_attempt_id = expected_entry.attempt_id
-                key = (task_id, expected_attempt_id)
-                task = self._tasks.get(key)
+            with slow_log(logger, "heartbeat reconciliation", threshold_ms=200):
+                with self._lock:
+                    # Reconcile expected_tasks against actual state
+                    for expected_entry in request.expected_tasks:
+                        task_id = expected_entry.task_id
+                        expected_attempt_id = expected_entry.attempt_id
+                        key = (task_id, expected_attempt_id)
+                        task = self._tasks.get(key)
 
-                if task is None:
-                    tasks.append(
-                        cluster_pb2.Controller.WorkerTaskStatus(
-                            task_id=task_id,
-                            attempt_id=expected_attempt_id,
-                            state=cluster_pb2.TASK_STATE_WORKER_FAILED,
-                            exit_code=0,
-                            error="Task not found on worker",
-                            finished_at=Timestamp.now().to_proto(),
-                        )
-                    )
-                else:
-                    task_proto = task.to_proto()
-                    reported_state = task.status
-                    if reported_state == cluster_pb2.TASK_STATE_PENDING:
-                        reported_state = cluster_pb2.TASK_STATE_BUILDING
+                        if task is None:
+                            tasks.append(
+                                cluster_pb2.Controller.WorkerTaskStatus(
+                                    task_id=task_id,
+                                    attempt_id=expected_attempt_id,
+                                    state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                                    exit_code=0,
+                                    error="Task not found on worker",
+                                    finished_at=Timestamp.now().to_proto(),
+                                )
+                            )
+                        else:
+                            task_proto = task.to_proto()
+                            reported_state = task.status
+                            if reported_state == cluster_pb2.TASK_STATE_PENDING:
+                                reported_state = cluster_pb2.TASK_STATE_BUILDING
 
-                    entry = cluster_pb2.Controller.WorkerTaskStatus(
-                        task_id=task_id,
-                        attempt_id=task_proto.current_attempt_id,
-                        state=reported_state,
-                        exit_code=task_proto.exit_code,
-                        error=task_proto.error or "",
-                        log_directory=task.log_directory,
-                    )
-                    if task.status in self._TERMINAL_STATES:
-                        entry.finished_at.CopyFrom(task_proto.finished_at)
-                    if task_proto.resource_usage.ByteSize() > 0:
-                        entry.resource_usage.CopyFrom(task_proto.resource_usage)
-                    tasks.append(entry)
+                            log_entries = task.drain_heartbeat_logs()
+                            entry = cluster_pb2.Controller.WorkerTaskStatus(
+                                task_id=task_id,
+                                attempt_id=task_proto.current_attempt_id,
+                                state=reported_state,
+                                exit_code=task_proto.exit_code,
+                                error=task_proto.error or "",
+                                log_entries=log_entries,
+                            )
+                            if task.status in self._TERMINAL_STATES:
+                                entry.finished_at.CopyFrom(task_proto.finished_at)
+                            if task_proto.resource_usage.ByteSize() > 0:
+                                entry.resource_usage.CopyFrom(task_proto.resource_usage)
+                            tasks.append(entry)
 
-            # Kill tasks not in expected_tasks - the controller has decided these
-            # tasks should no longer run (e.g., job was killed, task was reassigned)
-            expected_keys = {(entry.task_id, entry.attempt_id) for entry in request.expected_tasks}
-            tasks_to_kill: list[tuple[str, int]] = []
-            for key, task in self._tasks.items():
-                if key not in expected_keys and task.status not in self._TERMINAL_STATES:
-                    tasks_to_kill.append(key)
+                    # Kill tasks not in expected_tasks - the controller has decided these
+                    # tasks should no longer run (e.g., job was killed, task was reassigned)
+                    expected_keys = {(entry.task_id, entry.attempt_id) for entry in request.expected_tasks}
+                    tasks_to_kill: list[tuple[str, int]] = []
+                    for key, task in self._tasks.items():
+                        if key not in expected_keys and task.status not in self._TERMINAL_STATES:
+                            tasks_to_kill.append(key)
 
-        # Kill removed tasks outside lock to avoid deadlock
-        for task_id, attempt_id in tasks_to_kill:
-            logger.warning("Killing task %s attempt %d (no longer in expected_tasks)", task_id, attempt_id)
-            self._kill_task_attempt(task_id, attempt_id)
+                # Kill removed tasks asynchronously outside lock to avoid deadlock
+                for task_id, attempt_id in tasks_to_kill:
+                    logger.warning("Killing task %s attempt %d (no longer in expected_tasks)", task_id, attempt_id)
+                    self._kill_task_attempt(task_id, attempt_id, async_kill=True)
 
-        # Collect host metrics and aggregate task stats
-        resource_snapshot = self._host_metrics.collect()
-        running_count = 0
-        total_processes = 0
-        with self._lock:
-            for task in self._tasks.values():
-                if task.status == cluster_pb2.TASK_STATE_RUNNING:
-                    running_count += 1
-                    total_processes += task.process_count
-        resource_snapshot.running_task_count = running_count
-        resource_snapshot.total_process_count = total_processes
+            # Collect host metrics and aggregate task stats
+            with slow_log(logger, "heartbeat host_metrics", threshold_ms=100):
+                resource_snapshot = self._host_metrics.collect()
+                running_count = 0
+                total_processes = 0
+                with self._lock:
+                    for task in self._tasks.values():
+                        if task.status == cluster_pb2.TASK_STATE_RUNNING:
+                            running_count += 1
+                            total_processes += task.process_count
+                resource_snapshot.running_task_count = running_count
+                resource_snapshot.total_process_count = total_processes
 
-        return cluster_pb2.HeartbeatResponse(
-            tasks=tasks,
-            resource_snapshot=resource_snapshot,
-        )
+            return cluster_pb2.HeartbeatResponse(
+                tasks=tasks,
+                resource_snapshot=resource_snapshot,
+            )
 
-    def _kill_task_attempt(self, task_id: str, attempt_id: int, term_timeout_ms: int = 5000) -> bool:
-        """Kill a specific task attempt."""
+    def _kill_task_attempt(
+        self,
+        task_id: str,
+        attempt_id: int,
+        term_timeout_ms: int = 5000,
+        async_kill: bool = False,
+    ) -> bool:
+        """Kill a specific task attempt.
+
+        Args:
+            task_id: Wire-format task ID.
+            attempt_id: Attempt number to kill.
+            term_timeout_ms: Time to wait for graceful shutdown before SIGKILL.
+            async_kill: If True, signal the task immediately but perform the
+                container stop/wait/force-kill sequence in a daemon thread.
+                Used by heartbeat to avoid blocking the RPC response.
+        """
         task = self._tasks.get((task_id, attempt_id))
         if not task:
             return False
@@ -688,32 +699,46 @@ class Worker:
         ):
             return False
 
-        # Set flag to signal thread to stop
+        # Set flag to signal the task's execution thread to stop.
+        # This is always done immediately regardless of async_kill.
         task.should_stop = True
 
-        if task.has_container:
-            try:
-                # Send SIGTERM (graceful stop)
-                task.stop(force=False)
-
-                # Wait for shutdown
-                running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
-                stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-                    lambda: task.status not in running_states,
-                    timeout=Duration.from_ms(term_timeout_ms),
-                )
-
-                # Force kill if graceful shutdown timed out
-                if not stopped:
-                    try:
-                        task.stop(force=True)
-                    except RuntimeError:
-                        pass
-            except RuntimeError:
-                # Container may have already been removed or stopped
-                pass
+        if async_kill:
+            thread = threading.Thread(
+                target=self._do_kill_container,
+                args=(task, term_timeout_ms),
+                name=f"kill-{task_id}-{attempt_id}",
+                daemon=True,
+            )
+            thread.start()
+        else:
+            self._do_kill_container(task, term_timeout_ms)
 
         return True
+
+    @staticmethod
+    def _do_kill_container(task: TaskAttempt, term_timeout_ms: int) -> None:
+        """Perform the SIGTERM -> wait -> SIGKILL sequence for a task's container."""
+        if not task.has_container:
+            return
+
+        try:
+            task.stop(force=False)
+
+            running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+            stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+                lambda: task.status not in running_states,
+                timeout=Duration.from_ms(term_timeout_ms),
+            )
+
+            if not stopped:
+                try:
+                    task.stop(force=True)
+                except RuntimeError:
+                    pass
+        except RuntimeError:
+            # Container may have already been removed or stopped
+            pass
 
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
         """Kill the current (most recent) attempt of a task."""

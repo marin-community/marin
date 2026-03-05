@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -614,6 +614,9 @@ class LocalPlatform:
         self._local_controller = controller
         return address
 
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        raise NotImplementedError("restart_controller not supported for local clusters")
+
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the in-process LocalController."""
         from iris.cluster.controller.local import LocalController
@@ -638,10 +641,6 @@ class LocalPlatform:
         if self._local_controller is not None:
             assert isinstance(self._local_controller, LocalController)
             self._local_controller.wait()
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        self.stop_controller(config)
-        return self.start_controller(config)
 
     @property
     def threads(self) -> ThreadContainer:

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Dashboard validation tests using Playwright.
@@ -7,6 +7,8 @@ Replaces scripts/screenshot-dashboard.py with proper test assertions. Each test
 exercises a specific dashboard view and validates both DOM state and visual
 rendering via screenshots.
 """
+
+import time
 
 import pytest
 from iris.rpc import cluster_pb2
@@ -71,15 +73,15 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
     screenshot("job-detail-task-logs")
 
 
-def test_fleet_tab(cluster, page, screenshot):
-    """Fleet tab shows machines with health status."""
+def test_workers_tab(cluster, page, screenshot):
+    """Workers tab shows workers with health status."""
     cluster.wait_for_workers(1)
     dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
-    dashboard_click(page, 'button.tab-btn:has-text("Fleet")')
+    dashboard_click(page, 'button.tab-btn:has-text("Workers")')
 
-    assert_visible(page, "text=ready")
-    screenshot("fleet-tab")
+    assert_visible(page, "text=healthy")
+    screenshot("workers-tab")
 
 
 def test_worker_detail_page(cluster, page, screenshot):
@@ -127,6 +129,145 @@ def test_worker_detail_metric_cards(cluster, page, screenshot):
     # MetricCard components should be present (running tasks, CPU/memory, accelerator)
     assert_visible(page, "text=Running Tasks")
     screenshot("worker-detail-metric-cards")
+
+
+def test_worker_detail_shows_network_and_disk_sparklines(cluster, page, screenshot):
+    """Worker detail page shows network bandwidth and disk sparkline in Live Utilization."""
+    job = cluster.submit(_quick, "worker-net-disk")
+    cluster.wait(job, timeout=30)
+
+    task_status = cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id
+
+    dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
+
+    if not _is_noop_page(page):
+        page.wait_for_function(
+            "() => document.querySelector('.utilization-panel') !== null",
+            timeout=10000,
+        )
+    # Live Utilization panel should show CPU, Memory, Disk, and Network
+    assert_visible(page, "text=Live Utilization")
+    assert_visible(page, "text=CPU")
+    assert_visible(page, "text=Disk")
+    assert_visible(page, "text=Network")
+    screenshot("worker-detail-net-disk-sparklines")
+
+
+def _hold_for_heartbeats():
+    """Sleep long enough for multiple heartbeat cycles to accumulate resource history."""
+    import time
+
+    time.sleep(6)
+    return 1
+
+
+def test_worker_detail_sparklines_with_history(cluster, page, screenshot):
+    """Worker detail sparklines render once resource history has accumulated.
+
+    Submits a task that holds long enough for multiple heartbeat cycles (local
+    heartbeat_interval=0.5s) so the resource_history deque has enough entries
+    for the Sparkline SVGs to render.
+    """
+    job = cluster.submit(_hold_for_heartbeats, "worker-sparkline-history")
+    cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
+
+    task_status = cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id
+
+    # Wait for heartbeats to accumulate (local interval is 0.5s, need >=2 entries)
+    time.sleep(3)
+
+    dashboard_goto(page, f"{cluster.url}/worker/{worker_id}")
+
+    if not _is_noop_page(page):
+        # Wait for the utilization panel with SVG sparklines to render
+        page.wait_for_function(
+            "() => document.querySelector('.utilization-panel') !== null"
+            " && document.querySelectorAll('.utilization-panel svg.sparkline').length >= 3",
+            timeout=15000,
+        )
+
+    # Verify all four utilization metric sections are present
+    assert_visible(page, "text=Live Utilization")
+    assert_visible(page, "text=CPU")
+    assert_visible(page, "text=Memory")
+    assert_visible(page, "text=Disk")
+    assert_visible(page, "text=Network")
+
+    # Verify SVG sparklines rendered (not hidden due to empty data)
+    if not _is_noop_page(page):
+        sparkline_count = page.locator(".utilization-panel svg.sparkline").count()
+        assert sparkline_count >= 3, f"Expected at least 3 sparkline SVGs in utilization panel, got {sparkline_count}"
+
+    screenshot("worker-detail-sparklines-with-history")
+
+    cluster.wait(job, timeout=30)
+
+
+def _allocate_memory_and_wait():
+    """Allocate ~50 MB and sleep long enough for at least one stats collection cycle."""
+    import time
+
+    data = bytearray(50 * 1024 * 1024)  # 50 MB
+    time.sleep(8)
+    del data
+    return 1
+
+
+def test_job_detail_shows_human_readable_resources(cluster, page, screenshot):
+    """Job detail page shows human-readable resource values (GB/MB, cores) in the Resource Request card.
+
+    This verifies the fix for incomprehensible memory/CPU bars — the dashboard
+    should show absolute values like '1 GB' rather than opaque percentages.
+    """
+    job = cluster.submit(_quick, "dash-resources", memory="4g", cpu=8)
+    cluster.wait(job, timeout=30)
+
+    dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
+    wait_for_dashboard_ready(page)
+
+    # The Resource Request card should show human-readable memory (4 GB) and CPU (8)
+    assert_visible(page, "text=4 GB")
+    assert_visible(page, "text=Resource Request")
+    screenshot("job-detail-human-readable-resources")
+
+
+def test_job_detail_task_table_shows_resource_values(cluster, page, screenshot):
+    """Task table Mem/CPU columns show human-readable values for running tasks with stats.
+
+    Submits a job that allocates memory and runs for ~8s (enough for at least
+    one stats collection cycle), then verifies that the task table inline gauges
+    display absolute values (e.g. 'MB' or 'GB') instead of raw percentages.
+    """
+    job = cluster.submit(_allocate_memory_and_wait, "dash-task-resources", memory="4g", cpu=8)
+    cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
+
+    # Wait for stats collection (poll interval is 5s)
+    time.sleep(7)
+
+    dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
+    wait_for_dashboard_ready(page)
+
+    if not _is_noop_page(page):
+        # Wait for the task table to render with inline-gauge elements
+        page.wait_for_function(
+            "() => document.querySelectorAll('.inline-gauge').length > 0",
+            timeout=10000,
+        )
+        # Verify inline gauge text contains human-readable units (MB or GB)
+        mem_gauge_text = page.locator(".inline-gauge__text").first.text_content()
+        assert (
+            "MB" in mem_gauge_text or "GB" in mem_gauge_text
+        ), f"Expected memory gauge to show MB or GB units, got: '{mem_gauge_text}'"
+
+    screenshot("job-detail-task-resource-values")
+
+    # Clean up: kill the running job
+    cluster.kill(job)
+    cluster.wait(job, timeout=30)
 
 
 def test_autoscaler_tab(cluster, page, screenshot):

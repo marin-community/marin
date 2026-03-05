@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -95,9 +95,8 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
-import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray.v2.types import ResourceConfig
+from iris.marin_fs import open_url
 from iris.marin_fs import marin_prefix
 
 from marin.execution.step_spec import StepSpec
@@ -209,17 +208,11 @@ def resolve_executor_step(
     def resolved_fn(output_path):
         return captured_fn(captured_config)
 
-    # Determine Fray config: explicit ExecutorStep.resources wins,
-    # then @remote on the original fn, then None (run locally).
+    # If the original fn was decorated with @remote, propagate the
+    # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
+    # is preserved.  Plain functions run locally in-thread.
     final_fn: Callable = resolved_fn
-    if step.resources is not None:
-        final_fn = RemoteCallable(
-            fn=resolved_fn,
-            resources=step.resources,
-            env_vars=step.env_vars or {},
-            pip_dependency_groups=step.pip_dependency_groups or [],
-        )
-    elif isinstance(step.fn, RemoteCallable):
+    if isinstance(step.fn, RemoteCallable):
         final_fn = dataclasses.replace(step.fn, fn=resolved_fn)
 
     return StepSpec(
@@ -265,15 +258,6 @@ class ExecutorStep(Generic[ConfigT]):
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
-
-    pip_dependency_groups: list[str] | None = None
-    """List of `extra` dependencies from pyproject.toml to include with this step."""
-
-    resources: ResourceConfig | None = None
-    """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
-
-    env_vars: dict[str, str] | None = None
-    """Additional environment variables to set for this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -660,6 +644,7 @@ class Executor:
         self.steps: list[ExecutorStep] = []
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        self._depth_cache: dict[ExecutorStep, int] = {}
 
     def run(
         self,
@@ -817,15 +802,19 @@ class Executor:
         # The version specifies precisely all the information that uniquely
         # identifies this step.  Note that the fn name is not part of the
         # version.
+        #
+        # For deep dependency chains (depth > 4), we use output_paths (which
+        # already encode the version hash) instead of the full nested version
+        # dicts to avoid exponential blowup of the version structure.
         version = {
             "name": step.name,
             "config": computed_deps.version,
-            "dependencies": [self.versions[dep] for dep in computed_deps.dependencies],
+            "dependencies": [self._dep_version(dep) for dep in computed_deps.dependencies],
         }
 
         if computed_deps.pseudo_dependencies:
             # don't put this in the literal to avoid changing the hash for runs without pseudo-deps
-            version["pseudo_dependencies"] = [self.versions[dep] for dep in computed_deps.pseudo_dependencies]
+            version["pseudo_dependencies"] = [self._dep_version(dep) for dep in computed_deps.pseudo_dependencies]
 
         # Compute output path
         version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
@@ -868,6 +857,26 @@ class Executor:
         self.version_strs[step] = version_str
         self.output_paths[step] = output_path
         self.is_pseudo_dep[step] = is_pseudo_dep
+
+    _MAX_INLINE_DEPTH = 4
+
+    def _dep_depth(self, step: ExecutorStep) -> int:
+        """Return the maximum dependency chain depth for a step (cached)."""
+        if step in self._depth_cache:
+            return self._depth_cache[step]
+        deps = self.dependencies.get(step, [])
+        if not deps:
+            depth = 0
+        else:
+            depth = 1 + max(self._dep_depth(dep) for dep in deps)
+        self._depth_cache[step] = depth
+        return depth
+
+    def _dep_version(self, dep: ExecutorStep) -> dict[str, Any] | str:
+        """Full version dict for shallow deps, output path for deep ones."""
+        if self._dep_depth(dep) <= self._MAX_INLINE_DEPTH:
+            return self.versions[dep]
+        return self.output_paths[dep]
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""
@@ -944,12 +953,12 @@ class Executor:
         for step, info in zip(self.steps, executor_info_dict["steps"], strict=True):
             info_path = _get_info_path(self.output_paths[step])
             fsspec_utils.mkdirs(os.path.dirname(info_path))
-            with fsspec.open(info_path, "w") as f:
+            with open_url(info_path, "w") as f:
                 print(json.dumps(info, indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
         fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
-        with fsspec.open(self.executor_info_path, "w") as f:
+        with open_url(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
 

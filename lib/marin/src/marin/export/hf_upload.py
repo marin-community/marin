@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import fsspec
 import humanfriendly
 from fsspec.implementations.local import LocalFileSystem
+from iris.marin_fs import open_url
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
@@ -260,7 +261,7 @@ if __name__ == "__main__":
         )
 
     # also test memory fs
-    with fsspec.open("memory://foo/bar/test.txt", "w") as f:
+    with open_url("memory://foo/bar/test.txt", "w") as f:
         f.write("Hello, world!!!!!\nadad :-)")
 
     _actually_upload_to_hf(

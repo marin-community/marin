@@ -9,7 +9,7 @@ Format your review as:
 2. **Specification check** (if a specification exists as a PR comment, linked design doc, or `.agents/projects/` file):
    - The implementation should follow the described approach. Flag significant deviations.
    - Described test scenarios should exist and test what they claim.
-   - If no specification exists and the PR exceeds ~500 lines of code changes, note that a specification is expected (see `docs/recipes/agent-coding.md`).
+   - If no specification exists and the PR exceeds ~500 lines of code changes, note that a specification is expected (see `docs/recipes/pull-request.md`).
 3. Tight bullets (if any) for:
    - Bugs or correctness issues
    - Violations of AGENTS.md or coding guidelines
@@ -22,6 +22,11 @@ Scope:
   - Functionality divergence from the PR description or linked issue
 - If a specification exists (issue description, design doc, acceptance criteria, or inline requirements), verify the code adheres to it and flag concrete mismatches.
 - Ignore formatting, import order, lint/style preferences, naming opinions, missing docstrings/comments, and generic best-practice advice.
+
+Grug Variants:
+- In `experiments/grug`, duplication is often intentional. This area is designed for high-velocity, short-lived research iteration.
+- Do not flag copy/paste or DRY concerns by default in `experiments/grug` if behavior/contracts are correct.
+- Only call out duplication there when it causes a concrete correctness issue, regression risk, or clear divergence from stated objectives.
 
 Output contract:
 - Return exactly one final review.

@@ -1,11 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
 
 import pytest
 
-from iris.logging import BufferedLogRecord, LogRingBuffer, RingBufferHandler
+from iris.logging import BufferedLogRecord, LogRingBuffer, RingBufferHandler, slow_log
 
 
 @pytest.fixture
@@ -68,6 +68,24 @@ def test_handler_captures_log_records():
         assert results[0].logger_name == "iris.test.handler_test"
     finally:
         logger.removeHandler(handler)
+
+
+def test_slow_log_emits_warning_when_slow(caplog):
+    """slow_log emits a WARNING when the block exceeds the threshold."""
+    log = logging.getLogger("iris.test.slow_log")
+    with caplog.at_level(logging.WARNING, logger="iris.test.slow_log"):
+        with slow_log(log, "test-op", threshold_ms=0):
+            pass
+    assert any("Slow test-op" in r.message for r in caplog.records)
+
+
+def test_slow_log_silent_when_fast(caplog):
+    """slow_log emits nothing when the block completes within budget."""
+    log = logging.getLogger("iris.test.slow_log")
+    with caplog.at_level(logging.DEBUG, logger="iris.test.slow_log"):
+        with slow_log(log, "fast-op", threshold_ms=60_000):
+            pass
+    assert not any("Slow" in r.message for r in caplog.records)
 
 
 def test_configure_logging_captures_records():

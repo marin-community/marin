@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for actor client and pool retry on transient errors."""
@@ -69,7 +69,7 @@ def test_actor_client_retries_on_transient_rpc_error():
         client = ActorClient(
             switching,
             "counter",
-            resolve_timeout=5.0,
+            call_timeout=5.0,
             max_call_attempts=3,
             backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
         )
@@ -143,13 +143,51 @@ def test_actor_client_exhausts_retries():
     client = ActorClient(
         resolver,
         "ghost",
-        resolve_timeout=2.0,
+        call_timeout=2.0,
         max_call_attempts=2,
         backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
     )
 
     with pytest.raises(ConnectError):
         client.increment()
+
+
+def test_actor_client_retries_on_empty_resolution():
+    """ActorClient should retry when resolution returns no endpoints.
+
+    When the resolver returns an empty result (actor not yet registered),
+    rpc_client() raises ConnectError(UNAVAILABLE) which is retryable.
+    On the next attempt, the resolver returns a valid endpoint and the
+    call succeeds.
+    """
+    server = ActorServer(host="127.0.0.1")
+    server.register("counter", Counter())
+    port = server.serve_background()
+
+    try:
+        # First resolution returns no endpoints (actor not yet registered),
+        # second resolution returns the real endpoint.
+        switching = SwitchingResolver(
+            [
+                {},  # Empty — no endpoints for any actor
+                {"counter": f"http://127.0.0.1:{port}"},  # Real endpoint
+            ]
+        )
+
+        client = ActorClient(
+            switching,
+            "counter",
+            call_timeout=5.0,
+            max_call_attempts=3,
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
+        )
+
+        # First attempt: empty resolution raises UNAVAILABLE, retry resolves
+        # to the real endpoint and succeeds.
+        result = client.increment()
+        assert result == 1
+    finally:
+        server.stop()
 
 
 def test_actor_client_clears_cache_on_final_retryable_failure():
@@ -176,7 +214,7 @@ def test_actor_client_clears_cache_on_final_retryable_failure():
         client = ActorClient(
             switching,
             "counter",
-            resolve_timeout=5.0,
+            call_timeout=5.0,
             max_call_attempts=1,
             backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
         )

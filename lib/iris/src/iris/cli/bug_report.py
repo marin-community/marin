@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Diagnostic bug report generation for failed Iris jobs.
@@ -48,7 +48,6 @@ class TaskReport:
     finished_at: str
     duration: str
     pending_reason: str
-    log_directory: str
     attempts: list[AttemptReport]
     recent_logs: list[str]
 
@@ -64,7 +63,6 @@ class WorkerReport:
     tpu_info: str
     memory: str
     zone: str
-    process_log_path: str
 
 
 @dataclass
@@ -88,7 +86,6 @@ class BugReport:
     tasks: list[TaskReport]
     workers: dict[str, WorkerReport] = field(default_factory=dict)
     entrypoint: str = ""
-    log_prefix: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -153,24 +150,21 @@ def _gather(
             logger.warning("Failed to fetch logs for task %s", task.task_id, exc_info=True)
             task_logs[task.task_id] = ["(failed to fetch logs)"]
 
-    # 5. Derive log prefix
-    log_prefix = _derive_log_prefix(tasks_resp.tasks)
-
-    # 6. Build entrypoint string
+    # 5. Build entrypoint string
     entrypoint_str = ""
     if request and request.entrypoint and request.entrypoint.run_command:
         entrypoint_str = " ".join(request.entrypoint.run_command.argv)
 
-    # 7. Build task reports
+    # 6. Build task reports
     task_reports = [_build_task_report(t, task_logs.get(t.task_id, [])) for t in tasks_resp.tasks]
 
-    # 8. Build worker reports
+    # 7. Build worker reports
     worker_reports: dict[str, WorkerReport] = {}
     for w in workers_resp.workers:
         if w.worker_id in involved_worker_ids:
-            worker_reports[w.worker_id] = _build_worker_report(w, log_prefix)
+            worker_reports[w.worker_id] = _build_worker_report(w)
 
-    # 9. Assemble — prefer ListTasks count over the JobStatus convenience field
+    # 8. Assemble — prefer ListTasks count over the JobStatus convenience field
     state_name = _job_state_name(job.state)
     error = job.error or ""
     error_summary = error[:100] if error else state_name
@@ -196,7 +190,6 @@ def _gather(
         tasks=task_reports,
         workers=worker_reports,
         entrypoint=entrypoint_str,
-        log_prefix=log_prefix,
     )
 
 
@@ -230,7 +223,6 @@ def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskRep
         finished_at=_format_timestamp(task.finished_at),
         duration=_compute_duration(task.started_at, task.finished_at),
         pending_reason=task.pending_reason,
-        log_directory=task.log_directory,
         attempts=attempts,
         recent_logs=logs,
     )
@@ -238,7 +230,6 @@ def _build_task_report(task: cluster_pb2.TaskStatus, logs: list[str]) -> TaskRep
 
 def _build_worker_report(
     w: cluster_pb2.Controller.WorkerHealthStatus,
-    log_prefix: str | None,
 ) -> WorkerReport:
     meta = w.metadata
     gpu_info = ""
@@ -253,10 +244,6 @@ def _build_worker_report(
     if meta.memory_bytes > 0:
         memory = f"{meta.memory_bytes // (1024**3)} GiB"
 
-    process_log_path = ""
-    if log_prefix:
-        process_log_path = _worker_process_log_path(log_prefix, w.worker_id)
-
     return WorkerReport(
         worker_id=w.worker_id,
         address=w.address,
@@ -267,7 +254,6 @@ def _build_worker_report(
         tpu_info=tpu_info,
         memory=memory,
         zone=meta.gce_zone,
-        process_log_path=process_log_path,
     )
 
 
@@ -338,27 +324,6 @@ def _format_resources(resources: cluster_pb2.ResourceSpecProto | None) -> str:
     return ", ".join(parts) if parts else "-"
 
 
-def _derive_log_prefix(tasks: list[cluster_pb2.TaskStatus]) -> str | None:
-    """Extract the log storage prefix from task log directories.
-
-    Given log_directory = gs://bucket/ttl=30d/iris-logs/worker-abc/job/name/task/0/0
-    and worker_id = worker-abc:
-    Returns gs://bucket/ttl=30d/iris-logs
-    """
-    for task in tasks:
-        if not task.log_directory or not task.worker_id:
-            continue
-        marker = f"/{task.worker_id}/"
-        idx = task.log_directory.find(marker)
-        if idx >= 0:
-            return task.log_directory[:idx]
-    return None
-
-
-def _worker_process_log_path(log_prefix: str, worker_id: str) -> str:
-    return f"{log_prefix}/process/worker/{worker_id}/logs.jsonl"
-
-
 # ---------------------------------------------------------------------------
 # Markdown formatting
 # ---------------------------------------------------------------------------
@@ -419,8 +384,6 @@ def format_bug_report(report: BugReport) -> str:
             lines.append(f"| Error | {_escape_md(task.error)} |")
         if task.pending_reason:
             lines.append(f"| Pending Reason | {_escape_md(task.pending_reason)} |")
-        if task.log_directory:
-            lines.append(f"| Log directory | `{task.log_directory}` |")
         lines.append("")
 
         if task.attempts:
@@ -435,32 +398,6 @@ def format_bug_report(report: BugReport) -> str:
                     f"{_format_exit_code(a.exit_code)} | {error_col} | {wf} |"
                 )
             lines.append("")
-
-    # Log Paths
-    lines.append("## Log Paths\n")
-    task_log_rows = [t for t in report.tasks if t.log_directory]
-    if task_log_rows:
-        lines.append("### Task Logs\n")
-        lines.append("| Task | Log Directory |")
-        lines.append("|------|--------------|")
-        for t in task_log_rows:
-            lines.append(f"| `{t.task_id}` | `{t.log_directory}` |")
-        lines.append("")
-
-    worker_log_rows = [(wid, w) for wid, w in report.workers.items() if w.process_log_path]
-    if worker_log_rows:
-        lines.append("### Worker Process Logs\n")
-        lines.append("| Worker | Path |")
-        lines.append("|--------|------|")
-        for wid, w in worker_log_rows:
-            lines.append(f"| {wid} | `{w.process_log_path}` |")
-        lines.append("")
-
-    if report.log_prefix:
-        controller_log_path = f"{report.log_prefix}/process/controller/logs.jsonl"
-        lines.append("### Controller Logs\n")
-        lines.append(f"| Controller | `{controller_log_path}` |")
-        lines.append("")
 
     # Recent Logs (for non-succeeded tasks)
     failed_tasks = [t for t in report.tasks if t.state not in ("succeeded", "pending") and t.recent_logs]
@@ -489,18 +426,8 @@ def format_bug_report(report: BugReport) -> str:
     lines.append("```bash")
     lines.append("# Stream full task logs")
     lines.append(f"iris --config cluster.yaml job logs {report.job_id}\n")
-    if report.log_prefix:
-        for t in task_log_rows:
-            lines.append("# Read task log file directly")
-            lines.append(f"gsutil cat {t.log_directory}/logs.jsonl | tail -100\n")
-            break
-        for _wid, w in report.workers.items():
-            if w.process_log_path:
-                lines.append("# Read worker process logs")
-                lines.append(f"gsutil cat {w.process_log_path} | tail -100\n")
-                break
     lines.append("# Check autoscaler status")
-    lines.append("iris --config cluster.yaml rpc controller GetAutoscalerStatus")
+    lines.append("iris --config cluster.yaml rpc controller get-autoscaler-status")
     lines.append("```\n")
 
     return "\n".join(lines)

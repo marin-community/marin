@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Iris cluster configuration loading and utilities.
@@ -936,7 +936,11 @@ def create_autoscaler(
     """
     # Local import: controller modules import config.py, creating a circular dependency.
     from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.scaling_group import ScalingGroup
+    from iris.cluster.controller.scaling_group import (
+        DEFAULT_SCALE_DOWN_RATE_LIMIT,
+        DEFAULT_SCALE_UP_RATE_LIMIT,
+        ScalingGroup,
+    )
 
     threads = threads or get_thread_container()
 
@@ -944,7 +948,6 @@ def create_autoscaler(
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
     scale_up_delay = Duration.from_proto(autoscaler_config.scale_up_delay)
-    scale_down_delay = Duration.from_proto(autoscaler_config.scale_down_delay)
 
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
@@ -953,7 +956,8 @@ def create_autoscaler(
             platform=platform,
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
-            scale_down_cooldown=scale_down_delay,
+            scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
+            scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
         )
         resources = group_config.resources
         worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}

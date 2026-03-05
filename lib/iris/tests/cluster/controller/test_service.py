@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller RPC service implementation.
@@ -610,3 +610,23 @@ def test_get_process_logs_no_buffer():
 
     response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
     assert len(response.records) == 0
+
+
+# =============================================================================
+# GetTaskLogs Tests
+# =============================================================================
+
+
+def test_get_task_logs_invalid_regex_returns_error(service, job_request):
+    """Invalid regex filter returns a structured error instead of raising."""
+    launch_resp = service.launch_job(job_request("regex-test"), None)
+
+    response = service.get_task_logs(
+        cluster_pb2.Controller.GetTaskLogsRequest(
+            id=launch_resp.job_id,
+            regex="(unclosed",
+        ),
+        None,
+    )
+    assert len(response.task_logs) == 1
+    assert "Invalid regex filter" in response.task_logs[0].error
