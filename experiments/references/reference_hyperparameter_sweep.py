@@ -303,6 +303,7 @@ def _build_base_launch_config() -> GrugBaseLaunchConfig:
         data=NEMOTRON_MIX_WITH_EVAL,
         output_path=this_output_path(),
         run_id=f"{SWEEP.experiment_name}-base",
+        resources=ResourceConfig.with_tpu("v4-8"),
         steps=placeholder_steps,
         batch_size=placeholder_batch_size,
         seed=0,

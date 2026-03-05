@@ -86,6 +86,7 @@ training_step = ExecutorStep(
         data=data,
         output_path=this_output_path(),
         run_id="reference-pipeline",
+        resources=ResourceConfig.with_tpu("v4-8"),
         steps=TOTAL_STEPS,
         batch_size=256,
         seed=0,
