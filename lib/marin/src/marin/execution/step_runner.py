@@ -17,13 +17,14 @@ makes the control flow easy to follow and debug.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import logging
 import os
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Thread
 
@@ -253,42 +254,38 @@ def check_cache(output_path: str) -> bool:
     return False
 
 
-def acquire_lock(output_path: str, step_label: str, *, force_run_failed: bool = True) -> StatusFile:
-    """Acquire the distributed lock for *output_path*.
+@contextlib.contextmanager
+def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = True) -> Generator[StatusFile, None, None]:
+    """Context manager that acquires a distributed lock with heartbeat refresh.
 
-    Blocks until the lock is acquired or raises ``StepAlreadyDone`` if
-    another worker completed the step while we waited. Returns the
-    ``StatusFile`` that holds the lock.
+    Acquires the lock, starts a daemon heartbeat thread, yields the
+    ``StatusFile``, then tears down the heartbeat and releases the lock.
+
+    Raises ``StepAlreadyDone`` if another worker completed the step
+    while we waited for the lock.
     """
+    from marin.execution.executor_step_status import StepAlreadyDone
+
     status_file = StatusFile(output_path, worker_id())
     if not should_run(status_file, step_label, force_run_failed=force_run_failed):
-        from marin.execution.executor_step_status import StepAlreadyDone
-
         raise StepAlreadyDone(output_path)
-    return status_file
 
-
-def start_heartbeat(status_file: StatusFile) -> tuple[Event, Thread]:
-    """Start a daemon thread that refreshes *status_file*'s lock periodically.
-
-    Returns ``(stop_event, heartbeat_thread)``.  The caller must set the
-    event and join the thread when done.
-    """
+    # Start heartbeat
     stop_event = Event()
 
     def _heartbeat():
         while not stop_event.wait(HEARTBEAT_INTERVAL):
             status_file.refresh_lock()
 
-    thread = Thread(target=_heartbeat, daemon=True)
-    thread.start()
-    return stop_event, thread
+    heartbeat_thread = Thread(target=_heartbeat, daemon=True)
+    heartbeat_thread.start()
 
-
-def stop_heartbeat(stop_event: Event, thread: Thread) -> None:
-    """Signal the heartbeat thread to stop and wait for it."""
-    stop_event.set()
-    thread.join(timeout=5)
+    try:
+        yield status_file
+    finally:
+        stop_event.set()
+        heartbeat_thread.join(timeout=5)
+        status_file.release_lock()
 
 
 def run_step(step: StepSpec) -> None:
@@ -305,35 +302,27 @@ def run_step(step: StepSpec) -> None:
     if check_cache(output_path):
         return
 
-    # 2. Acquire distributed lock (blocks until lock obtained or step done)
+    # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
     from marin.execution.executor_step_status import StepAlreadyDone
 
     try:
-        status_file = acquire_lock(output_path, step_label)
+        with step_lock(output_path, step_label) as status_file:
+            # 3. Run the function
+            try:
+                if isinstance(step.fn, RemoteCallable):
+                    _run_remote_step(step, output_path)
+                else:
+                    result = step.fn(output_path)  # pyrefly: ignore[not-callable]
+                    Artifact.save(result, output_path)
+
+                # 4. Mark success
+                status_file.write_status(STATUS_SUCCESS)
+                logger.info(f"Step {step_label} succeeded")
+            except Exception:
+                status_file.write_status(STATUS_FAILED)
+                raise
     except StepAlreadyDone:
         logger.info(f"Step {step_label} completed by another worker")
-        return
-
-    # 3. Start heartbeat
-    stop_event, heartbeat_thread = start_heartbeat(status_file)
-
-    try:
-        # 4. Run the function
-        if isinstance(step.fn, RemoteCallable):
-            _run_remote_step(step, output_path)
-        else:
-            result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-            Artifact.save(result, output_path)
-
-        # 5. Mark success
-        status_file.write_status(STATUS_SUCCESS)
-        logger.info(f"Step {step_label} succeeded")
-    except Exception:
-        status_file.write_status(STATUS_FAILED)
-        raise
-    finally:
-        stop_heartbeat(stop_event, heartbeat_thread)
-        status_file.release_lock()
 
 
 def _run_remote_step(step: StepSpec, output_path: str) -> None:
