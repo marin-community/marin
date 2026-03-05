@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
+from fray.cluster import ResourceConfig
 from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -37,7 +38,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.dispatch import dispatch_grug_tpu
+from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -45,7 +46,6 @@ from experiments.grug.moe.model import GrugModelConfig, Transformer
 # `docs/recipes/change_grug.md`.
 
 logger = logging.getLogger(__name__)
-_GRUG_TPU_VARIANT = "v5p-8"
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,7 @@ class GrugRunConfig:
 
     model: GrugModelConfig
     data: LmDataConfig
+    resources: ResourceConfig
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -500,16 +501,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
 
 def run_grug(config: GrugRunConfig) -> None:
-    """Dispatch grug training through Fray TPU jobs."""
+    """Dispatch grug training through Fray jobs."""
     trainer = config.trainer.trainer
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
-    dispatch_grug_tpu(
+    dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
         local_entrypoint=_run_grug_local,
-        tpu_variant=_GRUG_TPU_VARIANT,
+        resources=config.resources,
     )
 
 

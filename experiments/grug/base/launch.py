@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 import jmp
+from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
@@ -40,6 +41,7 @@ class GrugBaseLaunchConfig:
     data: LmDataConfig
     output_path: str
     run_id: str
+    resources: ResourceConfig
     steps: int
     batch_size: int
     seed: int
@@ -108,6 +110,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     run_config = GrugRunConfig(
         model=config.model,
         data=config.data,
+        resources=config.resources,
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
@@ -128,6 +131,7 @@ grug_base_trial = ExecutorStep(
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(2_000),
         batch_size=versioned(512),
         seed=versioned(0),
