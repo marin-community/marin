@@ -41,6 +41,7 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
 }
 _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _PALLAS_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+_SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
 _AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
 _AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
@@ -609,6 +610,11 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 _warn_pallas_fallback_once(e)
                 errors.append(e)
                 continue
+
+        selected = str(impl)
+        if selected not in _SELECTED_IMPL_LOGGED:
+            _SELECTED_IMPL_LOGGED.add(selected)
+            logger.info("Fused cross-entropy selected implementation: %s", selected)
 
         if len(result) == 2:
             loss, lse = result
