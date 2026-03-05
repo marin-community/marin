@@ -27,7 +27,7 @@ from jax import shard_map
 from jax.sharding import PartitionSpec as P, get_abstract_mesh
 from jaxtyping import Array, Float, Int
 
-from haliax.nn.linear import gmm_sharded
+from haliax.nn.gmm import gmm_sharded
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
