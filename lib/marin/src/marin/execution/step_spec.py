@@ -72,11 +72,11 @@ class StepSpec:
 
     @cached_property
     def executable_fn(self) -> Callable[[str], Any]:
-        """Fully-wrapped fn: remote(disk_cache(distributed_lock(raw_fn))).
+        """Fully-wrapped fn: disk_cache(distributed_lock(remote(raw_fn))).
 
-        Caching, distributed locking, heartbeats, artifact saving, and status
-        writes all happen inside the wrapped callable. For remote steps, the
-        entire chain runs inside the Fray job.
+        Lock acquisition, heartbeats, caching, and status writes all run on
+        the executor node.  Only the raw step logic runs inside the remote
+        job (if the step was decorated with ``@remote``).
         """
         from marin.execution.artifact import Artifact
         from marin.execution.disk_cache import disk_cache
@@ -85,16 +85,37 @@ class StepSpec:
 
         raw_fn = self.fn.fn if isinstance(self.fn, RemoteCallable) else self.fn
 
-        wrapped = disk_cache(
-            distributed_lock(raw_fn),
-            output_path=self.output_path,
-            save_fn=Artifact.save,
-            load_fn=Artifact.load,
-        )
-
+        # If the step is remote, wrap the raw function in a RemoteCallable so
+        # that the step logic runs on the remote worker, but keep lock/cache
+        # handling on the executor node.
+        #
+        # Fray jobs can't return values, so the remote wrapper saves the
+        # artifact inside the job.  The executor-side disk_cache skips the
+        # save (no-op) and only uses load_fn on cache hits.
+        inner_fn = raw_fn
+        save_fn: Callable = Artifact.save
         if isinstance(self.fn, RemoteCallable):
+            captured_raw = raw_fn
+            assert captured_raw is not None
+
+            def _remote_with_artifact_save(output_path: str):
+                result = captured_raw(output_path)  # pyrefly: ignore[not-callable]
+                Artifact.save(result, output_path)
+
             job_name = f"{self.name_with_hash}-{uuid.uuid4().hex[:8]}"
             remote_callable = self.fn.named(job_name)
-            wrapped = dataclasses.replace(remote_callable, fn=wrapped)
+            inner_fn = dataclasses.replace(remote_callable, fn=_remote_with_artifact_save)
+
+            def _noop_save(result: Any, path: str) -> None:
+                pass
+
+            save_fn = _noop_save
+
+        wrapped = disk_cache(
+            distributed_lock(inner_fn),
+            output_path=self.output_path,
+            save_fn=save_fn,
+            load_fn=Artifact.load,
+        )
 
         return wrapped

@@ -149,6 +149,36 @@ def test_decorator_auto_path_from_marin_prefix(tmp_path: Path, monkeypatch):
     assert (cache_dirs[0] / "data.pkl").exists()
 
 
+def test_executable_fn_locks_outside_remote(tmp_path: Path):
+    """Lock acquisition and cache check run on the executor node, not inside the remote callable.
+
+    Verifies the wrapping order is disk_cache(distributed_lock(remote(raw_fn))) rather than
+    remote(disk_cache(distributed_lock(raw_fn))).
+    """
+    from marin.execution.remote import RemoteCallable
+
+    def raw_fn(output_path: str) -> dict:
+        os.makedirs(output_path, exist_ok=True)
+        return {"done": True}
+
+    # Create a StepSpec with a RemoteCallable wrapping raw_fn
+    remote_callable = RemoteCallable(fn=raw_fn, resources=None)
+    spec = StepSpec(
+        name="lock-order",
+        output_path_prefix=tmp_path.as_posix(),
+        fn=remote_callable,
+    )
+
+    executable = spec.executable_fn
+
+    # The outer layer should be disk_cache, not RemoteCallable.
+    # If RemoteCallable were the outer layer, the executable itself would be a RemoteCallable.
+    assert not isinstance(executable, RemoteCallable), (
+        "executable_fn should not be a RemoteCallable at the top level; "
+        "lock/cache must wrap the remote call, not the other way around"
+    )
+
+
 def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
     """@cache + @disk_cache: in-memory cache avoids repeated disk reads."""
     from functools import cache
