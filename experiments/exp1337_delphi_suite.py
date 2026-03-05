@@ -1,10 +1,10 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scaling Ladder Analysis for Completed AdamH v6 recipe on Nemotron.
+"""Scaling Ladder Analysis for Completed AdamH v6 heuristic on Nemotron.
 
 This experiment runs scaling ladder analysis on the isoflop training sweeps
-for Nemotron using the CompletedAdamH v6 recipe (sqrt batch LR, no /H on adam_lr).
+for Nemotron using the CompletedAdamH v6 heuristic (sqrt batch LR, no /H on adam_lr).
 
 The scaling ladder:
 1. Fits scaling laws from IsoFLOP sweep data to find compute-optimal configurations
@@ -37,7 +37,7 @@ from experiments.isoflop_sweep import (
     run_isoflop_analysis_step,
 )
 from experiments.llama import llama3_tokenizer
-from experiments.scaling_law_sweeps.completed_adamh import RECIPE
+from experiments.scaling_law_sweeps.completed_adamh import completed_adamh_heuristic
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
@@ -93,7 +93,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
         scaling_fits=scaling_fits,
         target_flops=config.target_budget,
         label=config.label,
-        recipe=RECIPE,
+        heuristic=completed_adamh_heuristic,
         seq_len=SEQ_LEN,
     )
 
@@ -102,7 +102,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
             f"Could not find optimal config for budget {config.target_budget:.2e} and label '{config.label}'"
         )
 
-    params = candidate.model_config.total_trainable_params(RECIPE.vocab_size)
+    params = candidate.model_config.total_trainable_params(completed_adamh_heuristic.vocab_size)
     hidden_dim = candidate.model_config.hidden_dim
     tpu_type = config.tpu_type
     cores = int(tpu_type.split("-")[1])
@@ -117,7 +117,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
     tokens = candidate.tokens
     train_steps = round(tokens / (batch_size * SEQ_LEN))
 
-    optimizer_config = RECIPE.build_optimizer_config(batch_size, tokens)
+    optimizer_config = completed_adamh_heuristic.build_optimizer_config(batch_size, tokens)
     candidate = replace(candidate, batch_size=batch_size, train_steps=train_steps, optimizer_config=optimizer_config)
 
     print(

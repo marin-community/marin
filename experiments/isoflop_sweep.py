@@ -4,7 +4,7 @@
 """Registry of ISOFlop sweep runs.
 
 This module defines the sweep configurations for different datasets and budgets.
-Recipe implementations live in experiments/scaling_law_sweeps/.
+Heuristic implementations live in experiments/scaling_law_sweeps/.
 """
 
 import json
@@ -20,8 +20,8 @@ from experiments.common_pile.tokenize_common_pile import comma_main_mixture
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads
-from experiments.scaling_law_sweeps import c_adamc as c_adamc_recipe
-from experiments.scaling_law_sweeps import completed_adamh as completed_adamh_recipe
+from experiments.scaling_law_sweeps import c_adamc as c_adamc_heuristic
+from experiments.scaling_law_sweeps import completed_adamh as completed_adamh_heuristic
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
@@ -200,28 +200,28 @@ dolma3_mix = lm_mixture_data_config(
 
 # --- Original C-AdamC sweeps (from main) ---
 SCALING_SUITES = {
-    "nemotron": c_adamc_recipe.create_isoflop_sweep_steps(
+    "nemotron": c_adamc_heuristic.create_isoflop_sweep_steps(
         tokenized=nemotron_mix,
         experiment_name="nemo-wider-depth-adapt",
         budgets=LEGACY_BUDGETS,
     ),
-    "common_pile_feistel": c_adamc_recipe.create_isoflop_sweep_steps(
+    "common_pile_feistel": c_adamc_heuristic.create_isoflop_sweep_steps(
         tokenized=comma_main_mixture(),
         experiment_name="comma-mix-feistel",
         budgets=LEGACY_BUDGETS,
     ),
-    "dclm-default": c_adamc_recipe.create_isoflop_sweep_steps(
+    "dclm-default": c_adamc_heuristic.create_isoflop_sweep_steps(
         tokenized=dclm_mix,
         experiment_name="dclm-default",
         budgets=LEGACY_BUDGETS,
     ),
-    "dolma3_mix_150b": c_adamc_recipe.create_isoflop_sweep_steps(
+    "dolma3_mix_150b": c_adamc_heuristic.create_isoflop_sweep_steps(
         tokenized=dolma3_mix,
         experiment_name="dolma3-mix-150b-1025",
         budgets=LEGACY_BUDGETS,
     ),
     # --- Completed AdamH sweeps ---
-    "nemotron-completed-adamh": completed_adamh_recipe.create_isoflop_sweep_steps(
+    "nemotron-completed-adamh": completed_adamh_heuristic.create_isoflop_sweep_steps(
         tokenized=nemotron_mix,
         experiment_name="adamh_scaling_v6",
         budgets=LEGACY_BUDGETS,

@@ -12,7 +12,7 @@ from marin.scaling_laws.isoflop_analysis import (
     ModelConfiguration,
     QuadraticFitCoeffs,
     ScalingFit,
-    ScalingRecipe,
+    ScalingHeuristic,
     fit_scaling_laws,
     predict_optimal_config,
     round_flops_to_bucket,
@@ -41,7 +41,7 @@ __all__ = [
     "ModelConfiguration",
     "QuadraticFitCoeffs",
     "ScalingFit",
-    "ScalingRecipe",
+    "ScalingHeuristic",
     # Functions
     "create_isoflop_plot",
     "create_scaling_plot",

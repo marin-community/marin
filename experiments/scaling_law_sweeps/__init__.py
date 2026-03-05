@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Scaling law sweep recipes.
+"""Scaling law sweep heuristics.
 
-- c_adamc: Original Marin 2025 recipe using CautiousConfig optimizer
-- completed_adamh: Complete(d)P scaling recipe with AdamH optimizer
+- c_adamc: Original Marin 2025 heuristic using CautiousConfig optimizer
+- completed_adamh: Complete(d)P scaling heuristic with AdamH optimizer
 """

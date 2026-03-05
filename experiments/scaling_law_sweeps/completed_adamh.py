@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Complete(d) AdamH scaling recipe for ISOFlop sweeps.
+"""Complete(d) AdamH scaling heuristic for ISOFlop sweeps.
 
 Close-to-CompletedP heuristic scaling for AdamH.
 
@@ -90,8 +90,8 @@ def _format_run_name(
 
 
 @dataclass(frozen=True)
-class CompletedAdamHRecipe:
-    """Complete(d) AdamH scaling recipe.
+class CompletedAdamHHeuristic:
+    """Complete(d) AdamH scaling heuristic.
 
     Close-to-CompletedP heuristic scaling where hyperparameters scale with
     the ratio r/r0 = (B * T0) / (B0 * T) and batch size B/B0,
@@ -251,7 +251,7 @@ class CompletedAdamHRecipe:
         batch_size = candidate.batch_size
         seq_len = model_config.max_seq_len
         hidden = model_config.hidden_dim
-        intermediate = getattr(model_config, "intermediate_dim", hidden * self.mlp_ratio)
+        intermediate = model_config.intermediate_dim
         layers = model_config.num_layers
 
         param_count = model_config.total_trainable_params(self.vocab_size)
@@ -324,7 +324,7 @@ class CompletedAdamHRecipe:
                 yield candidate
 
 
-RECIPE = CompletedAdamHRecipe()
+completed_adamh_heuristic = CompletedAdamHHeuristic()
 
 
 def create_isoflop_sweep_steps(
@@ -334,15 +334,15 @@ def create_isoflop_sweep_steps(
     eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
     seq_len: int = SEQ_LEN,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
-    """Create ExecutorSteps for an ISOFlop sweep using Completed AdamH recipe."""
-    candidates = [c for budget in budgets for c in RECIPE.candidates_for_budget(budget, seq_len)]
+    """Create ExecutorSteps for an ISOFlop sweep using Completed AdamH heuristic."""
+    candidates = [c for budget in budgets for c in completed_adamh_heuristic.candidates_for_budget(budget, seq_len)]
 
     base_train_config = SimpleTrainConfig(
         resources=ResourceConfig.with_tpu("v4-8"),
         train_batch_size=1,
         num_train_steps=50_000,
         learning_rate=1.0,
-        z_loss_weight=RECIPE.z_loss_weight,
+        z_loss_weight=completed_adamh_heuristic.z_loss_weight,
         env_vars={"LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=16000"},
     )
 
@@ -351,7 +351,7 @@ def create_isoflop_sweep_steps(
 
     for candidate in candidates:
         model_config = candidate.model_config
-        estimated_memory = RECIPE.estimate_memory_bytes(candidate)
+        estimated_memory = completed_adamh_heuristic.estimate_memory_bytes(candidate)
         tpu_type = pick_v4_type(estimated_memory)
 
         run_name = _format_run_name(
@@ -363,7 +363,7 @@ def create_isoflop_sweep_steps(
         )
         output_path = f"checkpoints/isoflop/{run_name}"
 
-        params = model_config.total_trainable_params(RECIPE.vocab_size)
+        params = model_config.total_trainable_params(completed_adamh_heuristic.vocab_size)
         tags = (
             f"FLOPs={candidate.flops_budget:.1e}",
             f"N={params:.1e}",

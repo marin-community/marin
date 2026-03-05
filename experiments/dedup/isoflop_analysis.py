@@ -17,10 +17,10 @@ from levanter.data.text import LMMixtureDatasetConfig
 from experiments.pretraining_datasets.simple import downloads
 from experiments.isoflop_sweep import (
     IsoFlopAnalysisConfig,
-    MARIN_2025_RECIPE,
     create_isoflop_sweep_steps,
     run_isoflop_analysis_step,
 )
+from experiments.scaling_law_sweeps.c_adamc import c_adamc_heuristic
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 logger = logging.getLogger(__name__)
@@ -111,7 +111,7 @@ fineweb_edu_variant = "fineweb_edu_sample_10bt"
 training_steps, _ = create_isoflop_sweep_steps(
     tokenized=_get_vanilla_data_mixture(variant=fineweb_edu_variant),
     experiment_name=f"{EXPERIMENT_NAME_PREFIX}-vanilla",
-    recipe=MARIN_2025_RECIPE,
+    heuristic=c_adamc_heuristic,
     budgets=BUDGETS,
 )
 for mode in DedupMode:
@@ -119,7 +119,7 @@ for mode in DedupMode:
         create_isoflop_sweep_steps(
             tokenized=_get_deduped_data_mixture(variant=fineweb_edu_variant, mode=mode),
             experiment_name=f"{EXPERIMENT_NAME_PREFIX}-dedup-{mode.lower()}",
-            recipe=MARIN_2025_RECIPE,
+            heuristic=c_adamc_heuristic,
             budgets=BUDGETS,
         )[0]
     )

@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""C-AdamC (Cautious Adam) scaling recipe for ISOFlop sweeps.
+"""C-AdamC (Cautious Adam with Cosine schedule) scaling heuristic for ISOFlop sweeps.
 
-This is the original Marin 2025 recipe using CautiousConfig optimizer.
+This is the original Marin 2025 heuristic using CautiousConfig optimizer with
+cosine LR schedule.
 """
 
 import math
@@ -41,8 +42,7 @@ SEQ_LEN: int = 4096
 STEPS_PER_RUN: int = 2**16
 
 
-def _round_to_power_of_two(x: float) -> int:
-    """Round x UP to the nearest power of 2."""
+def _round_up_to_power_of_two(x: float) -> int:
     if x <= 1:
         return 1
     return 2 ** math.ceil(math.log2(x))
@@ -60,8 +60,8 @@ def _format_run_name(
 
 
 @dataclass(frozen=True)
-class CAdamCRecipe:
-    """C-AdamC scaling recipe using CautiousConfig optimizer."""
+class CAdamCHeuristic:
+    """C-AdamC scaling heuristic using CautiousConfig optimizer."""
 
     name: str = "c-adamc"
     tokenizer: str = "stanford-crfm/marin-tokenizer"
@@ -161,7 +161,7 @@ class CAdamCRecipe:
         batch_size = candidate.batch_size
         seq_len = model_config.max_seq_len
         hidden = model_config.hidden_dim
-        intermediate = getattr(model_config, "intermediate_dim", hidden * self.mlp_ratio)
+        intermediate = model_config.intermediate_dim
         layers = model_config.num_layers
 
         param_count = model_config.total_trainable_params(self.vocab_size)
@@ -193,7 +193,7 @@ class CAdamCRecipe:
         hidden_size = model_config.hidden_dim
 
         batch_exact = tokens / (STEPS_PER_RUN * seq_len)
-        batch_size = _round_to_power_of_two(batch_exact)
+        batch_size = _round_up_to_power_of_two(batch_exact)
 
         lr = self._compute_learning_rate(batch_size, hidden_size)
         while lr > self.max_learning_rate:
@@ -244,7 +244,7 @@ class CAdamCRecipe:
                 yield candidate
 
 
-RECIPE = CAdamCRecipe()
+c_adamc_heuristic = CAdamCHeuristic()
 
 
 def create_isoflop_sweep_steps(
@@ -254,8 +254,8 @@ def create_isoflop_sweep_steps(
     eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
     seq_len: int = SEQ_LEN,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
-    """Create ExecutorSteps for an ISOFlop sweep using C-AdamC recipe."""
-    candidates = [c for budget in budgets for c in RECIPE.candidates_for_budget(budget, seq_len)]
+    """Create ExecutorSteps for an ISOFlop sweep using C-AdamC heuristic."""
+    candidates = [c for budget in budgets for c in c_adamc_heuristic.candidates_for_budget(budget, seq_len)]
 
     base_train_config = SimpleTrainConfig(
         resources=ResourceConfig.with_tpu("v5p-8"),
@@ -269,7 +269,7 @@ def create_isoflop_sweep_steps(
 
     for candidate in candidates:
         model_config = candidate.model_config
-        estimated_memory = RECIPE.estimate_memory_bytes(candidate)
+        estimated_memory = c_adamc_heuristic.estimate_memory_bytes(candidate)
         tpu_type = pick_v5p_type(estimated_memory)
 
         run_name = _format_run_name(
@@ -281,7 +281,7 @@ def create_isoflop_sweep_steps(
         )
         output_path = f"checkpoints/isoflop/{run_name}"
 
-        params = model_config.total_trainable_params(RECIPE.vocab_size)
+        params = model_config.total_trainable_params(c_adamc_heuristic.vocab_size)
         tags = (
             f"FLOPs={candidate.flops_budget:.1e}",
             f"N={params:.1e}",
