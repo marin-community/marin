@@ -863,9 +863,9 @@ class Migration:
         )
 
         # Fix test_integration_test.py: use sys.executable instead of bare
-        # "python" (which may not exist in venv-only setups), and pass cwd so
-        # that integration_test.py's relative path ./tests/quickstart-data
-        # resolves correctly.
+        # "python" (which may not exist in venv-only setups), and use -P flag
+        # to prevent the script's parent directory (tests/) from being prepended
+        # to sys.path, which would cause tests/levanter/ to shadow src/levanter/.
         self._replace_in_file(
             "tests/test_integration_test.py",
             "import os\nimport subprocess\nimport tempfile",
@@ -876,13 +876,10 @@ class Migration:
             '            ["python", os.path.join(MARIN_ROOT, "tests/integration_test.py"), "--prefix", temp_dir],\n'
             "            capture_output=False,\n"
             "            text=True,",
-            '            [sys.executable, os.path.join(MARIN_ROOT, "tests/integration_test.py"),\n'
+            '            [sys.executable, "-P",\n'
+            '             os.path.join(MARIN_ROOT, "tests/integration_test.py"),\n'
             '             "--prefix", temp_dir],\n'
             "            cwd=MARIN_ROOT,\n"
-            '            env={**os.environ, "PYTHONPATH": os.pathsep.join([\n'
-            '                os.path.join(MARIN_ROOT, "src"),\n'
-            '                os.path.join(MARIN_ROOT, "tests"),\n'
-            "            ])},\n"
             "            capture_output=False,\n"
             "            text=True,",
         )
