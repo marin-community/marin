@@ -24,6 +24,19 @@ def _quick_with_log_marker():
     return 1
 
 
+def _verbose_task():
+    """Emit 200 numbered log lines with categorized prefixes for filter testing."""
+    for i in range(200):
+        if i % 3 == 0:
+            print(f"[INFO] step {i}: processing data batch")
+        elif i % 3 == 1:
+            print(f"[WARN] step {i}: slow operation detected")
+        else:
+            print(f"[ERROR] step {i}: validation failed for item")
+    print("DONE: all 200 lines emitted")
+    return 1
+
+
 def test_jobs_tab_shows_all_states(cluster, page, screenshot):
     """Submit jobs in various states, verify the Jobs tab renders them."""
     succeeded_job = cluster.submit(_quick, "dash-succeeded")
@@ -56,21 +69,59 @@ def test_job_detail_page(cluster, page, screenshot):
 
 
 def test_job_detail_shows_task_logs(cluster, page, screenshot):
-    """Job detail Task Logs panel shows task stdout logs."""
-    job = cluster.submit(_quick_with_log_marker, "dash-task-logs")
+    """Job detail Task Logs panel shows logs, line limit buttons, and regex filter."""
+    job = cluster.submit(_verbose_task, "dash-task-logs")
     cluster.wait(job, timeout=30)
 
     dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
     wait_for_dashboard_ready(page)
 
-    if not _is_noop_page(page):
-        page.wait_for_function(
-            "() => document.querySelector('pre') && "
-            "document.querySelector('pre').textContent.includes('TASK_LOG_MARKER: dashboard-task-log-visible')",
-            timeout=10000,
-        )
-    assert_visible(page, "text=TASK_LOG_MARKER: dashboard-task-log-visible")
-    screenshot("job-detail-task-logs")
+    if _is_noop_page(page):
+        return
+
+    # Wait for logs to appear (default 1K limit shows all 201 lines)
+    page.wait_for_function(
+        "() => document.querySelector('pre') && "
+        "document.querySelector('pre').textContent.includes('DONE: all 200 lines emitted')",
+        timeout=10000,
+    )
+    screenshot("task-logs-default-1k")
+
+    # Click "100" button — should truncate to 100 lines
+    page.click("button:has-text('100')")
+    page.wait_for_function(
+        "() => document.querySelector('span')  && " "document.body.textContent.includes('(truncated)')",
+        timeout=5000,
+    )
+    screenshot("task-logs-limit-100")
+
+    # Click "All" to restore
+    page.click("button:has-text('All')")
+    page.wait_for_function(
+        "() => document.querySelector('pre') && "
+        "document.querySelector('pre').textContent.includes('DONE: all 200 lines emitted')",
+        timeout=5000,
+    )
+    screenshot("task-logs-limit-all")
+
+    # Test regex filter — filter for ERROR lines only
+    page.fill("input[placeholder='regex']", "ERROR")
+    page.click("button:has-text('Apply')")
+    page.wait_for_function(
+        "() => document.querySelector('pre') && "
+        "!document.querySelector('pre').textContent.includes('[INFO]') && "
+        "document.querySelector('pre').textContent.includes('[ERROR]')",
+        timeout=5000,
+    )
+    screenshot("task-logs-regex-error")
+
+    # Clear filter — all lines return
+    page.click("button:has-text('Clear')")
+    page.wait_for_function(
+        "() => document.querySelector('pre') && " "document.querySelector('pre').textContent.includes('[INFO]')",
+        timeout=5000,
+    )
+    screenshot("task-logs-regex-cleared")
 
 
 def test_workers_tab(cluster, page, screenshot):

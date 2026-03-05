@@ -9,7 +9,7 @@ import cloudpickle
 
 from marin.execution.artifact import Artifact
 from marin.execution.disk_cache import disk_cache
-from marin.execution.distributed_lock import distributed_lock
+from marin.execution.executor_step_status import distributed_lock
 from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
 from marin.execution.step_spec import StepSpec
 
@@ -147,6 +147,31 @@ def test_decorator_auto_path_from_marin_prefix(tmp_path: Path, monkeypatch):
     cache_dirs = list(tmp_dir.glob("disk_cache_*"))
     assert len(cache_dirs) == 1
     assert (cache_dirs[0] / "data.pkl").exists()
+
+
+def test_run_step_with_cache_and_lock(tmp_path: Path):
+    """run_step acquires a lock, runs the function, saves the artifact, and writes STATUS_SUCCESS."""
+    from marin.execution.step_runner import check_cache, run_step
+
+    call_count = 0
+
+    def counting_fn(output_path: str) -> dict:
+        nonlocal call_count
+        call_count += 1
+        os.makedirs(output_path, exist_ok=True)
+        return {"value": 42}
+
+    spec = StepSpec(name="run-step", output_path_prefix=tmp_path.as_posix(), fn=counting_fn)
+
+    # First run: should execute
+    run_step(spec)
+    assert call_count == 1
+    assert check_cache(spec.output_path)
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+
+    # Second run: cache hit, should not re-execute
+    run_step(spec)
+    assert call_count == 1
 
 
 def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):

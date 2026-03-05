@@ -271,6 +271,10 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     vf = vortex.open(spec.path)
     dataset = vf.to_dataset()
 
+    # Empty vortex files have no schema, so column projection would fail
+    if dataset.count_rows() == 0:
+        return
+
     if spec.row_start is not None and spec.row_end is not None:
         indices = np.arange(spec.row_start, spec.row_end, dtype=np.uint64)
         indices = pa.array(indices)

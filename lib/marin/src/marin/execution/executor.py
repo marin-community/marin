@@ -97,7 +97,6 @@ from urllib.parse import urlparse
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
 from iris.marin_fs import open_url
-from fray.v2.types import ResourceConfig
 from iris.marin_fs import marin_prefix
 
 from marin.execution.step_spec import StepSpec
@@ -209,17 +208,11 @@ def resolve_executor_step(
     def resolved_fn(output_path):
         return captured_fn(captured_config)
 
-    # Determine Fray config: explicit ExecutorStep.resources wins,
-    # then @remote on the original fn, then None (run locally).
+    # If the original fn was decorated with @remote, propagate the
+    # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
+    # is preserved.  Plain functions run locally in-thread.
     final_fn: Callable = resolved_fn
-    if step.resources is not None:
-        final_fn = RemoteCallable(
-            fn=resolved_fn,
-            resources=step.resources,
-            env_vars=step.env_vars or {},
-            pip_dependency_groups=step.pip_dependency_groups or [],
-        )
-    elif isinstance(step.fn, RemoteCallable):
+    if isinstance(step.fn, RemoteCallable):
         final_fn = dataclasses.replace(step.fn, fn=resolved_fn)
 
     return StepSpec(
@@ -265,15 +258,6 @@ class ExecutorStep(Generic[ConfigT]):
     override_output_path: str | None = None
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
-
-    pip_dependency_groups: list[str] | None = None
-    """List of `extra` dependencies from pyproject.toml to include with this step."""
-
-    resources: ResourceConfig | None = None
-    """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
-
-    env_vars: dict[str, str] | None = None
-    """Additional environment variables to set for this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""

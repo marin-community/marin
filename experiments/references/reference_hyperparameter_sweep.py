@@ -23,6 +23,7 @@ from experiments.grug.base.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.pretraining_datasets.nemotron import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 FloatRange = tuple[float, float]
@@ -302,6 +303,7 @@ def _build_base_launch_config() -> GrugBaseLaunchConfig:
         data=NEMOTRON_MIX_WITH_EVAL,
         output_path=this_output_path(),
         run_id=f"{SWEEP.experiment_name}-base",
+        resources=ResourceConfig.with_tpu("v4-8"),
         steps=placeholder_steps,
         batch_size=placeholder_batch_size,
         seed=0,
@@ -532,7 +534,7 @@ def _build_suggest_step(
     client_id = f"{SWEEP.client_id_prefix}-loop-{loop_index}"
     return ExecutorStep(
         name=f"{SWEEP.experiment_name}-suggest-loop{loop_index}",
-        fn=run_vizier_suggest,
+        fn=remote(run_vizier_suggest, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
         config=VizierSuggestConfig(
             study_owner=SWEEP.study_owner,
             study_id=SWEEP.study_id,
@@ -546,8 +548,6 @@ def _build_suggest_step(
             search_space=SWEEP.search_space,
             loop_index=loop_index,
         ),
-        pip_dependency_groups=["vizier"],
-        resources=ResourceConfig.with_cpu(),
     )
 
 
@@ -563,7 +563,7 @@ def _build_train_step(
             "checkpoints",
             f"{SWEEP.client_id_prefix}-loop{loop_index}-trial{suggestion_index}",
         ),
-        fn=run_vizier_train,
+        fn=remote(run_vizier_train, resources=ResourceConfig.with_tpu("v4-8")),
         config=VizierTrainConfig(
             suggestions_path=suggestions_path,
             suggestion_index=suggestion_index,
@@ -573,7 +573,6 @@ def _build_train_step(
             fixed_batch_size=SWEEP.fixed_batch_size,
             loop_index=loop_index,
         ),
-        resources=ResourceConfig.with_tpu("v4-8"),
     )
 
 
@@ -587,7 +586,7 @@ def _build_update_step(
 ) -> ExecutorStep:
     return ExecutorStep(
         name=f"{SWEEP.experiment_name}-update-loop{loop_index}",
-        fn=run_vizier_update,
+        fn=remote(run_vizier_update, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
         config=VizierUpdateConfig(
             study_id=SWEEP.study_id,
             study_resource_name=study_resource_name,
@@ -600,8 +599,6 @@ def _build_update_step(
             output_path=this_output_path(),
             loop_index=loop_index,
         ),
-        pip_dependency_groups=["vizier"],
-        resources=ResourceConfig.with_cpu(),
     )
 
 
@@ -612,15 +609,13 @@ def _build_optimal_step(
 ) -> ExecutorStep:
     return ExecutorStep(
         name=f"{SWEEP.experiment_name}-optimal",
-        fn=run_vizier_optimal,
+        fn=remote(run_vizier_optimal, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
         config=VizierOptimalConfig(
             study_id=SWEEP.study_id,
             study_resource_name=study_resource_name,
             input_db_path=input_db_path,
             output_path=this_output_path(),
         ),
-        pip_dependency_groups=["vizier"],
-        resources=ResourceConfig.with_cpu(),
     )
 
 

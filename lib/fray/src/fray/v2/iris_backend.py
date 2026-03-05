@@ -454,6 +454,8 @@ class FrayIrisClient:
                 constraints=iris_constraints if iris_constraints else None,
                 coscheduling=coscheduling,
                 replicas=replicas,
+                max_retries_failure=request.max_retries_failure,
+                max_retries_preemption=request.max_retries_preemption,
             )
         except IrisJobAlreadyExists as e:
             if adopt_existing:

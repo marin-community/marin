@@ -905,6 +905,7 @@ class ControllerServiceImpl:
         total_lines = 0
         truncated = False
         last_timestamp_ms = request.since_ms
+        resume_offsets: dict[str, int] = {}
 
         for task in tasks:
             task_id_wire = task.task_id.to_wire()
@@ -925,26 +926,32 @@ class ControllerServiceImpl:
 
             for attempt in attempts_to_fetch:
                 remaining = max(0, max_lines - total_lines) if max_lines > 0 else 0
-                worker_logs = log_store.get_logs(
+                offset_key = f"{task_id_wire}/{attempt.attempt_id}"
+                skip_lines = int(request.resume_offsets.get(offset_key, 0))
+                log_result = log_store.get_logs(
                     task.task_id,
                     attempt.attempt_id,
                     since_ms=request.since_ms,
+                    skip_lines=skip_lines,
                     regex_filter=compiled_regex,
                     max_lines=remaining,
+                    tail=True,
                 )
 
-                for entry in worker_logs:
+                resume_offsets[offset_key] = log_result.lines_read
+
+                for entry in log_result.entries:
                     if entry.timestamp.epoch_ms > last_timestamp_ms:
                         last_timestamp_ms = entry.timestamp.epoch_ms
 
                 batch = cluster_pb2.Controller.TaskLogBatch(
                     task_id=task_id_wire,
                     worker_id=str(attempt.worker_id) if attempt.worker_id else "",
-                    logs=worker_logs,
+                    logs=log_result.entries,
                 )
                 task_logs.append(batch)
 
-                total_lines += len(worker_logs)
+                total_lines += len(log_result.entries)
                 if max_lines > 0 and total_lines >= max_lines:
                     truncated = True
                     break
@@ -957,6 +964,7 @@ class ControllerServiceImpl:
             last_timestamp_ms=last_timestamp_ms,
             truncated=truncated,
             child_job_statuses=child_job_statuses,
+            resume_offsets=resume_offsets,
         )
 
     # --- Profiling ---
