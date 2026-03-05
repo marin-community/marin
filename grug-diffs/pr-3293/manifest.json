@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "modular_opt"
+  ],
+  "base_sha": "3fd8320675cf669005b132d8e2775bd2a0d1fa9a",
+  "head_sha": "a53ababa5b6353195cd9f0e8c7b8db4a30fc7aed",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 183,
+      "report_relpath": "modular_opt/index.html",
+      "status_counts": {
+        "added": 0,
+        "changed": 4,
+        "removed": 0,
+        "unchanged": 0
+      },
+      "variant": "modular_opt"
+    }
+  ]
+}
