@@ -1191,6 +1191,7 @@ class ZephyrContext:
         over-provisioning when there are fewer shards than the cap.
         """
         if num_shards == 0:
+            logger.warning("No shards to process, skipping worker creation")
             return
 
         assert self.max_workers is not None  # set by __post_init__
