@@ -106,12 +106,11 @@ def main(config: EvalLmConfig):
             max_examples_per_dataset=max_examples,
         )
 
-        @hax.named_jit
+        @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_loss(model: LmHeadModel, example: LmExample):
-            with hax.axis_mapping(compute_axis_mapping):
-                model = inference_mode(model, True)
-                model = mp.cast_to_compute(model)
-                return model.compute_next_token_loss(example, key=None)
+            model = inference_mode(model, True)
+            model = mp.cast_to_compute(model)
+            return model.compute_next_token_loss(example, key=None)
 
         @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
