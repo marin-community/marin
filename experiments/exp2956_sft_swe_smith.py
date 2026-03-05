@@ -146,8 +146,8 @@ STUDENT_CONFIGS: dict[str, StudentConfig] = {
         model_name_or_path="Qwen/Qwen2.5-Coder-32B-Instruct",
         chat_template=QWEN_2_5_INSTRUCT_CHAT_TEMPLATE,
         resources=ResourceConfig.with_tpu("v5p-64"),
-        train_batch_size=16,
-        microbatch_size=16,
+        train_batch_size=32,
+        microbatch_size=32,
     ),
 }
 
