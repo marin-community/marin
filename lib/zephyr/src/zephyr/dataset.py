@@ -216,6 +216,7 @@ class GroupByOp:
     key_fn: Callable  # Function from item -> hashable key
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
     num_output_shards: int | None = None  # None = auto-detect from current shard count
+    sort_fn: Callable | None = None  # Optional secondary sort within each group
 
     def __repr__(self):
         return f"GroupByOp(key={_get_fn_name(self.key_fn)})"
@@ -730,7 +731,9 @@ class Dataset(Generic[T]):
     def group_by(
         self,
         key: Callable[[T], object],
+        *,
         reducer: Callable[[object, Iterator[T]], R],
+        sort_by: Callable[[T], object] | None = None,
         num_output_shards: int | None = None,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
@@ -740,6 +743,8 @@ class Dataset(Generic[T]):
         Args:
             key: Function extracting grouping key from item (must be hashable)
             reducer: Function from (key, Iterator[items]) -> result
+            sort_by: Optional function extracting a sort key from each item. When provided,
+                items within each group are delivered to the reducer sorted by this key.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
 
         Returns:
@@ -756,8 +761,18 @@ class Dataset(Generic[T]):
             ... )
             >>> ctx.execute(ds)
             [{"cat": "A", "count": 2}, {"cat": "B", "count": 1}]
+
+            >>> # Items within each group sorted by timestamp
+            >>> ds = (Dataset
+            ...     .from_list([{"user": "A", "ts": 3}, {"user": "A", "ts": 1}])
+            ...     .group_by(
+            ...         key=lambda x: x["user"],
+            ...         reducer=lambda key, items: {"user": key, "events": list(items)},
+            ...         sort_by=lambda x: x["ts"],
+            ...     )
+            ... )
         """
-        return Dataset(self.source, [*self.operations, GroupByOp(key, reducer, num_output_shards)])
+        return Dataset(self.source, [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by)])
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
         """Deduplicate items by key.
