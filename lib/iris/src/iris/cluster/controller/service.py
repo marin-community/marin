@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import re
 import uuid
 from typing import Any, Protocol
 
@@ -23,10 +24,7 @@ from iris.cluster.controller.events import (
     JobSubmittedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.pending_diagnostics import (
-    build_job_pending_hints,
-    is_active_scale_up_hint,
-)
+from iris.cluster.controller.pending_diagnostics import build_job_pending_hints
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.snapshot import SnapshotResult
 from iris.cluster.controller.state import (
@@ -36,20 +34,18 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
 )
-from iris.cluster import task_logging
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import job_state_name, task_state_name
-from iris.time_utils import Timer, Timestamp
+from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
 DEFAULT_MAX_TOTAL_LINES = 10000
-_SLOW_STORAGE_READ_MS = 2000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
@@ -89,7 +85,7 @@ USER_JOB_STATES = (
 def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2.TaskStatus:
     """Convert a ControllerTask to a TaskStatus proto.
 
-    Handles attempt conversion, timestamps, log_directory, and resource_usage.
+    Handles attempt conversion, timestamps, and resource_usage.
     The caller is responsible for resolving worker_address from worker_id if needed.
     """
     current_attempt = task.current_attempt
@@ -119,7 +115,6 @@ def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2
         error=task.error or "",
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
-        log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
     )
     if current_attempt and current_attempt.started_at:
         proto.started_at.CopyFrom(current_attempt.started_at.to_proto())
@@ -362,7 +357,7 @@ class ControllerServiceImpl:
             # Only override scheduler diagnostics when autoscaler is actively
             # requesting new capacity. Otherwise, scheduler root-cause details
             # (e.g., constraint/resource mismatch) are more actionable.
-            if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
+            if autoscaler_hint:
                 pending_reason = autoscaler_hint
 
         # Build the JobStatus proto and set timestamps
@@ -488,7 +483,7 @@ class ControllerServiceImpl:
             pending_reason = j.error or ""
             if j.state == cluster_pb2.JOB_STATE_PENDING:
                 autoscaler_hint = autoscaler_pending_hints.get(j.job_id.to_wire(), "")
-                if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
+                if autoscaler_hint:
                     pending_reason = autoscaler_hint
 
             proto_job = cluster_pb2.JobStatus(
@@ -850,10 +845,10 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetTaskLogsRequest,
         ctx: RequestContext,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Get logs for a task or all tasks in a job from storage.
+        """Get logs for a task or all tasks in a job from the in-memory log store.
 
-        Fetches logs from durable storage (GCS) instead of proxying from workers.
-        This enables post-mortem access to logs after worker VMs terminate.
+        Logs are forwarded from workers via heartbeat and accumulated in the
+        controller's log store.  No remote storage I/O occurs.
 
         If request.id ends in a numeric index, treat as single task.
         Otherwise treat as job ID and fetch logs from all tasks.
@@ -863,10 +858,9 @@ class ControllerServiceImpl:
         job_name = JobName.from_wire(request.id)
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
+        log_store = self._state.log_store
 
         # Detect if this is a task ID (ends in /N) or job ID and collect tasks.
-        # When include_children is set, also collect child job statuses so the
-        # client can detect state transitions without a separate ListJobs RPC.
         child_job_statuses: list[cluster_pb2.JobStatus] = []
         if job_name.is_task:
             task = self._state.get_task(job_name)
@@ -892,7 +886,21 @@ class ControllerServiceImpl:
             else:
                 tasks.extend(self._state.get_job_tasks(job_name))
 
-        # Fetch logs from storage for each task/attempt
+        # Pre-compile regex filter so invalid patterns produce a clear error
+        # rather than an internal failure during iteration.
+        compiled_regex: re.Pattern[str] | None = None
+        if request.regex:
+            try:
+                compiled_regex = re.compile(request.regex)
+            except re.error as e:
+                return cluster_pb2.Controller.GetTaskLogsResponse(
+                    task_logs=[
+                        cluster_pb2.Controller.TaskLogBatch(
+                            error=f"Invalid regex filter: {e}",
+                        )
+                    ],
+                )
+
         task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
         total_lines = 0
         truncated = False
@@ -901,10 +909,8 @@ class ControllerServiceImpl:
         for task in tasks:
             task_id_wire = task.task_id.to_wire()
 
-            # Determine which attempts to fetch
             attempts_to_fetch = []
             if requested_attempt_id >= 0:
-                # Specific attempt requested
                 if requested_attempt_id >= len(task.attempts):
                     task_logs.append(
                         cluster_pb2.Controller.TaskLogBatch(
@@ -915,81 +921,33 @@ class ControllerServiceImpl:
                     continue
                 attempts_to_fetch = [task.attempts[requested_attempt_id]]
             else:
-                # All attempts
                 attempts_to_fetch = task.attempts
 
-            # Fetch logs for each attempt
             for attempt in attempts_to_fetch:
-                if not attempt.worker_id:
-                    task_logs.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            error=f"Attempt {attempt.attempt_id} has no assigned worker",
-                        )
-                    )
-                    continue
+                remaining = max(0, max_lines - total_lines) if max_lines > 0 else 0
+                worker_logs = log_store.get_logs(
+                    task.task_id,
+                    attempt.attempt_id,
+                    since_ms=request.since_ms,
+                    regex_filter=compiled_regex,
+                    max_lines=remaining,
+                )
 
-                if not attempt.log_directory:
-                    task_logs.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            worker_id=str(attempt.worker_id),
-                            error=(
-                                f"Attempt {attempt.attempt_id} has no log directory "
-                                "(worker may not have reported it yet)"
-                            ),
-                        )
-                    )
-                    continue
+                for entry in worker_logs:
+                    if entry.timestamp.epoch_ms > last_timestamp_ms:
+                        last_timestamp_ms = entry.timestamp.epoch_ms
 
-                try:
-                    storage_timer = Timer()
-                    reader = task_logging.LogReader.from_log_directory(log_directory=attempt.log_directory)
-                    log_entries = reader.read_logs(
-                        source=None,  # All sources
-                        regex_filter=request.regex if request.regex else None,
-                        max_lines=max(0, max_lines - total_lines) if max_lines > 0 else 0,
-                    )
-                    storage_elapsed = storage_timer.elapsed_ms()
-                    if storage_elapsed > _SLOW_STORAGE_READ_MS:
-                        logger.warning(
-                            "Storage read for %s attempt %d: %dms (slow)",
-                            task_id_wire,
-                            attempt.attempt_id,
-                            storage_elapsed,
-                        )
+                batch = cluster_pb2.Controller.TaskLogBatch(
+                    task_id=task_id_wire,
+                    worker_id=str(attempt.worker_id) if attempt.worker_id else "",
+                    logs=worker_logs,
+                )
+                task_logs.append(batch)
 
-                    worker_logs = []
-                    for entry in log_entries:
-                        # Filter by timestamp if requested
-                        if request.since_ms > 0 and entry.timestamp.epoch_ms <= request.since_ms:
-                            continue
-
-                        worker_logs.append(entry)
-
-                        if entry.timestamp.epoch_ms > last_timestamp_ms:
-                            last_timestamp_ms = entry.timestamp.epoch_ms
-
-                    batch = cluster_pb2.Controller.TaskLogBatch(
-                        task_id=task_id_wire,
-                        worker_id=str(attempt.worker_id),
-                        logs=worker_logs,
-                    )
-                    task_logs.append(batch)
-
-                    total_lines += len(worker_logs)
-                    if max_lines > 0 and total_lines >= max_lines:
-                        truncated = True
-                        break
-
-                except Exception as e:
-                    task_logs.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            worker_id=str(attempt.worker_id),
-                            error=f"Failed to fetch logs from storage: {e}",
-                        )
-                    )
+                total_lines += len(worker_logs)
+                if max_lines > 0 and total_lines >= max_lines:
+                    truncated = True
+                    break
 
             if truncated:
                 break

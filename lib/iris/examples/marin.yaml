@@ -59,7 +59,7 @@ scale_groups:
     num_vms: 1
     priority: 10
     resources: { cpu: 112, ram: 192GB, disk: 100GB, tpu_count: 4, gpu_count: 0 }
-    min_slices: 0
+    min_slices: 1
     max_slices: 1024
     slice_template:
       accelerator_variant: v5litepod-4
@@ -183,7 +183,7 @@ scale_groups:
     num_vms: 1
     priority: 10
     resources: { cpu: 180, ram: 720GB, disk: 100GB, tpu_count: 4, gpu_count: 0 }
-    min_slices: 0
+    min_slices: 1
     max_slices: 1024
     slice_template:
       accelerator_variant: v6e-4

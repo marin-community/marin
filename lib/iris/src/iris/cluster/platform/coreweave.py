@@ -1106,6 +1106,10 @@ class CoreweavePlatform:
 
         return self.discover_controller(config.controller)
 
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller by re-applying manifests and rolling restart."""
+        return self.start_controller(config)
+
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller by deleting its K8s resources."""
         cw = config.controller.coreweave
@@ -1441,7 +1445,7 @@ def _coreweave_tunnel(
     exits (e.g. konnectivity timeout), it is relaunched automatically.
     """
     if local_port is None:
-        local_port = find_free_port(start=10000)
+        local_port = find_free_port()
 
     deadline = Deadline.from_seconds(timeout)
     backoff = ExponentialBackoff(initial=1.0, maximum=10.0, factor=2.0)

@@ -47,8 +47,8 @@ Ray packages up the code from the local directory and ships it off to the approp
 The environment will have the following packages installed:
 - **Default packages**: installed on the Ray cluster (`dependencies` in
   [`pyproject.toml`](https://github.com/marin-community/marin/blob/main/pyproject.toml)), which include fsspec, draccus, etc.
-- **Step-specific packages**: each `ExecutorStep` can specify
-  `pip_dependency_groups`, a list of either (i) a key from
+- **Step-specific packages**: remote steps can specify
+  `pip_dependency_groups` via the `remote()` wrapper, a list of either (i) a key from
   `project.optional-dependencies` dictionary (e.g., `rl`), or (2) a
   specific pip package.  This allows each step to have its own environment and
   not interfere with other steps.
@@ -60,9 +60,8 @@ one can do:
 ```python
 number_of_restarts = ExecutorStep(
     name=...,
-    fn=...,
+    fn=remote(my_fn, pip_dependency_groups=["rl", "google-cloud-logging"]),
     config=...,
-    pip_dependency_groups=["rl", "google-cloud-logging"],
 )
 ```
 

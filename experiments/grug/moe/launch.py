@@ -23,6 +23,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
@@ -132,7 +133,7 @@ RESOLVED_TPU_TYPE = _resolve_tpu_type("v6e-8")
 
 grug_moe_trial = ExecutorStep(
     name="grug/moe-trial",
-    fn=run_grug_moe_trial,
+    fn=remote(run_grug_moe_trial, resources=ResourceConfig.with_tpu("v5p-8")),
     config=GrugMoeLaunchConfig(
         model=versioned(GRUG_MOE_TRIAL_MODEL),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,

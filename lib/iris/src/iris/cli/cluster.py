@@ -540,20 +540,12 @@ def controller_restart(ctx, bundle_prefix: str | None):
         for name, tag in built.items():
             click.echo(f"  {name}: {tag}")
 
-    # Stop controller
+    # Restart controller in-place (re-runs bootstrap on existing VM)
     iris_config = IrisConfig(config)
     platform = iris_config.platform()
     try:
-        platform.stop_controller(config)
+        address = platform.restart_controller(config)
     except Exception as e:
-        click.echo(f"Failed to stop controller: {e}", err=True)
-        raise SystemExit(1) from e
-    click.echo("Controller stopped.")
-
-    # Start new controller (auto-restores from latest.json in storage)
-    try:
-        address = platform.start_controller(config)
-    except Exception as e:
-        click.echo(f"Failed to start controller: {e}", err=True)
+        click.echo(f"Failed to restart controller: {e}", err=True)
         raise SystemExit(1) from e
     click.echo(f"Controller restarted at {address}")

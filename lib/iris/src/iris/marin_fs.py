@@ -55,6 +55,24 @@ REGION_TO_TMP_BUCKET: dict[str, str] = {
     "us-east5": "marin-tmp-us-east5",
 }
 
+# Special-case overrides for primary Marin buckets that do not follow the
+# default `marin-{region}` naming convention.
+_REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
+    "europe-west4": "marin-eu-west4",
+}
+
+# All known primary marin data buckets, keyed by region.
+# Used by the mirror filesystem to scan for files across regions.
+REGION_TO_DATA_BUCKET: dict[str, str] = {
+    "us-central1": "marin-us-central1",
+    "us-central2": "marin-us-central2",
+    "us-east1": "marin-us-east1",
+    "us-east5": "marin-us-east5",
+    "us-west4": "marin-us-west4",
+    "europe-west4": "marin-eu-west4",
+    "asia-northeast1": "marin-asia-northeast1",
+}
+
 
 # ---------------------------------------------------------------------------
 # Low-level region helpers
@@ -101,7 +119,8 @@ def marin_prefix() -> str:
         return prefix
     region = region_from_metadata()
     if region:
-        return f"gs://marin-{region}"
+        bucket = _REGION_TO_MARIN_BUCKET_OVERRIDES.get(region, f"marin-{region}")
+        return f"gs://{bucket}"
     return _DEFAULT_LOCAL_PREFIX
 
 
@@ -527,8 +546,12 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     """Like ``fsspec.core.url_to_fs`` but wraps GCS filesystems in a cross-region guard.
 
     Returns ``(fs, path)``.  For non-GCS URLs the filesystem is returned
-    unwrapped.
+    unwrapped.  ``mirror://`` URLs are handled by :class:`iris.mirror_fs.MirrorFileSystem`.
     """
+    # Ensure mirror:// protocol is registered before dispatch.
+    if url.startswith("mirror://"):
+        import iris.mirror_fs  # noqa: F401 — triggers fsspec registration
+
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)

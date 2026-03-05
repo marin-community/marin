@@ -260,9 +260,12 @@ class RemoteClusterClient:
         self._client.unregister_endpoint(request)
 
     def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
-        request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
-        response = self._client.list_endpoints(request, timeout_ms=10_000)
-        return list(response.endpoints)
+        def _call():
+            request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
+            response = self._client.list_endpoints(request, timeout_ms=10_000)
+            return list(response.endpoints)
+
+        return call_with_retry("list_endpoints", _call)
 
     def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
         """List all workers registered with the controller."""
@@ -364,5 +367,9 @@ class RemoteClusterClient:
         Returns:
             GetAutoscalerStatusResponse proto with autoscaler status and recent actions
         """
-        request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
-        return self._client.get_autoscaler_status(request)
+
+        def _call():
+            request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
+            return self._client.get_autoscaler_status(request)
+
+        return call_with_retry("get_autoscaler_status", _call)
