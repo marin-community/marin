@@ -107,7 +107,7 @@ class GrugModelConfig:
     num_experts_per_token: int = 2
     num_layers: int = 8
     num_heads: int = 8
-    num_kv_heads: int = 2
+    num_kv_heads: int = 8
     head_dim: int | None = None
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
