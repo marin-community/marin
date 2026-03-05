@@ -394,35 +394,35 @@ def test_resolve_executor_step_picks_up_remote_decorator():
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert isinstance(resolved.fn, RemoteCallable)
     assert resolved.fn.resources == ResourceConfig.with_cpu()
 
 
-def test_explicit_resources_override_remote_decorator():
-    """ExecutorStep.resources should take precedence over @remote decorator resources."""
-    explicit = ResourceConfig.with_cpu(cpu=8, ram="32g")
+def test_remote_decorator_resources_are_preserved():
+    """@remote decorator resources should be preserved through resolve_executor_step."""
+    custom = ResourceConfig.with_cpu(cpu=8, ram="32g")
 
-    @remote(resources=ResourceConfig.with_cpu(cpu=2))
+    @remote(resources=custom)
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=explicit)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources == explicit
+    assert resolved.fn.resources == custom
 
 
-def test_step_without_remote_or_resources_is_plain_fn():
-    """A plain function with no @remote and no ExecutorStep.resources should not be RemoteCallable."""
+def test_step_without_remote_is_plain_fn():
+    """A plain function with no @remote should not be RemoteCallable."""
 
     def my_fn(config):
         pass
 
-    step = ExecutorStep(name="test", fn=my_fn, config=None, resources=None)
+    step = ExecutorStep(name="test", fn=my_fn, config=None)
     resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
 
     assert not isinstance(resolved.fn, RemoteCallable)
