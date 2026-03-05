@@ -578,12 +578,6 @@ def test_kill_nonexistent_task(worker):
     assert result is False
 
 
-def test_get_logs_nonexistent_task(worker):
-    """Test getting logs for nonexistent task returns empty list."""
-    logs = worker.get_logs(JobName.root("test-user", "nonexistent-task").task(0).to_wire())
-    assert logs == []
-
-
 def test_port_env_vars_set(worker, mock_runtime):
     """Test that IRIS_PORT_* environment variables are set for requested ports."""
     request = create_run_task_request(ports=["web", "api", "metrics"])
@@ -675,11 +669,6 @@ def test_task_failure_error_appears_in_logs(worker, mock_runtime):
     final_task = worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert "Bundle download failed" in final_task.error
-
-    logs = worker.get_logs(task_id)
-    error_logs = [log for log in logs if log.source == "error"]
-    assert len(error_logs) >= 1
-    assert any("Bundle download failed" in log.data for log in error_logs)
 
 
 def test_port_binding_failure(mock_bundle_cache, tmp_path):
@@ -858,23 +847,3 @@ class TestWorkerServiceIntegration:
 
         assert response.healthy
         assert response.uptime.milliseconds >= 0
-
-    @pytest.mark.docker
-    def test_fetch_logs_tail(self, real_worker, real_service, test_bundle):
-        """Test FetchLogs with negative start_line for tailing."""
-        ctx = Mock(spec=RequestContext)
-
-        task_id = JobName.root("test-user", "logs-test").task(0).to_wire()
-        request = create_integration_run_task_request(test_bundle, task_id)
-        real_worker.submit_task(request)
-
-        time.sleep(2)
-
-        log_request = cluster_pb2.Worker.FetchTaskLogsRequest(
-            task_id=task_id,
-            filter=cluster_pb2.Worker.FetchLogsFilter(start_line=-10),
-        )
-
-        response = real_service.fetch_task_logs(log_request, ctx)
-        assert response.logs is not None
-        assert len(response.logs) >= 0

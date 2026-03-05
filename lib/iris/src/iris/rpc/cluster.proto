@@ -710,6 +710,7 @@ message Controller {
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
     string regex = 5;                // Regex filter (propagated to workers)
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
+    map<string, int64> resume_offsets = 7;  // Per-attempt line offset cursor: key = "{task_wire}/{attempt_id}"
   }
 
   message TaskLogBatch {
@@ -728,6 +729,8 @@ message Controller {
     // Included on every response so the client can detect state transitions
     // (e.g. child moved to FAILED) without a separate ListJobs RPC.
     repeated JobStatus child_job_statuses = 4;
+
+    map<string, int64> resume_offsets = 5;  // Per-attempt line offset cursor for next poll
   }
 
   // --- Process Logs ---
@@ -799,24 +802,6 @@ message Worker {
 
   message ListTasksResponse {
     repeated TaskStatus tasks = 1;
-  }
-
-  message FetchLogsFilter {
-    string regex = 1;
-    int64 start_line = 2;
-    int64 start_ms = 3;
-    int64 end_ms = 4;
-    int64 max_lines = 5;
-  }
-
-  message FetchTaskLogsRequest {
-    string task_id = 1;
-    FetchLogsFilter filter = 2;
-    int32 attempt_id = 3;  // Filter to specific attempt (-1 = all attempts)
-  }
-
-  message FetchTaskLogsResponse {
-    repeated iris.logging.LogEntry logs = 1;
   }
 
   message KillTaskRequest {
@@ -921,7 +906,6 @@ service ControllerService {
 service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
-  rpc FetchTaskLogs(Worker.FetchTaskLogsRequest) returns (Worker.FetchTaskLogsResponse);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
   rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
