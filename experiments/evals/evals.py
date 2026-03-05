@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
+from marin.execution.remote import remote
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -437,9 +438,12 @@ def evaluate_harbor(
         }
     }
 
+    # When model_path is set, the evaluator launches a fray sub-job for vLLM serving
+    # with the correct resources. The outer executor step runs on CPU.
+    dispatch_resources = ResourceConfig.with_cpu() if model_path else resource_config
     return ExecutorStep(
         name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
-        fn=evaluate,
+        fn=remote(evaluate, resources=dispatch_resources, pip_dependency_groups=["harbor"]),
         config=EvaluationConfig(
             evaluator="harbor",
             model_name=model_name,
@@ -456,9 +460,6 @@ def evaluate_harbor(
             generation_params=generation_params,
         ),
         pip_dependency_groups=["harbor"],
-        # When model_path is set, the evaluator launches a fray sub-job for vLLM serving
-        # with the correct resources. The outer executor step runs on CPU.
-        resources=ResourceConfig.with_cpu() if model_path else resource_config,
     )
 
 

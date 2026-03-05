@@ -22,6 +22,7 @@ from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
@@ -121,7 +122,7 @@ RESOLVED_RUN_ID = _resolve_run_id("grug-base-trial")
 
 grug_base_trial = ExecutorStep(
     name="grug/base-trial",
-    fn=run_grug_base_trial,
+    fn=remote(run_grug_base_trial, resources=ResourceConfig.with_tpu("v5p-8")),
     config=GrugBaseLaunchConfig(
         model=versioned(GRUG_130M_MODEL),
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -166,7 +167,6 @@ grug_base_trial = ExecutorStep(
             )
         ),
     ),
-    resources=ResourceConfig.with_tpu("v5p-8"),
 )
 
 

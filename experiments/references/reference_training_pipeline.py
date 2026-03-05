@@ -27,6 +27,7 @@ from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
@@ -79,7 +80,7 @@ data = add_validation_sets_to_mixture(data, default_validation_sets(tokenizer=da
 # --- Training ---
 training_step = ExecutorStep(
     name="reference-pipeline",
-    fn=run_grug_base_trial,
+    fn=remote(run_grug_base_trial, resources=ResourceConfig.with_tpu("v4-8")),
     config=GrugBaseLaunchConfig(
         model=model,
         data=data,
@@ -105,7 +106,6 @@ training_step = ExecutorStep(
             steps_per_eval=500,
         ),
     ),
-    resources=ResourceConfig.with_tpu("v4-8"),
 )
 
 if __name__ == "__main__":
