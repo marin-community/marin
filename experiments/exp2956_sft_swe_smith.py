@@ -23,8 +23,9 @@ Supports multiple teacher models:
   - swebm-minimax-m2.5:  AlienKevin/SWE-bench-multilingual-minimax-m2.5-trajectories     (299 samples)
 
 Supports multiple student models:
-  - qwen3-8b:                   Qwen/Qwen3-8B
-  - qwen25-coder-7b-instruct:   Qwen/Qwen2.5-Coder-7B-Instruct
+  - qwen3-8b:                    Qwen/Qwen3-8B                       (v5p-8)
+  - qwen25-coder-7b-instruct:    Qwen/Qwen2.5-Coder-7B-Instruct     (v5p-8)
+  - qwen25-coder-32b-instruct:   Qwen/Qwen2.5-Coder-32B-Instruct    (v5p-64)
 
 Each dataset has a JSON-serialized "messages" column in OpenAI chat format
 plus metadata like instance_id, resolved, model, traj_id, and patch.
@@ -64,6 +65,8 @@ from experiments.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_T
 from experiments.qwen3 import (
     qwen2_5_coder_7b_instruct,
     qwen2_5_coder_7b_instruct_tokenizer,
+    qwen2_5_coder_32b_instruct,
+    qwen2_5_coder_32b_instruct_tokenizer,
     qwen3_8b,
     qwen3_8b_tokenizer,
 )
@@ -90,6 +93,9 @@ class StudentConfig:
     tokenizer: str
     model_name_or_path: str
     chat_template: str
+    resources: ResourceConfig
+    train_batch_size: int
+    microbatch_size: int
 
 
 TEACHER_CONFIGS: dict[str, TeacherConfig] = {
@@ -121,20 +127,31 @@ STUDENT_CONFIGS: dict[str, StudentConfig] = {
         tokenizer=qwen3_8b_tokenizer,
         model_name_or_path="Qwen/Qwen3-8B",
         chat_template=QWEN_3_CHAT_TEMPLATE,
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        train_batch_size=16,
+        microbatch_size=4,
     ),
     "qwen25-coder-7b-instruct": StudentConfig(
         model_config=qwen2_5_coder_7b_instruct,
         tokenizer=qwen2_5_coder_7b_instruct_tokenizer,
         model_name_or_path="Qwen/Qwen2.5-Coder-7B-Instruct",
         chat_template=QWEN_2_5_INSTRUCT_CHAT_TEMPLATE,
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        train_batch_size=16,
+        microbatch_size=4,
+    ),
+    "qwen25-coder-32b-instruct": StudentConfig(
+        model_config=qwen2_5_coder_32b_instruct,
+        tokenizer=qwen2_5_coder_32b_instruct_tokenizer,
+        model_name_or_path="Qwen/Qwen2.5-Coder-32B-Instruct",
+        chat_template=QWEN_2_5_INSTRUCT_CHAT_TEMPLATE,
+        resources=ResourceConfig.with_tpu("v5p-64"),
+        train_batch_size=16,
+        microbatch_size=16,
     ),
 }
 
 TARGET_EPOCHS = 3
-DEFAULT_TRAIN_BATCH_SIZE = 8
-DEFAULT_MICROBATCH_SIZE = 4
-RESOURCES = ResourceConfig.with_tpu("v5p-8")
-RESOURCE_SUFFIX = RESOURCES.device.variant.replace("-", "") if RESOURCES.device.kind == "tpu" else "gpu"
 
 
 def _create_tokenization_step(
@@ -163,6 +180,11 @@ def build_swe_smith_sft(teacher: str, student: str = "qwen3-8b") -> tuple[Execut
     teacher_config = TEACHER_CONFIGS[teacher]
     student_config = STUDENT_CONFIGS[student]
 
+    resources = student_config.resources
+    train_batch_size = student_config.train_batch_size
+    microbatch_size = student_config.microbatch_size
+    resource_suffix = resources.device.variant.replace("-", "") if resources.device.kind == "tpu" else "gpu"
+
     model_config = dataclasses.replace(
         student_config.model_config,
         max_seq_len=32768,
@@ -179,26 +201,24 @@ def build_swe_smith_sft(teacher: str, student: str = "qwen3-8b") -> tuple[Execut
     }
 
     total_examples = teacher_config.num_samples
-    num_train_steps = math.ceil(TARGET_EPOCHS * total_examples / DEFAULT_TRAIN_BATCH_SIZE)
+    num_train_steps = math.ceil(TARGET_EPOCHS * total_examples / train_batch_size)
 
     warmup_steps = 5
     warmup_fraction = warmup_steps / num_train_steps if num_train_steps > 0 else 0.0
     decay_fraction = 1.0 - warmup_fraction  # All post-warmup steps are cosine decay (no stable phase)
 
     sft_config = SimpleSFTConfig(
-        resources=RESOURCES,
+        resources=resources,
         tokenizer=student_config.tokenizer,
         model_name_or_path=student_config.model_name_or_path,
-        train_batch_size=DEFAULT_TRAIN_BATCH_SIZE,
-        per_device_parallelism=compute_per_device_parallelism(
-            DEFAULT_TRAIN_BATCH_SIZE, DEFAULT_MICROBATCH_SIZE, RESOURCES
-        ),
+        train_batch_size=train_batch_size,
+        per_device_parallelism=compute_per_device_parallelism(train_batch_size, microbatch_size, resources),
         per_device_eval_parallelism=8,
         num_train_steps=num_train_steps,
         learning_rate=1e-4,
         max_seq_len=32768,
         seed=42,
-        steps_per_checkpoint=(total_examples // DEFAULT_TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
+        steps_per_checkpoint=(total_examples // train_batch_size) // 4,  # Every quarter epoch
         lr_schedule="cosine",
         warmup=warmup_fraction,
         decay=decay_fraction,
@@ -224,11 +244,11 @@ def build_swe_smith_sft(teacher: str, student: str = "qwen3-8b") -> tuple[Execut
     student_slug = student.replace("-", "_").replace(".", "_")
 
     sft_step = default_sft(
-        name=f"exp2956_sft_swe_smith_{teacher_slug}_{student_slug}_32768tokens_{RESOURCE_SUFFIX}",
+        name=f"exp2956_sft_swe_smith_{teacher_slug}_{student_slug}_32768tokens_{resource_suffix}",
         tokenized=mixture_config,
         model_config=model_config,
         sft_config=sft_config,
-        tags=["qwen", "swe-smith", "sft", teacher, student, RESOURCE_SUFFIX],
+        tags=["qwen", "swe-smith", "sft", teacher, student, resource_suffix],
     )
 
     checkpoint = sft_step.cd(f"hf/step-{num_train_steps - 1}").nonblocking()
