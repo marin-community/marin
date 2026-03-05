@@ -6,12 +6,10 @@
 import logging
 import queue
 import sys
-import tempfile
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from time import sleep
 from typing import Protocol
 
@@ -566,15 +564,8 @@ class Controller:
         self._config = config
         self.stub_factory = worker_stub_factory
 
-        # Task logs forwarded via heartbeats are spilled to a temp dir so the
-        # controller doesn't accumulate unbounded log data in memory.  Workers
-        # already persist the authoritative copy to GCS/S3.
-        self._log_temp_dir = tempfile.TemporaryDirectory(prefix="iris_controller_logs_")
-        log_dir = Path(self._log_temp_dir.name)
-
         self._state = ControllerState(
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
-            log_dir=log_dir,
         )
         self._scheduler = Scheduler()
         self._service = ControllerServiceImpl(
