@@ -37,6 +37,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug.dispatch import dispatch_grug_tpu
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -44,6 +45,7 @@ from experiments.grug.moe.model import GrugModelConfig, Transformer
 # `docs/recipes/change_grug.md`.
 
 logger = logging.getLogger(__name__)
+_GRUG_TPU_VARIANT = "v5p-8"
 
 
 @dataclass(frozen=True)
@@ -320,7 +322,7 @@ def _make_train_step(
     return train_step
 
 
-def run_grug(config: GrugRunConfig) -> None:
+def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
@@ -495,6 +497,20 @@ def run_grug(config: GrugRunConfig) -> None:
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
+
+
+def run_grug(config: GrugRunConfig) -> None:
+    """Dispatch grug training through Fray TPU jobs."""
+    trainer = config.trainer.trainer
+    if trainer.id is None:
+        raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    dispatch_grug_tpu(
+        run_id=trainer.id,
+        config=config,
+        local_entrypoint=_run_grug_local,
+        tpu_variant=_GRUG_TPU_VARIANT,
+    )
 
 
 __all__ = [
