@@ -17,14 +17,15 @@ state and return results indicating what the caller should do.
 
 import bisect
 import logging
-import re
 from collections import Counter, deque
+from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
 from typing import NamedTuple
 
+from iris.cluster.controller.logs import ControllerLogStore
 from iris.cluster.controller.events import (
     Event,
     JobCancelledEvent,
@@ -915,72 +916,6 @@ class HeartbeatSnapshot:
 # Controller Log Store
 # =============================================================================
 
-# Maximum log entries kept per task attempt in memory
-_MAX_LOG_ENTRIES_PER_ATTEMPT = 20_000
-
-
-class ControllerLogStore:
-    """In-memory log store for task attempts.
-
-    Accumulates log entries forwarded from workers via heartbeat and serves
-    them for GetTaskLogs requests. Each attempt gets a bounded deque.
-
-    Thread-safe: heartbeat writers (complete_heartbeat) and RPC readers
-    (get_task_logs) may run concurrently.
-    """
-
-    def __init__(self, max_entries_per_attempt: int = _MAX_LOG_ENTRIES_PER_ATTEMPT):
-        self._max_entries = max_entries_per_attempt
-        self._lock = RLock()
-        self._logs: dict[tuple[JobName, int], deque[cluster_pb2.LogEntry]] = {}
-
-    def append(self, task_id: JobName, attempt_id: int, entries: list) -> None:
-        with self._lock:
-            key = (task_id, attempt_id)
-            buf = self._logs.get(key)
-            if buf is None:
-                buf = deque(maxlen=self._max_entries)
-                self._logs[key] = buf
-            buf.extend(entries)
-
-    def get_logs(
-        self,
-        task_id: JobName,
-        attempt_id: int,
-        *,
-        since_ms: int = 0,
-        regex_filter: re.Pattern[str] | None = None,
-        max_lines: int = 0,
-    ) -> list:
-        with self._lock:
-            key = (task_id, attempt_id)
-            buf = self._logs.get(key)
-            if not buf:
-                return []
-            # Snapshot under lock to avoid RuntimeError from concurrent mutation
-            snapshot = list(buf)
-
-        result = []
-        for entry in snapshot:
-            if since_ms > 0 and entry.timestamp.epoch_ms <= since_ms:
-                continue
-            if regex_filter and not regex_filter.search(entry.data):
-                continue
-            result.append(entry)
-            if max_lines > 0 and len(result) >= max_lines:
-                break
-        return result
-
-    def has_logs(self, task_id: JobName, attempt_id: int) -> bool:
-        with self._lock:
-            key = (task_id, attempt_id)
-            buf = self._logs.get(key)
-            return buf is not None and len(buf) > 0
-
-    def clear_attempt(self, task_id: JobName, attempt_id: int) -> None:
-        with self._lock:
-            self._logs.pop((task_id, attempt_id), None)
-
 
 # =============================================================================
 # Controller State
@@ -1011,7 +946,11 @@ class ControllerState:
        which creates the attempt and commits resources.
     """
 
-    def __init__(self, heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD):
+    def __init__(
+        self,
+        heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
+        log_dir: Path | None = None,
+    ):
         self._lock = RLock()
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
         self._jobs: dict[JobName, ControllerJob] = {}
@@ -1024,7 +963,7 @@ class ControllerState:
         self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
         self._pending_dispatch: dict[WorkerId, PendingDispatch] = {}  # Buffered heartbeat dispatches
-        self._log_store = ControllerLogStore()
+        self._log_store = ControllerLogStore(log_dir=log_dir)
 
     @property
     def log_store(self) -> ControllerLogStore:
@@ -2028,16 +1967,20 @@ class ControllerState:
                     continue
                 task_id = JobName.from_wire(entry.task_id)
                 task = self._tasks.get(task_id)
-                if not task or task.is_finished():
+                if not task:
+                    continue
+
+                # Always ingest logs, even for finished tasks, because the final
+                # heartbeat carries the terminal state and the last log delta together.
+                if entry.log_entries and self._log_store is not None:
+                    self._log_store.append(task_id, entry.attempt_id, entry.log_entries)
+
+                if task.is_finished():
                     continue
 
                 # Store resource usage snapshot
                 if entry.resource_usage.ByteSize() > 0:
                     task.resource_usage = entry.resource_usage
-
-                # Accumulate delta log entries from heartbeat into the log store
-                if entry.log_entries and self._log_store is not None:
-                    self._log_store.append(task_id, entry.attempt_id, entry.log_entries)
 
                 if task.state == entry.state:
                     continue
