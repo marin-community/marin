@@ -8,12 +8,16 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
 import pickle
+from unittest.mock import MagicMock
 
 from fray.v2.iris_backend import (
+    FrayIrisClient,
     IrisActorHandle,
     convert_constraints,
 )
 from fray.v2.types import (
+    Entrypoint,
+    JobRequest,
     ResourceConfig,
 )
 
@@ -71,3 +75,37 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
+
+
+class TestFrayIrisClientSubmit:
+    def test_submit_forwards_retry_counts(self):
+        iris = MagicMock()
+        iris.submit.return_value = MagicMock(job_id="/u/job")
+
+        client = FrayIrisClient.from_iris_client(iris)
+        request = JobRequest(
+            name="job",
+            entrypoint=Entrypoint.from_binary("echo", ["hi"]),
+            max_retries_failure=7,
+            max_retries_preemption=13,
+        )
+        client.submit(request)
+
+        kwargs = iris.submit.call_args.kwargs
+        assert kwargs["max_retries_failure"] == 7
+        assert kwargs["max_retries_preemption"] == 13
+
+    def test_submit_forwards_default_retry_counts(self):
+        iris = MagicMock()
+        iris.submit.return_value = MagicMock(job_id="/u/job")
+
+        client = FrayIrisClient.from_iris_client(iris)
+        request = JobRequest(
+            name="job-defaults",
+            entrypoint=Entrypoint.from_binary("echo", ["hi"]),
+        )
+        client.submit(request)
+
+        kwargs = iris.submit.call_args.kwargs
+        assert kwargs["max_retries_failure"] == 0
+        assert kwargs["max_retries_preemption"] == 100
