@@ -9,7 +9,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
 from braceexpand import braceexpand
@@ -730,6 +730,17 @@ class Dataset(Generic[T]):
             ],
         )
 
+    @overload
+    def group_by(
+        self,
+        key: Callable[[T], K],
+        *,
+        reducer: Callable[[K, Iterator[T]], Iterator[R]],
+        sort_by: Callable[[T], Any] | None = None,
+        num_output_shards: int | None = None,
+    ) -> Dataset[R]: ...
+
+    @overload
     def group_by(
         self,
         key: Callable[[T], K],
@@ -737,10 +748,20 @@ class Dataset(Generic[T]):
         reducer: Callable[[K, Iterator[T]], R],
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
+    ) -> Dataset[R]: ...
+
+    def group_by(
+        self,
+        key: Callable[[T], K],
+        *,
+        reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
+        sort_by: Callable[[T], Any] | None = None,
+        num_output_shards: int | None = None,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
 
-        The reducer receives (key, iterator_of_items) and returns a single result.
+        The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
+        results for that group.
 
         Args:
             key: Function extracting grouping key from item (must be hashable)
