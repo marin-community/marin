@@ -36,7 +36,7 @@ from typing import Any
 
 import fsspec
 
-from iris.distributed_lock import DistributedLock, default_holder_id
+from iris.distributed_lock import DistributedLock, default_worker_id
 from iris.marin_fs import (
     REGION_TO_DATA_BUCKET,
     marin_prefix,
@@ -80,7 +80,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         self._remote_prefixes = [p for p in _all_data_bucket_prefixes() if not self._local_prefix.startswith(p)]
         self._copy_limit_bytes = copy_limit_bytes
         self._bytes_copied: int = 0
-        self._holder_id = default_holder_id()
+        self._worker_id = default_worker_id()
 
     # -- underlying fs helpers ------------------------------------------------
 
@@ -152,7 +152,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
                 f"Consider running in the source region instead."
             )
 
-        lock = DistributedLock(self._lock_path_for(path), self._holder_id)
+        lock = DistributedLock(self._lock_path_for(path), self._worker_id)
 
         if not lock.try_acquire():
             for _ in range(60):

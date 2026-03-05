@@ -15,24 +15,24 @@ from iris.distributed_lock import (
 
 
 def test_lease_is_stale_after_timeout():
-    lease = Lease(holder_id="worker-1", timestamp=time.time() - HEARTBEAT_TIMEOUT - 1)
+    lease = Lease(worker_id="worker-1", timestamp=time.time() - HEARTBEAT_TIMEOUT - 1)
     assert lease.is_stale()
 
 
 def test_lease_is_fresh_within_timeout():
-    lease = Lease(holder_id="worker-1", timestamp=time.time())
+    lease = Lease(worker_id="worker-1", timestamp=time.time())
     assert not lease.is_stale()
 
 
 def test_acquire_and_release_local_lock(tmp_path):
     lock_path = str(tmp_path / "test.lock")
-    lock = DistributedLock(lock_path, holder_id="holder-a")
+    lock = DistributedLock(lock_path, worker_id="holder-a")
 
     assert lock.try_acquire()
     # Lock file should exist with correct holder
     with open(lock_path) as f:
         data = json.loads(f.read())
-    assert data["holder_id"] == "holder-a"
+    assert data["worker_id"] == "holder-a"
 
     lock.release()
     assert not os.path.exists(lock_path)
@@ -40,8 +40,8 @@ def test_acquire_and_release_local_lock(tmp_path):
 
 def test_second_holder_blocked_while_lock_held(tmp_path):
     lock_path = str(tmp_path / "test.lock")
-    lock_a = DistributedLock(lock_path, holder_id="holder-a")
-    lock_b = DistributedLock(lock_path, holder_id="holder-b")
+    lock_a = DistributedLock(lock_path, worker_id="holder-a")
+    lock_b = DistributedLock(lock_path, worker_id="holder-b")
 
     assert lock_a.try_acquire()
     assert not lock_b.try_acquire()
@@ -55,19 +55,19 @@ def test_stale_lock_can_be_taken_over(tmp_path):
     lock_path = str(tmp_path / "test.lock")
 
     # Write a stale lock directly
-    stale_lease = Lease(holder_id="dead-worker", timestamp=time.time() - HEARTBEAT_TIMEOUT - 10)
+    stale_lease = Lease(worker_id="dead-worker", timestamp=time.time() - HEARTBEAT_TIMEOUT - 10)
     os.makedirs(os.path.dirname(lock_path), exist_ok=True)
     with open(lock_path, "w") as f:
-        f.write(json.dumps({"holder_id": stale_lease.holder_id, "timestamp": stale_lease.timestamp}))
+        f.write(json.dumps({"worker_id": stale_lease.worker_id, "timestamp": stale_lease.timestamp}))
 
-    lock = DistributedLock(lock_path, holder_id="new-worker")
+    lock = DistributedLock(lock_path, worker_id="new-worker")
     assert lock.try_acquire()
     lock.release()
 
 
 def test_refresh_updates_timestamp(tmp_path):
     lock_path = str(tmp_path / "test.lock")
-    lock = DistributedLock(lock_path, holder_id="holder-a")
+    lock = DistributedLock(lock_path, worker_id="holder-a")
     assert lock.try_acquire()
 
     # Read initial timestamp
@@ -86,8 +86,8 @@ def test_refresh_updates_timestamp(tmp_path):
 
 def test_refresh_fails_if_not_holder(tmp_path):
     lock_path = str(tmp_path / "test.lock")
-    lock_a = DistributedLock(lock_path, holder_id="holder-a")
-    lock_b = DistributedLock(lock_path, holder_id="holder-b")
+    lock_a = DistributedLock(lock_path, worker_id="holder-a")
+    lock_b = DistributedLock(lock_path, worker_id="holder-b")
 
     assert lock_a.try_acquire()
     with pytest.raises(ValueError, match="held by"):
@@ -97,7 +97,7 @@ def test_refresh_fails_if_not_holder(tmp_path):
 
 def test_has_active_holder(tmp_path):
     lock_path = str(tmp_path / "test.lock")
-    lock = DistributedLock(lock_path, holder_id="holder-a")
+    lock = DistributedLock(lock_path, worker_id="holder-a")
 
     assert not lock.has_active_holder()
     assert lock.try_acquire()
@@ -108,7 +108,7 @@ def test_has_active_holder(tmp_path):
 
 def test_same_holder_can_reacquire(tmp_path):
     lock_path = str(tmp_path / "test.lock")
-    lock = DistributedLock(lock_path, holder_id="holder-a")
+    lock = DistributedLock(lock_path, worker_id="holder-a")
 
     assert lock.try_acquire()
     assert lock.try_acquire()  # idempotent
