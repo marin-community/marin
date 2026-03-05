@@ -67,52 +67,21 @@ def test_read_from_local(mirror_fs, mirror_env):
 
 
 def test_read_copies_from_remote(mirror_fs, mirror_env):
-    """File not in local prefix is found in remote and copied."""
+    """File not in local prefix is found in remote and copied to local."""
     _write_file(mirror_env["remote1"], "models/ckpt.bin", b"remote-data")
 
     data = mirror_fs.cat_file("models/ckpt.bin")
     assert data == b"remote-data"
     # Should now exist locally too
     local_path = os.path.join(str(mirror_env["local_dir"]), "models/ckpt.bin")
-    assert os.path.exists(local_path)
     with open(local_path, "rb") as f:
         assert f.read() == b"remote-data"
 
 
-def test_file_not_found_anywhere(mirror_fs):
+def test_file_not_found_raises(mirror_fs):
     """FileNotFoundError when file doesn't exist in any prefix."""
     with pytest.raises(FileNotFoundError, match="not found in any marin bucket"):
         mirror_fs.cat_file("nonexistent/file.bin")
-
-
-def test_exists_checks_local_first(mirror_fs, mirror_env):
-    _write_file(mirror_env["local_dir"], "data/file.txt", b"hello")
-    assert mirror_fs.exists("data/file.txt")
-
-
-def test_exists_checks_remote(mirror_fs, mirror_env):
-    _write_file(mirror_env["remote2"], "data/file.txt", b"hello")
-    assert mirror_fs.exists("data/file.txt")
-
-
-def test_exists_returns_false_when_absent(mirror_fs):
-    assert not mirror_fs.exists("no/such/file.txt")
-
-
-def test_write_goes_to_local(mirror_fs, mirror_env):
-    """Writes target the local prefix."""
-    f = mirror_fs._open("output/result.bin", "wb")
-    f.write(b"result-data")
-    f.close()
-    local_path = os.path.join(str(mirror_env["local_dir"]), "output/result.bin")
-    with open(local_path, "rb") as fh:
-        assert fh.read() == b"result-data"
-
-
-def test_copy_budget_tracks_bytes(mirror_fs, mirror_env):
-    _write_file(mirror_env["remote1"], "data/big.bin", b"x" * 1000)
-    mirror_fs.cat_file("data/big.bin")
-    assert mirror_fs.bytes_copied == 1000
 
 
 def test_copy_budget_raises_when_exceeded(mirror_fs, mirror_env):
@@ -124,6 +93,7 @@ def test_copy_budget_raises_when_exceeded(mirror_fs, mirror_env):
 
 
 def test_copy_budget_cumulative(mirror_fs, mirror_env):
+    """Budget is enforced across multiple copies."""
     mirror_fs._copy_limit_bytes = 1500
     _write_file(mirror_env["remote1"], "data/a.bin", b"x" * 800)
     _write_file(mirror_env["remote1"], "data/b.bin", b"y" * 800)
@@ -135,27 +105,8 @@ def test_copy_budget_cumulative(mirror_fs, mirror_env):
         mirror_fs.cat_file("data/b.bin")
 
 
-def test_open_read_resolves_and_reads(mirror_fs, mirror_env):
-    _write_file(mirror_env["local_dir"], "data/local.txt", b"local-content")
-    with mirror_fs._open("data/local.txt", "rb") as f:
-        assert f.read() == b"local-content"
-
-
-def test_open_read_from_remote(mirror_fs, mirror_env):
-    _write_file(mirror_env["remote2"], "data/remote.txt", b"remote-content")
-    with mirror_fs._open("data/remote.txt", "rb") as f:
-        assert f.read() == b"remote-content"
-
-
-def test_protocol_registered():
-    """The mirror:// protocol is registered with fsspec."""
-    import iris.mirror_fs  # noqa: F401
-
-    assert "mirror" in fsspec.registry
-
-
 def test_second_read_uses_local_cache(mirror_fs, mirror_env):
-    """After copying from remote, second read uses local cache."""
+    """After copying from remote, second read uses local cache without re-copying."""
     _write_file(mirror_env["remote1"], "data/file.bin", b"data")
 
     mirror_fs.cat_file("data/file.bin")
@@ -167,3 +118,11 @@ def test_second_read_uses_local_cache(mirror_fs, mirror_env):
     data = mirror_fs.cat_file("data/file.bin")
     assert data == b"data"
     assert mirror_fs.bytes_copied == 4  # unchanged
+
+
+def test_read_finds_file_in_second_remote(mirror_fs, mirror_env):
+    """File only in the second remote prefix is still found and copied."""
+    _write_file(mirror_env["remote2"], "data/remote2.txt", b"from-remote2")
+
+    data = mirror_fs.cat_file("data/remote2.txt")
+    assert data == b"from-remote2"

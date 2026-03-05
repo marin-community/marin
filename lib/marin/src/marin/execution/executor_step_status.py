@@ -22,7 +22,6 @@ from typing import TypeVar
 
 from iris.distributed_lock import (
     HEARTBEAT_INTERVAL,
-    HEARTBEAT_TIMEOUT,
     DistributedLock,
     default_holder_id,
 )
@@ -31,10 +30,6 @@ from iris.marin_fs import url_to_fs
 logger = logging.getLogger("ray")
 
 T = TypeVar("T")
-
-# Re-export constants so existing callers don't break.
-HEARTBEAT_INTERVAL = HEARTBEAT_INTERVAL
-HEARTBEAT_TIMEOUT = HEARTBEAT_TIMEOUT
 
 STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"

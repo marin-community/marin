@@ -31,6 +31,7 @@ Usage::
 """
 
 import logging
+import time
 from typing import Any
 
 import fsspec
@@ -101,19 +102,14 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
     def _fs_exists(self, url: str) -> bool:
         """Check if a file exists at a full URL."""
-        try:
-            fs, fspath = self._get_fs_and_path(url)
-            return fs.exists(fspath)
-        except Exception:
-            return False
+        fs, fspath = self._get_fs_and_path(url)
+        return fs.exists(fspath)
 
-    def _fs_size(self, url: str) -> int:
-        """Return file size at a full URL, or 0 on error."""
-        try:
-            fs, fspath = self._get_fs_and_path(url)
-            return fs.size(fspath) or 0
-        except Exception:
-            return 0
+    def _fs_size(self, url: str) -> int | None:
+        """Return file size at a full URL, or None if it cannot be determined."""
+        fs, fspath = self._get_fs_and_path(url)
+        size = fs.size(fspath)
+        return size if size else None
 
     def _fs_copy(self, src_url: str, dst_url: str) -> None:
         """Copy a file from src_url to dst_url, potentially cross-filesystem."""
@@ -123,10 +119,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         # Ensure parent directory exists
         parent = dst_path.rsplit("/", 1)[0] if "/" in dst_path else ""
         if parent:
-            try:
-                dst_fs.makedirs(parent, exist_ok=True)
-            except Exception:
-                pass
+            dst_fs.makedirs(parent, exist_ok=True)
 
         if type(src_fs) is type(dst_fs):
             src_fs.copy(src_path, dst_path)
@@ -151,7 +144,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         remote_url = self._remote_url(source_prefix, path)
 
         size = self._fs_size(remote_url)
-        if size and (self._bytes_copied + size) > self._copy_limit_bytes:
+        if size is not None and (self._bytes_copied + size) > self._copy_limit_bytes:
             raise MirrorCopyLimitExceeded(
                 f"Copying {path} ({size / (1024**3):.2f} GB) would exceed the "
                 f"{self._copy_limit_bytes / (1024**3):.0f} GB mirror copy limit "
@@ -162,8 +155,6 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         lock = DistributedLock(self._lock_path_for(path), self._holder_id)
 
         if not lock.try_acquire():
-            import time
-
             for _ in range(60):
                 time.sleep(2)
                 if self._fs_exists(local_url):
@@ -182,7 +173,8 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
             logger.info("Mirror: copying %s → %s", remote_url, local_url)
             self._fs_copy(remote_url, local_url)
-            self._bytes_copied += size
+            if size is not None:
+                self._bytes_copied += size
         finally:
             lock.release()
 

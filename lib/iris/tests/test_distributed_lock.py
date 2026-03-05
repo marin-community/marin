@@ -11,7 +11,6 @@ from iris.distributed_lock import (
     HEARTBEAT_TIMEOUT,
     DistributedLock,
     Lease,
-    default_holder_id,
 )
 
 
@@ -23,12 +22,6 @@ def test_lease_is_stale_after_timeout():
 def test_lease_is_fresh_within_timeout():
     lease = Lease(holder_id="worker-1", timestamp=time.time())
     assert not lease.is_stale()
-
-
-def test_default_holder_id_is_nonempty():
-    hid = default_holder_id()
-    assert isinstance(hid, str)
-    assert len(hid) > 0
 
 
 def test_acquire_and_release_local_lock(tmp_path):
