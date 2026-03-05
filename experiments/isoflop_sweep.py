@@ -79,7 +79,9 @@ def transform_levanter_metrics(
         label = (label_map or {}).get(exp_name, exp_name)
 
         records.append(
-            IsoFlopRecord(tokens=float(tokens), metric=float(metric), flops=float(flops), params=float(params), label=label)
+            IsoFlopRecord(
+                tokens=float(tokens), metric=float(metric), flops=float(flops), params=float(params), label=label
+            )
         )
 
     logger.info(f"Transformed {len(records)} records from {len(raw_records)} raw records")
@@ -135,6 +137,7 @@ def save_isoflop_analysis_result(result: FitScalingLawsResult, output_path: str)
     with fs.open(fit_curves_path, "w") as f:
         json.dump(fit_curves_json, f, indent=2)
     logger.info(f"Saved fit curves to {fit_curves_path}")
+
 
 # --- Budget configurations ---
 LEGACY_BUDGETS: tuple[float, ...] = (3e18, 9e18, 1.8e19, 3e19, 9e19, 1.8e20, 3e20)

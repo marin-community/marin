@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -167,7 +170,7 @@ class CompletedAdamHHeuristic:
         """lr = lr0 * sqrt(B/B0) * (T0/T)^0.3"""
         batch_ratio = batch_size / self.reference_batch_size
         token_ratio = self.reference_tokens / tokens
-        lr = self.lr_base * math.sqrt(batch_ratio) * (token_ratio ** 0.3)
+        lr = self.lr_base * math.sqrt(batch_ratio) * (token_ratio**0.3)
         return min(self.max_learning_rate, lr)
 
     def _compute_adam_lr(self, batch_size: int, tokens: float) -> float:
