@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lease-based distributed locking via ``StatusFile``.
+"""Lease-based distributed locking via ``DistributedLock``.
 
 Wraps a ``fn(output_path) -> T`` so that only one worker executes the
 function for a given *output_path* at a time.  If the step has already
@@ -17,8 +17,9 @@ from collections.abc import Callable
 from threading import Event, Thread
 from typing import TypeVar
 
+from iris.distributed_lock import HEARTBEAT_INTERVAL
+
 from marin.execution.executor_step_status import (
-    HEARTBEAT_INTERVAL,
     StatusFile,
     should_run,
     worker_id,
