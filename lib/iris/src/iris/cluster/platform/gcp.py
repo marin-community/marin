@@ -39,6 +39,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -1204,10 +1205,21 @@ class GcpPlatform:
         zones: list[str],
         labels: dict[str, str] | None = None,
     ) -> list[GcpSliceHandle | GcpVmSliceHandle]:
-        """List TPU and VM slices across zones, optionally filtered by labels."""
-        results: list[GcpSliceHandle | GcpVmSliceHandle] = []
-        for zone in zones:
-            for tpu_data in self._gcloud_list_tpus(zone, labels):
+        """List TPU and VM slices across zones, optionally filtered by labels.
+
+        Queries all zones in parallel (TPU + VM per zone) to avoid the latency
+        of sequential gcloud subprocess calls.
+        """
+
+        def _query_zone(zone: str) -> list[GcpSliceHandle | GcpVmSliceHandle]:
+            zone_results: list[GcpSliceHandle | GcpVmSliceHandle] = []
+
+            # Run TPU and VM list queries concurrently within the zone.
+            with ThreadPoolExecutor(max_workers=2) as inner:
+                tpu_future = inner.submit(self._gcloud_list_tpus, zone, labels)
+                vm_future = inner.submit(self._gcloud_list_instances, zone, labels)
+
+            for tpu_data in tpu_future.result():
                 state = tpu_data.get("state", "UNKNOWN")
                 if state not in ("READY", "CREATING"):
                     logger.info("Skipping TPU %s in state %s", tpu_data["name"], state)
@@ -1220,7 +1232,7 @@ class GcpPlatform:
                 if "/" in accelerator_type:
                     accelerator_type = accelerator_type.split("/")[-1]
 
-                results.append(
+                zone_results.append(
                     GcpSliceHandle(
                         _slice_id=tpu_data["name"],
                         _zone=zone,
@@ -1234,7 +1246,7 @@ class GcpPlatform:
                     )
                 )
 
-            for vm_data in self._gcloud_list_instances(zone, labels):
+            for vm_data in vm_future.result():
                 vm_state = vm_data.get("status", "UNKNOWN")
                 if vm_state not in _ACTIVE_VM_SLICE_STATES:
                     logger.info("Skipping VM instance %s in state %s", vm_data.get("name", ""), vm_state)
@@ -1243,7 +1255,7 @@ class GcpPlatform:
                 slice_id = vm_labels.get(self._iris_labels.iris_slice_id, "")
                 if not slice_id:
                     continue
-                results.append(
+                zone_results.append(
                     GcpVmSliceHandle(
                         _slice_id=slice_id,
                         _vm_name=vm_data.get("name", ""),
@@ -1256,6 +1268,17 @@ class GcpPlatform:
                     )
                 )
 
+            return zone_results
+
+        if len(zones) <= 1:
+            # Fast path: no thread overhead for single zone.
+            return _query_zone(zones[0]) if zones else []
+
+        results: list[GcpSliceHandle | GcpVmSliceHandle] = []
+        with ThreadPoolExecutor(max_workers=len(zones)) as executor:
+            futures = {executor.submit(_query_zone, z): z for z in zones}
+            for future in as_completed(futures):
+                results.extend(future.result())
         return results
 
     def list_all_slices(self, labels: dict[str, str] | None = None) -> list[GcpSliceHandle | GcpVmSliceHandle]:
@@ -1271,9 +1294,13 @@ class GcpPlatform:
         zones: list[str],
         labels: dict[str, str] | None = None,
     ) -> list[GcpStandaloneWorkerHandle]:
-        """List GCE instances across zones, optionally filtered by labels."""
-        results: list[GcpStandaloneWorkerHandle] = []
-        for zone in zones:
+        """List GCE instances across zones, optionally filtered by labels.
+
+        Queries all zones in parallel to avoid sequential gcloud subprocess latency.
+        """
+
+        def _query_zone(zone: str) -> list[GcpStandaloneWorkerHandle]:
+            zone_results: list[GcpStandaloneWorkerHandle] = []
             for instance in self._gcloud_list_instances(zone, labels):
                 name = instance.get("name", "")
                 network_interfaces = instance.get("networkInterfaces", [])
@@ -1290,7 +1317,7 @@ class GcpPlatform:
                     zone=zone,
                     vm_name=name,
                 )
-                results.append(
+                zone_results.append(
                     GcpStandaloneWorkerHandle(
                         _vm_id=name,
                         _internal_address=internal_ip,
@@ -1300,7 +1327,16 @@ class GcpPlatform:
                         _remote_exec=remote_exec,
                     )
                 )
+            return zone_results
 
+        if len(zones) <= 1:
+            return _query_zone(zones[0]) if zones else []
+
+        results: list[GcpStandaloneWorkerHandle] = []
+        with ThreadPoolExecutor(max_workers=len(zones)) as executor:
+            futures = {executor.submit(_query_zone, z): z for z in zones}
+            for future in as_completed(futures):
+                results.extend(future.result())
         return results
 
     def tunnel(
