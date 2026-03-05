@@ -4,9 +4,10 @@
 """
 EDA: Perplexity vs Downstream Task Performance.
 
-Train models of 2 sizes (~60M, ~600M) on mammals datasets with different
-filtering thresholds while tracking both LM loss and TraitGym Mendelian VEP
-AUPRC during training.
+Train models of 3 sizes (~6M, ~60M, ~600M) on datasets from different
+evolutionary timescales (mammals, primates, vertebrates) and filtering
+thresholds while tracking both LM loss and TraitGym Mendelian VEP AUPRC
+during training.
 
 https://github.com/Open-Athena/bolinas-dna/issues/8
 """
@@ -34,18 +35,37 @@ DNA_SEQ_LEN = 255
 MODEL_SEQ_LEN = dna_effective_seq_len(DNA_SEQ_LEN, TOKENIZER)  # 256 with BOS only
 assert MODEL_SEQ_LEN == 256, f"Expected 256, got {MODEL_SEQ_LEN}"
 
+TIMESCALES = ["mammals", "primates", "vertebrates"]
+FILTERS = {
+    "id0.3-cov0.3": "id0.3_cov0.3",
+    "id1-cov1": "id1_cov1",
+}
+
 DATASETS = {
-    "mammals-id0.3-cov0.3": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v1_255_128-id0.3_cov0.3",
-    "mammals-id1-cov1": "bolinas-dna/genomes-v4-genome_set-mammals-intervals-v1_255_128-id1_cov1",
+    f"{ts}-{filt_name}": f"bolinas-dna/genomes-v4-genome_set-{ts}-intervals-v1_255_128-{filt_suffix}"
+    for ts in TIMESCALES
+    for filt_name, filt_suffix in FILTERS.items()
 }
 
 # =============================================================================
 # Model configs
 #
 # Approximate param counts with vocab_size=8 (DNA char tokenizer):
+#   6m:   ~8M   (hidden=256,  inter=896,  layers=8)
 #   60m:  ~61M  (hidden=512,  inter=1792, layers=16)
 #   600m: ~440M (qwen3_0_6b_hd128 architecture)
 # =============================================================================
+
+qwen3_6m = Qwen3Config(
+    max_seq_len=MODEL_SEQ_LEN,
+    hidden_dim=256,
+    intermediate_dim=896,
+    num_heads=4,
+    num_kv_heads=4,
+    num_layers=8,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+)
 
 qwen3_60m = Qwen3Config(
     max_seq_len=MODEL_SEQ_LEN,
@@ -62,6 +82,7 @@ qwen3_600m = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=MODEL_SEQ_LEN)
 
 MODEL_CONFIGS = {
     # (model_config, learning_rate, resources)
+    "6m": (qwen3_6m, 1e-3, ResourceConfig.with_tpu("v4-8")),
     "60m": (qwen3_60m, 1e-3, ResourceConfig.with_tpu("v4-8")),
     "600m": (qwen3_600m, 1e-3, ResourceConfig.with_tpu("v4-8")),
 }
