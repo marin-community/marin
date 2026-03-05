@@ -247,6 +247,12 @@ qwen2_5_32b_instruct = QwenConfig(
     rope=DefaultRotaryEmbeddingsConfig(theta=1000000.0, factor=1.0),
 )
 
+qwen2_5_coder_7b_instruct_tokenizer = "Qwen/Qwen2.5-Coder-7B-Instruct"
+qwen2_5_coder_7b_instruct = dataclasses.replace(
+    qwen2_5_7b_instruct,
+    reference_checkpoint="Qwen/Qwen2.5-Coder-7B-Instruct",
+)
+
 qwen2_5_coder_32b_instruct_tokenizer = "Qwen/Qwen2.5-Coder-32B-Instruct"
 qwen2_5_coder_32b_instruct = dataclasses.replace(
     qwen2_5_32b_instruct,
