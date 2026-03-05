@@ -331,7 +331,10 @@ def _start_fn_on_slice(
             remote_fn._runtime_env is lost when the RemoteFunction is serialized
             across Ray workers (e.g. through run_on_pod_ray.remote()).
     """
-    merged_env = dict(runtime_env) if runtime_env else {}
+    # Prefer explicit runtime_env; fall back to remote_fn._runtime_env for
+    # direct callers of run_on_pod* that attach env via ray.remote(runtime_env=...).
+    effective_env = runtime_env if runtime_env is not None else (remote_fn._runtime_env or {})
+    merged_env = dict(effective_env) if effective_env else {}
     if mxla_env is not None:
         mxla_env = dict(env_vars=mxla_env)
         merged_env = mergedeep.merge({}, merged_env, mxla_env, strategy=mergedeep.Strategy.ADDITIVE)
