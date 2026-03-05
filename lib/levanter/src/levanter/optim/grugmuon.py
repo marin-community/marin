@@ -126,16 +126,15 @@ def _grug_scale_with_muon(
         def transform_array(x):
             if not hasattr(x, "ndim") or x.ndim not in (2, 3):
                 return x
-            if x.ndim == 3:
-                from jax.sharding import PartitionSpec as P, reshard
+            from jax.sharding import PartitionSpec as P, reshard
 
+            original_spec = jax.typeof(x).sharding.spec
+            if x.ndim == 3:
                 # Keep the first dim's existing sharding, replicate only the last 2 dims for Newton-Schulz
-                current_spec = x.sharding.spec
-                x = reshard(x, P(current_spec[0], None, None))
+                x = reshard(x, P(original_spec[0], None, None))
                 updated = jax.vmap(
                     lambda m: _newtonschulz_core(m, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
                 )(x)
-                updated = reshard(updated, current_spec)
                 # Layout per slice is (fan_in, fan_out)
                 fan_in, fan_out = updated.shape[1], updated.shape[2]
             else:
@@ -147,6 +146,7 @@ def _grug_scale_with_muon(
             else:
                 scale = 0.2 * jnp.sqrt(jnp.maximum(fan_in, fan_out))
             updated *= scale
+            updated = reshard(updated, original_spec)
             return updated
 
         updates = jax.tree.map(transform_array, updates)
