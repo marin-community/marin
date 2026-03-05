@@ -18,6 +18,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
     _init_wandb,
     _load_batches,
 )
+from fray.v2 import ResourceConfig
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.utilities.time_logger import log_time
 import wandb
@@ -81,6 +82,7 @@ def dedup_fuzzy_document(
     fuzzy_minhash_num_bands: int = 26,
     fuzzy_minhash_ngram_size: int = 5,
     fuzzy_minhash_seed: int = 42,
+    max_parallelism: int | None = None,
 ) -> dict:
     """Perform fuzzy document-level deduplication"""
 
@@ -131,7 +133,7 @@ def dedup_fuzzy_document(
             for b in doc_buckets.as_py():
                 yield {"bucket": str(b), "id": doc_id_val}
 
-    ctx = ZephyrContext(name="fuzzy-dedup")
+    ctx = ZephyrContext(name="fuzzy-dedup", max_workers=max_parallelism, resources=ResourceConfig(cpu=1, ram="32g"))
     doc_minhash_lsh = (
         Dataset.from_list(input_files)
         .flat_map(lambda f: _load_batches(f, columns=[text_field, "id"]))
