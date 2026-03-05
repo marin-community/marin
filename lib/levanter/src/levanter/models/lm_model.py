@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Optional, Type, TypeVar, cast
+from typing import Any, Generic, Optional, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -310,6 +310,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         )
 
         return loss + aux_loss
+
     def compute_next_token_loss_array(
         self,
         example: "LmExample | GrugLmExample",
