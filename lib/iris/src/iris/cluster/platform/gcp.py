@@ -1609,6 +1609,8 @@ def _gcp_tunnel(
             f"127.0.0.1:{local_port}:localhost:10000",
             "-N",
             "-o",
+            "BatchMode=yes",
+            "-o",
             "StrictHostKeyChecking=no",
             "-o",
             "UserKnownHostsFile=/dev/null",
