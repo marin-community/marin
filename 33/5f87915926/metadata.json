@@ -3,7 +3,7 @@
   "checkpoint_id": "335f87915926",
   "strategy": "manual-commit",
   "branch": "kevin/agentic-sft",
-  "checkpoints_count": 1,
+  "checkpoints_count": 7,
   "files_touched": [
     "experiments/defaults.py",
     "experiments/exp2956_sft_swe_smith.py",
@@ -24,13 +24,20 @@
       "context": "/33/5f87915926/1/context.md",
       "content_hash": "/33/5f87915926/1/content_hash.txt",
       "prompt": "/33/5f87915926/1/prompt.txt"
+    },
+    {
+      "metadata": "/33/5f87915926/2/metadata.json",
+      "transcript": "/33/5f87915926/2/full.jsonl",
+      "context": "/33/5f87915926/2/context.md",
+      "content_hash": "/33/5f87915926/2/content_hash.txt",
+      "prompt": "/33/5f87915926/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 131,
-    "cache_creation_tokens": 284157,
-    "cache_read_tokens": 5914741,
-    "output_tokens": 43324,
-    "api_call_count": 98
+    "input_tokens": 433,
+    "cache_creation_tokens": 1203436,
+    "cache_read_tokens": 33327400,
+    "output_tokens": 115752,
+    "api_call_count": 334
   }
 }
