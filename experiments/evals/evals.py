@@ -459,7 +459,6 @@ def evaluate_harbor(
             wandb_tags=wandb_tags,
             generation_params=generation_params,
         ),
-        pip_dependency_groups=["harbor"],
     )
 
 
