@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # Portions of this file are adapted from:
@@ -59,6 +59,7 @@ from levanter.optim.config import OptimizerConfig
 from levanter.optim.util import (
     CoefficientType,
     flatten_linear_layers,
+    label_linear_like_module,
     unflatten_linear_layers,
     zeropower_via_newtonschulz5,
 )
@@ -92,7 +93,7 @@ def _create_namo_mask(params: PyTree) -> PyTree:
         if "Embedding" in path_str or "lm_head" in path_str:
             return "adamw"
         if isinstance(param, Linear):
-            return dataclasses.replace(param, weight="namo", bias="adamw" if param.bias is not None else None)
+            return label_linear_like_module(param, weight_label="namo", bias_label="adamw")
         return "adamw"
 
     return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))

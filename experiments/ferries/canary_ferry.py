@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Canary ferry: Qwen3 ~30M (hid512) daily pretraining canary.
@@ -57,7 +57,7 @@ NUM_STEPS = TARGET_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
 def _resources(accelerator: str) -> ResourceConfig:
     if accelerator == "gpu":
-        return ResourceConfig.with_gpu(count=8, cpu=128, ram="256g", disk="256g")
+        return ResourceConfig.with_gpu("H100", count=8, cpu=128, ram="256g", disk="256g")
     elif accelerator == "tpu":
         return ResourceConfig.with_tpu("v5p-8")
     else:

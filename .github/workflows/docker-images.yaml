@@ -187,9 +187,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Build and push ${{ matrix.image }}
+      - name: Build and push ${{ matrix.image }} with inline cache
         run: |
           docker buildx build --file ${{ matrix.dockerfile }} \
+            --cache-to type=inline \
             --provenance=false \
             --tag ghcr.io/marin-community/${{ matrix.image }}:latest \
             --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.DATE_TAG }} \

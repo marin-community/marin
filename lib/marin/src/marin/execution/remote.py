@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Decorator for marking step functions for remote execution via Fray.
@@ -22,7 +22,7 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Generic, ParamSpec, TypeVar
+from typing import Generic, ParamSpec, TypeVar, overload
 
 from fray.v2 import client as fray_client
 from fray.v2.types import ResourceConfig, Entrypoint, JobRequest, create_environment
@@ -83,6 +83,27 @@ class RemoteCallable(Generic[P, R]):
             )
         )
         handle.wait(raise_on_failure=True)
+
+
+@overload
+def remote(
+    fn: Callable[P, R],
+    *,
+    name: str | None = None,
+    resources: ResourceConfig | None = None,
+    env_vars: dict[str, str] | None = None,
+    pip_dependency_groups: list[str] | None = None,
+) -> RemoteCallable[P, R]: ...
+
+
+@overload
+def remote(
+    *,
+    name: str | None = None,
+    resources: ResourceConfig | None = None,
+    env_vars: dict[str, str] | None = None,
+    pip_dependency_groups: list[str] | None = None,
+) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
 def remote(

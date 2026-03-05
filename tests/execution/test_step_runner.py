@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -30,6 +30,12 @@ class TokenizeMetadata:
 class TrainMetadata:
     tokens_seen: int
     checkpoint_path: str
+
+
+@dataclass
+class NestedMetadata:
+    path: str
+    resources: ResourceConfig
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +120,17 @@ def test_artifact_save_and_load_untyped(tmp_path: Path):
     assert isinstance(loaded, dict)
     assert loaded["path"] == "/tokenized"
     assert loaded["num_tokens"] == 42
+
+
+def test_artifact_save_nested_dataclass(tmp_path: Path):
+    artifact = NestedMetadata(path="/nested", resources=ResourceConfig(cpu=2, ram="4g"))
+    Artifact.save(artifact, tmp_path.as_posix())
+
+    loaded = Artifact.load(tmp_path.as_posix())
+    assert isinstance(loaded, dict)
+    assert loaded["path"] == "/nested"
+    assert loaded["resources"]["cpu"] == 2
+    assert loaded["resources"]["ram"] == "4g"
 
 
 def test_artifact_roundtrip_through_pipeline(tmp_path: Path):

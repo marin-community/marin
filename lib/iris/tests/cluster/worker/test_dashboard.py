@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for WorkerDashboard HTTP/RPC endpoints and WorkerService implementation."""
@@ -20,6 +20,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2
 from starlette.testclient import TestClient
+from tests.test_utils import wait_for_condition
 
 # ============================================================================
 # Shared fixtures
@@ -212,19 +213,15 @@ def test_get_task_success(client, worker):
 
 def test_get_logs_with_tail_parameter(client, worker):
     """Test FetchTaskLogs RPC with negative start_line for tailing."""
-    import time
-
     task_id = JobName.root("test-user", "job-tail").task(0).to_wire()
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
-    # Wait for task to transition out of building state (should be fast with mocked runtime)
-    deadline = time.time() + 2.0
-    while time.time() < deadline and worker.get_task(task_id).status == cluster_pb2.TASK_STATE_BUILDING:
-        time.sleep(0.01)
+    # Wait for task to move past PENDING and BUILDING (setup + build run in the task thread)
+    task = worker.get_task(task_id)
+    wait_for_condition(lambda: task.status not in (cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_BUILDING))
 
     # Inject logs
-    task = worker.get_task(task_id)
     for i in range(100):
         task._log_sink.append(source="stdout", data=f"Log line {i}")
 
@@ -248,16 +245,15 @@ def test_get_logs_with_tail_parameter(client, worker):
 
 def test_get_logs_with_source_filter(client, worker):
     """Test FetchTaskLogs RPC returns logs that can be filtered client-side."""
-    import time
-
     task_id = JobName.root("test-user", "job-source-filter").task(0).to_wire()
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
-    # Stop the task thread so it doesn't add more logs
+    # Wait for the task to move past PENDING so setup (including log sink init) completes
     task = worker.get_task(task_id)
-    # Give the thread a moment to start
-    time.sleep(0.02)
+    wait_for_condition(lambda: task.status != cluster_pb2.TASK_STATE_PENDING)
+
+    # Stop the task thread so it doesn't add more logs
     task.should_stop = True
     if task.thread:
         task.thread.join(timeout=1.0)
@@ -293,8 +289,11 @@ def test_fetch_task_logs_tail_with_negative_start_line(service, worker, request_
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
-    # Add logs directly to canonical log sink
+    # Wait for setup to complete (log sink init happens in the task thread)
     task = worker.get_task(task_id)
+    wait_for_condition(lambda: task.status != cluster_pb2.TASK_STATE_PENDING)
+
+    # Add logs directly to canonical log sink
     for i in range(10):
         task._log_sink.append(source="stdout", data=f"Log line {i}")
 
@@ -314,8 +313,11 @@ def test_fetch_task_logs_with_regex_filter(service, worker, request_context):
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
-    # Add logs with different patterns
+    # Wait for setup to complete (log sink init happens in the task thread)
     task = worker.get_task(task_id)
+    wait_for_condition(lambda: task.status != cluster_pb2.TASK_STATE_PENDING)
+
+    # Add logs with different patterns
     for data in [
         "ERROR: something bad",
         "INFO: normal log",
@@ -339,8 +341,11 @@ def test_fetch_task_logs_combined_filters(service, worker, request_context):
     request = create_run_task_request(task_id=task_id)
     worker.submit_task(request)
 
-    # Add logs
+    # Wait for setup to complete (log sink init happens in the task thread)
     task = worker.get_task(task_id)
+    wait_for_condition(lambda: task.status != cluster_pb2.TASK_STATE_PENDING)
+
+    # Add logs
     for data in [
         "ERROR: first error",
         "INFO: normal",
@@ -379,8 +384,11 @@ def test_run_task_with_ports(worker):
     request = create_run_task_request(task_id=task_id, ports=["http", "grpc"])
     worker.submit_task(request)
 
-    # Verify ports were allocated
+    # Ports are allocated in the task thread during setup, so wait for the
+    # task to move past PENDING before checking.
     task = worker.get_task(task_id)
+    wait_for_condition(lambda: task.status != cluster_pb2.TASK_STATE_PENDING)
+
     assert len(task.ports) == 2
     assert "http" in task.ports
     assert "grpc" in task.ports

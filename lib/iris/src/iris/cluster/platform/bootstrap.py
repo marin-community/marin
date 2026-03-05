@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Bootstrap script generation for worker and controller VMs.
@@ -113,7 +113,7 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # Bootstrap script template for worker VMs.
-WORKER_BOOTSTRAP_SCRIPT = """
+WORKER_BOOTSTRAP_SCRIPT = """#!/bin/bash
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
@@ -333,8 +333,9 @@ echo "[iris-controller] [5/5] Controller container started"
 # Wait for health
 echo "[iris-controller] Waiting for controller to become healthy..."
 RESTART_COUNT=0
-for i in $(seq 1 30); do
-    echo "[iris-controller] Health check attempt $i/30 at $(date -Iseconds)..."
+MAX_ATTEMPTS=150
+for i in $(seq 1 $MAX_ATTEMPTS); do
+    echo "[iris-controller] Health check attempt $i/$MAX_ATTEMPTS at $(date -Iseconds)..."
     if curl -sf http://localhost:{{ port }}/health > /dev/null 2>&1; then
         echo "[iris-controller] ================================================"
         echo "[iris-controller] Controller is healthy! Bootstrap complete."
@@ -366,7 +367,7 @@ for i in $(seq 1 30); do
 done
 
 echo "[iris-controller] ================================================"
-echo "[iris-controller] ERROR: Controller failed to become healthy after 60 seconds"
+echo "[iris-controller] ERROR: Controller failed to become healthy after 300 seconds"
 echo "[iris-controller] ================================================"
 echo "[iris-controller] Full container logs:"
 sudo docker logs {{ container_name }} 2>&1

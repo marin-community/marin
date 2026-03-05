@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Template: grug-base trial run.
@@ -159,7 +159,7 @@ grug_base_trial = ExecutorStep(
         eval=versioned(
             GrugEvalConfig(
                 eval_batch_size=512,
-                steps_per_eval=200,
+                steps_per_eval=1000,
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,

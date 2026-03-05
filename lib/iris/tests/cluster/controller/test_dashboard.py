@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller dashboard behavioral logic.
@@ -23,7 +23,7 @@ from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
 
@@ -131,7 +131,7 @@ def service(state, scheduler):
 @pytest.fixture
 def client(service):
     dashboard = ControllerDashboard(service)
-    return TestClient(dashboard._app)
+    return TestClient(dashboard.app)
 
 
 @pytest.fixture
@@ -376,8 +376,6 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     Jobs no longer track individual attempts - tasks do. The RPC returns
     aggregate retry information for the job.
     """
-    from iris.time_utils import Timestamp
-
     job_id = submit_job(state, "test-job", job_request)
     job = state.get_job(job_id)
     job.state = cluster_pb2.JOB_STATE_RUNNING
@@ -480,9 +478,6 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 @pytest.fixture
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
-    from iris.rpc import config_pb2, vm_pb2
-    from iris.time_utils import Timestamp
-
     autoscaler = Mock()
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         groups=[
@@ -537,7 +532,7 @@ def mock_autoscaler():
 def client_with_autoscaler(service_with_autoscaler):
     """Dashboard test client with autoscaler enabled."""
     dashboard = ControllerDashboard(service_with_autoscaler)
-    return TestClient(dashboard._app)
+    return TestClient(dashboard.app)
 
 
 def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscaler):
@@ -616,13 +611,13 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
     assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in listed[0].get("pendingReason", "")
 
 
-def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
+def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
     client_with_autoscaler,
     state,
     mock_autoscaler,
     make_worker_metadata,
 ):
-    """GetJobStatus should keep scheduler diagnostics when autoscaler has no active launch."""
+    """GetJobStatus should use autoscaler passive-wait hint even when no active launch."""
     register_worker(state, "w1", "h1:8080", make_worker_metadata())
 
     request = cluster_pb2.Controller.LaunchJobRequest(
@@ -656,17 +651,16 @@ def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
     )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
     assert pending_reason
-    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" not in pending_reason
-    assert "constraints" in pending_reason.lower() or "nonexistent-attr" in pending_reason
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in pending_reason
 
 
-def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
+def test_list_jobs_shows_passive_autoscaler_wait_hint(
     client_with_autoscaler,
     state,
     job_request,
     mock_autoscaler,
 ):
-    """ListJobs should not override pending diagnostics with non-active wait hints."""
+    """ListJobs should show passive autoscaler wait hints for pending jobs."""
     submit_job(state, "pending-no-launch", job_request)
     task_id = JobName.root("test-user", "pending-no-launch").task(0).to_wire()
 
@@ -686,7 +680,7 @@ def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
         if j.get("jobId") == JobName.root("test-user", "pending-no-launch").to_wire()
     ]
     assert listed
-    assert listed[0].get("pendingReason", "") == ""
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in listed[0].get("pendingReason", "")
 
 
 # =============================================================================
@@ -717,6 +711,26 @@ def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_work
     assert tasks[0]["taskId"] == task_id.to_wire()
     assert tasks[0].get("startedAt"), "started_at must be populated from attempt timestamps"
     assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
+
+
+def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
+    """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
+    register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    assert resp.get("worker", {}).get("workerId") == "w1"
+    assert resp.get("worker", {}).get("healthy") is True
+    assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
+
+
+def test_get_worker_status_unknown_id_returns_error(client):
+    """GetWorkerStatus returns 404 for unknown IDs (no VM fallback)."""
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetWorkerStatus",
+        json={"id": "nonexistent-vm-0"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code != 200
 
 
 def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):

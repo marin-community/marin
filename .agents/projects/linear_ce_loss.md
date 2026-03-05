@@ -684,3 +684,75 @@ Notes:
 - In the only shared working dtype (`float32`), our `xla` custom-vjp path is clearly fastest on combined throughput on both `v5e-8` and `v6e-8`.
 - `pallas_tpu` remains competitive on forward but trails on backward, so combined is below `xla`.
 - Tokamax `mosaic_tpu` is not competitive in this setup and cannot currently run bf16 on these TPUs due the matmul-accumulator verification failure.
+
+### 2026-03-01: Restore explicit TPU v6 tuned table entries
+- Added an explicit `TPU v6` section in `tuned_block_sizes.py` (no `v5e` copy/fallback indirection).
+- `TPU v6` entries now include:
+  - `small-vocab`: `b=1024,h=256,v=512` (bf16/f32)
+  - `llama3-ish`: `b=1024,h=512,v=1024` (bf16/f32)
+  - `mid-h-large-vocab`: `b=1024,h=1024,v=1024` (bf16/f32)
+  - `large-batch-small-h`: `b=1024,h=512,v=2048` (bf16/f32)
+
+### 2026-03-01: Uniform TPU label-layout rule
+- Simplified fused-CE TPU block-size validation and inference policy:
+  - For all TPU device kinds, when `B >= 1024`, require `b_block_size % 1024 == 0`.
+  - Removed per-generation label-layout gating in `tuned_block_sizes.py`.
+  - Updated runtime validation in `pallas_tpu.py` to enforce the same uniform TPU rule.
+
+### 2026-03-01: Diagnostics hook validation on dev TPU (v6e-8, europe-west4-a)
+- Validated new bench/tune diagnostics flags end-to-end on a fresh dev TPU allocation:
+  - TPU: `v6e-8`
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304`
+  - flags under test:
+    - `--xla-dump-dir`
+    - `--compiler-log-path`
+- Bench run (`bench_fused_cross_entropy_loss_pallas.py`, forward-only, pallas):
+  - shape: `B_tokens=1024, H=1024, V=32768`
+  - output included `xla_dump_dir`, `compiler_log_path`, `xla_flags`, `libtpu_init_args` in `result_json`.
+  - artifacts on TPU:
+    - `/tmp/ce_diag/bench_hlo` with `148` dumped files
+    - `/tmp/ce_diag/bench_compile.log` containing benchmark output and `result_json`.
+- Tune run (`tune_fused_cross_entropy_loss_block_sizes.py`, forward-only, one explicit config):
+  - shape: `global_batch=4, seq_len=256, data_shards=1` (kernel batch `1024`), `H=1024`, `V=32768`
+  - config: `b1024_h512_v1024`
+  - output included the same diagnostics metadata keys in `result_json`.
+  - artifacts on TPU:
+    - `/tmp/ce_diag/tune_hlo` with `148` dumped files
+    - `/tmp/ce_diag/tune_compile.log` containing run output and `result_json`.
+- Conclusion:
+  - diagnostics hooks are functioning as intended on dev TPU runs and capture reproducible compile/HLO context.
+
+### 2026-03-04: v4-8 retune for Grug reference shape (us-central2)
+- TPU setup:
+  - Cluster config: `infra/marin-us-central2-staging.yaml`
+  - TPU: `v4-8` (4 chips), dev TPU via `scripts/ray/dev_tpu.py`
+- Shape under test:
+  - `global_batch=256`, `seq_len=4096`, `data_shards=4`
+  - kernel shape `B=262144`, `H=1024`, `V=128256`
+  - dtype: inputs `bfloat16`, accum `float32`
+
+- Reproduced failure with prior/default Pallas tuning sweep:
+  - `b1024_h{128,256,512}_v1024`: compile vmem OOM (`Used 20.19M of 16.00M`)
+  - `b1024_h{256,512}_v2048`: compile vmem OOM (`Used 32.29M of 16.00M`)
+  - `b1024_h{256,512}_v4096`: compile vmem OOM (`Allocation 33,554,432 > 16,777,216`)
+  - `b2048_h{256,512}_v2048`: compile vmem OOM (`Used 48.54M of 16.00M`)
+
+- XLA checks at same shape:
+  - `bs=256` (`B=262144`): success, `steady_time_s=1.9428`, `~539,724 tok/s`
+  - `bs=512` (`B=524288`): success in isolated CE tune script, `steady_time_s=3.9370`, `~532,676 tok/s`
+  - Note: the `bs=512` success here is isolated CE benchmarking and does not include full-train activation/state pressure.
+
+- Expanded Pallas sweep (explicit grid):
+  - sweep: `b in {1024,2048}`, `h in {128,256,512,1024}`, `v in {128,256,512,768,1024}`
+  - `b=1024`:
+    - `v=128` and `v=256` succeeded for all tested `h`
+    - best observed: `b1024_h128_v256` at `~663,603 tok/s` (`steady_time_s=1.5801`)
+    - `v>=512` failed (vmem compile OOM)
+  - `b=2048`:
+    - all tested `h/v` failed (vmem compile OOM)
+
+- Follow-up code changes (this run):
+  - keep TPU default path XLA-first in `api.py` (Pallas only when explicitly requested)
+  - add new TPU v4 tuned bucket for huge-batch/small-h shapes:
+    - bucket: `B in [131073, 1048576], H in [256,1024], V in [120000,131072]`
+    - tuned entry: `b=1024, h=128, v=256` (bf16/f32)

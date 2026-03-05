@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """File-based distributed queue implementation, mostly for testing."""
@@ -13,7 +13,8 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, TypeVar
 
-import fsspec
+from iris.marin_fs import url_to_fs
+
 from fray.v1.queue.base import Lease, Queue
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class FileQueue(Queue[T]):
         self.path = Path(path)
         self.fs_args = fs_args or {}
 
-        self.fs, self.fs_path = fsspec.core.url_to_fs(path, **self.fs_args)
+        self.fs, self.fs_path = url_to_fs(path, **self.fs_args)
 
         self.pending_dir = self.path / "pending"
         self.processing_dir = self.path / "processing"

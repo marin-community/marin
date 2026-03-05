@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -17,8 +17,11 @@ from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
-# Empirical GB10 launch guardrail from repeated Triton shared-memory launch failures.
-_GB10_WEIGHT_TILE_BYTES_LIMIT = 101_376
+# Empirical launch guardrails from Triton shared-memory launch failures.
+# H100 has 232,448 bytes per-SM shared memory; kernel overhead (input tiles,
+# accumulators, Triton metadata) consumes ~131 KB, leaving 101,376 bytes for
+# the weight tile.  Same limit applies to all NVIDIA GPUs including GB10.
+_NVIDIA_WEIGHT_TILE_BYTES_LIMIT = 101_376
 # Compile-time safety cap observed to avoid pathological GB10 H-tiling compile behavior.
 _GB10_MAX_H_TILES = 512
 _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
@@ -56,8 +59,8 @@ def _gb10_native_forward_opt_in_enabled() -> bool:
 
 
 def _max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
-    if "gb10" in device_kind:
-        return _GB10_WEIGHT_TILE_BYTES_LIMIT
+    if "nvidia" in device_kind:
+        return _NVIDIA_WEIGHT_TILE_BYTES_LIMIT
     return None
 
 
@@ -608,6 +611,19 @@ def _gb10_custom_backward_v_block_size(
     return None
 
 
+def _custom_backward_v_block_size(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+    block_sizes: BlockSizes | None,
+) -> int:
+    gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
+    if gb10_tuned is not None:
+        return gb10_tuned
+    if block_sizes is not None:
+        return block_sizes.v_block_size
+    return BlockSizes.get_default().v_block_size
+
+
 @partial(jax.jit, static_argnames=["v_block_size", "logit_soft_cap", "precision"])
 def _backward_streaming_from_lse(
     x: Float[Array, "B H"],
@@ -737,7 +753,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     )
     # We carry this shape-derived tuning choice in residuals so bwd can use
     # exactly the same policy decision as fwd without recomputing dispatch logic.
-    backward_v_block = _gb10_custom_backward_v_block_size(x, w)
+    backward_v_block = _custom_backward_v_block_size(x, w, block_sizes)
     return (loss, lse), (x, labels, w, lse, backward_v_block)
 
 
@@ -753,34 +769,17 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
     x, labels, w, lse, backward_v_block = residuals
     g_loss, g_lse = output_cotangent
 
-    if backward_v_block is not None:
-        grad_x, grad_w = _backward_streaming_from_lse(
-            x,
-            labels,
-            w,
-            lse,
-            g_loss,
-            g_lse,
-            v_block_size=backward_v_block,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
-    else:
-        _, vjp_fn = jax.vjp(
-            lambda x_, w_: _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
-                x_,
-                labels,
-                w_,
-                block_sizes=block_sizes,
-                dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
-                precision=precision,
-                gb10_native_forward_opt_in=gb10_native_forward_opt_in,
-            ),
-            x,
-            w,
-        )
-        grad_x, grad_w = vjp_fn((g_loss, g_lse))
+    grad_x, grad_w = _backward_streaming_from_lse(
+        x,
+        labels,
+        w,
+        lse,
+        g_loss,
+        g_lse,
+        v_block_size=backward_v_block,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+    )
 
     return grad_x, None, grad_w
 

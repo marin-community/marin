@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Step runner for StepSpec.
@@ -24,8 +24,8 @@ import time
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 
-import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
+from iris.marin_fs import open_url, url_to_fs
 
 from fray.v2.client import JobHandle, JobStatus
 from marin.execution.executor_step_status import (
@@ -56,7 +56,7 @@ def _write_executor_info(step: StepSpec) -> None:
     a richer version before StepRunner launched the step).
     """
     info_path = os.path.join(step.output_path, ".executor_info")
-    fs = fsspec.core.url_to_fs(info_path, use_listings_cache=False)[0]
+    fs = url_to_fs(info_path, use_listings_cache=False)[0]
     if fs.exists(info_path):
         return
     info = {
@@ -71,7 +71,7 @@ def _write_executor_info(step: StepSpec) -> None:
         "output_path": step.output_path,
     }
     fsspec_utils.mkdirs(step.output_path)
-    with fsspec.open(info_path, "w") as f:
+    with open_url(info_path, "w") as f:
         f.write(json.dumps(info, indent=2, cls=CustomJsonEncoder))
 
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for cluster client hierarchical name handling."""
@@ -7,7 +7,7 @@ import pytest
 
 from iris.client import IrisClient, LocalClientConfig
 from iris.client.client import JobAlreadyExists
-from iris.cluster.types import Entrypoint, JobName, ResourceSpec
+from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device, validate_tpu_replicas
 from iris.rpc import cluster_pb2
 
 
@@ -138,3 +138,27 @@ def test_terminate_prefix_excludes_finished(local_client):
     # terminate_prefix should not include it
     terminated = local_client.terminate_prefix(JobName.root("test-user", "finished-test"))
     assert job.job_id not in terminated
+
+
+def test_validate_tpu_replicas(local_client):
+    """Validate TPU replica count against topology vm_count."""
+    # Multi-host TPU with wrong replica count must be rejected
+    with pytest.raises(ValueError, match="replicas must be a multiple of 8"):
+        validate_tpu_replicas(tpu_device("v6e-32"), replicas=1)
+    with pytest.raises(ValueError, match="replicas must be a multiple of 4"):
+        validate_tpu_replicas(tpu_device("v5litepod-16"), replicas=3)
+
+    # Correct counts and multislice pass
+    validate_tpu_replicas(tpu_device("v6e-32"), replicas=8)
+    validate_tpu_replicas(tpu_device("v6e-32"), replicas=16)
+
+    # Single-host, no device, and unknown topology are skipped
+    validate_tpu_replicas(tpu_device("v6e-4"), replicas=1)
+    validate_tpu_replicas(None, replicas=1)
+    validate_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1)
+
+    # IrisClient.submit() integration
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g", device=tpu_device("v6e-32"))
+    with pytest.raises(ValueError, match="replicas must be a multiple of 8"):
+        local_client.submit(entrypoint, "bad-tpu-job", resources, user="test-user", replicas=1)

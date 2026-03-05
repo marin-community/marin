@@ -1,9 +1,12 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
 import sys
+import time
 from collections import deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
@@ -75,6 +78,19 @@ class RingBufferHandler(logging.Handler):
                 message=self.format(record),
             )
         )
+
+
+@contextmanager
+def slow_log(log: logging.Logger, operation: str, threshold_ms: int = 100) -> Iterator[None]:
+    """Log a WARNING if the enclosed block takes longer than threshold_ms.
+
+    Silent when the operation completes within budget.
+    """
+    start = time.monotonic()
+    yield
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    if elapsed_ms >= threshold_ms:
+        log.warning("Slow %s: %dms (threshold: %dms)", operation, elapsed_ms, threshold_ms)
 
 
 _global_buffer = LogRingBuffer()

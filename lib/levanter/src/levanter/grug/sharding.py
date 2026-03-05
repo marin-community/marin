@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import jax
@@ -12,4 +12,4 @@ Pvocab = P(None, None)
 
 
 def unshard(x: jax.Array) -> jax.Array:
-    return reshard(x, P((None,)))
+    return reshard(x, P(None))
