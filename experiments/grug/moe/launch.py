@@ -16,19 +16,19 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDataConfig, TextLmDatasetFormat
+from levanter.data.text import LmDataConfig
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import lm_data_config
+from marin.processing.tokenize import add_validation_sets_to_mixture
 
-from experiments.defaults import default_tokenize
+from experiments.defaults import default_validation_sets
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.marin_models import marin_tokenizer
+from experiments.tootsie.exp1295_32b import nemotron_mix
 
 
 @dataclass(frozen=True)
@@ -62,22 +62,13 @@ GRUG_MOE_TRIAL_MODEL = GrugModelConfig(
     num_layers=6,
     num_heads=8,
     num_kv_heads=8,
-    max_seq_len=1024,
+    max_seq_len=4096,
     head_dim=None,
 )
 
-TINYSTORIES_HF_ID = "roneneldan/TinyStories"
-TINYSTORIES_TOKENIZED = default_tokenize(
-    name=TINYSTORIES_HF_ID,
-    dataset=TINYSTORIES_HF_ID,
-    tokenizer=marin_tokenizer,
-    format=TextLmDatasetFormat(),
-    sample_count=versioned(1000),
-)
-TINYSTORIES_DATASET_KEY = os.path.basename(TINYSTORIES_TOKENIZED.name)
-TINYSTORIES_DATA = lm_data_config(
-    TINYSTORIES_TOKENIZED,
-    num_validation_sequences={TINYSTORIES_DATASET_KEY: 64},
+NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
+    nemotron_mix,
+    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
 )
 
 
@@ -94,6 +85,11 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     if isinstance(tracker, WandbConfig):
         return dataclasses.replace(tracker, name=run_id)
     return tracker
+
+
+def _resolve_tpu_type(default_tpu_type: str) -> str:
+    """Resolve TPU type for executor resource requests."""
+    return os.environ.get("GRUG_MOE_TPU_TYPE", default_tpu_type)
 
 
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
@@ -131,6 +127,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
 
 
 RESOLVED_RUN_ID = _resolve_run_id("grug-moe-trial")
+RESOLVED_TPU_TYPE = _resolve_tpu_type("v6e-8")
 
 
 grug_moe_trial = ExecutorStep(
@@ -138,18 +135,18 @@ grug_moe_trial = ExecutorStep(
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(GRUG_MOE_TRIAL_MODEL),
-        data=TINYSTORIES_DATA,
+        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
         # this_output_path() resolves to this step's output root (e.g. gs://.../grug/moe-trial-<version>).
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
-        steps=versioned(10),
-        batch_size=versioned(4),
+        steps=versioned(2_000),
+        batch_size=versioned(512),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="marin",
-            tags=["grug", "template", "moe", "tinystories", "smoke"],
+            tags=["grug", "template", "moe"],
             group="grug-moe-trial",
             name=None,  # filled from run_id in _resolve_tracker
         ),
@@ -160,7 +157,7 @@ grug_moe_trial = ExecutorStep(
                 lr_schedule="cosine",
                 decay=0.2,
                 min_lr_ratio=0.1,
-                warmup=5,
+                warmup=1000,
             )
         ),
         grug_trainer=versioned(
@@ -172,20 +169,20 @@ grug_moe_trial = ExecutorStep(
         ),
         eval=versioned(
             GrugEvalConfig(
-                eval_batch_size=4,
-                steps_per_eval=None,
-                max_eval_batches=1,
-                eval_current=False,
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
                 eval_ema=False,
             )
         ),
     ),
-    resources=ResourceConfig.with_gpu("H100", count=1),
+    resources=ResourceConfig.with_tpu(RESOLVED_TPU_TYPE),
 )
 
 
 if __name__ == "__main__":
     executor_main(
-        steps=[TINYSTORIES_TOKENIZED, grug_moe_trial],
-        description="Template grug MoE trial run (~10 steps) on TinyStories (single GPU).",
+        steps=[grug_moe_trial],
+        description="Template grug MoE trial run (~2000 steps) on Nemotron mix.",
     )
