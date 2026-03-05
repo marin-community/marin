@@ -112,7 +112,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("data","expert")),
+    batch_pspec: P = P(("data", "expert")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
@@ -275,7 +275,6 @@ def _make_train_step(
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
-                include_router_aux_loss=True,
                 return_router_metrics=True,
             )
 

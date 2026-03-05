@@ -430,14 +430,13 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-        include_router_aux_loss: bool = False,
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        loss = fused_linear_softmax_cross_entropy_loss(
+        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
             labels,
@@ -455,11 +454,11 @@ class Transformer(eqx.Module):
         aux_loss = load_balancing_loss_coef * jnp.sum(router_metrics["load_balancing_loss_per_layer"]) + (
             router_z_loss_coef * jnp.sum(router_metrics["router_z_loss_per_layer"])
         )
-        if include_router_aux_loss:
-            loss = loss + aux_loss
+        include_aux_in_loss = reduction != "none" and (load_balancing_loss_coef != 0.0 or router_z_loss_coef != 0.0)
+        loss = cross_entropy_loss + aux_loss if include_aux_in_loss else cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
-            summarized_metrics["train/cross_entropy_loss"] = loss - aux_loss if include_router_aux_loss else loss
+            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics
         return loss
