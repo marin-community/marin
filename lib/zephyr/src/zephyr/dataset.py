@@ -274,6 +274,8 @@ LogicalOp = (
 
 T = TypeVar("T")
 R = TypeVar("R")
+# NOTE/TODO: this could be bound to `Hashable` or similar constraint
+K = TypeVar("K")
 
 
 class Dataset(Generic[T]):
@@ -730,10 +732,10 @@ class Dataset(Generic[T]):
 
     def group_by(
         self,
-        key: Callable[[T], object],
+        key: Callable[[T], K],
         *,
-        reducer: Callable[[object, Iterator[T]], R],
-        sort_by: Callable[[T], object] | None = None,
+        reducer: Callable[[K, Iterator[T]], R],
+        sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
