@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""C-AdamC (Cautious Adam with Cosine schedule) scaling heuristic for ISOFlop sweeps.
+"""C-AdamC (Cautious Adam with Corrected Weight Decay) scaling heuristic for ISOFlop sweeps.
+Paper refs: https://arxiv.org/abs/2411.16085 and https://arxiv.org/abs/2506.02285v1
 
 This is the original Marin 2025 heuristic using CautiousConfig optimizer with
 cosine LR schedule.
