@@ -710,6 +710,7 @@ message Controller {
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
     string regex = 5;                // Regex filter (propagated to workers)
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
+    map<string, int64> resume_offsets = 7;  // Per-attempt line offset cursor: key = "{task_wire}/{attempt_id}"
   }
 
   message TaskLogBatch {
@@ -728,6 +729,8 @@ message Controller {
     // Included on every response so the client can detect state transitions
     // (e.g. child moved to FAILED) without a separate ListJobs RPC.
     repeated JobStatus child_job_statuses = 4;
+
+    map<string, int64> resume_offsets = 5;  // Per-attempt line offset cursor for next poll
   }
 
   // --- Process Logs ---

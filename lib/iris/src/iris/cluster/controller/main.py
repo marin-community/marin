@@ -147,6 +147,7 @@ def serve(
         scheduler_interval=Duration.from_seconds(scheduler_interval),
         heartbeat_failure_threshold=heartbeat_failure_threshold,
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
+        log_dir=Path("/tmp/iris/controller-logs"),
     )
 
     try:

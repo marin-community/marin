@@ -18,6 +18,7 @@ state and return results indicating what the caller should do.
 import bisect
 import logging
 from collections import Counter, deque
+from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -948,6 +949,7 @@ class ControllerState:
     def __init__(
         self,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
+        log_dir: Path | None = None,
     ):
         self._lock = RLock()
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
@@ -961,7 +963,7 @@ class ControllerState:
         self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
         self._pending_dispatch: dict[WorkerId, PendingDispatch] = {}  # Buffered heartbeat dispatches
-        self._log_store = ControllerLogStore()
+        self._log_store = ControllerLogStore(log_dir=log_dir)
 
     @property
     def log_store(self) -> ControllerLogStore:

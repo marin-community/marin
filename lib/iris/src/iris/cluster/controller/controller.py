@@ -10,6 +10,7 @@ import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from time import sleep
 from typing import Protocol
 
@@ -514,6 +515,9 @@ class ControllerConfig:
     """If set, take a periodic best-effort snapshot this often.
     Runs in the autoscaler loop thread; does not pause scheduling."""
 
+    log_dir: Path | None = None
+    """Persistent directory for task log files. When None, uses a temp dir."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -566,6 +570,7 @@ class Controller:
 
         self._state = ControllerState(
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
+            log_dir=config.log_dir,
         )
         self._scheduler = Scheduler()
         self._service = ControllerServiceImpl(

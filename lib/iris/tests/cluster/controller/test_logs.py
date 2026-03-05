@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ControllerLogStore and reverse-read helpers."""
+"""Tests for ControllerLogStore with line-offset streaming."""
 
 import re
 import threading
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from iris.cluster.controller.logs import ControllerLogStore, _reverse_read_lines
+from iris.cluster.controller.logs import ControllerLogStore
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
 
@@ -21,63 +21,7 @@ def _make_entry(data: str, epoch_ms: int = 0) -> logging_pb2.LogEntry:
 
 
 # =============================================================================
-# _reverse_read_lines tests
-# =============================================================================
-
-
-def test_reverse_read_lines_empty_file(tmp_path: Path):
-    f = tmp_path / "empty.txt"
-    f.write_text("")
-    assert list(_reverse_read_lines(f)) == []
-
-
-def test_reverse_read_lines_single_line(tmp_path: Path):
-    f = tmp_path / "single.txt"
-    f.write_text("hello\n")
-    assert list(_reverse_read_lines(f)) == ["hello"]
-
-
-def test_reverse_read_lines_single_line_no_trailing_newline(tmp_path: Path):
-    f = tmp_path / "single.txt"
-    f.write_text("hello")
-    assert list(_reverse_read_lines(f)) == ["hello"]
-
-
-def test_reverse_read_lines_multiple_lines(tmp_path: Path):
-    f = tmp_path / "multi.txt"
-    lines = [f"line-{i}" for i in range(10)]
-    f.write_text("\n".join(lines) + "\n")
-    result = list(_reverse_read_lines(f))
-    assert result == list(reversed(lines))
-
-
-def test_reverse_read_lines_skips_blank_lines(tmp_path: Path):
-    f = tmp_path / "blanks.txt"
-    f.write_text("a\n\nb\n\nc\n")
-    assert list(_reverse_read_lines(f)) == ["c", "b", "a"]
-
-
-def test_reverse_read_lines_spanning_multiple_blocks(tmp_path: Path):
-    """Lines that span multiple 25KB blocks are read correctly."""
-    f = tmp_path / "large.txt"
-    # Each line is ~100 bytes, 500 lines = ~50KB = spans 2+ blocks of 25KB
-    lines = [f"line-{i:04d}-{'x' * 90}" for i in range(500)]
-    f.write_text("\n".join(lines) + "\n")
-    result = list(_reverse_read_lines(f))
-    assert result == list(reversed(lines))
-
-
-def test_reverse_read_lines_small_block_size(tmp_path: Path):
-    """Verify correctness with a very small block size to stress boundary handling."""
-    f = tmp_path / "small_block.txt"
-    lines = [f"line-{i}" for i in range(20)]
-    f.write_text("\n".join(lines) + "\n")
-    result = list(_reverse_read_lines(f, block_size=16))
-    assert result == list(reversed(lines))
-
-
-# =============================================================================
-# ControllerLogStore tail tests
+# Fixtures
 # =============================================================================
 
 
@@ -91,13 +35,18 @@ def log_store():
 TASK_ID = JobName.from_wire("/job/test/task/0")
 
 
+# =============================================================================
+# Basic tail tests
+# =============================================================================
+
+
 def test_get_logs_tail_returns_last_n(log_store: ControllerLogStore):
     entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(100)]
     log_store.append(TASK_ID, 0, entries)
 
     result = log_store.get_logs(TASK_ID, 0, max_lines=10, tail=True)
-    assert len(result) == 10
-    assert [e.data for e in result] == [f"line-{i}" for i in range(90, 100)]
+    assert len(result.entries) == 10
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(90, 100)]
 
 
 def test_get_logs_tail_chronological_order(log_store: ControllerLogStore):
@@ -105,7 +54,7 @@ def test_get_logs_tail_chronological_order(log_store: ControllerLogStore):
     log_store.append(TASK_ID, 0, entries)
 
     result = log_store.get_logs(TASK_ID, 0, max_lines=5, tail=True)
-    timestamps = [e.timestamp.epoch_ms for e in result]
+    timestamps = [e.timestamp.epoch_ms for e in result.entries]
     assert timestamps == sorted(timestamps)
 
 
@@ -114,10 +63,9 @@ def test_get_logs_tail_with_regex(log_store: ControllerLogStore):
     log_store.append(TASK_ID, 0, entries)
 
     result = log_store.get_logs(TASK_ID, 0, max_lines=3, tail=True, regex_filter=re.compile("ERROR"))
-    assert len(result) == 3
-    assert all("ERROR" in e.data for e in result)
-    # Last 3 ERROR lines are at i=70, 80, 90
-    assert [e.data for e in result] == ["ERROR: msg-70", "ERROR: msg-80", "ERROR: msg-90"]
+    assert len(result.entries) == 3
+    assert all("ERROR" in e.data for e in result.entries)
+    assert [e.data for e in result.entries] == ["ERROR: msg-70", "ERROR: msg-80", "ERROR: msg-90"]
 
 
 def test_get_logs_tail_with_since_ms(log_store: ControllerLogStore):
@@ -125,7 +73,7 @@ def test_get_logs_tail_with_since_ms(log_store: ControllerLogStore):
     log_store.append(TASK_ID, 0, entries)
 
     result = log_store.get_logs(TASK_ID, 0, max_lines=5, tail=True, since_ms=94)
-    assert [e.data for e in result] == ["line-95", "line-96", "line-97", "line-98", "line-99"]
+    assert [e.data for e in result.entries] == ["line-95", "line-96", "line-97", "line-98", "line-99"]
 
 
 def test_get_logs_tail_fewer_than_max(log_store: ControllerLogStore):
@@ -133,12 +81,13 @@ def test_get_logs_tail_fewer_than_max(log_store: ControllerLogStore):
     log_store.append(TASK_ID, 0, entries)
 
     result = log_store.get_logs(TASK_ID, 0, max_lines=100, tail=True)
-    assert len(result) == 3
+    assert len(result.entries) == 3
 
 
 def test_get_logs_tail_empty_file(log_store: ControllerLogStore):
     result = log_store.get_logs(TASK_ID, 0, max_lines=10, tail=True)
-    assert result == []
+    assert result.entries == []
+    assert result.lines_read == 0
 
 
 def test_get_logs_forward_unchanged(log_store: ControllerLogStore):
@@ -147,7 +96,7 @@ def test_get_logs_forward_unchanged(log_store: ControllerLogStore):
     log_store.append(TASK_ID, 0, entries)
 
     result = log_store.get_logs(TASK_ID, 0, max_lines=10, tail=False)
-    assert [e.data for e in result] == [f"line-{i}" for i in range(10)]
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(10)]
 
 
 def test_get_logs_tail_concurrent(log_store: ControllerLogStore):
@@ -172,3 +121,109 @@ def test_get_logs_tail_concurrent(log_store: ControllerLogStore):
     t1.join()
     t2.join()
     assert errors == [], f"Concurrent access raised: {errors}"
+
+
+# =============================================================================
+# Persistent log dir tests
+# =============================================================================
+
+
+def test_persistent_log_dir(tmp_path: Path):
+    """Append, close, reopen with same dir, read logs."""
+    log_dir = tmp_path / "logs"
+    store1 = ControllerLogStore(log_dir=log_dir)
+    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)]
+    store1.append(TASK_ID, 0, entries)
+    store1.close()
+
+    store2 = ControllerLogStore(log_dir=log_dir)
+    result = store2.get_logs(TASK_ID, 0)
+    assert len(result.entries) == 5
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(5)]
+    store2.close()
+
+
+# =============================================================================
+# Skip-lines / offset tests
+# =============================================================================
+
+
+def test_skip_lines_seeks_efficiently(log_store: ControllerLogStore):
+    """Append 1000 lines, skip_lines=990 returns last 10."""
+    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(1000)]
+    log_store.append(TASK_ID, 0, entries)
+
+    result = log_store.get_logs(TASK_ID, 0, skip_lines=990)
+    assert len(result.entries) == 10
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(990, 1000)]
+    assert result.lines_read == 1000
+
+
+def test_skip_lines_round_trip(log_store: ControllerLogStore):
+    """Append → read → append more → read(skip=prev) returns only new."""
+    entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
+    log_store.append(TASK_ID, 0, entries1)
+
+    result1 = log_store.get_logs(TASK_ID, 0)
+    assert len(result1.entries) == 10
+    cursor = result1.lines_read
+
+    entries2 = [_make_entry(f"batch2-{i}", epoch_ms=100 + i) for i in range(5)]
+    log_store.append(TASK_ID, 0, entries2)
+
+    result2 = log_store.get_logs(TASK_ID, 0, skip_lines=cursor)
+    assert len(result2.entries) == 5
+    assert [e.data for e in result2.entries] == [f"batch2-{i}" for i in range(5)]
+    assert result2.lines_read == 15
+
+
+def test_line_offsets_rebuilt_on_restart(tmp_path: Path):
+    """Append, close, new store with same dir, skip works."""
+    log_dir = tmp_path / "logs"
+    store1 = ControllerLogStore(log_dir=log_dir)
+    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(20)]
+    store1.append(TASK_ID, 0, entries)
+    store1.close()
+
+    store2 = ControllerLogStore(log_dir=log_dir)
+    result = store2.get_logs(TASK_ID, 0, skip_lines=15)
+    assert len(result.entries) == 5
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(15, 20)]
+    assert result.lines_read == 20
+    store2.close()
+
+
+def test_tail_uses_offset_array(log_store: ControllerLogStore):
+    """tail=True returns last N via offset skip."""
+    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(50)]
+    log_store.append(TASK_ID, 0, entries)
+
+    result = log_store.get_logs(TASK_ID, 0, max_lines=5, tail=True)
+    assert len(result.entries) == 5
+    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(45, 50)]
+    assert result.lines_read == 50
+
+
+def test_has_logs_no_known_attempts(tmp_path: Path):
+    """has_logs uses path.exists() without _known_attempts cache."""
+    log_dir = tmp_path / "logs"
+    store1 = ControllerLogStore(log_dir=log_dir)
+    store1.append(TASK_ID, 0, [_make_entry("hello")])
+    store1.close()
+
+    store2 = ControllerLogStore(log_dir=log_dir)
+    assert store2.has_logs(TASK_ID, 0)
+    assert not store2.has_logs(TASK_ID, 99)
+    store2.close()
+
+
+def test_clear_attempt_removes_offsets(log_store: ControllerLogStore):
+    entries = [_make_entry(f"line-{i}") for i in range(5)]
+    log_store.append(TASK_ID, 0, entries)
+    assert log_store.has_logs(TASK_ID, 0)
+
+    log_store.clear_attempt(TASK_ID, 0)
+    assert not log_store.has_logs(TASK_ID, 0)
+    result = log_store.get_logs(TASK_ID, 0)
+    assert result.entries == []
+    assert result.lines_read == 0

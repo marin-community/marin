@@ -172,6 +172,8 @@ class RemoteClusterClient:
         max_log_failures = 5
         # Track child job states so we fire callbacks once per transition.
         child_job_states: dict[str, int] = {}
+        # Per-attempt line offset cursors for efficient incremental polling.
+        resume_offsets: dict[str, int] = {}
 
         while True:
             status = self.get_job_status(job_id)
@@ -182,6 +184,7 @@ class RemoteClusterClient:
                     job_id,
                     include_children=include_children,
                     since_ms=last_timestamp_ms,
+                    resume_offsets=resume_offsets,
                 )
                 consecutive_log_failures = 0
                 log_fetch_backoff.reset()
@@ -201,6 +204,7 @@ class RemoteClusterClient:
             if log_response is not None:
                 if log_response.last_timestamp_ms > last_timestamp_ms:
                     last_timestamp_ms = log_response.last_timestamp_ms
+                resume_offsets.update(log_response.resume_offsets)
 
                 if state_logger is not None:
                     state_logger.task_logging(log_response)
@@ -333,6 +337,7 @@ class RemoteClusterClient:
         max_total_lines: int = 0,
         regex: str | None = None,
         attempt_id: int = -1,
+        resume_offsets: dict[str, int] | None = None,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
         """Fetch logs for a task or job via the controller RPC.
 
@@ -346,6 +351,7 @@ class RemoteClusterClient:
             max_total_lines: Maximum total lines (0 = default 10000)
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
+            resume_offsets: Per-attempt line offset cursors from previous response
         """
         request = cluster_pb2.Controller.GetTaskLogsRequest(
             id=target.to_wire(),
@@ -354,6 +360,7 @@ class RemoteClusterClient:
             max_total_lines=max_total_lines,
             regex=regex or "",
             attempt_id=attempt_id,
+            resume_offsets=resume_offsets or {},
         )
 
         def _call():
