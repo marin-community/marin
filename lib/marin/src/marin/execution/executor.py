@@ -259,9 +259,6 @@ class ExecutorStep(Generic[ConfigT]):
     """Specifies the `output_path` that should be used.  Print warning if it
     doesn't match the automatically computed one."""
 
-    pip_dependency_groups: list[str] | None = None
-    """List of `extra` dependencies from pyproject.toml to include with this step."""
-
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
         return InputName(self, name=name)

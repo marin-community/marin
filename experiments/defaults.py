@@ -219,7 +219,6 @@ def default_tokenize(
             },
         ),
         config=config,
-        pip_dependency_groups=["cpu"],
     )
 
 
