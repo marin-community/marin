@@ -547,7 +547,6 @@ def _build_suggest_step(
             search_space=SWEEP.search_space,
             loop_index=loop_index,
         ),
-        pip_dependency_groups=["vizier"],
     )
 
 
@@ -599,7 +598,6 @@ def _build_update_step(
             output_path=this_output_path(),
             loop_index=loop_index,
         ),
-        pip_dependency_groups=["vizier"],
     )
 
 
@@ -617,7 +615,6 @@ def _build_optimal_step(
             input_db_path=input_db_path,
             output_path=this_output_path(),
         ),
-        pip_dependency_groups=["vizier"],
     )
 
 
