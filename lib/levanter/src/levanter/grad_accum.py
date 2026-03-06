@@ -3,14 +3,13 @@
 
 import enum
 import functools
-from typing import Callable, Optional, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Optional, ParamSpec, TypeVar
 
 import equinox as eqx
 import haliax as hax
 import haliax.quantization as hq
 import jax
 import jax.numpy as jnp
-from haliax import Axis
 from jax.lax import with_sharding_constraint
 from jax.sharding import PartitionSpec
 
@@ -22,6 +21,11 @@ from levanter.utils.partitioning import axis, physical_axis_name, physical_axis_
 
 Args = ParamSpec("Args")
 R = TypeVar("R")
+
+if TYPE_CHECKING:
+    from haliax import Axis
+else:
+    Axis = Any
 
 
 class ReductionType(enum.Enum):
