@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 import draccus
+import haliax as hax
 
-from haliax import AxisSpec
 from haliax.nn import LayerNorm, RmsNorm
 from haliax.nn.normalization import LayerNormBase
 
@@ -25,7 +25,7 @@ class LayerNormConfigBase(draccus.ChoiceRegistry, abc.ABC):
         return "rms"
 
     @abc.abstractmethod
-    def build(self, axis: AxisSpec) -> LayerNormBase:
+    def build(self, axis: hax.AxisSpec) -> LayerNormBase:
         """Build the normalization layer."""
         raise NotImplementedError
 
@@ -35,7 +35,7 @@ class LayerNormConfigBase(draccus.ChoiceRegistry, abc.ABC):
 class RmsNormConfig(LayerNormConfigBase):
     """Configuration for RMS normalization."""
 
-    def build(self, axis: AxisSpec) -> RmsNorm:
+    def build(self, axis: hax.AxisSpec) -> RmsNorm:
         return RmsNorm.init(axis, eps=self.eps, use_weight=self.use_weight, use_bias=self.use_bias)
 
 
@@ -44,5 +44,5 @@ class RmsNormConfig(LayerNormConfigBase):
 class LayerNormConfig(LayerNormConfigBase):
     """Configuration for standard layer normalization."""
 
-    def build(self, axis: AxisSpec) -> LayerNorm:
+    def build(self, axis: hax.AxisSpec) -> LayerNorm:
         return LayerNorm.init(axis, eps=self.eps, use_weight=self.use_weight, use_bias=self.use_bias)
