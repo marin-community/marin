@@ -138,6 +138,8 @@ def cb_compute_entropies(
     """
     if prefix is None:
         prefix = "analysis"
+    if mesh is None:
+        raise ValueError("cb_compute_entropies requires an explicit mesh.")
 
     def compute_entropy(step: StepInfo):
         loader_axis_resources = None
@@ -231,6 +233,8 @@ def cb_compute_top2_gap(
 ):
     if prefix is None:
         prefix = "analysis"
+    if mesh is None:
+        raise ValueError("cb_compute_top2_gap requires an explicit mesh.")
 
     def compute_top2_gap(step: StepInfo):
         loader_axis_resources = None
