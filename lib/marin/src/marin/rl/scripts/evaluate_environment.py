@@ -42,7 +42,7 @@ from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer
 from iris.logging import configure_logging
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _to_list(arr) -> list:

@@ -109,7 +109,7 @@ from marin.execution.executor_step_status import (
 from marin.utilities.json_encoder import CustomJsonEncoder
 from iris.logging import configure_logging
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 _LOCAL_DATA_BROWSER_PORT_RE = re.compile(r"^\s*port\s*:\s*(\d+)\s*(?:#.*)?$")
 _LOCAL_DATA_BROWSER_CONFIG_REL = Path("data_browser") / "conf" / "local.conf"

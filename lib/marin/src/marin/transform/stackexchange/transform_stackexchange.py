@@ -24,7 +24,7 @@ from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
