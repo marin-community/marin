@@ -12,19 +12,12 @@ Dataset families are organized in separate modules:
 - dolmino: DOLMINO (12 splits + combined math)
 - nemotron: NEMOTRON CC v1 (7 quality-based splits)
 - nemotron_v2: Nemotron v2 collection (CC v2/v2.1, Code, Math, Specialized, SFT)
-- finepdfs: FinePDFs multilingual PDF text (per-language subsets
 - simple: Single-corpus datasets
 
 Use `python -m experiments.pretraining_datasets list` to see all available datasets.
 """
 
 # Import downloads and tokenized dicts from each module
-from experiments.pretraining_datasets.finepdfs import (
-    FINEPDFS_LANGUAGES,
-    downloads as finepdfs_downloads,
-    tokenize_finepdfs,
-    tokenized as finepdfs_tokenized,
-)
 from experiments.pretraining_datasets.dolma import (
     DOLMA_DATASETS,
     DOLMA_LLAMA3_OVERRIDES,
@@ -64,7 +57,6 @@ __all__ = [
     "DOLMA_OLMO_MIXTURE_WEIGHTS",
     "DOLMINO_DATASETS",
     "DOLMINO_LLAMA3_OVERRIDES",
-    "FINEPDFS_LANGUAGES",
     "NEMOTRON_DATASETS",
     "NEMOTRON_LLAMA3_OVERRIDES",
     "NEMOTRON_V2_DATASETS",
@@ -74,7 +66,6 @@ __all__ = [
     "tokenize_dolmino",
     "tokenize_dolmino_math",
     "tokenize_dolmino_subset",
-    "tokenize_finepdfs",
     "tokenize_nemotron",
     "tokenize_nemotron_subset",
     "tokenize_nemotron_v2_family",
@@ -86,12 +77,6 @@ __all__ = [
 # ============================================================================
 
 DATASETS = {
-    # FinePDFs (per-language subsets)
-    "finepdfs": {
-        "subsets": list(FINEPDFS_LANGUAGES),
-        "download": finepdfs_downloads,
-        "tokenize_fn": tokenize_finepdfs,
-    },
     # Simple datasets (single "all" subset)
     "dclm_baseline": {
         "subsets": ["all"],
