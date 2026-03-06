@@ -219,6 +219,26 @@ class Transformer(eqx.Module):
             dtype=loss_dtype,
         )
 
+    def compute_next_token_loss(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+    ) -> jax.Array:
+        """Compatibility wrapper used by shared training/eval surfaces."""
+        return self.next_token_loss(
+            token_ids,
+            loss_weight,
+            mask=mask,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+        )
+
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * random.truncated_normal(key, -3, 3, shape)
