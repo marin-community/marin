@@ -280,4 +280,4 @@ def make_floating_point_trainable_filter(is_trainable: FilterTree) -> FilterTree
         else:
             return lambda y: is_inexact_arrayish(y) and x(y)
 
-    return haliax.tree_util.tree_map(is_trainable_and_floating_point, is_trainable)
+    return jax.tree_util.tree_map(is_trainable_and_floating_point, is_trainable)
