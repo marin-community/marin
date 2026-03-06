@@ -55,7 +55,8 @@ def main(config: VizLmConfig):
     tokenizer = config.data.the_tokenizer
 
     # some axes we use outside the model proper
-    EvalBatch = config.trainer.EvalBatch
+    eval_batch_size = config.trainer.eval_batch_size
+    batch_axis_name = config.trainer.batch_axis_name
     Pos = config.model.max_Pos.resize(config.max_eval_length)
 
     validation_sets = config.data.validation_grug_sets(seq_len=Pos.size)
@@ -63,7 +64,7 @@ def main(config: VizLmConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
     batch_axis_resource = config.trainer.batch_axis_resource
-    loader_axis_resources = {EvalBatch.name: batch_axis_resource} if batch_axis_resource is not None else None
+    loader_axis_resources = {batch_axis_name: batch_axis_resource} if batch_axis_resource is not None else None
 
     with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
@@ -84,11 +85,11 @@ def main(config: VizLmConfig):
 
             loss = model.compute_next_token_loss_array(
                 example,
-                batch_axis=EvalBatch,
+                batch_axis=batch_axis_name,
                 reduction=None,
                 reduction_axis=(),
             )
-            logits = model.logits_from_token_ids_array(example.tokens, batch_axis=EvalBatch, key=key)
+            logits = model.logits_from_token_ids_array(example.tokens, batch_axis=batch_axis_name, key=key)
 
             # Roll forward to align each prediction with its target token.
             logprobs = jnp.roll(-loss, 1, axis=-1)
@@ -145,8 +146,8 @@ def main(config: VizLmConfig):
 
             loader = DataLoader(
                 dataset,
-                config.trainer.eval_batch_size,
-                batch_axis_name=EvalBatch.name,
+                eval_batch_size,
+                batch_axis_name=batch_axis_name,
                 mesh=config.trainer.device_mesh,
                 axis_resources=loader_axis_resources,
             )
