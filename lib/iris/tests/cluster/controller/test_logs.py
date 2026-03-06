@@ -239,11 +239,13 @@ def test_eviction_caps_total_rows():
     store = ControllerLogStore(max_records=50)
     try:
         entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(200)]
-        # Append in chunks to trigger eviction checks
+        # Append in chunks
         for i in range(0, 200, 10):
             store.append(TASK_ID, 0, entries[i : i + 10])
-        # Force an eviction check
-        store._append_count = 99
+        # Force append_count so the next append triggers eviction check
+        from iris.cluster.controller.logs import _EVICT_CHECK_INTERVAL
+
+        store._append_count = _EVICT_CHECK_INTERVAL - 1
         store.append(TASK_ID, 0, [_make_entry("trigger", epoch_ms=999)])
 
         total = store._conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]

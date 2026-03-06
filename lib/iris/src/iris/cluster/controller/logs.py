@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS logs (
 CREATE INDEX IF NOT EXISTS idx_task_attempt ON logs(task_wire, attempt_id, id);
 """
 
-_MAX_RECORDS = 1_000_000
-_EVICT_CHECK_INTERVAL = 100  # check eviction every N appends
+_MAX_RECORDS = 100_000_000
+_EVICT_CHECK_INTERVAL = 100_000  # check eviction every N appends
 
 
 @dataclass
@@ -80,8 +80,8 @@ class ControllerLogStore:
 
     @staticmethod
     def _row_to_entry(row: tuple) -> logging_pb2.LogEntry:
-        # row: (source, data, epoch_ms)
-        entry = logging_pb2.LogEntry(source=row[0], data=row[1])
+        # row: (source, data, epoch_ms, attempt_id)
+        entry = logging_pb2.LogEntry(source=row[0], data=row[1], attempt_id=row[3])
         entry.timestamp.epoch_ms = row[2]
         return entry
 
@@ -112,73 +112,75 @@ class ControllerLogStore:
         tail: bool = False,
     ) -> LogReadResult:
         task_wire = task_id.to_wire()
-        total = self._count_lines(task_wire, attempt_id)
-        if total == 0:
-            return LogReadResult(entries=[], lines_read=0)
+        with self._lock:
+            total = self._count_lines(task_wire, attempt_id)
+            if total == 0:
+                return LogReadResult(entries=[], lines_read=0)
 
-        has_filter = regex_filter is not None or since_ms > 0
+            has_filter = regex_filter is not None or since_ms > 0
 
-        # Build the query depending on mode
-        if tail and max_lines > 0 and not has_filter:
-            # Optimized tail without filters: skip to last N rows via OFFSET
-            effective_skip = max(skip_lines, total - max_lines)
-            rows = self._conn.execute(
-                "SELECT source, data, epoch_ms FROM logs "
-                "WHERE task_wire = ? AND attempt_id = ? "
-                "ORDER BY id LIMIT -1 OFFSET ?",
-                (task_wire, attempt_id, effective_skip),
-            ).fetchall()
-        elif tail and max_lines > 0 and has_filter:
-            # Tail with filters: fetch all candidate rows, filter in Python, take last N
-            if since_ms > 0:
+            # Build the query depending on mode
+            if tail and max_lines > 0 and not has_filter:
+                # Optimized tail without filters: skip to last N rows via OFFSET
+                effective_skip = max(skip_lines, total - max_lines)
                 rows = self._conn.execute(
-                    "SELECT source, data, epoch_ms FROM logs "
-                    "WHERE task_wire = ? AND attempt_id = ? AND epoch_ms > ? "
-                    "ORDER BY id",
-                    (task_wire, attempt_id, since_ms),
-                ).fetchall()
-            else:
-                rows = self._conn.execute(
-                    "SELECT source, data, epoch_ms FROM logs "
+                    "SELECT source, data, epoch_ms, attempt_id FROM logs "
                     "WHERE task_wire = ? AND attempt_id = ? "
                     "ORDER BY id LIMIT -1 OFFSET ?",
-                    (task_wire, attempt_id, skip_lines),
+                    (task_wire, attempt_id, effective_skip),
                 ).fetchall()
-            if regex_filter:
-                rows = [r for r in rows if regex_filter.search(r[1])]
-            rows = rows[-max_lines:]
-        else:
-            # Forward mode
-            params: list = [task_wire, attempt_id]
-            where_extra = ""
-            if since_ms > 0:
-                where_extra += " AND epoch_ms > ?"
-                params.append(since_ms)
+            elif tail and max_lines > 0 and has_filter:
+                # Tail with filters: fetch all candidate rows, filter in Python, take last N
+                if since_ms > 0:
+                    rows = self._conn.execute(
+                        "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                        "WHERE task_wire = ? AND attempt_id = ? AND epoch_ms > ? "
+                        "ORDER BY id",
+                        (task_wire, attempt_id, since_ms),
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                        "WHERE task_wire = ? AND attempt_id = ? "
+                        "ORDER BY id LIMIT -1 OFFSET ?",
+                        (task_wire, attempt_id, skip_lines),
+                    ).fetchall()
+                if regex_filter:
+                    rows = [r for r in rows if regex_filter.search(r[1])]
+                rows = rows[-max_lines:]
+            else:
+                # Forward mode
+                params: list = [task_wire, attempt_id]
+                where_extra = ""
+                if since_ms > 0:
+                    where_extra += " AND epoch_ms > ?"
+                    params.append(since_ms)
 
-            query = (
-                "SELECT source, data, epoch_ms FROM logs "
-                f"WHERE task_wire = ? AND attempt_id = ?{where_extra} "
-                "ORDER BY id LIMIT -1 OFFSET ?"
-            )
-            params.append(skip_lines)
-            rows = self._conn.execute(query, params).fetchall()
+                query = (
+                    "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                    f"WHERE task_wire = ? AND attempt_id = ?{where_extra} "
+                    "ORDER BY id LIMIT -1 OFFSET ?"
+                )
+                params.append(skip_lines)
+                rows = self._conn.execute(query, params).fetchall()
 
-            if regex_filter:
-                rows = [r for r in rows if regex_filter.search(r[1])]
+                if regex_filter:
+                    rows = [r for r in rows if regex_filter.search(r[1])]
 
-            if max_lines > 0:
-                rows = rows[:max_lines]
+                if max_lines > 0:
+                    rows = rows[:max_lines]
 
         entries = [self._row_to_entry(r) for r in rows]
         return LogReadResult(entries=entries, lines_read=total)
 
     def has_logs(self, task_id: JobName, attempt_id: int) -> bool:
         task_wire = task_id.to_wire()
-        row = self._conn.execute(
-            "SELECT 1 FROM logs WHERE task_wire = ? AND attempt_id = ? LIMIT 1",
-            (task_wire, attempt_id),
-        ).fetchone()
-        return row is not None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM logs WHERE task_wire = ? AND attempt_id = ? LIMIT 1",
+                (task_wire, attempt_id),
+            ).fetchone()
+            return row is not None
 
     def clear_attempt(self, task_id: JobName, attempt_id: int) -> None:
         task_wire = task_id.to_wire()
