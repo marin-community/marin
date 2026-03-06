@@ -118,3 +118,4 @@ DO NOT:
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
+- NEVER EVER stop, restart, or otherwise bounce a Ray cluster unless the user has given express permission for that exact action.
