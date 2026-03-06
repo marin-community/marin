@@ -7,11 +7,11 @@ import jax
 import optax
 
 import haliax.nn
-from haliax import NamedArray, is_named_array
+from haliax import NamedArray
 
 from levanter.tracker.histogram import Histogram
 from levanter.utils import jax_utils
-from levanter.utils.jax_utils import is_jax_array_like
+from levanter.utils.jax_utils import is_jax_array_like, is_named_array
 
 
 def summary_statistics_for_tree(

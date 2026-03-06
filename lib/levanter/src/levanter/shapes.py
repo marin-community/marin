@@ -8,9 +8,10 @@ from typing import Optional, Tuple, Type, TypeAlias, Union
 import jax
 import numpy as np
 from haliax import Axis
-from haliax.util import is_named_array
 from jax import ShapeDtypeStruct
 from jaxtyping import PyTree
+
+from levanter.utils.jax_utils import is_named_array
 
 DType = Union[np.dtype, Type[int], Type[float], Type[bool]]
 

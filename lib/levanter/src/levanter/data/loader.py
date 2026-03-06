@@ -24,7 +24,6 @@ from jaxtyping import PyTree
 from optax.tree_utils import tree_zeros_like
 
 import haliax as hax
-from haliax import is_named_array
 
 from levanter.data.dataset import AsyncDataset
 from levanter.data.utils import batched
@@ -33,7 +32,7 @@ from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
-from levanter.utils.jax_utils import local_cpu_mesh
+from levanter.utils.jax_utils import is_named_array, local_cpu_mesh
 from levanter.utils.mesh import activate_mesh, get_active_mesh
 from levanter.utils.partitioning import (
     current_thread_local_mapping,

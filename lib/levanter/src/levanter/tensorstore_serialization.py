@@ -19,11 +19,11 @@ import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
 import tensorstore as ts
-from haliax.util import is_named_array
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
 from levanter.utils import fsspec_utils, jax_utils
+from levanter.utils.jax_utils import is_named_array
 from levanter.utils.mesh import get_active_mesh
 from levanter.utils.partitioning import sharding_for_axis
 from levanter.utils.types import ResourceMapping

@@ -10,13 +10,12 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 from haliax import Axis
-from haliax.util import is_named_array
 from jax.lax import with_sharding_constraint
 from jax.sharding import PartitionSpec
 
 from levanter.metrics import Metric
 from levanter.metrics import fold as fold_metric
-from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.jax_utils import is_named_array, zeros_like_tree
 from levanter.utils.mesh import DATA_AXIS
 from levanter.utils.partitioning import physical_axis_name, physical_axis_size
 
