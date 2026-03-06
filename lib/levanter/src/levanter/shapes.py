@@ -3,15 +3,19 @@
 
 from dataclasses import dataclass
 from math import prod
-from typing import Optional, Tuple, Type, TypeAlias, Union
+from typing import TYPE_CHECKING, Any, Optional, Tuple, Type, TypeAlias, Union
 
 import jax
 import numpy as np
-from haliax import Axis
 from jax import ShapeDtypeStruct
 from jaxtyping import PyTree
 
 from levanter.utils.jax_utils import is_named_array
+
+if TYPE_CHECKING:
+    from haliax import Axis
+else:
+    Axis = Any
 
 DType = Union[np.dtype, Type[int], Type[float], Type[bool]]
 
