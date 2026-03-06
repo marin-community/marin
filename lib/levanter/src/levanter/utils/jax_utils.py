@@ -28,7 +28,7 @@ from levanter.utils.mesh import (
     create_mesh_from_axis_specs,
     get_active_mesh,
 )
-from levanter.utils.partitioning import current_thread_local_mapping, pspec_for
+from levanter.utils.partitioning import current_thread_local_mapping, pspec_for, shard
 from levanter.utils.py_utils import index_where
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
 from levanter.utils.types import ResourceMapping
@@ -470,7 +470,7 @@ def zeros_like_tree(tree: T, axis_mapping: Optional[ResourceMapping] = None, dty
 
 def _zeros_like(mapping, dtype, n):
     if isinstance(n, hax.NamedArray):
-        return hax.shard(hax.zeros_like(n, dtype=dtype), mapping)
+        return shard(hax.zeros_like(n, dtype=dtype), mapping)
     elif is_jax_array_like(n):
         return jnp.zeros_like(n, dtype)
     else:
