@@ -16,7 +16,7 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -33,7 +33,6 @@ import transformers.utils.hub
 from fsspec import AbstractFileSystem
 from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
-from haliax import Axis
 from haliax.state_dict import (
     StateDict,
     flatten_modules_for_export,
@@ -80,7 +79,10 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module  # n
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 
 if TYPE_CHECKING:
+    from haliax import Axis
     from transformers import FeatureExtractionMixin, ProcessorMixin
+else:
+    Axis = Any
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
