@@ -31,7 +31,6 @@ from functools import cached_property
 from typing import Callable, Iterator, List, Optional, Tuple, TypeVar, Union
 
 import equinox as eqx
-import haliax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -708,9 +707,7 @@ class LevanterHarnessLM(TemplateLM):
 
         return encoding
 
-    def _process_and_tokenize_stop_sequences(
-        self, until: Optional[List[str]], eos: str
-    ) -> Optional[haliax.NamedArray]:
+    def _process_and_tokenize_stop_sequences(self, until: Optional[List[str]], eos: str) -> Optional[hax.NamedArray]:
         """
         Process and tokenize stop sequences for generation.
 
@@ -752,7 +749,7 @@ class LevanterHarnessLM(TemplateLM):
 
         # Convert to named array with proper dimensions
         stop_tokens_array = jnp.asarray(padded_tokens, dtype=jnp.int32)
-        return haliax.named(stop_tokens_array, ("stop_seq", "position"))
+        return hax.named(stop_tokens_array, ("stop_seq", "position"))
 
     def loglikelihood_rolling(self, requests) -> List[Tuple[float]]:
         raise NotImplementedError()
