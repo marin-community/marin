@@ -31,7 +31,6 @@ from typing import (
 import equinox as eqx
 import haliax as hax
 from iris.marin_fs import open_url
-import haliax.tree_util
 import jax
 import jax.numpy as jnp
 import jmp
@@ -1109,8 +1108,8 @@ def _resolve_axis_in_tree(tree, axis):
     """
     Resolves an axis in a tree of NamedArrays. This is useful for finding the batch axis in a batch of data.
     """
-    for leaf in haliax.tree_util.tree_leaves(tree):
-        if isinstance(leaf, haliax.NamedArray):
+    for leaf in jax.tree_util.tree_leaves(tree, is_leaf=lambda x: isinstance(x, hax.NamedArray)):
+        if isinstance(leaf, hax.NamedArray):
             try:
                 return leaf.resolve_axis(axis)
             except ValueError:
