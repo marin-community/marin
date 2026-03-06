@@ -344,12 +344,20 @@ class Worker:
             stop_event.wait(1.0)
 
     def _reset_worker_state(self) -> None:
-        """Reset worker state: wipe all containers and clear tracking."""
+        """Reset worker state: stop task threads, wipe containers, clear tracking."""
         logger.info("Resetting worker state")
+
+        # Stop all running task threads so they exit cleanly before we
+        # kill containers.  Without this, orphaned threads discover their
+        # containers are gone and log confusing "Container not found" errors.
+        self._task_threads.stop()
 
         # Clear task tracking
         with self._lock:
             self._tasks.clear()
+
+        # Replace the task thread container so new tasks get a fresh group.
+        self._task_threads = self._threads.create_child("tasks")
 
         # Wipe ALL iris containers (simple, no tracking needed)
         self._cleanup_all_iris_containers()
