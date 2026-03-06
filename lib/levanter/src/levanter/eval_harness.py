@@ -1249,10 +1249,11 @@ def run_lm_eval_harness(
     config: LmEvalHarnessConfig,
     model: ArrayLmHarnessModel,
     tokenizer,
-    EvalBatch: haliax.Axis | int,
+    eval_batch_size: int,
     compute_axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
     batch_axis_resource=None,
+    batch_axis_name: str = "batch",
     profiler_config: ProfilerConfig | None = None,
 ) -> dict | None:
     """
@@ -1262,10 +1263,11 @@ def run_lm_eval_harness(
         config: Configuration for the evaluation harness
         model: The Levanter model to evaluate
         tokenizer: Tokenizer for the model
-        EvalBatch: Batch axis for evaluation, or an integer batch size.
+        eval_batch_size: Per-step eval batch size.
         compute_axis_resources: Resource mapping for distributed computation
         mp: Mixed precision policy
         batch_axis_resource: Explicit resource to use for the eval batch axis.
+        batch_axis_name: Logical batch axis name used for sharding/resource lookup.
         profiler_config: Optional ProfilerConfig for profiling during evaluation
 
     Returns:
@@ -1274,7 +1276,6 @@ def run_lm_eval_harness(
         Otherwise, returns None.
     """
     if batch_axis_resource is None:
-        batch_axis_name = EvalBatch.name if isinstance(EvalBatch, hax.Axis) else "batch"
         batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_resources)
 
     # Build the tasks dictionary
@@ -1285,7 +1286,8 @@ def run_lm_eval_harness(
         model,
         tasks_to_run,
         tokenizer,
-        EvalBatch,
+        eval_batch_size,
+        batch_axis_name,
         compute_axis_resources,
         mp,
         batch_axis_resource=batch_axis_resource,
@@ -1300,7 +1302,8 @@ def _actually_run_eval_harness(
     model: ArrayLmHarnessModel,
     tasks_to_run: dict,
     tokenizer: HfTokenizer,
-    EvalBatch: haliax.Axis | int,
+    eval_batch_size: int,
+    batch_axis_name: str,
     compute_axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
     batch_axis_resource=None,
@@ -1315,8 +1318,7 @@ def _actually_run_eval_harness(
         - "averages": A dictionary with macro and micro averages for all metrics.
 
     """
-    if isinstance(EvalBatch, int):
-        EvalBatch = batch_axis("batch", EvalBatch)
+    EvalBatch = batch_axis(batch_axis_name, eval_batch_size)
 
     max_examples = config.max_examples
     max_length = config.max_length
@@ -1525,10 +1527,11 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             config.eval_harness,
             model,
             tokenizer,
-            config.EvalBatch,
+            config.EvalBatch.size,
             compute_axis_resources=compute_axis_mapping,
             mp=config.trainer.mp,
             batch_axis_resource=config.trainer.batch_axis_resource,
+            batch_axis_name=config.EvalBatch.name,
             profiler_config=profiler_config,
         )
 
@@ -1591,10 +1594,11 @@ def log_report_to_tracker(prefix: str, report: dict, tracker: Optional[levanter.
 def lm_eval_harness(
     config: LmEvalHarnessConfig,
     tokenizer,
-    EvalBatch: haliax.Axis | int,
+    eval_batch_size: int,
     compute_axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
     batch_axis_resource=None,
+    batch_axis_name: str = "batch",
 ):
     """
     Create a callback function for running the LM Eval Harness during training.
@@ -1602,17 +1606,17 @@ def lm_eval_harness(
     Args:
         config: Configuration for the evaluation harness
         tokenizer: Tokenizer for the model
-        EvalBatch: Batch axis for evaluation, or an integer batch size.
+        eval_batch_size: Per-step eval batch size.
         compute_axis_resources: Resource mapping for distributed computation
         mp: Mixed precision policy
         batch_axis_resource: Explicit resource to use for the eval batch axis.
+        batch_axis_name: Logical batch axis name used for sharding/resource lookup.
 
     Returns:
         Callback function that can be used with the trainer
     """
     tasks_to_run = config.to_task_dict()
     if batch_axis_resource is None:
-        batch_axis_name = EvalBatch.name if isinstance(EvalBatch, hax.Axis) else "batch"
         batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_resources)
 
     def lm_eval_harness(step: StepInfo, force=False):
@@ -1628,7 +1632,8 @@ def lm_eval_harness(
             model,
             tasks_to_run,
             tokenizer,
-            EvalBatch,
+            eval_batch_size,
+            batch_axis_name,
             compute_axis_resources,
             mp,
             batch_axis_resource=batch_axis_resource,

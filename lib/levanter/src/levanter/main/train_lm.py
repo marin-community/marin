@@ -289,6 +289,7 @@ def main(config: TrainLmConfig):
                     compute_axis_resources=compute_axis_mapping,
                     mp=trainer.mp,
                     batch_axis_resource=batch_axis_resource,
+                    batch_axis_name=config.trainer.batch_axis_name,
                 ),
                 every=config.eval_harness_steps,
             )
