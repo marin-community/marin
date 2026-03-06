@@ -1163,6 +1163,7 @@ class CoreweavePlatform:
         deadline = Deadline.from_seconds(_DEPLOYMENT_READY_TIMEOUT)
         last_status_log = 0.0
         status_log_interval = 30.0  # log progress every 30s
+        prev_pod_state: tuple[str, str] | None = None  # (phase, node)
 
         while not self._shutdown_event.is_set():
             if deadline.expired():
@@ -1187,7 +1188,18 @@ class CoreweavePlatform:
                     )
 
                 # Check Pods owned by this Deployment for fatal errors
-                self._check_controller_pods_health()
+                pods = self._check_controller_pods_health()
+
+                # Log pod phase/node on transitions only — distinguishes
+                # node-provisioning vs image-pull vs readiness-probe time.
+                if pods:
+                    pod = pods[0]
+                    phase = pod.get("status", {}).get("phase", "Unknown")
+                    node = pod.get("spec", {}).get("nodeName") or "<none>"
+                    pod_state = (phase, node)
+                    if pod_state != prev_pod_state:
+                        logger.info("Controller pod: phase=%s node=%s", phase, node)
+                        prev_pod_state = pod_state
 
             self._shutdown_event.wait(self._poll_interval)
         raise PlatformError("Platform shutting down while waiting for controller Deployment")
@@ -1232,7 +1244,7 @@ class CoreweavePlatform:
             if prev_logs:
                 logger.warning("Post-mortem %s previous logs:\n%s", name, prev_logs)
 
-    def _check_controller_pods_health(self) -> None:
+    def _check_controller_pods_health(self) -> list[dict]:
         """Check controller Pods for fatal conditions and fail fast.
 
         Detects three categories of unrecoverable failure:
@@ -1276,6 +1288,7 @@ class CoreweavePlatform:
                         logger.info("Controller Pod %s not ready: %s: %s", pod_name, cond_reason, cond_message)
 
         self._check_controller_pod_events()
+        return pods
 
     # Known-fatal event reasons that will never self-resolve
     _FATAL_EVENT_REASONS = frozenset(
@@ -1481,6 +1494,15 @@ def _coreweave_tunnel(
         if proc is not None:
             proc.terminate()
             proc.wait()
+        # Capture konnectivity-agent state — it lives in kube-system and is
+        # invisible to normal pod-scoped queries. Without this, diagnosing
+        # the tunnel race requires manual kubectl before events TTL (~1h).
+        try:
+            result = kubectl.run(["get", "pods", "-n", "kube-system", "-o", "wide"], timeout=10)
+            if result.returncode == 0:
+                logger.warning("kube-system pods at tunnel failure:\n%s", result.stdout.strip())
+        except subprocess.TimeoutExpired:
+            pass
         raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
     try:
