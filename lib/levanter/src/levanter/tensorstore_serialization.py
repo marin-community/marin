@@ -12,7 +12,6 @@ from functools import partial
 from typing import Any, Callable, Optional
 
 import equinox
-import haliax as hax
 import jax
 import jax.experimental.array_serialization.serialization as array_ser
 import jax.numpy as jnp
@@ -390,12 +389,6 @@ def tree_deserialize_leaves_tensorstore(
     # deser_arrays only has arrays for the deserialized arrays, but we need named arrays for at least some.
     # The original pytree has the structure we want, so we'll use that to rebuild the named arrays
     def _rebuild_named_array(like, array):
-        if is_named_array(array):
-            return array
-
-        if is_named_array(like):
-            return hax.NamedArray(array, like.axes)
-        else:
-            return array
+        return jax_utils.as_named_array_like(array, like)
 
     return jtu.tree_map(_rebuild_named_array, pytree, deser_arrays, is_leaf=_is_named_or_none)

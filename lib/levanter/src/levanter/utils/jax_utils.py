@@ -97,6 +97,15 @@ def ensure_scalar(x: Any, *, name: str = "value") -> Any:
     return x
 
 
+def as_named_array_like(array: Any, like: Any) -> Any:
+    """Wrap ``array`` in NamedArray form when ``like`` carries named axes."""
+    if is_named_array(array):
+        return array
+    if is_named_array(like):
+        return hax.NamedArray(array, like.axes)
+    return array
+
+
 def shape_dtype_struct_tree(tree: T) -> T:
     """Convert array-like leaves in a pytree to ShapeDtypeStruct leaves."""
 
