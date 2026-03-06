@@ -35,7 +35,7 @@ from levanter.utils.mesh import MeshConfig
 from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import (
     IsoFlopAnalysisConfig,
-    SCALING_SUITES,
+    MARIN_SCALING_SUITES,
     nemotron_mix,
     run_isoflop_analysis_step,
 )
@@ -51,7 +51,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Get training steps from the isoflop sweep
-adamh_training, _ = SCALING_SUITES["nemotron-completed-adamh"]
+adamh_training, _ = MARIN_SCALING_SUITES["nemotron-completed-adamh"]
 
 # --- Configuration ---
 TARGET_BUDGETS: dict[float, tuple[str, int]] = {

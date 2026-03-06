@@ -202,7 +202,7 @@ dolma3_mix = lm_mixture_data_config(
 )
 
 # --- Original C-AdamC sweeps (from main) ---
-SCALING_SUITES = {
+MARIN_SCALING_SUITES = {
     "nemotron": c_adamc_heuristic.create_isoflop_sweep_steps(
         tokenized=nemotron_mix,
         experiment_name="nemo-wider-depth-adapt",
@@ -232,5 +232,5 @@ SCALING_SUITES = {
 }
 
 if __name__ == "__main__":
-    steps, _ = SCALING_SUITES["nemotron-completed-adamh"]
+    steps, _ = MARIN_SCALING_SUITES["nemotron-completed-adamh"]
     executor_main(steps=steps)
