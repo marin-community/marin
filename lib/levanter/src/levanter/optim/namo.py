@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # Portions of this file are adapted from:
@@ -51,8 +51,6 @@ import optax
 from optax import tree_utils as otu
 from jaxtyping import Array, Float
 
-import haliax
-
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.util import (
     CoefficientType,
@@ -97,7 +95,7 @@ def _create_namo_mask(params: PyTree) -> PyTree:
             return label_linear_like_module(param, weight_label="namo", bias_label="adamw")
         return "adamw"
 
-    return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
+    return jax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
 
 
 def _adamw_transform(
