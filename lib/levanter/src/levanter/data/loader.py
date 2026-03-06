@@ -33,7 +33,7 @@ from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import is_named_array, local_cpu_mesh
-from levanter.utils.mesh import activate_mesh, get_active_mesh
+from levanter.utils.mesh import activate_mesh
 from levanter.utils.partitioning import (
     batch_axis,
     current_thread_local_mapping,
@@ -82,7 +82,7 @@ class DataLoader(Iterable[Ex]):
         *,
         batch_axis_name: str | None = None,
         max_buffered_batches: int | None = 64,
-        mesh: Mesh | None = None,
+        mesh: Mesh,
         axis_resources: ResourceMapping | None = None,
         prefetch_size: int = 32,
         pad_final_batch: bool = True,
@@ -113,15 +113,10 @@ class DataLoader(Iterable[Ex]):
         self.axis_resources = axis_resources
         self.data_store = data
 
-        if mesh is None:
-            mesh = get_active_mesh()
         self.mesh = mesh
 
         self.batch_axis_name = batch_axis_name or "batch"
         self.scheduler = BatchSchedule(batch_size)
-
-        if mesh is None:
-            raise ValueError("DataLoader requires an explicit mesh or an active mesh context.")
 
         self._batch_sharding = sharding_for_axis(self.batch_axis_name, axis_resources, mesh)
         with activate_mesh(mesh):
