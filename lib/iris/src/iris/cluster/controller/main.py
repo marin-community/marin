@@ -14,8 +14,7 @@ import click
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.snapshot import read_snapshot_from_path
 from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
-from iris.cluster.task_logging import ProcessLogSink
-from iris.logging import configure_logging, get_global_buffer
+from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import Duration
 
@@ -185,21 +184,10 @@ def serve(
 
     logger.info("Controller is ready to accept connections")
 
-    log_prefix = (cluster_config.storage.log_prefix if cluster_config else None) or marin_temp_bucket(
-        ttl_days=30, prefix="iris-logs"
-    )
-    process_log_sink = ProcessLogSink(
-        prefix=log_prefix,
-        process_name="controller",
-        log_buffer=get_global_buffer(),
-    )
-    logger.info("Controller process log sink enabled: %s", process_log_sink.log_path)
-
     stop_event = threading.Event()
 
     def handle_shutdown(_signum, _frame):
         logger.info("Shutdown signal received, stopping controller...")
-        process_log_sink.close()
         controller.stop()
         logger.info("Controller stopped")
         stop_event.set()

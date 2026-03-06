@@ -4,6 +4,7 @@
 """WorkerService RPC implementation using Connect RPC."""
 
 import logging
+import re
 import time
 from typing import Protocol
 
@@ -12,8 +13,8 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.chaos import chaos
+from iris.cluster.log_store import LogStore
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
 from iris.time_utils import Timer
@@ -38,9 +39,13 @@ class TaskProvider(Protocol):
 class WorkerServiceImpl:
     """Implementation of WorkerService RPC interface."""
 
-    def __init__(self, provider: TaskProvider, log_buffer: LogBuffer | None = None):
+    def __init__(
+        self,
+        provider: TaskProvider,
+        log_store: LogStore | None = None,
+    ):
         self._provider = provider
-        self._log_buffer = log_buffer
+        self._log_store = log_store
         self._timer = Timer()
 
     def get_task_status(
@@ -82,28 +87,33 @@ class WorkerServiceImpl:
         response.uptime.milliseconds = self._timer.elapsed_ms()
         return response
 
-    def get_process_logs(
+    def fetch_logs(
         self,
-        request: cluster_pb2.Worker.GetProcessLogsRequest,
+        request: cluster_pb2.FetchLogsRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.GetProcessLogsResponse:
-        """Get worker process logs from the in-memory ring buffer."""
-        if not self._log_buffer:
-            return cluster_pb2.Worker.GetProcessLogsResponse(records=[])
-        prefix = request.prefix or None
-        limit = request.limit if request.limit > 0 else 200
-        records = self._log_buffer.query(prefix=prefix, limit=limit)
-        return cluster_pb2.Worker.GetProcessLogsResponse(
-            records=[
-                cluster_pb2.ProcessLogRecord(
-                    timestamp=r.timestamp,
-                    level=r.level,
-                    logger_name=r.logger_name,
-                    message=r.message,
-                )
-                for r in records
-            ]
+    ) -> cluster_pb2.FetchLogsResponse:
+        """Fetch logs from the worker's LogStore by key with filtering."""
+        if not self._log_store:
+            return cluster_pb2.FetchLogsResponse(entries=[], lines_read=0)
+
+        compiled_regex = None
+        if request.regex:
+            try:
+                compiled_regex = re.compile(request.regex)
+            except re.error as e:
+                raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid regex: {e}") from e
+
+        max_lines = request.max_lines if request.max_lines > 0 else 1000
+        result = self._log_store.get_logs(
+            request.source,
+            since_ms=request.since_ms,
+            skip_lines=request.skip_lines,
+            regex_filter=compiled_regex,
+            max_lines=max_lines,
+            tail=request.tail,
+            min_level=request.min_level,
         )
+        return cluster_pb2.FetchLogsResponse(entries=result.entries, lines_read=result.lines_read)
 
     def heartbeat(
         self,

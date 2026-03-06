@@ -19,6 +19,7 @@ import uvicorn
 from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.log_store import LogStoreHandler, PROCESS_LOG_KEY
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
     JobRequirements,
@@ -61,7 +62,7 @@ from iris.cluster.controller.snapshot import (
     restore_tracked_workers,
     write_snapshot,
 )
-from iris.logging import get_global_buffer, slow_log
+from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, snapshot_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -577,13 +578,18 @@ class Controller:
             self._state,
             self,
             bundle_prefix=config.bundle_prefix,
-            log_buffer=get_global_buffer(),
         )
         self._dashboard = ControllerDashboard(
             self._service,
             host=config.host,
             port=config.port,
         )
+
+        # Ingest process logs into the LogStore so they are available via FetchLogs.
+        self._log_store_handler = LogStoreHandler(self._state.log_store, key=PROCESS_LOG_KEY)
+        self._log_store_handler.setLevel(logging.DEBUG)
+        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(self._log_store_handler)
 
         # Background loop state
         self._threads = threads if threads is not None else get_thread_container()

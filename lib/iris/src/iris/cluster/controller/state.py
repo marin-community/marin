@@ -25,7 +25,7 @@ from enum import Enum
 from threading import RLock
 from typing import NamedTuple
 
-from iris.cluster.controller.logs import ControllerLogStore
+from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.controller.events import (
     Event,
     JobCancelledEvent,
@@ -963,10 +963,10 @@ class ControllerState:
         self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
         self._pending_dispatch: dict[WorkerId, PendingDispatch] = {}  # Buffered heartbeat dispatches
-        self._log_store = ControllerLogStore(log_dir=log_dir)
+        self._log_store = LogStore(log_dir=log_dir)
 
     @property
-    def log_store(self) -> ControllerLogStore:
+    def log_store(self) -> LogStore:
         return self._log_store
 
     # =========================================================================
@@ -1987,7 +1987,7 @@ class ControllerState:
                 # Always ingest logs, even for finished tasks, because the final
                 # heartbeat carries the terminal state and the last log delta together.
                 if entry.log_entries and self._log_store is not None:
-                    self._log_store.append(task_id, entry.attempt_id, entry.log_entries)
+                    self._log_store.append(task_log_key(task_id, entry.attempt_id), entry.log_entries)
 
                 if task.is_finished():
                     continue
