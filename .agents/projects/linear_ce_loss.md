@@ -1456,3 +1456,70 @@ Notes:
   - attempted a broad live v4 Ray coverage sweep, but shared-cluster head-node
     memory pressure and intermittent submission tunnel resets prevented collecting
     a complete on-cluster matrix in this session.
+
+### 2026-03-06: head-to-head vs XLA on currently tuned infer path (cross-platform)
+- Goal:
+  - run `pallas_tpu` vs `xla` head-to-head on the currently tuned infer path across platforms and record the results in one place.
+
+- Runner:
+  - `python scripts/ray/ce_h2h_platform_local.py`
+  - fixed settings:
+    - `H2H_STEPS=3`
+    - `H2H_WARMUP=1`
+    - script-level `LIBTPU_INIT_ARGS+=--xla_tpu_scoped_vmem_limit_kib=50000`
+  - each case invokes:
+    - `uv run --package levanter --extra tpu python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py ... --block-sizes infer --implementation <pallas_tpu|xla>`
+
+- Submitted jobs and status:
+  - `v4` (`infra/marin-us-central2.yaml`):
+    - job: `raysubmit_x6rNA8RpxZgCgjvL`
+    - status: `SUCCEEDED` (`2026-03-06 12:02:35 PST` -> `12:07:58 PST`)
+  - `v5p` (`infra/marin-us-central1.yaml`):
+    - job: `raysubmit_QFvDsEk4pUwbpr5B`
+    - status: `SUCCEEDED` (`2026-03-06 12:02:54 PST` -> `12:13:43 PST`)
+  - `v5e` (`infra/marin-eu-west4.yaml`):
+    - job: `raysubmit_y6mD81ysjCJ4gh8V`
+    - status: `SUCCEEDED` (`2026-03-06 11:48:14 PST` -> `12:13:36 PST`)
+  - `v6e`:
+    - east1 status API remained unavailable (`infra/marin-us-east1.yaml` list-jobs returns dashboard `Connection refused` as of `2026-03-06 12:42 PST`).
+    - fallback attempt on existing east5 cluster:
+      - job: `raysubmit_v6e_h2h_20260306_122610` (`infra/marin-us-east5.yaml`)
+      - status at capture time: `PENDING` (waiting for resources/runtime env), started `2026-03-06 12:26:43 PST`.
+      - stop attempts:
+        - `cluster.py stop-job` timed out in this session.
+        - direct `ray job stop --no-wait` was accepted, but job still reported `PENDING` as of `2026-03-06 12:45 PST`.
+
+- Aggregated h2h results (successful platforms):
+  - `v4`:
+    - `ok_pairs=2/6`, `failed_pairs=4`
+    - `avg_xla_over_pallas_combined=0.7412` (pallas `~+34.9%` combined on successful pairs)
+    - `avg_xla_over_pallas_bwd=0.8475` (pallas `~+18.0%` bwd on successful pairs)
+  - `v5p`:
+    - `ok_pairs=6/6`, `failed_pairs=0`
+    - `avg_xla_over_pallas_combined=0.7772` (pallas `~+28.7%` combined)
+    - `avg_xla_over_pallas_bwd=0.8135` (pallas `~+22.9%` bwd)
+  - `v5e`:
+    - `ok_pairs=6/6`, `failed_pairs=0`
+    - `avg_xla_over_pallas_combined=0.7666` (pallas `~+30.4%` combined)
+    - `avg_xla_over_pallas_bwd=0.7731` (pallas `~+29.4%` bwd)
+
+- Per-bucket highlights:
+  - `v4`:
+    - successful buckets:
+      - `mid_h_large_vocab`: xla/pallas combined `0.5405` (pallas substantially ahead)
+      - `huge_batch_small_h`: xla/pallas combined `0.9419` (pallas slight combined lead), but xla bwd higher on this bucket (`1.1315` ratio).
+    - pallas failures in this run on:
+      - `small_vocab`
+      - `large_batch_small_h`
+      - `llama3_ish` (forward compile VMEM OOM in log)
+      - `medium_batch_mid_h`
+  - `v5p`:
+    - pallas leads combined in 5/6 buckets; near parity on `llama3_ish` (`xla/pallas combined=0.9920`).
+  - `v5e`:
+    - pallas leads combined in 5/6 buckets; `xla` leads `llama3_ish` (`xla/pallas combined=1.0729`).
+
+- Instrumentation caveat (important):
+  - these h2h summary blobs report top-level `backend="cpu"` / `device_kind="cpu"`.
+  - logs also contain JAX warnings about falling back to CPU in the wrapper process.
+  - the per-case benchmark subprocesses still run via the TPU-enabled bench invocation (`--extra tpu`) and produce TPU-scale throughput numbers; so throughput comparisons above are still useful, but the wrapper-level backend metadata is misleading.
+  - follow-up hygiene item: plumb backend/device-kind from the subprocess `result_json` into the h2h summary to remove this ambiguity.
