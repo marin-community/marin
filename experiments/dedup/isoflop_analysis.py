@@ -19,7 +19,7 @@ from experiments.isoflop_sweep import (
     IsoFlopAnalysisConfig,
     run_isoflop_analysis_step,
 )
-from experiments.scaling_law_sweeps.c_adamc import c_adamc_heuristic, create_isoflop_sweep_steps
+from experiments.scaling_law_sweeps.c_adamc import create_isoflop_sweep_steps
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 logger = logging.getLogger(__name__)
