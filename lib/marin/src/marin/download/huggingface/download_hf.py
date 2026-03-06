@@ -131,7 +131,7 @@ def stream_file_to_fsspec(
                         while True:
                             try:
                                 chunk = src_file.read(chunk_size)
-                            except (TimeoutError, socket.timeout) as timeout_error:
+                            except TimeoutError as timeout_error:
                                 raise TimeoutError(
                                     f"Timed out reading from {file_path} after "
                                     f"{read_timeout_seconds:.1f}s with {bytes_written} bytes written"
