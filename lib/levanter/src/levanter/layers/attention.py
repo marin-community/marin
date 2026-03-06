@@ -29,7 +29,6 @@ import haliax
 import haliax as hax
 import haliax.haxtyping as ht
 import haliax.nn as hnn
-from haliax import Axis, AxisSelection, AxisSelector, NamedArray, axis_name
 from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
@@ -84,14 +83,14 @@ def default_attention_type() -> AttentionBackend:
 
 @named_call
 def dot_product_attention(
-    QPos: AxisSelector,
-    KPos: AxisSelection,
-    Key: AxisSelector,
-    query: NamedArray,
-    key: NamedArray,
-    value: NamedArray,
-    mask: Optional[Union["AttentionMask", NamedArray]] = None,
-    bias: Optional[NamedArray] = None,
+    QPos: hax.AxisSelector,
+    KPos: hax.AxisSelection,
+    Key: hax.AxisSelector,
+    query: hax.NamedArray,
+    key: hax.NamedArray,
+    value: hax.NamedArray,
+    mask: Optional[Union["AttentionMask", hax.NamedArray]] = None,
+    bias: Optional[hax.NamedArray] = None,
     attention_dtype: Optional[jnp.dtype] = None,
     precision: PrecisionLike = None,
     use_flash: Optional[bool] = None,
@@ -103,7 +102,7 @@ def dot_product_attention(
     scaling_factor: float | None = None,
     inference: bool = True,
     prng: PRNGKeyArray | None = None,
-    attn_sink: Optional[NamedArray] = None,
+    attn_sink: Optional[hax.NamedArray] = None,
 ):
     """
     This method is similar to [haliax.nn.attention.dot_product_attention][] but it can use different backends for
@@ -116,13 +115,13 @@ def dot_product_attention(
 
     Args:
         Key: Size of key dimension
-        QPos: Axis of query sequence length. Can be an AxisSpec to attend along more than one axis.
-        KPos: Axis of key sequence length. Can be an AxisSpec to attend along more than one axis.
+        QPos: hax.Axis of query sequence length. Can be an AxisSpec to attend along more than one axis.
+        KPos: hax.Axis of key sequence length. Can be an AxisSpec to attend along more than one axis.
         query: shape at least {QPos, KeySize}
         key: shape at least {KPos, KeySize}
         value: shape at least {KPos, ValueSize}
         mask: attention mask
-        bias: Optional[NamedArray] broadcast compatible with (KeySize, QPos, KPos). Should be float
+        bias: Optional[hax.NamedArray] broadcast compatible with (KeySize, QPos, KPos). Should be float
         attention_dtype: Optional dtype to use for attention
         precision: PrecisionLike for dot product. See precision argument to jax.lax.dot_general
         use_flash: whether to use flash attention
@@ -135,9 +134,9 @@ def dot_product_attention(
              default is 1/sqrt(HeadSize.size)
         logits_soft_cap: If not None, the attention logits will be soft_capped with tanh(logits / logits_soft_cap) * logits_soft_cap.
     Returns:
-        NamedArray of shape (value.axes - KPos + QPos)
+        hax.NamedArray of shape (value.axes - KPos + QPos)
     """
-    if axis_name(QPos) == axis_name(KPos):
+    if hax.axis_name(QPos) == hax.axis_name(KPos):
         raise ValueError("QPos and KPos must have different names")
 
     if use_flash is not None:
@@ -297,15 +296,15 @@ def dot_product_attention(
 
 def _materialize_sink_as_dummy_kv(
     *,
-    QPos: AxisSelector,
-    KPos: AxisSelection,
-    Key: AxisSelector,
-    query: NamedArray,
-    key: NamedArray,
-    value: NamedArray,
-    attn_sink: NamedArray,
-    mask: Optional[Union["AttentionMask", NamedArray]],
-    bias: Optional[NamedArray],
+    QPos: hax.AxisSelector,
+    KPos: hax.AxisSelection,
+    Key: hax.AxisSelector,
+    query: hax.NamedArray,
+    key: hax.NamedArray,
+    value: hax.NamedArray,
+    attn_sink: hax.NamedArray,
+    mask: Optional[Union["AttentionMask", hax.NamedArray]],
+    bias: Optional[hax.NamedArray],
 ):
     """
     Preprocess for dot-product attention variant with a learned sink term per head.
@@ -353,14 +352,14 @@ def _materialize_sink_as_dummy_kv(
 
 
 def simple_attention_with_dropout(
-    QPos: AxisSelector,
-    KPos: AxisSelector,
-    Key: Axis,
-    query: NamedArray,
-    key: NamedArray,
-    value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    QPos: hax.AxisSelector,
+    KPos: hax.AxisSelector,
+    Key: hax.Axis,
+    query: hax.NamedArray,
+    key: hax.NamedArray,
+    value: hax.NamedArray,
+    mask: Optional[Union[hax.NamedArray, "AttentionMask"]] = None,
+    bias: Optional[hax.NamedArray] = None,
     inference: bool = False,
     dropout: float = 0.0,
     attention_dtype: Optional[jnp.dtype] = None,
@@ -405,14 +404,14 @@ def simple_attention_with_dropout(
 
 
 def _try_te_attention(
-    QPos: AxisSelector,
-    KPos: AxisSelection,
-    Key: AxisSelector,
-    query: NamedArray,
-    key: NamedArray,
-    value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    QPos: hax.AxisSelector,
+    KPos: hax.AxisSelection,
+    Key: hax.AxisSelector,
+    query: hax.NamedArray,
+    key: hax.NamedArray,
+    value: hax.NamedArray,
+    mask: Optional[Union[hax.NamedArray, "AttentionMask"]] = None,
+    bias: Optional[hax.NamedArray] = None,
     dropout: float = 0.0,
     inference: bool = False,
     *,
@@ -423,7 +422,7 @@ def _try_te_attention(
     force_te: bool,
     scaling_factor: float,
     logits_soft_cap: Optional[float] = None,
-    attn_sink: Optional[NamedArray] = None,  # NEW
+    attn_sink: Optional[hax.NamedArray] = None,  # NEW
 ):
     """
     Try NVTE fused attention. If unsupported, either raise (when forced) or warn and return None.
@@ -499,14 +498,14 @@ def _try_te_attention(
 
 
 def _te_flash_attention(
-    QPos: AxisSelector,
-    KPos: AxisSelection,
-    Key: AxisSelector,
-    query: NamedArray,
-    key: NamedArray,
-    value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    QPos: hax.AxisSelector,
+    KPos: hax.AxisSelection,
+    Key: hax.AxisSelector,
+    query: hax.NamedArray,
+    key: hax.NamedArray,
+    value: hax.NamedArray,
+    mask: Optional[Union[hax.NamedArray, "AttentionMask"]] = None,
+    bias: Optional[hax.NamedArray] = None,
     dropout: float = 0.0,
     inference: bool = False,
     *,
@@ -645,9 +644,9 @@ def _te_get_mask_type(mask):
     """Get the TE AttnMaskType from a mask object without materializing it."""
     from transformer_engine.jax.attention import AttnMaskType  # type: ignore[import]
 
-    if isinstance(mask, NamedArray):
+    if isinstance(mask, hax.NamedArray):
         raise NotImplementedError(
-            "Custom NamedArray masks are not implemented for flash attention. Please pass an AttentionMask object"
+            "Custom hax.NamedArray masks are not implemented for flash attention. Please pass an AttentionMask object"
         )
     elif isinstance(mask, AttentionMask):
         if mask.is_causal:
@@ -710,7 +709,7 @@ def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
     # - not spoken for already
     # - come after QPos in Q (if there's already a primary H)
     # - not the 0th axis in Q (even if there's no primary H)
-    primary_H: list[Axis] = []
+    primary_H: list[hax.Axis] = []
     for a in reversed(q.axes[1:]):
         if a.name in present_in_all and a.name not in spoken_for:
             primary_H.append(a)
@@ -743,11 +742,11 @@ def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
     # eventually we can vmapp over these, but for now we'll just raise an error
     for a in k.axes:
         if a.name not in spoken_for:
-            raise ValueError(f"Axis {a.name} is present in k but not in q and/or v")
+            raise ValueError(f"hax.Axis {a.name} is present in k but not in q and/or v")
 
     for a in v.axes:
         if a.name not in spoken_for:
-            raise ValueError(f"Axis {a.name} is present in v but not in q and/or k")
+            raise ValueError(f"hax.Axis {a.name} is present in v but not in q and/or k")
 
     return q_class, k_class, v_class
 
@@ -756,7 +755,7 @@ def _maybe_flatten(q, axes, name):
     if axes:
         q = q.flatten_axes(axes, name)
     else:
-        q = q.broadcast_axis(Axis(name, 1))
+        q = q.broadcast_axis(hax.Axis(name, 1))
     return q
 
 
@@ -773,7 +772,7 @@ def _reshape_axes_for_bshd_bins(q, q_class, output_order=("B", "S", "H", "D")):
     return q
 
 
-def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: PartitionSpec):
+def _prepare_sinks_for_splash(attn_sink: hax.NamedArray, q_class, physical_axes_q: PartitionSpec):
     """Reshape and broadcast attention sinks to (B, H) for the splash kernel."""
 
     batch_axes = tuple(q_class["B"])
@@ -823,12 +822,12 @@ def _unflatten_bshd(attn_output, q_class, v_class):
 
 
 def _materialize_segment_mask(
-    segment_ids: NamedArray | tuple[NamedArray, NamedArray],
+    segment_ids: hax.NamedArray | tuple[hax.NamedArray, hax.NamedArray],
     QPos,
     KPos,
     q_slice,
     k_slice,
-) -> NamedArray:
+) -> hax.NamedArray:
     """
     Make a segment mask for attention. This is a mask that prevents attention between different segments.
     """
@@ -842,12 +841,12 @@ def _materialize_segment_mask(
         kv_segment_ids = segment_ids.rename({QPos.name: KPos.name})[KPos.name, k_slice]
         q_segment_ids = segment_ids[QPos.name, q_slice]
 
-    return cast(NamedArray, q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids)
+    return cast(hax.NamedArray, q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids)
 
 
 def _materialize_sliding_window_mask(
-    window: int, QPos: Axis, KPos: Axis, q_slice: haliax.dslice, k_slice: haliax.dslice
-) -> NamedArray:
+    window: int, QPos: hax.Axis, KPos: hax.Axis, q_slice: haliax.dslice, k_slice: haliax.dslice
+) -> hax.NamedArray:
     """Materialize a causal sliding window mask."""
     sub_q = QPos.resize(q_slice.size)
     sub_k = KPos.resize(k_slice.size)
@@ -869,7 +868,7 @@ class AttentionMask(eqx.Module):
     The abstraction is based on two concepts:
 
     1) Materialization: An AttentionMask can be materialized for a particular slice of the query and key position axes.
-       Most naively, you can just get the whole mask as a NamedArray. However, in some cases, you might want to
+       Most naively, you can just get the whole mask as a hax.NamedArray. However, in some cases, you might want to
        only get a particular chunk (e.g. for flash attention).
     2) Combination: AttentionMasks are represented as an implicit conjunction of multiple masks, each with different
         kinds of structure. You can combine masks with `&` and `|`. Due to the way jit works, we don't use inheritance
@@ -887,9 +886,9 @@ class AttentionMask(eqx.Module):
     # we apply a shifted causal mask such that a query at position *i* can attend to key *j* whenever
     # ``j <= i + causal_offset``. A ``None`` offset means a static offset of 0 (i.e., standard causal masking).
     is_causal: bool = eqx.field(default=False, static=True)
-    causal_offset: None | NamedArray = None
-    explicit_mask: Optional[NamedArray] = None
-    segment_ids: tuple[NamedArray, NamedArray] | None = None
+    causal_offset: None | hax.NamedArray = None
+    explicit_mask: Optional[hax.NamedArray] = None
+    segment_ids: tuple[hax.NamedArray, hax.NamedArray] | None = None
     sliding_window: Optional[int] = eqx.field(default=None, static=True)
     # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
     # TODO: add prefixlm
@@ -897,13 +896,13 @@ class AttentionMask(eqx.Module):
 
     def materialize(
         self,
-        QPos: Axis,
-        KPos: Axis,
+        QPos: hax.Axis,
+        KPos: hax.Axis,
         q_slice: Optional[haliax.dslice] = None,
         k_slice: Optional[haliax.dslice] = None,
-    ) -> Optional[NamedArray]:
+    ) -> Optional[hax.NamedArray]:
         """
-        Materialize the mask as a NamedArray. This is useful for attention functions that don't support masks,
+        Materialize the mask as a hax.NamedArray. This is useful for attention functions that don't support masks,
         or for the inner loop
         """
         if q_slice is None:
@@ -915,7 +914,7 @@ class AttentionMask(eqx.Module):
             # None means static 0 offset
             offset = 0 if self.causal_offset is None else self.causal_offset
             shifted_k_start = k_slice.start - offset
-            if isinstance(shifted_k_start, NamedArray):
+            if isinstance(shifted_k_start, hax.NamedArray):
                 # need to vmap
                 causal = hax.vmap(causal_mask, shifted_k_start.axes)(
                     QPos.resize(q_slice.size),
@@ -958,8 +957,8 @@ class AttentionMask(eqx.Module):
     def causal(
         *,
         sliding_window: Optional[int] = None,
-        offset: int | NamedArray | None = None,
-        segment_ids: tuple[NamedArray, NamedArray] | None = None,
+        offset: int | hax.NamedArray | None = None,
+        segment_ids: tuple[hax.NamedArray, hax.NamedArray] | None = None,
     ) -> "AttentionMask":
         """Create a causal AttentionMask.
 
@@ -981,23 +980,25 @@ class AttentionMask(eqx.Module):
         )
 
     @staticmethod
-    def explicit(mask: NamedArray) -> "AttentionMask":
+    def explicit(mask: hax.NamedArray) -> "AttentionMask":
         return AttentionMask(is_causal=False, causal_offset=None, explicit_mask=mask)
 
     def __post_init__(self):
         # Normalize legacy single-array segment_ids to a tuple for consistency
         if self.segment_ids is not None and not isinstance(self.segment_ids, tuple):
-            warnings.warn("Storing segment_ids as a single NamedArray is deprecated. Use a tuple instead.")
+            warnings.warn("Storing segment_ids as a single hax.NamedArray is deprecated. Use a tuple instead.")
             object.__setattr__(self, "segment_ids", (self.segment_ids, self.segment_ids))
 
-    def with_segment_ids(self, segment_ids: NamedArray, kv_segment_ids: NamedArray | None = None) -> "AttentionMask":
+    def with_segment_ids(
+        self, segment_ids: hax.NamedArray, kv_segment_ids: hax.NamedArray | None = None
+    ) -> "AttentionMask":
         """Attach segment ids to the mask.
 
         Always stores segment ids internally as a tuple ``(q_segment_ids, kv_segment_ids)``.
         If only a single array is provided, it is used for both queries and keys/values.
         """
         # Always store as a tuple; duplicate if only one provided.
-        seg_field: tuple[NamedArray, NamedArray]
+        seg_field: tuple[hax.NamedArray, hax.NamedArray]
         if kv_segment_ids is None:
             seg_field = (segment_ids, segment_ids)
         else:
@@ -1120,38 +1121,38 @@ class AttentionMask(eqx.Module):
 
 @overload
 def materialize_mask(
-    mask: NamedArray | AttentionMask,
-    QPos: Axis,
-    KPos: Axis,
+    mask: hax.NamedArray | AttentionMask,
+    QPos: hax.Axis,
+    KPos: hax.Axis,
     q_slice: Optional[haliax.dslice] = None,
     k_slice: Optional[haliax.dslice] = None,
-) -> NamedArray: ...
+) -> hax.NamedArray: ...
 
 
 @overload
 def materialize_mask(
-    mask: Optional[NamedArray | AttentionMask],
-    QPos: Axis,
-    KPos: Axis,
+    mask: Optional[hax.NamedArray | AttentionMask],
+    QPos: hax.Axis,
+    KPos: hax.Axis,
     q_slice: Optional[haliax.dslice] = None,
     k_slice: Optional[haliax.dslice] = None,
-) -> Optional[NamedArray]: ...
+) -> Optional[hax.NamedArray]: ...
 
 
 def materialize_mask(
-    mask: Optional[NamedArray | AttentionMask],
-    QPos: Axis,
-    KPos: Axis,
+    mask: Optional[hax.NamedArray | AttentionMask],
+    QPos: hax.Axis,
+    KPos: hax.Axis,
     q_slice: Optional[haliax.dslice] = None,
     k_slice: Optional[haliax.dslice] = None,
-) -> Optional[NamedArray]:
+) -> Optional[hax.NamedArray]:
     """
     Materialize an attention mask if it is an AttentionMask. Otherwise, just return it.
     """
     if isinstance(mask, AttentionMask):
         mask = mask.materialize(QPos, KPos, q_slice=q_slice, k_slice=k_slice)
         return mask
-    elif isinstance(mask, NamedArray):
+    elif isinstance(mask, hax.NamedArray):
         if q_slice is not None or k_slice is not None:
             if q_slice is None:
                 q_slice = haliax.dslice(0, QPos.size)
@@ -1170,14 +1171,14 @@ def materialize_mask(
 
 
 def _try_tpu_splash_attention(
-    QPos: AxisSelector,
-    KPos: AxisSelection,
-    Key: AxisSelector,
-    query: NamedArray,
-    key: NamedArray,
-    value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    QPos: hax.AxisSelector,
+    KPos: hax.AxisSelection,
+    Key: hax.AxisSelector,
+    query: hax.NamedArray,
+    key: hax.NamedArray,
+    value: hax.NamedArray,
+    mask: Optional[Union[hax.NamedArray, "AttentionMask"]] = None,
+    bias: Optional[hax.NamedArray] = None,
     dropout: float = 0.0,
     inference: bool = False,
     *,
@@ -1188,8 +1189,8 @@ def _try_tpu_splash_attention(
     block_size: Optional[int] = None,
     scaling_factor: float,
     logits_soft_cap: float | None,
-    attn_sink: Optional[NamedArray] = None,
-) -> Optional[NamedArray]:
+    attn_sink: Optional[hax.NamedArray] = None,
+) -> Optional[hax.NamedArray]:
     if dropout != 0.0:
         if force_flash:
             raise NotImplementedError("Splash attention does not support dropout.")
@@ -1243,14 +1244,14 @@ def _try_tpu_splash_attention(
 
 # CF https://github.com/google/maxtext/blob/db31dd4b0b686bca4cd7cf940917ec372faa183a/MaxText/layers/attentions.py#L179
 def _tpu_splash_attention(
-    QPos: AxisSelector,
-    KPos: AxisSelection,
-    Key: AxisSelector,
-    query: NamedArray,
-    key: NamedArray,
-    value: NamedArray,
-    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
-    bias: Optional[NamedArray] = None,
+    QPos: hax.AxisSelector,
+    KPos: hax.AxisSelection,
+    Key: hax.AxisSelector,
+    query: hax.NamedArray,
+    key: hax.NamedArray,
+    value: hax.NamedArray,
+    mask: Optional[Union[hax.NamedArray, "AttentionMask"]] = None,
+    bias: Optional[hax.NamedArray] = None,
     dropout: float = 0.0,
     inference: bool = False,
     *,
@@ -1260,8 +1261,8 @@ def _tpu_splash_attention(
     block_size: Optional[int] = None,
     scaling_factor: float,
     logits_soft_cap: float | None = None,
-    attn_sink: Optional[NamedArray] = None,
-) -> Optional[NamedArray]:
+    attn_sink: Optional[hax.NamedArray] = None,
+) -> Optional[hax.NamedArray]:
     from jax.experimental.pallas.ops.tpu.splash_attention import (
         SegmentIds as SplashSegmentIds,
         splash_attention_kernel,
@@ -1438,8 +1439,8 @@ def _tpu_splash_attention(
             base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
         if mask.explicit_mask is not None:
             raise NotImplementedError("Explicit masks are not yet supported for splash attention")
-    elif isinstance(mask, NamedArray):
-        raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
+    elif isinstance(mask, hax.NamedArray):
+        raise NotImplementedError("hax.NamedArray masks are not yet supported for splash attention")
     else:
         raise ValueError(f"Unknown mask type: {mask}")
 
@@ -1567,7 +1568,7 @@ class AttentionConfig:
         qk_norm: Optional configuration for QK normalization. If None, no normalization is applied.
     """
 
-    Embed: Axis
+    Embed: hax.Axis
 
     num_heads: int
     num_kv_heads: int
@@ -1600,21 +1601,21 @@ class AttentionConfig:
         return self.num_heads // self.num_kv_heads
 
     @property
-    def KVHeads(self) -> Axis:
-        return Axis("kv_head", self.num_kv_heads)
+    def KVHeads(self) -> hax.Axis:
+        return hax.Axis("kv_head", self.num_kv_heads)
 
     @property
-    def Heads(self) -> Axis:
-        return Axis("heads", self.num_heads)
+    def Heads(self) -> hax.Axis:
+        return hax.Axis("heads", self.num_heads)
 
     @property
-    def HeadSize(self) -> Axis:
-        return Axis("head_size", self.head_size)
+    def HeadSize(self) -> hax.Axis:
+        return hax.Axis("head_size", self.head_size)
 
     @property
-    def QHeadsPerGroup(self) -> Axis:
-        """Axis for query heads per group."""
-        return Axis("q_heads_per_group", self.q_heads_per_group)
+    def QHeadsPerGroup(self) -> hax.Axis:
+        """hax.Axis for query heads per group."""
+        return hax.Axis("q_heads_per_group", self.q_heads_per_group)
 
     @property
     def use_flash_attention(self) -> bool:
@@ -1624,8 +1625,8 @@ class AttentionConfig:
         return self.attn_backend != AttentionBackend.VANILLA
 
     @property
-    def GateSize(self) -> Axis:
-        """Axis for the gate output size based on gating mode.
+    def GateSize(self) -> hax.Axis:
+        """hax.Axis for the gate output size based on gating mode.
 
         For headwise gating, returns an axis of size 1 (one scalar per head).
         For elementwise gating, returns an axis of size head_size (one value per element).
@@ -1635,9 +1636,9 @@ class AttentionConfig:
         if self.gated == "none":
             raise ValueError("GateSize is only defined when gating is enabled")
         if self.gated == "headwise":
-            return Axis("gate_size", 1)
+            return hax.Axis("gate_size", 1)
         else:  # elementwise
-            return Axis("gate_size", self.head_size)
+            return hax.Axis("gate_size", self.head_size)
 
 
 class Attention(eqx.Module):
@@ -1713,12 +1714,12 @@ class Attention(eqx.Module):
     @named_call
     def __call__(
         self,
-        x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         key_proj, key_o = maybe_rng_split(key, 2)
 
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
@@ -1765,13 +1766,13 @@ class Attention(eqx.Module):
     @jax.profiler.annotate_function
     def paged_decode(
         self,
-        x: NamedArray,
+        x: hax.NamedArray,
         kv_cache: "KvPageCache",
         batch_info: PageBatchInfo,
         *,
-        pos_ids: NamedArray,
+        pos_ids: hax.NamedArray,
         key=None,
-    ) -> tuple[NamedArray, "KvPageCache"]:
+    ) -> tuple[hax.NamedArray, "KvPageCache"]:
         """Decode-time forward pass using a paged KV cache.
 
         This method is intended for autoregressive decoding and prefill.  ``batch_info``
@@ -1810,11 +1811,11 @@ class Attention(eqx.Module):
     @named_call
     def _compute_qkv(
         self,
-        x: NamedArray,
+        x: hax.NamedArray,
         *,
         key,
-        pos_ids: NamedArray | None = None,
-    ) -> tuple[NamedArray, NamedArray, NamedArray]:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> tuple[hax.NamedArray, hax.NamedArray, hax.NamedArray]:
         """Project *x* to Q, K and V and apply all per-head processing."""
         key_q, key_k, key_v = maybe_rng_split(key, 3)
 
@@ -1901,12 +1902,12 @@ class GatedAttention(Attention):
     @named_call
     def __call__(
         self,
-        x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         key_proj, key_o = maybe_rng_split(key, 2)
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
@@ -1949,13 +1950,13 @@ class GatedAttention(Attention):
     @jax.profiler.annotate_function
     def paged_decode(
         self,
-        x: NamedArray,
+        x: hax.NamedArray,
         kv_cache: "KvPageCache",
         batch_info: PageBatchInfo,
         *,
-        pos_ids: NamedArray,
+        pos_ids: hax.NamedArray,
         key=None,
-    ) -> tuple[NamedArray, "KvPageCache"]:
+    ) -> tuple[hax.NamedArray, "KvPageCache"]:
         key_proj, key_o = maybe_rng_split(key, 2)
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
@@ -1990,15 +1991,15 @@ class GatedAttention(Attention):
 
 @named_call
 def ragged_paged_attention(
-    q: NamedArray,  # [Tok, KVHeads, QHeadsPerGroup, HeadSize]
-    kv_pages: NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]
-    kv_lens: NamedArray,  # i32[Seq]
-    page_indices: NamedArray,  # i32[Seq, PagePerSeq]
-    cu_q_lens: NamedArray,  # i32[Seq + 1] <-- cumulative lengths for the sequences, including new tokens
+    q: hax.NamedArray,  # [Tok, KVHeads, QHeadsPerGroup, HeadSize]
+    kv_pages: hax.NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]
+    kv_lens: hax.NamedArray,  # i32[Seq]
+    page_indices: hax.NamedArray,  # i32[Seq, PagePerSeq]
+    cu_q_lens: hax.NamedArray,  # i32[Seq + 1] <-- cumulative lengths for the sequences, including new tokens
     num_seqs: jnp.ndarray,
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
-) -> NamedArray:
+) -> hax.NamedArray:
     """Ragged attention for paged KV caches.
 
     This function dispatches to the TPU implementation when available and
@@ -2048,15 +2049,15 @@ def ragged_paged_attention(
 
 
 def _do_tpu_ragged_paged_attention(
-    q: ht.Float[NamedArray, "position kv_head q_heads_per_group head_size"],
-    kv_pages: ht.Float[NamedArray, "page page_size kv_head head_size"],
-    kv_lens: ht.i32[NamedArray, " seq"],  # type: ignore[name-defined]
-    page_indices: ht.i32[NamedArray, "seq page"],
-    cu_q_lens: ht.i32[NamedArray, " seq"],  # type: ignore[name-defined]
+    q: ht.Float[hax.NamedArray, "position kv_head q_heads_per_group head_size"],
+    kv_pages: ht.Float[hax.NamedArray, "page page_size kv_head head_size"],
+    kv_lens: ht.i32[hax.NamedArray, " seq"],  # type: ignore[name-defined]
+    page_indices: ht.i32[hax.NamedArray, "seq page"],
+    cu_q_lens: ht.i32[hax.NamedArray, " seq"],  # type: ignore[name-defined]
     num_seqs: jnp.ndarray,  # scalar int32
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
-) -> NamedArray:
+) -> hax.NamedArray:
     if tpu_ragged_paged_attention is None:
         msg = "TPU ragged paged attention kernel is unavailable."
         raise RuntimeError(msg)
@@ -2165,15 +2166,15 @@ def _do_tpu_ragged_paged_attention(
 
 
 def default_ragged_paged_attention(
-    q: NamedArray,  # [tok, KVHeads, QHeadsPerGroup, HeadSize]
-    kv_pages: NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]
-    kv_lens: NamedArray,  # i32[Seq]
-    page_indices: NamedArray,  # i32[Seq, PagePerSeq]
+    q: hax.NamedArray,  # [tok, KVHeads, QHeadsPerGroup, HeadSize]
+    kv_pages: hax.NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]
+    kv_lens: hax.NamedArray,  # i32[Seq]
+    page_indices: hax.NamedArray,  # i32[Seq, PagePerSeq]
     cu_q_lens: jnp.ndarray,  # i32[Seq + 1] <-- cumulative lengths for the sequences, including new tokens
     num_seqs: jnp.ndarray,  # scalar int32
     sm_scale: float,
     soft_cap: float | None = None,
-) -> NamedArray:
+) -> hax.NamedArray:
     """Default implementation of ragged paged attention.
     This implementation is not optimized for performance and is intended for testing purposes.
 
@@ -2309,7 +2310,7 @@ def default_ragged_paged_attention(
 class MultiHeadLatentAttentionConfig:
     """Configuration for MultiHeadLatentAttention adapted from DeepSeek-V3."""
 
-    Embed: Axis
+    Embed: hax.Axis
     num_heads: int
     kv_lora_rank: int
     q_lora_rank: int | None = None
@@ -2325,28 +2326,28 @@ class MultiHeadLatentAttentionConfig:
     logits_soft_cap: Optional[float] = None
 
     @property
-    def Heads(self) -> Axis:
-        return Axis("heads", self.num_heads)
+    def Heads(self) -> hax.Axis:
+        return hax.Axis("heads", self.num_heads)
 
     @property
-    def QHeadSize(self) -> Axis:
-        return Axis("q_head_dim", self.qk_rope_head_dim + self.qk_nope_head_dim)
+    def QHeadSize(self) -> hax.Axis:
+        return hax.Axis("q_head_dim", self.qk_rope_head_dim + self.qk_nope_head_dim)
 
     @property
-    def VHeadSize(self) -> Axis:
-        return Axis("v_head_dim", self.v_head_dim)
+    def VHeadSize(self) -> hax.Axis:
+        return hax.Axis("v_head_dim", self.v_head_dim)
 
     @property
-    def LatentSize(self) -> Axis:
-        return Axis("latent", self.kv_lora_rank)
+    def LatentSize(self) -> hax.Axis:
+        return hax.Axis("latent", self.kv_lora_rank)
 
     @property
-    def QLoraSize(self) -> Axis:
-        return Axis("q_lora_rank", self.q_lora_rank)
+    def QLoraSize(self) -> hax.Axis:
+        return hax.Axis("q_lora_rank", self.q_lora_rank)
 
     @property
-    def KVCombinedSize(self) -> Axis:
-        return Axis("kv_combined", self.kv_lora_rank + self.qk_rope_head_dim)
+    def KVCombinedSize(self) -> hax.Axis:
+        return hax.Axis("kv_combined", self.kv_lora_rank + self.qk_rope_head_dim)
 
 
 class MultiHeadLatentAttention(eqx.Module):
@@ -2390,7 +2391,7 @@ class MultiHeadLatentAttention(eqx.Module):
                 use_bias=use_bias,
                 out_first=True,
             )
-            q_a_norm = hnn.RmsNorm.init(Axis("q_lora_rank", config.q_lora_rank), use_bias=False)
+            q_a_norm = hnn.RmsNorm.init(hax.Axis("q_lora_rank", config.q_lora_rank), use_bias=False)
             q_b_proj = hnn.Linear.init(
                 In=config.QLoraSize,
                 Out=(config.Heads, config.QHeadSize),
@@ -2407,12 +2408,12 @@ class MultiHeadLatentAttention(eqx.Module):
             use_bias=use_bias,
             out_first=True,
         )
-        kv_a_norm = hnn.RmsNorm.init(Axis("latent", config.kv_lora_rank), use_bias=False)
+        kv_a_norm = hnn.RmsNorm.init(hax.Axis("latent", config.kv_lora_rank), use_bias=False)
         kv_b_proj = hnn.Linear.init(
             In=config.LatentSize,
             Out=(
                 config.Heads,
-                Axis("kv_out", config.qk_nope_head_dim + config.v_head_dim),
+                hax.Axis("kv_out", config.qk_nope_head_dim + config.v_head_dim),
             ),
             key=keys[3],
             use_bias=False,
@@ -2425,7 +2426,9 @@ class MultiHeadLatentAttention(eqx.Module):
             use_bias=use_bias,
             out_first=True,
         )
-        rot_embs = config.rope.build(Axis("q_head_dim", config.qk_rope_head_dim)) if config.rope is not None else None
+        rot_embs = (
+            config.rope.build(hax.Axis("q_head_dim", config.qk_rope_head_dim)) if config.rope is not None else None
+        )
 
         return MultiHeadLatentAttention(
             config,
@@ -2443,12 +2446,12 @@ class MultiHeadLatentAttention(eqx.Module):
     @named_call
     def __call__(
         self,
-        x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_q_a, k_q_b, k_kv_a, k_kv_b, k_o = maybe_rng_split(key, 5)
 
         # Project to a shared latent space for K and V.
@@ -2535,7 +2538,7 @@ class AttentionWithSink(Attention):
     bucket. This can improve stability during generation.
     """
 
-    sinks: NamedArray | None = None
+    sinks: hax.NamedArray | None = None
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "AttentionWithSink":
@@ -2556,12 +2559,12 @@ class AttentionWithSink(Attention):
     @named_call
     def __call__(
         self,
-        x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         key_proj, key_o = maybe_rng_split(key, 2)
 
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
