@@ -14,7 +14,6 @@ import haliax as hax
 import jax
 import numpy as np
 from haliax import is_named_array
-from haliax.jax_utils import is_jax_array_like
 from jax import numpy as jnp
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
@@ -77,6 +76,25 @@ def local_cpu_mesh():
 def is_inside_jit():
     """Returns True if we're currently inside a jit"""
     return isinstance(jnp.zeros(()), jax.core.Tracer)
+
+
+def is_in_jit():
+    """Returns True if we're currently inside a jit."""
+    return is_inside_jit()
+
+
+def is_jax_array_like(x: Any) -> bool:
+    """Return True when ``x`` looks like a JAX-compatible array leaf."""
+    return hasattr(x, "shape") and hasattr(x, "dtype")
+
+
+def ensure_scalar(x: Any, *, name: str = "value") -> Any:
+    """Unwrap scalar NamedArrays to plain arrays and reject non-scalar NamedArrays."""
+    if isinstance(x, hax.NamedArray):
+        if x.ndim != 0:
+            raise TypeError(f"{name} must be a scalar NamedArray")
+        return x.array
+    return x
 
 
 def shape_dtype_struct_tree(tree: T) -> T:

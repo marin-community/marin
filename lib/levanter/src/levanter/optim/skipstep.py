@@ -9,9 +9,8 @@ import optax
 from jax import numpy as jnp
 from jax.tree_util import GetAttrKey, register_pytree_with_keys_class
 
-from haliax.jax_utils import is_jax_array_like
-
 import levanter.tracker
+from levanter.utils.jax_utils import is_jax_array_like
 from levanter.utils.tree_utils import tree_flatten_one_level_with_keys
 
 

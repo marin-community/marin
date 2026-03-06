@@ -9,7 +9,6 @@ import jax
 import jaxtyping
 from haliax import NamedArray
 from haliax import haxtyping as ht
-from haliax.jax_utils import ensure_scalar
 from jax import numpy as jnp
 
 from levanter.inference.page_table import PageBatchInfo, PageTable
@@ -22,6 +21,7 @@ from levanter.inference.utils import (
     masked_set,
     purge,
 )
+from levanter.utils.jax_utils import ensure_scalar
 
 
 class PackedSequence(eqx.Module):

@@ -34,7 +34,6 @@ from fsspec import AbstractFileSystem
 from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
 from haliax import Axis
-from haliax.jax_utils import is_jax_array_like
 from haliax.state_dict import (
     StateDict,
     flatten_modules_for_export,
@@ -58,7 +57,7 @@ from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
+from levanter.utils.jax_utils import best_effort_sharding, is_jax_array_like, sync_global_devices, use_cpu_device
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.mesh import get_active_mesh
