@@ -26,6 +26,8 @@ from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.types import (
+    REGION_ATTRIBUTE_KEY,
+    ZONE_ATTRIBUTE_KEY,
     Constraint,
     CoschedulingConfig,
     Entrypoint,
@@ -36,8 +38,8 @@ from iris.cluster.types import (
     get_tpu_topology,
     gpu_device,
     region_constraint,
-    zone_constraint,
     tpu_device,
+    zone_constraint,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -229,6 +231,85 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
         f"Expected a known variant (e.g., H100), VARIANTxCOUNT (e.g., H100x8), "
         f"or a bare count (e.g., 8). Known variants: {known}"
     )
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if len(a) < len(b):
+        return _levenshtein(b, a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1] + [0] * len(b)
+        for j, cb in enumerate(b):
+            curr[j + 1] = min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (ca != cb))
+        prev = curr
+    return prev[-1]
+
+
+def _find_closest(value: str, known: set[str], max_distance: int = 5) -> str | None:
+    """Return the closest match from *known* by edit distance, or None."""
+    best, best_dist = None, max_distance + 1
+    for candidate in sorted(known):
+        dist = _levenshtein(value, candidate)
+        if dist < best_dist:
+            best, best_dist = candidate, dist
+    return best if best_dist <= max_distance else None
+
+
+def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
+    """Extract known regions and zones from an IrisClusterConfig proto.
+
+    Returns:
+        (regions, zones) sets derived from scale group worker attributes.
+    """
+    regions: set[str] = set()
+    zones: set[str] = set()
+    for sg in config.scale_groups.values():
+        attrs = sg.worker.attributes
+        if REGION_ATTRIBUTE_KEY in attrs:
+            regions.add(attrs[REGION_ATTRIBUTE_KEY])
+        if ZONE_ATTRIBUTE_KEY in attrs:
+            zones.add(attrs[ZONE_ATTRIBUTE_KEY])
+    return regions, zones
+
+
+def validate_region_zone(
+    regions: tuple[str, ...] | None,
+    zone: str | None,
+    config,
+) -> None:
+    """Validate --region/--zone CLI values against the cluster config.
+
+    Raises click.BadParameter if a value doesn't match any known region/zone.
+    Only validates when a config is available (i.e. --config was passed).
+    """
+    if config is None:
+        return
+
+    known_regions, known_zones = _known_regions_and_zones(config)
+
+    if not known_regions and not known_zones:
+        return
+
+    if regions:
+        for r in regions:
+            if r not in known_regions:
+                suggestion = _find_closest(r, known_regions)
+                hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+                raise click.BadParameter(
+                    f"'{r}' is not a known region in the cluster config.{hint}"
+                    f" Known regions: {', '.join(sorted(known_regions))}",
+                    param_hint="'--region'",
+                )
+
+    if zone:
+        if zone not in known_zones:
+            suggestion = _find_closest(zone, known_zones)
+            hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+            raise click.BadParameter(
+                f"'{zone}' is not a known zone in the cluster config.{hint}"
+                f" Known zones: {', '.join(sorted(known_zones))}",
+                param_hint="'--zone'",
+            )
 
 
 def build_resources(
@@ -591,6 +672,7 @@ def run(
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    validate_region_zone(region or None, zone, ctx.obj.get("config"))
 
     command = list(cmd)
     if not command:
