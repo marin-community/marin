@@ -18,11 +18,12 @@ import pytest
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.constraints import region_constraint
 from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
-    region_constraint,
 )
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -43,15 +44,15 @@ def _make_multi_region_config() -> config_pb2.IrisClusterConfig:
     for name, region in [("cpu-region-a", REGION_A), ("cpu-region-b", REGION_B)]:
         sg = config.scale_groups[name]
         sg.name = name
-        sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.num_vms = 1
         sg.min_slices = 1
         sg.max_slices = 2
         sg.resources.cpu_millicores = 8000
         sg.resources.memory_bytes = 16 * 1024**3
         sg.resources.disk_bytes = 50 * 1024**3
+        sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.slice_template.local.SetInParent()
-        sg.worker.attributes["region"] = region
+        sg.worker.attributes[WellKnownAttribute.REGION] = region
 
     return make_local_config(config)
 
@@ -78,7 +79,7 @@ def _get_worker_region(cluster: IrisTestCluster, worker_id: str) -> str | None:
     response = cluster.controller_client.list_workers(request)
     for w in response.workers:
         if w.worker_id == worker_id:
-            region_attr = w.metadata.attributes.get("region")
+            region_attr = w.metadata.attributes.get(WellKnownAttribute.REGION)
             if region_attr and region_attr.HasField("string_value"):
                 return region_attr.string_value
     return None
@@ -168,7 +169,7 @@ def _submit_child_with_region_override():
     The child specifies region-b, overriding the parent's region-a constraint.
     """
     from iris.client.client import iris_ctx
-    from iris.cluster.types import region_constraint
+    from iris.cluster.constraints import region_constraint
 
     ctx = iris_ctx()
     child = ctx.client.submit(

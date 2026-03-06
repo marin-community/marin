@@ -17,8 +17,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
-from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
-
+from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
+from iris.cluster.types import get_tpu_topology
 from iris.rpc import cluster_pb2, config_pb2
 from iris.time_utils import Timestamp
 
@@ -207,26 +207,11 @@ def collect_workdir_size_mb(workdir: Path) -> int:
     return int(size_str)
 
 
-def _detect_preemptible(extra_attributes: dict[str, str]) -> bool:
-    """Detect whether this worker is running on a preemptible/spot VM.
-
-    Checks the GCP metadata server first (authoritative for GCP VMs), then
-    falls back to IRIS_WORKER_ATTRIBUTES. Defaults to False for non-GCP
-    environments without explicit configuration.
-    """
-    if _is_gcp_vm():
-        try:
-            preemptible = _get_gcp_metadata("scheduling/preemptible")
-            if preemptible is not None:
-                return preemptible.upper() == "TRUE"
-            logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
-        except ValueError:
-            logger.debug("GCP metadata not available for preemptible detection, checking IRIS_WORKER_ATTRIBUTES")
-
-    return extra_attributes.get(PREEMPTIBLE_ATTRIBUTE_KEY, "false").lower() == "true"
-
-
 def _build_worker_attributes(
+    *,
+    accelerator_type: int,
+    accelerator_variant: str,
+    preemptible: bool,
     tpu_name: str,
     tpu_worker_id: str,
     device: cluster_pb2.DeviceConfig,
@@ -234,45 +219,55 @@ def _build_worker_attributes(
 ) -> dict[str, cluster_pb2.AttributeValue]:
     """Build worker attributes for constraint-based scheduling.
 
-    Populates standard attributes from the TPU environment:
-    - tpu-name: TPU slice name
-    - tpu-worker-id: Worker ID within the slice (0-indexed)
-    - tpu-topology: TPU topology variant (e.g., "v5litepod-16")
-    - tpu-vm-count: Number of VMs in the TPU slice
+    Scheduling-relevant attributes (device-type, device-variant, preemptible)
+    come from WorkerConfig fields, which are populated by the autoscaler from
+    ScaleGroupResources. Probed hardware data populates diagnostic fields on
+    WorkerMetadata but does NOT influence the attributes map.
 
-    Also merges in extra_attributes from IRIS_WORKER_ATTRIBUTES env var.
-    Extra attributes are treated as strings.
+    TPU multi-host identity (tpu-name, tpu-worker-id) still comes from GCP
+    metadata probes since these identify which specific VM in a TPU slice this
+    worker is -- the config cannot know this.
+
+    TPU topology and VM count are derived from device_variant when device_type
+    is TPU.
     """
     attributes: dict[str, cluster_pb2.AttributeValue] = {}
 
+    # Scheduling attributes from config
+    device_type_str = accelerator_type_to_string(accelerator_type)
+    attributes[WellKnownAttribute.DEVICE_TYPE] = cluster_pb2.AttributeValue(string_value=device_type_str)
+
+    if accelerator_variant:
+        attributes[WellKnownAttribute.DEVICE_VARIANT] = cluster_pb2.AttributeValue(
+            string_value=accelerator_variant.lower()
+        )
+
+    attributes[WellKnownAttribute.PREEMPTIBLE] = cluster_pb2.AttributeValue(string_value=str(preemptible).lower())
+
+    # TPU multi-host identity from GCP metadata probes
     if tpu_name:
-        attributes["tpu-name"] = cluster_pb2.AttributeValue(string_value=tpu_name)
-        attributes["tpu-worker-id"] = cluster_pb2.AttributeValue(int_value=int(tpu_worker_id) if tpu_worker_id else 0)
+        attributes[WellKnownAttribute.TPU_NAME] = cluster_pb2.AttributeValue(string_value=tpu_name)
+        attributes[WellKnownAttribute.TPU_WORKER_ID] = cluster_pb2.AttributeValue(
+            int_value=int(tpu_worker_id) if tpu_worker_id else 0
+        )
 
-        # Extract topology from device config if available
-        if device.HasField("tpu") and device.tpu.variant:
-            tpu_variant = device.tpu.variant
-            attributes["tpu-topology"] = cluster_pb2.AttributeValue(string_value=tpu_variant)
+    # TPU topology attributes derived from variant
+    if accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU and accelerator_variant:
+        attributes[WellKnownAttribute.TPU_TOPOLOGY] = cluster_pb2.AttributeValue(string_value=accelerator_variant)
+        try:
+            topo = get_tpu_topology(accelerator_variant)
+            attributes[WellKnownAttribute.TPU_VM_COUNT] = cluster_pb2.AttributeValue(int_value=topo.vm_count)
+        except ValueError:
+            logger.warning("Unknown TPU topology: %s", accelerator_variant)
 
-            # Look up VM count from topology
-            try:
-                topo = get_tpu_topology(tpu_variant)
-                attributes["tpu-vm-count"] = cluster_pb2.AttributeValue(int_value=topo.vm_count)
-            except ValueError:
-                # Unknown topology - don't add vm-count attribute
-                logger.warning("Unknown TPU topology: %s", tpu_variant)
-
+    # GPU diagnostic attributes from device config (populated by build_worker_metadata)
     if device.HasField("gpu"):
-        attributes["gpu-variant"] = cluster_pb2.AttributeValue(string_value=device.gpu.variant)
-        attributes["gpu-count"] = cluster_pb2.AttributeValue(int_value=device.gpu.count)
+        attributes[WellKnownAttribute.GPU_VARIANT] = cluster_pb2.AttributeValue(string_value=device.gpu.variant)
+        attributes[WellKnownAttribute.GPU_COUNT] = cluster_pb2.AttributeValue(int_value=device.gpu.count)
 
-    # Add extra attributes from environment
+    # Custom user attributes from YAML worker.attributes (merged last so they can override)
     for key, value in extra_attributes.items():
         attributes[key] = cluster_pb2.AttributeValue(string_value=value)
-
-    # Preemptible detection: GCP metadata server, then IRIS_WORKER_ATTRIBUTES fallback
-    is_preemptible = _detect_preemptible(extra_attributes)
-    attributes[PREEMPTIBLE_ATTRIBUTE_KEY] = cluster_pb2.AttributeValue(string_value=str(is_preemptible).lower())
 
     return attributes
 
@@ -324,15 +319,18 @@ def build_worker_metadata(
     accelerator_type: int = 0,
     accelerator_variant: str = "",
     gpu_count_override: int = 0,
+    preemptible: bool = False,
     worker_attributes: dict[str, str] | None = None,
 ) -> cluster_pb2.WorkerMetadata:
     """Combine hardware probe results with platform-provided config.
 
-    Accelerator resolution priority:
-    1. Explicit accelerator_type/variant (platform knowledge from WorkerConfig)
-    2. TPU metadata from GCP metadata server (hardware probe)
-    3. GPU from nvidia-smi (hardware probe)
-    4. CPU fallback
+    Scheduling-relevant attributes (device-type, device-variant, preemptible) are
+    derived from WorkerConfig fields (accelerator_type, accelerator_variant,
+    preemptible). Hardware probes populate diagnostic fields on WorkerMetadata
+    (gpu_name, tpu_worker_hostnames, etc.) but do not influence the attributes map.
+
+    The DeviceConfig oneof on WorkerMetadata is still built from config + probe
+    data for capacity accounting (device count).
     """
     extra_attributes = worker_attributes or {}
 
@@ -368,7 +366,15 @@ def build_worker_metadata(
         gpu_name = ""
         gpu_memory_mb = 0
 
-    attributes = _build_worker_attributes(hardware.tpu_name, hardware.tpu_worker_id, device, extra_attributes)
+    attributes = _build_worker_attributes(
+        accelerator_type=accelerator_type,
+        accelerator_variant=accelerator_variant,
+        preemptible=preemptible,
+        tpu_name=hardware.tpu_name,
+        tpu_worker_id=hardware.tpu_worker_id,
+        device=device,
+        extra_attributes=extra_attributes,
+    )
 
     return cluster_pb2.WorkerMetadata(
         hostname=hardware.hostname,
@@ -395,36 +401,15 @@ class EnvironmentProvider(Protocol):
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
 
 
-class TPUSimEnvironmentProvider:
-    """Simulated TPU environment for testing multi-host JAX coordination.
+class FixedEnvironmentProvider:
+    """Returns pre-built worker metadata. Used by LocalPlatform and tests."""
 
-    Wraps DefaultEnvironmentProvider and adds fake TPU metadata so that
-    _build_device_env_vars() sets JAX_COORDINATOR_ADDRESS, JAX_PROCESS_ID,
-    and JAX_NUM_PROCESSES correctly.
-    """
-
-    def __init__(
-        self,
-        worker_id: int,
-        num_workers: int,
-        coordinator_host: str = "127.0.0.1",
-        tpu_variant: str = "v4-8-sim",
-    ):
-        self._worker_id = worker_id
-        self._num_workers = num_workers
-        self._coordinator_host = coordinator_host
-        self._tpu_variant = tpu_variant
+    def __init__(self, metadata: cluster_pb2.WorkerMetadata, log_prefix_value: str | None = None):
+        self._metadata = metadata
+        self._log_prefix_value = log_prefix_value
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
-        base = DefaultEnvironmentProvider().probe()
-        # Simulate TPU slice membership
-        base.tpu_name = "sim-tpu-slice"
-        base.tpu_worker_id = str(self._worker_id)
-        base.tpu_worker_hostnames = self._coordinator_host
-        base.tpu_chips_per_host_bounds = "2,2,1"
-        # Mark device as TPU so _build_device_env_vars triggers
-        base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
-        return base
+        return self._metadata
 
 
 class DefaultEnvironmentProvider:

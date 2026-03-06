@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.worker.env_probe import TPUSimEnvironmentProvider
-from iris.rpc import cluster_pb2
+from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
+from iris.rpc import cluster_pb2, config_pb2
 
 from tests.e2e._docker_cluster import E2ECluster
 
@@ -39,17 +39,36 @@ def docker_cluster(shared_cache):
 
 @pytest.fixture(scope="module")
 def tpu_sim_cluster(shared_cache):
-    """Docker cluster with simulated TPU metadata for JAX coordination tests.
+    """Docker cluster with simulated TPU metadata for JAX coordination tests."""
 
-    Each worker gets a TPUSimEnvironmentProvider which populates tpu_worker_hostnames,
-    tpu_worker_id, and device.tpu. This triggers _build_device_env_vars() in docker.py
-    to set JAX_COORDINATOR_ADDRESS, JAX_PROCESS_ID, and JAX_NUM_PROCESSES.
-    """
+    def make_tpu_sim_provider(worker_id: int, num_workers: int) -> FixedEnvironmentProvider:
+        hardware = HardwareProbe(
+            hostname="local",
+            ip_address="127.0.0.1",
+            cpu_count=4,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=100 * 1024**3,
+            gpu_count=0,
+            gpu_name="",
+            gpu_memory_mb=0,
+            tpu_name="sim-tpu-slice",
+            tpu_type="v4-8-sim",
+            tpu_worker_hostnames="127.0.0.1",
+            tpu_worker_id=str(worker_id),
+            tpu_chips_per_host_bounds="2,2,1",
+        )
+        metadata = build_worker_metadata(
+            hardware=hardware,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v4-8-sim",
+        )
+        return FixedEnvironmentProvider(metadata)
+
     with E2ECluster(
         num_workers=2,
         use_docker=True,
         cache_dir=shared_cache,
-        env_provider_factory=lambda i, n: TPUSimEnvironmentProvider(i, n),
+        env_provider_factory=make_tpu_sim_provider,
     ) as cluster:
         yield cluster
 

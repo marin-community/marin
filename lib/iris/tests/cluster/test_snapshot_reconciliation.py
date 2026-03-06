@@ -35,8 +35,6 @@ def _make_scale_group_config(
         name=name,
         min_slices=min_slices,
         max_slices=max_slices,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5litepod-16",
         slice_template=config_pb2.SliceConfig(
             gcp=config_pb2.GcpSliceConfig(zone="us-central1-a"),
         ),

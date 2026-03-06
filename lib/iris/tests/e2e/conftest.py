@@ -26,8 +26,8 @@ from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
+from iris.cluster.constraints import Constraint
 from iris.cluster.types import (
-    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -189,14 +189,15 @@ def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
     """
     sg = config.scale_groups["tpu_cosched_2"]
     sg.name = "tpu_cosched_2"
-    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.accelerator_variant = "v5litepod-16"
     sg.num_vms = 2
     sg.min_slices = 1
     sg.max_slices = 2
     sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
     sg.resources.disk_bytes = 1024 * 1024 * 1024 * 1024
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.resources.device_variant = "v5litepod-16"
+    sg.resources.preemptible = True
     sg.slice_template.preemptible = True
     sg.slice_template.num_vms = 2
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
@@ -223,13 +224,13 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     config.scale_groups.clear()
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
-    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.num_vms = 1
     sg.min_slices = num_workers
     sg.max_slices = num_workers
     sg.resources.cpu_millicores = 8000
     sg.resources.memory_bytes = 16 * 1024**3
     sg.resources.disk_bytes = 50 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.slice_template.local.SetInParent()
     return make_local_config(config)
 

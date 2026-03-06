@@ -368,33 +368,32 @@ controller:
 
 scale_groups:
   tpu_v5e_4:
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-4
-    num_vms: 4
+    zones: [us-central1-a, us-central1-b]
+    num_vms: 1
+    priority: 10
     resources:
       cpu: 64
       ram: 64GB
       disk: 500GB
-      tpu_count: 4
-      gpu_count: 0
+      device_type: tpu
+      device_variant: v5litepod-4
+      device_count: 4
+      preemptible: true
     min_slices: 0
     max_slices: 10
     slice_template:
-      preemptible: true
       gcp:
         zone: us-central1-a
-        zones: [us-central1-a, us-central1-b]
         runtime_version: v2-alpha-tpuv5-lite
 
   manual_hosts:
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 16
       ram: 32GB
       disk: 100GB
-      tpu_count: 0
-      gpu_count: 0
+      device_type: cpu
+      preemptible: false
     min_slices: 0
     max_slices: 2
     slice_template:

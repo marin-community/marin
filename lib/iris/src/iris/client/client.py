@@ -42,8 +42,8 @@ from iris.cluster.controller.local import (
     make_local_cluster_config,
     wait_for_worker_registration,
 )
+from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import (
-    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -51,8 +51,7 @@ from iris.cluster.types import (
     Namespace,
     ReservationEntry,
     ResourceSpec,
-    merge_constraints,
-    validate_tpu_replicas,
+    adjust_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -637,7 +636,7 @@ class IrisClient:
             raise ValueError("Job name cannot contain '/'")
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
-        validate_tpu_replicas(resources.device, replicas)
+        replicas = adjust_tpu_replicas(resources.device, replicas)
 
         # Get parent job ID from context
         ctx = get_iris_ctx()

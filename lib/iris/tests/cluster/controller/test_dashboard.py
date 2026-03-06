@@ -22,6 +22,7 @@ from iris.cluster.controller.events import (
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
@@ -414,12 +415,12 @@ def test_get_job_status_returns_original_request(client, state):
         replicas=2,
         constraints=[
             cluster_pb2.Constraint(
-                key="tpu-name",
+                key=WellKnownAttribute.TPU_NAME,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="my-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     job_id = submit_job(state, "request-detail-job", request)
 
@@ -485,10 +486,12 @@ def mock_autoscaler():
                 name="test-group",
                 config=config_pb2.ScaleGroupConfig(
                     name="test-group",
-                    accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                    accelerator_variant="v4-8",
                     min_slices=1,
                     max_slices=5,
+                    resources=config_pb2.ScaleGroupResources(
+                        device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                        device_variant="v4-8",
+                    ),
                 ),
                 slices=[
                     vm_pb2.SliceInfo(
@@ -575,7 +578,7 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
         assert "sliceId" in slice_info
         assert "vms" in slice_info
         assert len(slice_info["vms"]) == 1
-    assert group["config"]["acceleratorVariant"] == "v4-8"
+    assert group["config"]["resources"]["deviceVariant"] == "v4-8"
 
 
 def test_pending_reason_uses_autoscaler_hint_for_scale_up(
@@ -811,12 +814,12 @@ def test_coscheduling_failure_reason_no_workers(client, state):
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
             cluster_pb2.Constraint(
-                key="tpu-name",
+                key=WellKnownAttribute.TPU_NAME,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="nonexistent-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     submit_job(state, "cosched-job", request)
 
@@ -834,8 +837,8 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     # Register 2 workers with tpu-name=my-tpu
     for i in range(2):
         meta = make_worker_metadata()
-        meta.attributes["tpu-name"].CopyFrom(cluster_pb2.AttributeValue(string_value="my-tpu"))
-        meta.attributes["tpu-worker-id"].CopyFrom(cluster_pb2.AttributeValue(int_value=i))
+        meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(cluster_pb2.AttributeValue(string_value="my-tpu"))
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(cluster_pb2.AttributeValue(int_value=i))
         register_worker(state, f"w{i}", f"h{i}:8080", meta)
 
     # Submit a coscheduled job needing 4 replicas
@@ -847,12 +850,12 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
             cluster_pb2.Constraint(
-                key="tpu-name",
+                key=WellKnownAttribute.TPU_NAME,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="my-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     submit_job(state, "big-cosched", request)
 
@@ -871,8 +874,8 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
 def test_worker_attributes_in_list_workers(client, state, make_worker_metadata):
     """ListWorkers RPC returns worker attributes in metadata."""
     meta = make_worker_metadata()
-    meta.attributes["tpu-name"].CopyFrom(cluster_pb2.AttributeValue(string_value="v5litepod-16"))
-    meta.attributes["tpu-worker-id"].CopyFrom(cluster_pb2.AttributeValue(int_value=0))
+    meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(cluster_pb2.AttributeValue(string_value="v5litepod-16"))
+    meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(cluster_pb2.AttributeValue(int_value=0))
     register_worker(state, "tpu-worker", "h1:8080", meta)
 
     resp = rpc_post(client, "ListWorkers")

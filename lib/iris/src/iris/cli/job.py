@@ -25,6 +25,7 @@ from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
+from iris.cluster.constraints import Constraint, WellKnownAttribute, region_constraint, zone_constraint
 from iris.cluster.types import (
     REGION_ATTRIBUTE_KEY,
     ZONE_ATTRIBUTE_KEY,
@@ -414,7 +415,7 @@ def resolve_multinode_tpu_defaults(
             f"Using explicit replicas={replicas} with coscheduling by tpu-name."
         )
 
-    coscheduling = CoschedulingConfig(group_by="tpu-name")
+    coscheduling = CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME)
     return replicas, coscheduling
 
 

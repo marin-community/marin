@@ -14,13 +14,11 @@ import pytest
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.constraints import WellKnownAttribute, zone_constraint
 from iris.cluster.types import (
-    REGION_ATTRIBUTE_KEY,
-    ZONE_ATTRIBUTE_KEY,
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
-    zone_constraint,
 )
 from iris.rpc import config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -48,22 +46,23 @@ def _add_scale_group(
 ) -> None:
     sg = config.scale_groups[name]
     sg.name = name
-    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.accelerator_variant = variant
     sg.num_vms = num_vms
     sg.min_slices = 1
     sg.max_slices = 2
     sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
     sg.resources.disk_bytes = 1024 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.resources.device_variant = variant
+    sg.resources.preemptible = True
     sg.slice_template.preemptible = True
     sg.slice_template.num_vms = num_vms
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.slice_template.accelerator_variant = variant
     sg.slice_template.local.SetInParent()
     if zone:
-        sg.worker.attributes[ZONE_ATTRIBUTE_KEY] = zone
-        sg.worker.attributes[REGION_ATTRIBUTE_KEY] = zone.rsplit("-", 1)[0]
+        sg.worker.attributes[WellKnownAttribute.ZONE] = zone
+        sg.worker.attributes[WellKnownAttribute.REGION] = zone.rsplit("-", 1)[0]
 
 
 def _make_two_group_config() -> config_pb2.IrisClusterConfig:

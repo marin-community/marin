@@ -156,13 +156,23 @@ enum AcceleratorType {
 // enum VmType { ... } used field numbers 0-4
 // Callers should use slice_template.WhichOneof("platform") instead.
 
-// Resources available per slice in a scale group.
+// Resources available per VM in a scale group.
+// This is the single declaration of what each worker provides. The config
+// loader derives SliceConfig and WorkerConfig fields from these values.
 message ScaleGroupResources {
   int32 cpu_millicores = 1;  // CPU in millicores (1000 = 1 core)
   int64 memory_bytes = 2;
   int64 disk_bytes = 3;
-  int32 gpu_count = 4;
-  int32 tpu_count = 5;
+  reserved 4;  // was: gpu_count (replaced by device_count)
+  reserved 5;  // was: tpu_count (replaced by device_count)
+
+  // Device configuration — canonical source for accelerator type/variant
+  AcceleratorType device_type = 10;
+  string device_variant = 11;       // e.g. "v5litepod-16", "H100"
+  int32 device_count = 12;          // GPUs or TPU chips per VM
+
+  // Scheduling attribute derived from config
+  bool preemptible = 20;
 }
 
 message WorkerSettings {
@@ -179,9 +189,8 @@ message ScaleGroupConfig {
   int32 min_slices = 3 [features.field_presence = EXPLICIT];
   int32 max_slices = 4 [features.field_presence = EXPLICIT];
 
-  // Device configuration (kept on ScaleGroupConfig for demand matching)
-  AcceleratorType accelerator_type = 9;
-  string accelerator_variant = 10;
+  reserved 9;   // was: accelerator_type (moved to ScaleGroupResources.device_type)
+  reserved 10;  // was: accelerator_variant (moved to ScaleGroupResources.device_variant)
   reserved 11;  // was: topology (now in slice_template.gcp)
   reserved 12;  // was: runtime_version (now in slice_template.gcp)
   reserved 13;  // was: preemptible (moved to SliceConfig)
@@ -236,10 +245,11 @@ message WorkerConfig {
   map<string, string> default_task_env = 10;
   string runtime = 11;                       // "docker" or "kubernetes"
 
-  // Accelerator (from scale group, not env vars)
+  // Accelerator (from scale group resources, not env vars)
   AcceleratorType accelerator_type = 20;
   string accelerator_variant = 21;
   int32 gpu_count = 22;
+  bool preemptible = 23;
 
   // Scheduling attributes
   map<string, string> worker_attributes = 30;

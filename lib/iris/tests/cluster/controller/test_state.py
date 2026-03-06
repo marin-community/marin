@@ -30,7 +30,9 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
 )
-from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, DeviceType, JobName, WorkerId
+from iris.cluster.constraints import WellKnownAttribute, constraints_from_resources
+from iris.cluster.constraints import DeviceType
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -176,9 +178,27 @@ def submit_job(
     request: cluster_pb2.Controller.LaunchJobRequest,
     timestamp_ms: int | None = None,
 ) -> list[ControllerTask]:
-    """Submit a job via event and return tasks."""
+    """Submit a job via event and return tasks.
+
+    Auto-injects resource-derived constraints (device-type, device-variant)
+    to mirror service-layer behavior. All jobs in production go through
+    service.launch_job() which does this injection.
+    """
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
+
+    auto_constraints = constraints_from_resources(request.resources)
+    for ac in auto_constraints:
+        already = any(c.key == ac.key for c in request.constraints)
+        if not already:
+            request.constraints.append(
+                cluster_pb2.Constraint(
+                    key=ac.key,
+                    op=cluster_pb2.CONSTRAINT_OP_EQ,
+                    value=cluster_pb2.AttributeValue(string_value=ac.value),
+                )
+            )
+
     state.handle_event(
         JobSubmittedEvent(
             job_id=jid,
@@ -959,8 +979,8 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
     # Register 4 workers (one per task)
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     # Create coscheduled job with 4 tasks
@@ -971,7 +991,7 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
     job = state.get_job(JobName.root("test-user", "j1"))
@@ -1009,8 +1029,8 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
 
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     req = cluster_pb2.Controller.LaunchJobRequest(
@@ -1020,7 +1040,7 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j-leak", req)
 
     for i, task in enumerate(tasks):
@@ -1061,8 +1081,8 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
 
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     # Use max_retries_preemption=1 so second worker failure is terminal.
@@ -1074,7 +1094,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(),
         max_retries_preemption=1,  # Allow one retry, so second failure is terminal
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
     # Dispatch all tasks
@@ -1123,8 +1143,8 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
 
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     req = cluster_pb2.Controller.LaunchJobRequest(
@@ -1134,7 +1154,7 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
     for i, task in enumerate(tasks):
@@ -1205,8 +1225,8 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
 
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     req = cluster_pb2.Controller.LaunchJobRequest(
@@ -1218,7 +1238,7 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
         max_retries_failure=1,  # Allow one retry
         max_task_failures=4,  # Don't fail job on task failure
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
     for i, task in enumerate(tasks):
@@ -1423,13 +1443,13 @@ def test_compute_demand_entries_counts_coscheduled_job_once():
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=4,
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
     demand = compute_demand_entries(state)
     assert len(demand) == 1
-    assert demand[0].device_type == DeviceType.TPU
-    assert demand[0].device_variant == "v5litepod-16"
+    assert demand[0].normalized.device_type == DeviceType.TPU
+    assert demand[0].normalized.device_variants == frozenset({"v5litepod-16"})
     assert demand[0].task_ids == ["/test-user/j1/0", "/test-user/j1/1", "/test-user/j1/2", "/test-user/j1/3"]
     assert demand[0].coschedule_group_id == "/test-user/j1"
 
@@ -1454,8 +1474,8 @@ def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
     demand = compute_demand_entries(state)
     assert len(demand) == 4
     for entry in demand:
-        assert entry.device_type == DeviceType.TPU
-        assert entry.device_variant == "v5litepod-16"
+        assert entry.normalized.device_type == DeviceType.TPU
+        assert entry.normalized.device_variants == frozenset({"v5litepod-16"})
         assert entry.coschedule_group_id is None
         assert len(entry.task_ids) == 1
 
@@ -1476,7 +1496,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=4,
     )
-    coscheduled_req.coscheduling.group_by = "tpu-name"
+    coscheduled_req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", coscheduled_req)
 
     # Regular job with 2 tasks -> 2 slices
@@ -1501,8 +1521,8 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
     assert len(regular) == 2
     assert coscheduled[0].task_ids == ["/test-user/j1/0", "/test-user/j1/1", "/test-user/j1/2", "/test-user/j1/3"]
     for entry in regular:
-        assert entry.device_type == DeviceType.TPU
-        assert entry.device_variant == "v5litepod-16"
+        assert entry.normalized.device_type == DeviceType.TPU
+        assert entry.normalized.device_variants == frozenset({"v5litepod-16"})
 
 
 def test_compute_demand_entries_separates_by_preemptible_constraint():
@@ -1522,7 +1542,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key=PREEMPTIBLE_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.PREEMPTIBLE,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="true"),
             )
@@ -1543,7 +1563,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key=PREEMPTIBLE_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.PREEMPTIBLE,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="false"),
             )
@@ -1554,10 +1574,10 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
     demand = compute_demand_entries(state)
     assert len(demand) == 2
 
-    by_preemptible = {d.preemptible: d for d in demand}
-    assert by_preemptible[True].device_type == DeviceType.TPU
+    by_preemptible = {d.normalized.preemptible: d for d in demand}
+    assert by_preemptible[True].normalized.device_type == DeviceType.TPU
     assert by_preemptible[True].task_ids == ["/test-user/j1/0"]
-    assert by_preemptible[False].device_type == DeviceType.TPU
+    assert by_preemptible[False].normalized.device_type == DeviceType.TPU
     assert by_preemptible[False].task_ids == ["/test-user/j2/0"]
 
 
@@ -1580,7 +1600,7 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
 
     demand = compute_demand_entries(state)
     assert len(demand) == 1
-    assert demand[0].preemptible is None
+    assert demand[0].normalized.preemptible is None
 
 
 def test_compute_demand_entries_extracts_required_region():
@@ -1597,7 +1617,7 @@ def test_compute_demand_entries_extracts_required_region():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key=REGION_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.REGION,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="us-west4"),
             )
@@ -1607,7 +1627,7 @@ def test_compute_demand_entries_extracts_required_region():
 
     demand = compute_demand_entries(state)
     assert len(demand) == 1
-    assert demand[0].required_regions == frozenset({"us-west4"})
+    assert demand[0].normalized.required_regions == frozenset({"us-west4"})
     assert demand[0].invalid_reason is None
 
 
@@ -1625,12 +1645,12 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key=REGION_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.REGION,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="us-west4"),
             ),
             cluster_pb2.Constraint(
-                key=REGION_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.REGION,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="eu-west4"),
             ),
@@ -1654,7 +1674,13 @@ def _make_reservation_job_request(
     reservation_devices: list[cluster_pb2.DeviceConfig],
     replicas: int = 1,
 ) -> cluster_pb2.Controller.LaunchJobRequest:
-    """Build a LaunchJobRequest with a reservation and task resources."""
+    """Build a LaunchJobRequest with a reservation and task resources.
+
+    Each reservation entry gets auto-generated constraints from its device
+    config, mirroring what the service layer does for the top-level request.
+    This ensures holder jobs get the correct device constraints from the
+    entry, not from the parent.
+    """
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="reservation-job",
         entrypoint=_make_test_entrypoint(),
@@ -1667,13 +1693,16 @@ def _make_reservation_job_request(
         replicas=replicas,
     )
     for dev in reservation_devices:
+        entry_resources = cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=dev,
+        )
+        entry_constraints = [c.to_proto() for c in constraints_from_resources(entry_resources)]
         req.reservation.entries.append(
             cluster_pb2.ReservationEntry(
-                resources=cluster_pb2.ResourceSpecProto(
-                    cpu_millicores=1000,
-                    memory_bytes=1024**3,
-                    device=dev,
-                ),
+                resources=entry_resources,
+                constraints=entry_constraints,
             )
         )
     return req
@@ -1764,7 +1793,7 @@ def test_demand_reservation_holder_uses_entry_resources():
     assert len(real_demand) == 2
     # Holder demand uses entry's H100 device, not parent's A100
     for d in synthetic_demand:
-        assert d.device_variant == "H100"
+        assert d.normalized.device_variants == frozenset({"h100"})
 
 
 def test_demand_reservation_mixed_jobs():
@@ -1801,7 +1830,7 @@ def test_demand_reservation_mixed_jobs():
 
     # h100-job: 3 real tasks + a100-job: 2 tasks = 5 real demand
     assert len(real_demand) == 5
-    a100_demand = [d for d in real_demand if d.device_variant == "A100"]
+    a100_demand = [d for d in real_demand if d.normalized.device_variants == frozenset({"a100"})]
     assert len(a100_demand) == 2
 
 
@@ -2154,7 +2183,7 @@ def _gpu_worker_metadata(
     variant: str = "H100",
     gpu_count: int = 8,
 ) -> cluster_pb2.WorkerMetadata:
-    """Create worker metadata for a GPU worker."""
+    """Create worker metadata for a GPU worker with scheduling attributes."""
     return cluster_pb2.WorkerMetadata(
         hostname="gpu-worker",
         ip_address="10.0.0.1",
@@ -2164,6 +2193,11 @@ def _gpu_worker_metadata(
         device=cluster_pb2.DeviceConfig(
             gpu=cluster_pb2.GpuDevice(variant=variant, count=gpu_count),
         ),
+        attributes={
+            WellKnownAttribute.DEVICE_TYPE: cluster_pb2.AttributeValue(string_value="gpu"),
+            WellKnownAttribute.DEVICE_VARIANT: cluster_pb2.AttributeValue(string_value=variant.lower()),
+            WellKnownAttribute.PREEMPTIBLE: cluster_pb2.AttributeValue(string_value="false"),
+        },
     )
 
 
@@ -2174,7 +2208,7 @@ def _tpu_worker_metadata(
     variant: str = "v5litepod-16",
     chip_count: int = 8,
 ) -> cluster_pb2.WorkerMetadata:
-    """Create worker metadata for a TPU worker."""
+    """Create worker metadata for a TPU worker with scheduling attributes."""
     return cluster_pb2.WorkerMetadata(
         hostname="tpu-worker",
         ip_address="10.0.0.1",
@@ -2184,6 +2218,11 @@ def _tpu_worker_metadata(
         device=cluster_pb2.DeviceConfig(
             tpu=cluster_pb2.TpuDevice(variant=variant, chip_count=chip_count),
         ),
+        attributes={
+            WellKnownAttribute.DEVICE_TYPE: cluster_pb2.AttributeValue(string_value="tpu"),
+            WellKnownAttribute.DEVICE_VARIANT: cluster_pb2.AttributeValue(string_value=variant.lower()),
+            WellKnownAttribute.PREEMPTIBLE: cluster_pb2.AttributeValue(string_value="false"),
+        },
     )
 
 
@@ -2201,6 +2240,10 @@ def _cpu_worker_metadata(
         device=cluster_pb2.DeviceConfig(
             cpu=cluster_pb2.CpuDevice(variant="cpu"),
         ),
+        attributes={
+            WellKnownAttribute.DEVICE_TYPE: cluster_pb2.AttributeValue(string_value="cpu"),
+            WellKnownAttribute.PREEMPTIBLE: cluster_pb2.AttributeValue(string_value="false"),
+        },
     )
 
 
@@ -2583,6 +2626,37 @@ def test_holder_tasks_excluded_from_building_counts():
     # Building counts should NOT include the holder task
     building_counts = state.snapshot_building_counts()
     assert building_counts.get(wid, 0) == 0
+
+
+def test_holder_tasks_excluded_from_heartbeat_expected_tasks():
+    """Holder tasks must not appear in heartbeat expected_tasks.
+
+    Holder tasks are virtual — never dispatched to the worker. If included
+    in expected_tasks the worker reports "Task not found on worker", causing
+    a worker_failed → retry loop (GH-3178).
+    """
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+
+    # Assign holder task to worker
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+
+    # Heartbeat snapshot must NOT include the holder task
+    snapshot = state.begin_heartbeat(wid)
+    assert snapshot is not None
+    running_task_ids = {entry.task_id for entry in snapshot.running_tasks}
+    assert holder_tasks[0].task_id not in running_task_ids
 
 
 def test_snapshot_round_trip_preserves_reservation_holder():

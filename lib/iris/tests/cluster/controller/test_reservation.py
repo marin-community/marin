@@ -33,7 +33,14 @@ from iris.cluster.controller.events import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.state import ControllerState, ControllerWorker
-from iris.cluster.types import AttributeValue, JobName, WorkerId
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.constraints import (
+    AttributeValue,
+    device_variant_constraint,
+    get_device_type,
+    get_device_variant,
+)
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
@@ -51,7 +58,7 @@ def _gpu_device(variant: str = "H100", count: int = 8) -> cluster_pb2.DeviceConf
 
 
 def _cpu_metadata() -> cluster_pb2.WorkerMetadata:
-    return cluster_pb2.WorkerMetadata(
+    meta = cluster_pb2.WorkerMetadata(
         hostname="test",
         ip_address="127.0.0.1",
         cpu_count=8,
@@ -59,10 +66,12 @@ def _cpu_metadata() -> cluster_pb2.WorkerMetadata:
         disk_bytes=100 * 1024**3,
         device=_cpu_device(),
     )
+    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(cluster_pb2.AttributeValue(string_value="cpu"))
+    return meta
 
 
 def _gpu_metadata(variant: str = "H100") -> cluster_pb2.WorkerMetadata:
-    return cluster_pb2.WorkerMetadata(
+    meta = cluster_pb2.WorkerMetadata(
         hostname="test-gpu",
         ip_address="127.0.0.1",
         cpu_count=32,
@@ -70,6 +79,20 @@ def _gpu_metadata(variant: str = "H100") -> cluster_pb2.WorkerMetadata:
         disk_bytes=500 * 1024**3,
         device=_gpu_device(variant),
     )
+    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(cluster_pb2.AttributeValue(string_value="gpu"))
+    meta.attributes[WellKnownAttribute.DEVICE_VARIANT].CopyFrom(cluster_pb2.AttributeValue(string_value=variant.lower()))
+    return meta
+
+
+def _default_attributes_for_device(device: cluster_pb2.DeviceConfig) -> dict[str, AttributeValue]:
+    """Build the worker attributes that the real env_probe would set from config."""
+    attrs: dict[str, AttributeValue] = {}
+    dt = get_device_type(device)
+    attrs[WellKnownAttribute.DEVICE_TYPE] = AttributeValue(dt)
+    dv = get_device_variant(device)
+    if dv:
+        attrs[WellKnownAttribute.DEVICE_VARIANT] = AttributeValue(dv.lower())
+    return attrs
 
 
 def _make_worker(
@@ -79,11 +102,16 @@ def _make_worker(
     healthy: bool = True,
 ) -> ControllerWorker:
     meta = metadata or _cpu_metadata()
+    # Workers always have device attributes from config (Stage 3).
+    # Merge explicit attributes on top of the device-derived defaults.
+    default_attrs = _default_attributes_for_device(meta.device)
+    if attributes:
+        default_attrs.update(attributes)
     return ControllerWorker(
         worker_id=WorkerId(worker_id),
         address=f"{worker_id}:8080",
         metadata=meta,
-        attributes=attributes or {},
+        attributes=default_attrs,
         healthy=healthy,
     )
 
@@ -216,10 +244,10 @@ def test_worker_matches_with_constraint():
     worker = _make_worker(
         "w1",
         _cpu_metadata(),
-        attributes={"region": AttributeValue("us-central1")},
+        attributes={WellKnownAttribute.REGION: AttributeValue("us-central1")},
     )
     constraint = cluster_pb2.Constraint(
-        key="region",
+        key=WellKnownAttribute.REGION,
         op=cluster_pb2.CONSTRAINT_OP_EQ,
         value=cluster_pb2.AttributeValue(string_value="us-central1"),
     )
@@ -231,7 +259,7 @@ def test_worker_rejects_unmet_constraint():
     """Worker without the required attribute fails the constraint check."""
     worker = _make_worker("w1", _cpu_metadata())
     constraint = cluster_pb2.Constraint(
-        key="region",
+        key=WellKnownAttribute.REGION,
         op=cluster_pb2.CONSTRAINT_OP_EQ,
         value=cluster_pb2.AttributeValue(string_value="us-central1"),
     )
@@ -651,7 +679,7 @@ def test_taint_constraint_mixed_jobs():
 def test_taint_constraint_preserves_existing_constraints():
     """Existing constraints are preserved when the taint constraint is added."""
     existing = cluster_pb2.Constraint(
-        key="region",
+        key=WellKnownAttribute.REGION,
         op=cluster_pb2.CONSTRAINT_OP_EQ,
         value=cluster_pb2.AttributeValue(string_value="us-central1"),
     )
@@ -670,7 +698,7 @@ def test_taint_constraint_preserves_existing_constraints():
     constraints = result[JobName.root("test-user", "regular")].constraints
     assert len(constraints) == 2
     # Original constraint preserved
-    region_constraints = [c for c in constraints if c.key == "region"]
+    region_constraints = [c for c in constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1
     # Taint constraint added
     taint_constraints = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
@@ -775,7 +803,7 @@ def test_preference_pass_skips_coscheduled_jobs():
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         constraints=[],
         is_coscheduled=True,
-        coscheduling_group_by="tpu-name",
+        coscheduling_group_by=WellKnownAttribute.TPU_NAME,
     )
     has_reservation = {job_id}
     claims = {WorkerId("w1"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=0)}
@@ -854,7 +882,7 @@ def test_region_constraint_injected_from_claimed_workers():
     w1 = _register_worker(ctrl.state, "w1")
     # Set region attribute on worker
     worker = ctrl.state.get_worker(w1)
-    worker.attributes["region"] = AttributeValue("us-central1")
+    worker.attributes[WellKnownAttribute.REGION] = AttributeValue("us-central1")
 
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
     jid = _submit_job(ctrl.state, "j1", req)
@@ -868,7 +896,7 @@ def test_region_constraint_injected_from_claimed_workers():
     )
 
     assert len(result) == 1
-    assert result[0].key == "region"
+    assert result[0].key == WellKnownAttribute.REGION
     assert result[0].op == cluster_pb2.CONSTRAINT_OP_EQ
     assert result[0].value.string_value == "us-central1"
 
@@ -878,14 +906,14 @@ def test_region_constraint_not_injected_when_already_present():
     ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     worker = ctrl.state.get_worker(w1)
-    worker.attributes["region"] = AttributeValue("us-central1")
+    worker.attributes[WellKnownAttribute.REGION] = AttributeValue("us-central1")
 
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
     jid = _submit_job(ctrl.state, "j1", req)
     ctrl._claim_workers_for_reservations()
 
     existing = cluster_pb2.Constraint(
-        key="region",
+        key=WellKnownAttribute.REGION,
         op=cluster_pb2.CONSTRAINT_OP_EQ,
         value=cluster_pb2.AttributeValue(string_value="us-east1"),
     )
@@ -924,8 +952,8 @@ def test_region_constraint_multiple_regions():
     ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
     w2 = _register_worker(ctrl.state, "w2")
-    ctrl.state.get_worker(w1).attributes["region"] = AttributeValue("us-central1")
-    ctrl.state.get_worker(w2).attributes["region"] = AttributeValue("us-east1")
+    ctrl.state.get_worker(w1).attributes[WellKnownAttribute.REGION] = AttributeValue("us-central1")
+    ctrl.state.get_worker(w2).attributes[WellKnownAttribute.REGION] = AttributeValue("us-east1")
 
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
@@ -941,7 +969,7 @@ def test_region_constraint_multiple_regions():
     )
 
     assert len(result) == 1
-    assert result[0].key == "region"
+    assert result[0].key == WellKnownAttribute.REGION
     assert result[0].op == cluster_pb2.CONSTRAINT_OP_IN
     regions = {v.string_value for v in result[0].values}
     assert regions == {"us-central1", "us-east1"}
@@ -951,7 +979,7 @@ def test_no_injection_for_non_reservation_job():
     """No claims for this job → constraints returned unchanged."""
     ctrl = _make_controller()
     w1 = _register_worker(ctrl.state, "w1")
-    ctrl.state.get_worker(w1).attributes["region"] = AttributeValue("us-central1")
+    ctrl.state.get_worker(w1).attributes[WellKnownAttribute.REGION] = AttributeValue("us-central1")
 
     # Claim w1 for a different job
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
@@ -1336,3 +1364,24 @@ def test_unrelated_job_blocked_when_all_workers_claimed():
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
     assert not_exists[0].op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+
+
+# =============================================================================
+# _worker_matches_reservation_entry with auto-injected constraints
+# =============================================================================
+
+
+def test_reservation_match_auto_injects_device_constraints():
+    """Reservation entry with GPU device auto-generates device constraints."""
+    worker = _make_worker("w1", _gpu_metadata("H100"))
+    entry = _make_reservation_entry(_gpu_device("H100"))
+    assert _worker_matches_reservation_entry(worker, entry)
+
+
+def test_reservation_match_user_variant_override():
+    """Explicit multi-variant constraint on entry overrides auto-generated single variant."""
+    worker = _make_worker("w1", _gpu_metadata("A100"))
+    user_constraint = device_variant_constraint(["A100", "H100"]).to_proto()
+    entry = _make_reservation_entry(_gpu_device("H100"), constraints=[user_constraint])
+    # Worker is A100, entry device is H100, but explicit constraint allows A100
+    assert _worker_matches_reservation_entry(worker, entry)
