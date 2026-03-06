@@ -68,7 +68,7 @@ from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_trainin
 from levanter.utils import cloud_utils, fsspec_utils
 from levanter.utils.jax_utils import zeros_like_tree
 from levanter.utils.mesh import MeshConfig, activate_mesh, create_mesh_from_axis_specs
-from levanter.utils.partitioning import named_jit
+from levanter.utils.partitioning import named_jit, shard, shard_with_axis_mapping
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec, ResourceMapping
 
@@ -692,7 +692,7 @@ class Trainer:
             return loss_for_opt.scalar()
 
         new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
-        new_state = hax.shard(new_state, self.parameter_axis_mapping)
+        new_state = shard(new_state, self.parameter_axis_mapping)
 
         hook_infos = None
         if not _no_hooks:
@@ -709,7 +709,7 @@ class Trainer:
             loss_metrics=train_metrics,
             hook_infos=hook_infos,
         )
-        return hax.shard_with_axis_mapping(result, self.parameter_axis_mapping)
+        return shard_with_axis_mapping(result, self.parameter_axis_mapping)
 
     def _compute_gradients_microbatched(
         self, loss_fn: WrappedLossFunction, model: M, *batch, **batch_kwargs

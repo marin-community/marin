@@ -20,8 +20,6 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
 
-import haliax as hax
-
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
@@ -34,7 +32,7 @@ from levanter.models.lm_model import ArrayLmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
 from levanter.utils.logging import LoadingTimeTrackerIterator
-from levanter.utils.partitioning import named_jit
+from levanter.utils.partitioning import named_jit, shard
 from levanter.utils.stat_utils import RunningMean
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ResourceMapping
@@ -491,7 +489,7 @@ class TaggedEvaluator(Generic[Ex, M]):
 
         state = _EvalRunningMeans.zeros_like(total_loss, mean_losses_per_tag)
         del total_loss, mean_losses_per_tag
-        state = hax.shard(state)
+        state = shard(state)
 
         iterator = LoadingTimeTrackerIterator(self.loader)
 

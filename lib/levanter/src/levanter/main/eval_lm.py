@@ -9,8 +9,6 @@ import equinox as eqx
 import jax
 import jmp
 
-import haliax as hax
-
 import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
@@ -27,7 +25,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
-from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning
+from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning, shard_with_axis_mapping
 from levanter.utils.tree_utils import inference_mode
 
 
@@ -138,7 +136,7 @@ def main(config: EvalLmConfig):
                 # TODO: don't load the entire checkpoint into CPU memory when we only need our share of the model
                 model = load_checkpoint(model, config.checkpoint_path, subpath="model")
 
-            model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
+            model = shard_with_axis_mapping(model, parameter_axis_mapping)
         elif config.hf_checkpoint is not None:
             # load the huggingface model
             model_config = config.model

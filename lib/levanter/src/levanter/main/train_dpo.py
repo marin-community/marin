@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Union, cast
 
 import equinox as eqx
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -32,7 +31,7 @@ from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count, use_cpu_device
-from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning
+from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning, shard
 from levanter.utils.tree_utils import inference_mode
 
 logger = logging.getLogger(__name__)
@@ -379,7 +378,7 @@ def main(config: TrainDpoConfig):
                     policy_model = load_checkpoint(
                         policy_model, config.initialize_from_checkpoint_path, subpath="model"
                     )
-                policy_model = hax.shard(policy_model, parameter_axis_mapping)
+                policy_model = shard(policy_model, parameter_axis_mapping)
                 policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
@@ -404,7 +403,7 @@ def main(config: TrainDpoConfig):
             with use_cpu_device():
                 reference_model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
                 reference_model = load_checkpoint(reference_model, config.reference_model_path, subpath="model")
-            reference_model = hax.shard(reference_model, parameter_axis_mapping)
+            reference_model = shard(reference_model, parameter_axis_mapping)
 
         reference_model = cast(LmHeadModel, inference_mode(reference_model, True))
         reference_model = named_jit(trainer.mp.cast_to_compute, parameter_axis_mapping)(reference_model)

@@ -10,8 +10,6 @@ import jax
 import jax.numpy as jnp
 import jmp
 
-import haliax as hax
-
 import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -22,7 +20,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
-from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning
+from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning, shard
 from levanter.utils.tree_utils import inference_mode
 from levanter.visualization import compute_and_diff_log_probs, compute_and_visualize_log_probs
 
@@ -113,7 +111,7 @@ def main(config: VizLmConfig):
             with use_cpu_device():
                 model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
                 model = load_checkpoint(model, config.checkpoint_path, subpath="model")
-            model = hax.shard(model, parameter_axis_mapping)
+            model = shard(model, parameter_axis_mapping)
 
         model = inference_mode(model, True)
 
@@ -132,7 +130,7 @@ def main(config: VizLmConfig):
                 with use_cpu_device():
                     comparison_model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
                     comparison_model = load_checkpoint(comparison_model, config.comparison_model_path, subpath="model")
-                comparison_model = hax.shard(comparison_model, parameter_axis_mapping)
+                comparison_model = shard(comparison_model, parameter_axis_mapping)
             comparison_model = inference_mode(comparison_model, True)
         else:
             comparison_model = None

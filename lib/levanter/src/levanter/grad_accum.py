@@ -17,7 +17,7 @@ from levanter.metrics import Metric
 from levanter.metrics import fold as fold_metric
 from levanter.utils.jax_utils import is_named_array, zeros_like_tree
 from levanter.utils.mesh import DATA_AXIS
-from levanter.utils.partitioning import physical_axis_name, physical_axis_size
+from levanter.utils.partitioning import physical_axis_name, physical_axis_size, shard, shard_with_axis_mapping
 
 Args = ParamSpec("Args")
 R = TypeVar("R")
@@ -150,7 +150,7 @@ def microbatched(
 
                 # Repack and shard
                 acc = ((new_loss, new_metrics), new_grads)
-                acc = hax.shard_with_axis_mapping(acc, accum_axis_mapping)
+                acc = shard_with_axis_mapping(acc, accum_axis_mapping)
 
             return acc
 
@@ -176,7 +176,7 @@ def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inpu
             if not x.has_axis(Batch.name):
                 return x
             x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
-            return hax.shard(x, axis_mapping)
+            return shard(x, axis_mapping)
         elif isinstance(x, jnp.ndarray):
             x = x.reshape((AccumStep.size, Microbatch.size) + x.shape[1:])
             return with_sharding_constraint(x, PartitionSpec(None, DATA_AXIS, *(None,) * (len(x.shape) - 2)))
