@@ -11,7 +11,6 @@ import haliax.nn as hnn
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
@@ -40,10 +39,10 @@ class XIELUActivation(ModuleWithStateDictSerialization):
     flatten_for_export/unflatten_from_export handle the () <-> (1,) conversion.
     """
 
-    alpha_p: NamedArray  # scalar
-    alpha_n: NamedArray  # scalar
-    beta: NamedArray  # scalar (constant)
-    eps: NamedArray  # scalar (constant)
+    alpha_p: hax.NamedArray  # scalar
+    alpha_n: hax.NamedArray  # scalar
+    beta: hax.NamedArray  # scalar (constant)
+    eps: hax.NamedArray  # scalar (constant)
 
     @staticmethod
     def init(
@@ -60,7 +59,7 @@ class XIELUActivation(ModuleWithStateDictSerialization):
         eps_arr = hax.full((), eps, dtype=dtype)
         return XIELUActivation(alpha_p, alpha_n, beta_arr, eps_arr)
 
-    def __call__(self, x: NamedArray) -> NamedArray:
+    def __call__(self, x: hax.NamedArray) -> hax.NamedArray:
         alpha_p = hnn.softplus(self.alpha_p)
         alpha_n = hnn.softplus(self.alpha_n)
         beta = self.beta
@@ -73,7 +72,7 @@ class XIELUActivation(ModuleWithStateDictSerialization):
 
     def flatten_for_export(self) -> "XIELUActivation":
         """Expand scalar parameters to [1] shape for HF checkpoint compatibility."""
-        Param = Axis("xielu_param", 1)
+        Param = hax.Axis("xielu_param", 1)
         alpha_p = hax.named(self.alpha_p.array.reshape(1), Param)
         alpha_n = hax.named(self.alpha_n.array.reshape(1), Param)
         return XIELUActivation(alpha_p, alpha_n, self.beta, self.eps)
@@ -226,8 +225,8 @@ class ApertusMlp(ModuleWithStateDictSerialization):
 
     @staticmethod
     def init(
-        Embed: AxisSpec,
-        Mlp: AxisSpec,
+        Embed: hax.AxisSpec,
+        Mlp: hax.AxisSpec,
         activation_function: ActivationFunctionEnum | str,
         *,
         key,
@@ -243,7 +242,7 @@ class ApertusMlp(ModuleWithStateDictSerialization):
         return ApertusMlp(up_proj, down_proj, act_fn)
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: hax.NamedArray, *, key=None) -> hax.NamedArray:
         k_up, k_down = maybe_rng_split(key, 2)
         x = self.up_proj(x, key=k_up)
         x = self.act_fn(x)
@@ -276,8 +275,13 @@ class ApertusDecoderLayer(ModuleWithStateDictSerialization):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        mask: hax.NamedArray | AttentionMask | None,
+        *,
+        key=None,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         residual = x
         x = self.attention_layernorm(x)
@@ -293,13 +297,13 @@ class ApertusDecoderLayer(ModuleWithStateDictSerialization):
     @named_call
     def decode(
         self,
-        x: NamedArray,
+        x: hax.NamedArray,
         kv_cache: KvPageCache,
         batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
+        pos_ids: hax.NamedArray,
         *,
         key=None,
-    ) -> tuple[NamedArray, KvPageCache]:
+    ) -> tuple[hax.NamedArray, KvPageCache]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         residual = x
         x = self.attention_layernorm(x)
@@ -337,10 +341,15 @@ class ApertusTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        attn_mask: hax.NamedArray | AttentionMask | None,
+        *,
+        key,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
+        x = cast(hax.NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
@@ -348,12 +357,12 @@ class ApertusTransformer(eqx.Module):
     def decode(
         self,
         kv_cache: ListCache[KvPageCache],
-        x: NamedArray,
+        x: hax.NamedArray,
         batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
+        pos_ids: hax.NamedArray,
         *,
         key=None,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+    ) -> tuple[hax.NamedArray, ListCache[KvPageCache]]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
 
         caches = list(kv_cache)
@@ -396,11 +405,11 @@ class ApertusLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[ApertusCo
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     @classmethod
-    def init(cls, Vocab: Axis, config: ApertusConfig, *, key) -> "ApertusLMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: ApertusConfig, *, key) -> "ApertusLMHeadModel":
         k_t, k_emb = jrandom.split(key, 2)
         transformer = ApertusTransformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
@@ -413,12 +422,12 @@ class ApertusLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[ApertusCo
 
     def __call__(
         self,
-        input_ids: NamedArray,
-        attn_mask: NamedArray | AttentionMask | None = None,
-        pos_ids: NamedArray | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: hax.NamedArray | AttentionMask | None = None,
+        pos_ids: hax.NamedArray | None = None,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> hax.NamedArray:
         k_t, k_head = maybe_rng_split(key, 2)
         x = self.embeddings.embed(input_ids)
         x = self.transformer(x, attn_mask=attn_mask, key=k_t, pos_ids=pos_ids)
@@ -430,12 +439,12 @@ class ApertusLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[ApertusCo
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: AttentionMask | NamedArray | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: AttentionMask | hax.NamedArray | None = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         x = self.embeddings.embed(input_ids)
         x = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
         return x
@@ -466,13 +475,13 @@ class ApertusLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[ApertusCo
     @named_call
     def decode(
         self,
-        input_ids: NamedArray,
+        input_ids: hax.NamedArray,
         kv_cache: ListCache[KvPageCache],
         batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
+        pos_ids: hax.NamedArray,
         *,
         key=None,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+    ) -> tuple[hax.NamedArray, ListCache[KvPageCache]]:
         x = self.embeddings.embed(input_ids)
         k_t = maybe_rng_split(key, 1)[0] if key is not None else None
         x, kv_cache = self.transformer.decode(kv_cache, x, batch_info, pos_ids=pos_ids, key=k_t)
