@@ -5,7 +5,14 @@ import logging
 
 import pytest
 
-from iris.logging import BufferedLogRecord, LogRingBuffer, RingBufferHandler, slow_log
+from iris.logging import (
+    BufferedLogRecord,
+    LevelPrefixFormatter,
+    LogRingBuffer,
+    RingBufferHandler,
+    parse_log_level,
+    slow_log,
+)
 
 
 @pytest.fixture
@@ -101,6 +108,86 @@ def test_configure_logging_captures_records():
         results = buf.query(prefix="iris.test.configure_test")
         assert len(results) >= 1
         assert "cfg-test-msg" in results[-1].message
+    finally:
+        iris_logging._configured = False
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.handlers.extend(old_handlers)
+
+
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        # Single-letter prefix format (the only supported format)
+        ("I20260306 12:44:05 iris.worker starting up", "INFO"),
+        ("E20260306 12:44:05 iris.worker failed", "ERROR"),
+        ("W20260306 12:44:05 iris.worker slow", "WARNING"),
+        ("D20260306 12:44:05 iris.worker debug", "DEBUG"),
+        ("C20260306 12:44:05 iris.worker critical", "CRITICAL"),
+        # Other formats are not recognized (we've normalized to single-letter prefix)
+        ("[INFO] some message", None),
+        ("2025-01-01 12:00:00 - INFO - message", None),
+        # No level detected
+        ("just some random output", None),
+        ("", None),
+        ("12345", None),
+    ],
+)
+def test_parse_log_level(line, expected):
+    """parse_log_level detects levels from the single-letter prefix format only."""
+    assert parse_log_level(line) == expected
+
+
+def test_level_prefix_formatter_produces_expected_format():
+    """LevelPrefixFormatter prepends a single-letter level prefix."""
+    formatter = LevelPrefixFormatter(
+        fmt="%(levelprefix)s%(asctime)s %(name)s %(message)s",
+        datefmt="%Y%m%d %H:%M:%S",
+    )
+    record = logging.LogRecord(
+        name="iris.test",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="hello",
+        args=(),
+        exc_info=None,
+    )
+    output = formatter.format(record)
+    assert output.startswith("I"), f"Expected 'I' prefix, got: {output}"
+    assert "iris.test" in output
+    assert "hello" in output
+
+
+def test_configure_logging_uses_level_prefix_format():
+    """configure_logging produces log lines with single-letter level prefix."""
+
+    import iris.logging as iris_logging
+
+    iris_logging._configured = False
+    old_handlers = logging.getLogger().handlers[:]
+    try:
+        iris_logging.configure_logging(level=logging.DEBUG)
+        root = logging.getLogger()
+        # Find the stderr handler and capture its output
+        for h in root.handlers:
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, RingBufferHandler):
+                record = logging.LogRecord(
+                    name="test.fmt",
+                    level=logging.WARNING,
+                    pathname="",
+                    lineno=0,
+                    msg="test-msg",
+                    args=(),
+                    exc_info=None,
+                )
+                output = h.format(record)
+                assert output.startswith("W"), f"Expected 'W' prefix, got: {output}"
+                assert "test.fmt" in output
+                assert "test-msg" in output
+                break
+        else:
+            pytest.fail("No StreamHandler found after configure_logging")
     finally:
         iris_logging._configured = False
         root = logging.getLogger()

@@ -26,6 +26,7 @@ import datetime
 import os
 
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
@@ -87,6 +88,7 @@ def make_training_step(accelerator: str = "tpu"):
             nesterov=False,
         ),
         steps_per_eval=500,
+        profiler=ProfilerConfig(enabled=True),
     )
 
     return default_train(

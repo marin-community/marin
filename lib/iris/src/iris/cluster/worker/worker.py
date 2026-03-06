@@ -32,7 +32,7 @@ from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer, slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2, logging_pb2
+from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -344,12 +344,20 @@ class Worker:
             stop_event.wait(1.0)
 
     def _reset_worker_state(self) -> None:
-        """Reset worker state: wipe all containers and clear tracking."""
+        """Reset worker state: stop task threads, wipe containers, clear tracking."""
         logger.info("Resetting worker state")
+
+        # Stop all running task threads so they exit cleanly before we
+        # kill containers.  Without this, orphaned threads discover their
+        # containers are gone and log confusing "Container not found" errors.
+        self._task_threads.stop()
 
         # Clear task tracking
         with self._lock:
             self._tasks.clear()
+
+        # Replace the task thread container so new tasks get a fresh group.
+        self._task_threads = self._threads.create_child("tasks")
 
         # Wipe ALL iris containers (simple, no tracking needed)
         self._cleanup_all_iris_containers()
@@ -755,50 +763,6 @@ class Worker:
         if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
             raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)
-
-    def get_logs(
-        self,
-        task_id: str,
-        start_line: int = 0,
-        attempt_id: int = -1,
-    ) -> list[logging_pb2.LogEntry]:
-        """Get logs for a task.
-
-        Logs are streamed into task.logs during execution (single source of truth).
-        Container is removed after task completion to release TPU devices.
-
-        Args:
-            task_id: ID of the task to get logs for
-            start_line: Line offset (supports negative indexing: -1000 = last 1000 lines)
-            attempt_id: Specific attempt to get logs for (-1 = all attempts for this task)
-
-        Returns:
-            List of LogEntry protos with attempt_id populated.
-        """
-        if attempt_id >= 0:
-            # Specific attempt requested
-            task = self._tasks.get((task_id, attempt_id))
-            if not task:
-                return []
-            logs = task.recent_logs(max_entries=0)
-            logs.sort(key=lambda x: x.timestamp.epoch_ms)
-            return logs[start_line:]
-
-        # All attempts for this task
-        all_logs: list[logging_pb2.LogEntry] = []
-        for (tid, aid), task in self._tasks.items():
-            if tid != task_id:
-                continue
-            logs = task.recent_logs(max_entries=0)
-            for log in logs:
-                entry = logging_pb2.LogEntry()
-                entry.CopyFrom(log)
-                if entry.attempt_id == 0:
-                    entry.attempt_id = aid
-                all_logs.append(entry)
-
-        all_logs.sort(key=lambda x: x.timestamp.epoch_ms)
-        return all_logs[start_line:]
 
     @property
     def url(self) -> str:

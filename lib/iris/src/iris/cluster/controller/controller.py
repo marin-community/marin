@@ -10,6 +10,7 @@ import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from time import sleep
 from typing import Protocol
 
@@ -514,6 +515,9 @@ class ControllerConfig:
     """If set, take a periodic best-effort snapshot this often.
     Runs in the autoscaler loop thread; does not pause scheduling."""
 
+    log_dir: Path | None = None
+    """Persistent directory for task log files. When None, uses a temp dir."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -564,7 +568,10 @@ class Controller:
         self._config = config
         self.stub_factory = worker_stub_factory
 
-        self._state = ControllerState(heartbeat_failure_threshold=config.heartbeat_failure_threshold)
+        self._state = ControllerState(
+            heartbeat_failure_threshold=config.heartbeat_failure_threshold,
+            log_dir=config.log_dir,
+        )
         self._scheduler = Scheduler()
         self._service = ControllerServiceImpl(
             self._state,
@@ -739,7 +746,10 @@ class Controller:
                 break
             if self._checkpoint_in_progress:
                 continue
-            self._heartbeat_all_workers()
+            try:
+                self._heartbeat_all_workers()
+            except Exception:
+                logger.exception("Heartbeat round failed, will retry next interval")
 
     def _is_reservation_satisfied(self, job: ControllerJob) -> bool:
         """Check if a job's reservation is fully satisfied.

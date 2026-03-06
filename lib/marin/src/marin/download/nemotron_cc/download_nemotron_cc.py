@@ -23,7 +23,7 @@ from marin.utils import fsspec_exists
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 myagent = "marin-nemotron-ingress/1.0"
 NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/data-jsonl.paths.gz"
