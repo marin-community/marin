@@ -17,7 +17,7 @@ from levanter.metrics import Metric
 from levanter.metrics import fold as fold_metric
 from levanter.utils.jax_utils import is_named_array, zeros_like_tree
 from levanter.utils.mesh import DATA_AXIS
-from levanter.utils.partitioning import physical_axis_name, physical_axis_size, shard, shard_with_axis_mapping
+from levanter.utils.partitioning import axis, physical_axis_name, physical_axis_size, shard, shard_with_axis_mapping
 
 Args = ParamSpec("Args")
 R = TypeVar("R")
@@ -90,7 +90,7 @@ def microbatched(
         )
 
     Microbatch = Batch.resize(microbatch_size)
-    AccumStep = Axis("accum_step", num_micro_steps)
+    AccumStep = axis("accum_step", num_micro_steps)
     if num_micro_steps * microbatch_size != batch_size:
         raise ValueError(
             "Batch size must be an integer multiple of microbatch_size. "
