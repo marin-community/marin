@@ -198,7 +198,8 @@ def cb_tagged_lm_evaluate(
     eval_batch_size: int,
     tagged_eval_sets: Sequence[tuple[AsyncDataset[LmEvalExample], Sequence[str]]],
     tokenizer: Optional[HfTokenizer] = None,
-    device_mesh: Optional[Mesh] = None,
+    *,
+    device_mesh: Mesh,
     compute_axis_mapping: ResourceMapping | None = None,
     batch_axis_resource=None,
     batch_axis_name: str = "batch",
@@ -242,9 +243,6 @@ def cb_tagged_lm_evaluate(
 
         def loss_fn(model: ArrayLmHeadModel, batch: LmEvalExample) -> LossFnOutput:
             return _default_lm_eval_loss_fn(model, batch, batch_axis_name=batch_axis_name, mp=mp)
-
-    if device_mesh is None:
-        raise ValueError("cb_tagged_lm_evaluate requires an explicit device_mesh.")
 
     if batch_axis_resource is None:
         batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_mapping)
@@ -403,15 +401,13 @@ class TaggedEvaluator(Generic[Ex, M]):
         tagged_eval_sets: Sequence[tuple[AsyncDataset[Ex], Sequence[str]]],
         loss_fn: Callable[[M, Ex], LossFnOutput],
         tokenizer: Optional[HfTokenizer] = None,
-        device_mesh: Mesh | None = None,
+        *,
+        device_mesh: Mesh,
         compute_axis_mapping=None,
         batch_axis_resource=None,
         batch_axis_name: str = "batch",
         max_examples_per_dataset=None,
     ):
-        if device_mesh is None:
-            raise ValueError("TaggedEvaluator requires an explicit device_mesh.")
-
         if batch_axis_resource is None:
             batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_mapping)
         loader_axis_resources = compute_axis_mapping
