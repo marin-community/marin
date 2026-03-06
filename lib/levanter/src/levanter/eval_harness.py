@@ -1268,7 +1268,8 @@ def run_lm_eval_harness(
         Otherwise, returns None.
     """
     if batch_axis_resource is None:
-        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_resources)
+        batch_axis_name = EvalBatch.name if isinstance(EvalBatch, hax.Axis) else "batch"
+        batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_resources)
 
     # Build the tasks dictionary
     tasks_to_run = config.to_task_dict()
@@ -1324,7 +1325,7 @@ def _actually_run_eval_harness(
     )
     logger.info("Running eval harness...")
     if batch_axis_resource is None:
-        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_resources)
+        batch_axis_resource = resolve_batch_axis_resource(EvalBatch.name, compute_axis_resources)
 
     worker = _LmEvalHarnessWorker(
         EvalBatch,
@@ -1605,7 +1606,8 @@ def lm_eval_harness(
     """
     tasks_to_run = config.to_task_dict()
     if batch_axis_resource is None:
-        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_resources)
+        batch_axis_name = EvalBatch.name if isinstance(EvalBatch, hax.Axis) else "batch"
+        batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_resources)
 
     def lm_eval_harness(step: StepInfo, force=False):
         if step.step == 0 and not force:

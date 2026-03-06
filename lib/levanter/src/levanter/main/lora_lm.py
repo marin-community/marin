@@ -134,7 +134,8 @@ def main(config: LoraLmConfig):
             compute_axis_mapping = trainer.compute_axis_mapping
             batch_axis_resource = trainer.batch_axis_resource
             cb = levanter.eval.cb_tagged_lm_evaluate(
-                EvalBatch=trainer.EvalBatch,
+                eval_batch_size=config.trainer.eval_batch_size,
+                batch_axis_name=config.trainer.batch_axis_name,
                 tagged_eval_sets=tagged_eval_datasets,
                 tokenizer=tokenizer,
                 device_mesh=trainer.device_mesh,

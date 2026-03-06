@@ -52,12 +52,10 @@ TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
 
 
-def resolve_batch_axis_resource(EvalBatch: hax.Axis | int, compute_axis_mapping: ResourceMapping | None):
+def resolve_batch_axis_resource(batch_axis_name: str, compute_axis_mapping: ResourceMapping | None):
     if compute_axis_mapping is None:
         return None
-    if isinstance(EvalBatch, int):
-        return compute_axis_mapping.get("batch")
-    return compute_axis_mapping.get(EvalBatch.name, compute_axis_mapping.get("batch"))
+    return compute_axis_mapping.get(batch_axis_name, compute_axis_mapping.get("batch"))
 
 
 @dataclasses.dataclass
@@ -179,7 +177,7 @@ def _default_lm_eval_loss_fn(
     model: ArrayLmHeadModel,
     batch: LmLikeExample,
     *,
-    EvalBatch: hax.Axis,
+    batch_axis_name: str,
     mp: jmp.Policy | None,
 ) -> LossFnOutput:
     model = inference_mode(model, True)
@@ -188,7 +186,7 @@ def _default_lm_eval_loss_fn(
 
     per_pos_loss = model.compute_next_token_loss_array(
         batch,
-        batch_axis=EvalBatch,
+        batch_axis=batch_axis_name,
         reduction=None,
         reduction_axis=(),
     )
@@ -199,12 +197,13 @@ def _default_lm_eval_loss_fn(
 
 
 def cb_tagged_lm_evaluate(
-    EvalBatch: hax.Axis | int,
+    eval_batch_size: int,
     tagged_eval_sets: Sequence[tuple[AsyncDataset[LmEvalExample], Sequence[str]]],
     tokenizer: Optional[HfTokenizer] = None,
     device_mesh: Optional[Mesh] = None,
     compute_axis_mapping: ResourceMapping | None = None,
     batch_axis_resource=None,
+    batch_axis_name: str = "batch",
     max_examples_per_dataset: Optional[int] = None,
     eval_current: bool = True,
     eval_ema: bool = True,
@@ -223,11 +222,12 @@ def cb_tagged_lm_evaluate(
 
     !!! note
 
-        The evaluator loss callback should produce per-position arrays with shape `[EvalBatch, Token]`:
+        The evaluator loss callback should produce per-position arrays with shape `[batch, token]`:
         `(per_pos_loss, per_pos_weight, per_pos_token_id)`.
 
     Args:
-        EvalBatch: The axis for the evaluation batch (mostly for the batch size)
+        eval_batch_size: Batch size for evaluation.
+        batch_axis_name: Batch axis name used for loader sharding and model loss calls.
         tagged_eval_sets: A list of datasets, each with its own domain tag
         tokenizer: The tokenizer to use for bits-per-byte evaluation (optional)
         device_mesh: The mesh to use for evaluation
@@ -240,25 +240,23 @@ def cb_tagged_lm_evaluate(
         checkpoint_path: If provided, write eval metrics to a JSONL file in this directory
     """
 
-    if isinstance(EvalBatch, int):
-        EvalBatch = hax.Axis("batch", EvalBatch)
-
     if loss_fn is None:
 
         def loss_fn(model: ArrayLmHeadModel, batch: LmEvalExample) -> LossFnOutput:
-            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
+            return _default_lm_eval_loss_fn(model, batch, batch_axis_name=batch_axis_name, mp=mp)
 
     if batch_axis_resource is None:
-        batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_mapping)
+        batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_mapping)
 
     evaluator = TaggedEvaluator(
-        EvalBatch=EvalBatch,
+        eval_batch_size=eval_batch_size,
         tagged_eval_sets=tagged_eval_sets,
         loss_fn=loss_fn,
         tokenizer=tokenizer,
         device_mesh=device_mesh,
         compute_axis_mapping=compute_axis_mapping,
         batch_axis_resource=batch_axis_resource,
+        batch_axis_name=batch_axis_name,
         max_examples_per_dataset=max_examples_per_dataset,
     )
 
@@ -400,27 +398,27 @@ class TaggedEvaluator(Generic[Ex, M]):
 
     def __init__(
         self,
-        EvalBatch: hax.Axis | int,
+        eval_batch_size: int,
         tagged_eval_sets: Sequence[tuple[AsyncDataset[Ex], Sequence[str]]],
         loss_fn: Callable[[M, Ex], LossFnOutput],
         tokenizer: Optional[HfTokenizer] = None,
         device_mesh=None,
         compute_axis_mapping=None,
         batch_axis_resource=None,
+        batch_axis_name: str = "batch",
         max_examples_per_dataset=None,
     ):
-        if isinstance(EvalBatch, int):
-            EvalBatch = hax.Axis("batch", EvalBatch)
         if batch_axis_resource is None:
-            batch_axis_resource = resolve_batch_axis_resource(EvalBatch, compute_axis_mapping)
+            batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_mapping)
         loader_axis_resources = compute_axis_mapping
         if batch_axis_resource is not None:
-            loader_axis_resources = {EvalBatch.name: batch_axis_resource}
+            loader_axis_resources = {batch_axis_name: batch_axis_resource}
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
         self.loader = DataLoader(
             self.dataset.as_async_dataset(),
-            EvalBatch,
+            eval_batch_size,
+            batch_axis_name=batch_axis_name,
             max_buffered_batches=100,
             mesh=device_mesh,
             axis_resources=loader_axis_resources,

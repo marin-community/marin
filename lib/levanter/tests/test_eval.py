@@ -57,7 +57,7 @@ def test_tagged_evaluator_accepts_grug_lm_examples():
             )
 
         evaluator = TaggedEvaluator(
-            EvalBatch=EvalBatch.size,
+            eval_batch_size=EvalBatch.size,
             tagged_eval_sets=[(dataset, ["grug"])],
             loss_fn=loss_fn,
             tokenizer=None,
@@ -105,7 +105,8 @@ def test_tagged_evaluator_accepts_mixed_lm_example_types():
             )
 
         evaluator = TaggedEvaluator(
-            EvalBatch=EvalBatch,
+            eval_batch_size=EvalBatch.size,
+            batch_axis_name=EvalBatch.name,
             tagged_eval_sets=[(named_dataset, ["named"]), (grug_dataset, ["grug"])],
             loss_fn=loss_fn,
             tokenizer=None,
@@ -163,7 +164,8 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
             return per_pos_loss, batch.loss_weight, jnp.roll(batch.tokens, -1, axis=-1)
 
         evaluator = TaggedEvaluator(
-            EvalBatch=EvalBatch,
+            eval_batch_size=EvalBatch.size,
+            batch_axis_name=EvalBatch.name,
             tagged_eval_sets=[(dataset, ["grug"])],
             loss_fn=loss_fn,
             tokenizer=None,

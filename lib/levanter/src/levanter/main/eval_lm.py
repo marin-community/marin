@@ -59,7 +59,8 @@ def main(config: EvalLmConfig):
     levanter.initialize(config)
     tokenizer = config.data.the_tokenizer
 
-    Batch = config.trainer.EvalBatch
+    eval_batch_size = config.trainer.eval_batch_size
+    batch_axis_name = config.trainer.batch_axis_name
     Pos = config.model.max_Pos.resize(config.max_eval_length)
 
     if config.eval_on_train:
@@ -81,7 +82,7 @@ def main(config: EvalLmConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
     batch_axis_resource = config.trainer.batch_axis_resource
-    loader_axis_resources = {Batch.name: batch_axis_resource} if batch_axis_resource is not None else None
+    loader_axis_resources = {batch_axis_name: batch_axis_resource} if batch_axis_resource is not None else None
 
     if config.checkpoint_path is None and config.hf_checkpoint is None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint")
@@ -103,7 +104,7 @@ def main(config: EvalLmConfig):
             model = mp.cast_to_compute(model)
             per_pos_loss = model.compute_next_token_loss_array(
                 batch,
-                batch_axis=Batch,
+                batch_axis=batch_axis_name,
                 reduction=None,
                 reduction_axis=(),
             )
@@ -113,7 +114,8 @@ def main(config: EvalLmConfig):
             return per_pos_loss, per_pos_weight, per_pos_token_id
 
         evaluator = TaggedEvaluator(
-            EvalBatch=Batch,
+            eval_batch_size=eval_batch_size,
+            batch_axis_name=batch_axis_name,
             tagged_eval_sets=datasets,
             loss_fn=eval_loss_fn,
             tokenizer=tokenizer,
@@ -126,7 +128,7 @@ def main(config: EvalLmConfig):
         def compute_logits(model: ArrayLmHeadModel, example: LmEvalExample):
             model = mp.cast_to_compute(model)
             token_ids = token_ids_array_from_lm_example(example)
-            return model.logits_from_token_ids_array(token_ids, batch_axis=Batch, key=None)
+            return model.logits_from_token_ids_array(token_ids, batch_axis=batch_axis_name, key=None)
 
         # initialize the model
         if config.checkpoint_path is not None:
@@ -168,7 +170,7 @@ def main(config: EvalLmConfig):
                 loader = DataLoader(
                     dataset,
                     batch_size=config.trainer.eval_batch_size,
-                    batch_axis_name=Batch.name,
+                    batch_axis_name=batch_axis_name,
                     axis_resources=loader_axis_resources,
                 )
                 entropy_hist = levanter.analysis.compute_entropy_histogram(
@@ -193,7 +195,7 @@ def main(config: EvalLmConfig):
                 loader = DataLoader(
                     dataset,
                     batch_size=config.trainer.eval_batch_size,
-                    batch_axis_name=Batch.name,
+                    batch_axis_name=batch_axis_name,
                     axis_resources=loader_axis_resources,
                 )
                 top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(

@@ -138,7 +138,6 @@ def main(config: TrainLmConfig):
         parameter_axis_mapping = trainer.parameter_axis_mapping
 
         # some axes we need
-        EvalBatch = config.trainer.EvalBatch
         batch_axis_resource = trainer.batch_axis_resource
         model_max_seq_len = config.model.max_seq_len
         train_length = config.train_seq_len
@@ -220,7 +219,8 @@ def main(config: TrainLmConfig):
                 checkpoint_path = config.trainer.checkpointer.expanded_path(trainer.run_id)
 
             cb = levanter.eval.cb_tagged_lm_evaluate(
-                EvalBatch=EvalBatch,
+                eval_batch_size=config.trainer.eval_batch_size,
+                batch_axis_name=config.trainer.batch_axis_name,
                 tagged_eval_sets=tagged_eval_datasets,
                 tokenizer=tokenizer,
                 device_mesh=trainer.device_mesh,
@@ -284,7 +284,7 @@ def main(config: TrainLmConfig):
                 levanter.eval_harness.lm_eval_harness(
                     eval_harness,
                     tokenizer,
-                    EvalBatch,
+                    config.trainer.eval_batch_size,
                     compute_axis_resources=compute_axis_mapping,
                     mp=trainer.mp,
                     batch_axis_resource=batch_axis_resource,
@@ -296,7 +296,7 @@ def main(config: TrainLmConfig):
         def compute_logits(model: ArrayLmHeadModel, example: LmLikeExample):
             model = trainer.mp.cast_to_compute(model)
             token_ids = token_ids_array_from_lm_example(example)
-            return model.logits_from_token_ids_array(token_ids, batch_axis=EvalBatch, key=None)
+            return model.logits_from_token_ids_array(token_ids, batch_axis=config.trainer.batch_axis_name, key=None)
 
         if config.log_entropy:
             for name, dataset in config.data.validation_grug_sets(seq_len=Pos.size).items():
@@ -306,9 +306,9 @@ def main(config: TrainLmConfig):
                         Vocab,
                         dataset,
                         prefix=os.path.join("analysis", name) if name else "analysis",
-                        batch_size=EvalBatch.size,
+                        batch_size=config.trainer.eval_batch_size,
                         batch_axis_resource=batch_axis_resource,
-                        batch_axis_name=EvalBatch.name,
+                        batch_axis_name=config.trainer.batch_axis_name,
                     ),
                     every=config.trainer.steps_per_eval,
                 )
