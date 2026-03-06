@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Helpers for composing autoscaler-aware pending diagnostics.
@@ -17,8 +17,6 @@ from collections import Counter, defaultdict
 
 from iris.cluster.types import JobName
 from iris.rpc import vm_pb2
-
-ACTIVE_SCALE_UP_HINT_PREFIX = "Waiting for worker scale-up in scale group"
 
 
 def _task_id_to_job_id(task_id: str) -> str | None:
@@ -88,8 +86,3 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
         hints[job_id] = f"Unsatisfied autoscaler demand: {reason}"
 
     return hints
-
-
-def is_active_scale_up_hint(hint: str) -> bool:
-    """Whether a hint indicates an active scale-up request."""
-    return hint.startswith(ACTIVE_SCALE_UP_HINT_PREFIX)

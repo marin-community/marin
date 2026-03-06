@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -9,7 +9,7 @@ import cloudpickle
 
 from marin.execution.artifact import Artifact
 from marin.execution.disk_cache import disk_cache
-from marin.execution.distributed_lock import distributed_lock
+from marin.execution.executor_step_status import distributed_lock
 from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
 from marin.execution.step_spec import StepSpec
 
@@ -122,10 +122,8 @@ def test_decorator_with_cloudpickle(tmp_path: Path):
 
 
 def test_decorator_auto_path_from_marin_prefix(tmp_path: Path, monkeypatch):
-    """When no output_path is given, disk_cache derives one from MARIN_PREFIX."""
+    """When no output_path is given, disk_cache derives one from MARIN_PREFIX via marin_temp_bucket."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
-    # Ensure get_temp_bucket_path returns None so MARIN_PREFIX is used
-    monkeypatch.setattr("marin.execution.disk_cache.get_temp_bucket_path", lambda *a, **kw: None)
 
     call_count = 0
 
@@ -144,11 +142,36 @@ def test_decorator_auto_path_from_marin_prefix(tmp_path: Path, monkeypatch):
     assert call_count == 1
     assert result2 == 50
 
-    # Verify the cache landed under MARIN_PREFIX
-    prefix_dir = tmp_path / "prefix"
-    cache_dirs = list(prefix_dir.glob("disk_cache_*"))
+    # marin_temp_bucket places local caches under {MARIN_PREFIX}/tmp/
+    tmp_dir = tmp_path / "prefix" / "tmp"
+    cache_dirs = list(tmp_dir.glob("disk_cache_*"))
     assert len(cache_dirs) == 1
     assert (cache_dirs[0] / "data.pkl").exists()
+
+
+def test_run_step_with_cache_and_lock(tmp_path: Path):
+    """run_step acquires a lock, runs the function, saves the artifact, and writes STATUS_SUCCESS."""
+    from marin.execution.step_runner import check_cache, run_step
+
+    call_count = 0
+
+    def counting_fn(output_path: str) -> dict:
+        nonlocal call_count
+        call_count += 1
+        os.makedirs(output_path, exist_ok=True)
+        return {"value": 42}
+
+    spec = StepSpec(name="run-step", output_path_prefix=tmp_path.as_posix(), fn=counting_fn)
+
+    # First run: should execute
+    run_step(spec)
+    assert call_count == 1
+    assert check_cache(spec.output_path)
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+
+    # Second run: cache hit, should not re-execute
+    run_step(spec)
+    assert call_count == 1
 
 
 def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
@@ -156,7 +179,6 @@ def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
     from functools import cache
 
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
-    monkeypatch.setattr("marin.execution.disk_cache.get_temp_bucket_path", lambda *a, **kw: None)
 
     call_count = 0
 
@@ -183,8 +205,8 @@ def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
     assert call_count == 1  # still 1: disk_cache served the result
     assert r3 == r1
 
-    # Verify the cache landed under MARIN_PREFIX
-    prefix_dir = tmp_path / "prefix"
-    cache_dirs = list(prefix_dir.glob("disk_cache_*"))
+    # marin_temp_bucket places local caches under {MARIN_PREFIX}/tmp/
+    tmp_dir = tmp_path / "prefix" / "tmp"
+    cache_dirs = list(tmp_dir.glob("disk_cache_*"))
     assert len(cache_dirs) == 1
     assert (cache_dirs[0] / "data.pkl").exists()

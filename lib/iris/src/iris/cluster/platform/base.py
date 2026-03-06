@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -322,12 +322,12 @@ class Platform(Protocol):
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a slice of connected workers (e.g., TPU pod, IB GPU cluster).
 
         The slice is the atomic scaling unit -- it succeeds or fails as a whole.
-        When bootstrap_config is provided, the platform handles worker bootstrapping
+        When worker_config is provided, the platform handles worker bootstrapping
         internally (docker setup, worker container startup). describe() returns
         BOOTSTRAPPING while in progress, then READY or FAILED when complete.
         """
@@ -381,6 +381,14 @@ class Platform(Protocol):
         """
         ...
 
+    def debug_report(self) -> None:
+        """Log diagnostic info about the controller after a failure.
+
+        Override to inspect platform-specific state (e.g. pod termination
+        reason, previous container logs). Default is a no-op.
+        """
+        ...
+
     def shutdown(self) -> None:
         """Release platform-owned resources (threads, connections, caches).
 
@@ -389,6 +397,23 @@ class Platform(Protocol):
 
         For LocalPlatform this stops worker threads managed by ThreadContainer.
         For GCP/Manual this is typically a no-op.
+        """
+        ...
+
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        """Resolve a container image reference for this platform's registry.
+
+        On GCP, rewrites ``ghcr.io/`` images to the Artifact Registry remote
+        repo for the given zone's continent.  Other platforms return the image
+        unchanged.
+
+        Args:
+            image: Container image tag (e.g. ``ghcr.io/org/img:v1``).
+            zone: Cloud zone used to select the regional mirror.  Required on
+                GCP when the image starts with ``ghcr.io/``.
+
+        Returns:
+            Resolved image tag ready for ``docker pull``.
         """
         ...
 
@@ -410,6 +435,15 @@ class Platform(Protocol):
         - Manual: SSHes to configured host, bootstraps container
         - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
         - Local: starts in-process LocalController
+        """
+        ...
+
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller in-place without destroying underlying compute.
+
+        Re-runs the bootstrap script on the existing VM/pod to pull the latest
+        image and restart the container. Falls back to stop+start semantics on
+        platforms where in-place restart isn't meaningful (e.g. CoreWeave).
         """
         ...
 
@@ -439,19 +473,6 @@ class Platform(Protocol):
         - GCP/Manual: list_all_slices + terminate each + stop_controller (parallel)
         - CoreWeave: kubectl delete NodePools + controller resources
         - Local: terminate slices + stop controller
-        """
-        ...
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Reload controller and workers with updated images/config.
-
-        Each platform implements its own reload strategy:
-        - GCP/Manual: full stop + start (terminate all worker slices, then controller)
-        - CoreWeave: update ConfigMap, reload worker Pods in parallel, then
-          rolling update controller Deployment
-        - Local: restart in-process controller
-
-        Returns the controller address after reload.
         """
         ...
 

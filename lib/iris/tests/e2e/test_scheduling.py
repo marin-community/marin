@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Scheduling and multi-worker distribution tests.
@@ -13,12 +13,11 @@ from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
 from iris.cluster.types import Constraint, ConstraintOp
-from iris.rpc import cluster_pb2
-from iris.rpc import config_pb2
+from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration
 
-from .conftest import IRIS_ROOT, TestCluster, assert_visible, dashboard_goto, wait_for_dashboard_ready
+from .conftest import IRIS_ROOT, IrisTestCluster, assert_visible, dashboard_goto, wait_for_dashboard_ready
 
 pytestmark = pytest.mark.e2e
 
@@ -37,7 +36,7 @@ def _make_cold_start_scaleup_config() -> config_pb2.IrisClusterConfig:
     sg.num_vms = 1
     sg.min_slices = 0
     sg.max_slices = 2
-    sg.resources.cpu = 128
+    sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
     sg.resources.disk_bytes = 1024 * 1024**3
     sg.slice_template.preemptible = True
@@ -55,7 +54,7 @@ def cold_start_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        yield TestCluster(url=url, client=client, controller_client=controller_client)
+        yield IrisTestCluster(url=url, client=client, controller_client=controller_client)
         controller_client.close()
 
 

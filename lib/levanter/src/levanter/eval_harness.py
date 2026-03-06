@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -847,7 +847,10 @@ class LevanterHarnessLM(TemplateLM):
             hbm_utilization=0.5,
         )
         engine = InferenceEngine.from_model_with_config(
-            model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
+            model=self.leader.model,
+            tokenizer=self.tokenizer,
+            config=engine_cfg,
+            axis_resources=self.compute_axis_resources,
         )
 
         # Build generation requests
@@ -1243,8 +1246,8 @@ def run_lm_eval_harness(
     config: LmEvalHarnessConfig,
     model,
     tokenizer,
-    EvalBatch,
-    axis_resources,
+    EvalBatch: haliax.Axis | int,
+    axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
     profiler_config: ProfilerConfig | None = None,
 ) -> dict | None:
@@ -1255,7 +1258,7 @@ def run_lm_eval_harness(
         config: Configuration for the evaluation harness
         model: The Levanter model to evaluate
         tokenizer: Tokenizer for the model
-        EvalBatch: Batch axis for evaluation
+        EvalBatch: Batch axis for evaluation, or an integer batch size.
         axis_resources: Resource mapping for distributed computation
         mp: Mixed precision policy
         profiler_config: Optional ProfilerConfig for profiling during evaluation
@@ -1280,7 +1283,7 @@ def _actually_run_eval_harness(
     model: LmHeadModel,
     tasks_to_run: dict,
     tokenizer: HfTokenizer,
-    EvalBatch: haliax.Axis,
+    EvalBatch: haliax.Axis | int,
     axis_resources: ResourceMapping,
     mp: jmp.Policy | None,
     profiler_config: ProfilerConfig | None = None,
@@ -1294,6 +1297,9 @@ def _actually_run_eval_harness(
         - "averages": A dictionary with macro and micro averages for all metrics.
 
     """
+    if isinstance(EvalBatch, int):
+        EvalBatch = hax.Axis("batch", EvalBatch)
+
     max_examples = config.max_examples
     max_length = config.max_length
 
@@ -1436,7 +1442,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -1460,7 +1466,12 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         else:
             with use_cpu_device():
                 model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                model = load_checkpoint(model, config.checkpoint_path, subpath="model")
+                model = load_checkpoint(
+                    model,
+                    config.checkpoint_path,
+                    subpath="model",
+                    axis_mapping=parameter_axis_mapping,
+                )
             model = hax.shard(model, parameter_axis_mapping)
 
         model = typing.cast(LmHeadModel, inference_mode(model, True))
@@ -1555,14 +1566,20 @@ def log_report_to_tracker(prefix: str, report: dict, tracker: Optional[levanter.
         tracker.log(to_log, step=None)
 
 
-def lm_eval_harness(config: LmEvalHarnessConfig, tokenizer, EvalBatch, axis_resources, mp: jmp.Policy | None):
+def lm_eval_harness(
+    config: LmEvalHarnessConfig,
+    tokenizer,
+    EvalBatch: haliax.Axis | int,
+    axis_resources: ResourceMapping,
+    mp: jmp.Policy | None,
+):
     """
     Create a callback function for running the LM Eval Harness during training.
 
     Args:
         config: Configuration for the evaluation harness
         tokenizer: Tokenizer for the model
-        EvalBatch: Batch axis for evaluation
+        EvalBatch: Batch axis for evaluation, or an integer batch size.
         axis_resources: Resource mapping for distributed computation
         mp: Mixed precision policy
 

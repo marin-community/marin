@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core types for the iris cluster layer.
@@ -30,21 +30,22 @@ from iris.rpc import cluster_pb2
 class JobName:
     """Structured hierarchical job name.
 
-    Canonical form: /namespace/parent/child
-    Tasks are job names with numeric suffix: /namespace/parent/child/0
+    Canonical form: /user/root-job/child
+    Tasks are job names with numeric suffix: /user/root-job/child/0
 
-    Job names form a tree rooted at the namespace:
-        /root-job
-        /root-job/child-1
-        /root-job/child-1/grandchild
-        /root-job/0
+    The first path component identifies the submitting user. Job hierarchy starts
+    at the second component:
+        /alice/root-job
+        /alice/root-job/child-1
+        /alice/root-job/child-1/grandchild
+        /alice/root-job/0
     """
 
     _parts: tuple[str, ...]
 
     def __post_init__(self):
-        if not self._parts:
-            raise ValueError("JobName cannot be empty")
+        if len(self._parts) < 2:
+            raise ValueError("JobName must use canonical '/<user>/<job>[...]' format")
         for part in self._parts:
             if "/" in part:
                 raise ValueError(f"JobName component cannot contain '/': {part}")
@@ -53,26 +54,28 @@ class JobName:
 
     @classmethod
     def from_string(cls, s: str) -> "JobName":
-        """Parse a job name string like '/root/child/grandchild'.
+        """Parse a job name string like '/user/root/child/grandchild'.
 
         Examples:
-            JobName.from_string("/my-job") -> JobName(("my-job",))
-            JobName.from_string("/parent/child") -> JobName(("parent", "child"))
-            JobName.from_string("/job/0") -> JobName(("job", "0"))
+            JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
+            JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
+            JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
         if not s:
-            raise ValueError("Job name cannot be empty")
+            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
         if not s.startswith("/"):
-            raise ValueError(f"Job name must start with '/': {s}")
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         parts = tuple(s[1:].split("/"))
+        if len(parts) < 2:
+            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
         if any(not part or not part.strip() for part in parts):
             raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
         return cls(parts)
 
     @classmethod
-    def root(cls, name: str) -> "JobName":
+    def root(cls, user: str, name: str) -> "JobName":
         """Create a root job name (no parent)."""
-        return cls((name,))
+        return cls((user, name))
 
     def child(self, name: str) -> "JobName":
         """Create a child job name."""
@@ -84,21 +87,31 @@ class JobName:
         Tasks are job names with a numeric suffix.
 
         Example:
-            JobName.from_string("/my-job").task(0) -> JobName(("my-job", "0"))
+            JobName.from_string("/alice/my-job").task(0) -> JobName(("alice", "my-job", "0"))
         """
         return JobName((*self._parts, str(index)))
 
     @property
     def parent(self) -> "JobName | None":
         """Get parent job name, or None if this is a root job."""
-        if len(self._parts) == 1:
+        if self.is_root:
             return None
         return JobName(self._parts[:-1])
 
     @property
-    def namespace(self) -> str:
-        """Get the namespace (root component) for actor isolation."""
+    def user(self) -> str:
+        """Get the submitting user."""
         return self._parts[0]
+
+    @property
+    def root_job(self) -> "JobName":
+        """Get the root job for this hierarchy."""
+        return JobName(self._parts[:2])
+
+    @property
+    def namespace(self) -> str:
+        """Get the actor namespace (user/root job) for actor isolation."""
+        return "/".join(self.root_job._parts)
 
     @property
     def name(self) -> str:
@@ -108,11 +121,13 @@ class JobName:
     @property
     def is_root(self) -> bool:
         """True if this is a root job (no parent)."""
-        return len(self._parts) == 1
+        return len(self._parts) == 2
 
     @property
     def task_index(self) -> int | None:
         """If this is a task (last component is numeric), return the index."""
+        if len(self._parts) < 3:
+            return None
         try:
             return int(self._parts[-1])
         except ValueError:
@@ -131,15 +146,15 @@ class JobName:
         is not counted as a depth level).
 
         Examples:
-            /root -> 1
-            /root/child -> 2
-            /root/child/grandchild -> 3
-            /root/0 (task) -> 1
-            /root/child/0 (task) -> 2
+            /alice/root -> 1
+            /alice/root/child -> 2
+            /alice/root/child/grandchild -> 3
+            /alice/root/0 (task) -> 1
+            /alice/root/child/0 (task) -> 2
         """
         if self.is_task:
-            return len(self._parts) - 1
-        return len(self._parts)
+            return len(self._parts) - 2
+        return len(self._parts) - 1
 
     def is_ancestor_of(self, other: "JobName", *, include_self: bool = True) -> bool:
         """True if this job name is an ancestor of another job name."""
@@ -167,7 +182,7 @@ class JobName:
         return (self.parent, task_index)
 
     def __str__(self) -> str:
-        """Canonical wire format: '/root/child/grandchild'."""
+        """Canonical wire format: '/user/root/child/grandchild'."""
         return "/" + "/".join(self._parts)
 
     def __repr__(self) -> str:
@@ -402,6 +417,30 @@ class CoschedulingConfig:
         return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
 
 
+@dataclass(frozen=True)
+class ReservationEntry:
+    """A single reservation entry describing one worker's worth of resources.
+
+    Used in the high-level client API. Each entry becomes a demand anchor
+    that the autoscaler provisions before the reserving job schedules.
+
+    Example:
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2), constraints=[Constraint("region", value="us-central1")])
+    """
+
+    resources: "ResourceSpec"
+    constraints: list[Constraint] | None = None
+
+    def to_proto(self) -> cluster_pb2.ReservationEntry:
+        """Convert to protobuf representation."""
+        constraints_proto = [c.to_proto() for c in self.constraints or []]
+        return cluster_pb2.ReservationEntry(
+            resources=self.resources.to_proto(),
+            constraints=constraints_proto,
+        )
+
+
 def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
     """Create a DeviceConfig for a TPU device.
 
@@ -490,7 +529,7 @@ class ResourceSpec:
     Accepts human-readable memory/disk values (e.g., "8g", "512m").
     """
 
-    cpu: int = 0
+    cpu: float = 0.0
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
@@ -500,7 +539,7 @@ class ResourceSpec:
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
         spec = cluster_pb2.ResourceSpecProto(
-            cpu=self.cpu,
+            cpu_millicores=int(self.cpu * 1000),
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
         )
@@ -516,12 +555,29 @@ import sys
 import traceback
 import logging
 
+# Reinitialize logging with the unified Iris format.
+# Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
+# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from iris.logging
+# because CALLABLE_RUNNER executes inside an isolated task container that may not
+# have the iris package installed (e.g. user-provided Docker images).
+_LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
+
+class _LevelPrefixFormatter(logging.Formatter):
+    def format(self, record):
+        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        return super().format(record)
+
+_root = logging.getLogger()
+_root.handlers.clear()
+_handler = logging.StreamHandler(sys.stderr)
+_handler.setFormatter(_LevelPrefixFormatter(
+    fmt="%(levelprefix)s%(asctime)s %(name)s %(message)s",
+    datefmt="%Y%m%d %H:%M:%S",
+))
+_root.addHandler(_handler)
+_root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
-)
 
 workdir = os.environ["IRIS_WORKDIR"]
 
@@ -579,9 +635,9 @@ class Namespace(str):
     Namespaces provide isolation between different jobs/environments.
     Actors in one namespace cannot discover actors in another namespace.
 
-    The namespace is derived from the root job ID: all jobs in a hierarchy
-    share the same namespace. This ensures automatic isolation without
-    explicit configuration.
+    The namespace is derived from the user/root job pair: all jobs in a hierarchy
+    share the same namespace. This preserves actor isolation between unrelated
+    jobs from the same user.
     """
 
     def __repr__(self) -> str:
@@ -593,7 +649,7 @@ class Namespace(str):
 
         The namespace is the first component of the job ID hierarchy.
         For example:
-            JobName.from_string("/abc123/worker-0") -> Namespace("abc123")
+            JobName.from_string("/alice/abc123/worker-0") -> Namespace("alice/abc123")
 
         Args:
             job_id: Hierarchical job ID
@@ -903,6 +959,49 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
         if config.name == tpu_type:
             return config
     raise ValueError(f"Unknown TPU type: {tpu_type}")
+
+
+def validate_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: int) -> None:
+    """Validate that replicas match the TPU topology's vm_count.
+
+    Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
+    per VM. This function checks that ``replicas`` is a positive multiple of
+    the topology's ``vm_count`` so that every VM in every slice has exactly
+    one task. A mismatch (e.g. replicas=1 for a v6e-32) would cause JAX
+    distributed initialization to time out waiting for missing workers.
+
+    Args:
+        device: DeviceConfig from the resource spec. ``None`` or non-TPU
+            devices are silently accepted.
+        replicas: Number of replicas requested for the job.
+
+    Raises:
+        ValueError: If the TPU topology is known and ``replicas`` is not a
+            positive multiple of ``vm_count``.
+    """
+    if device is None or not device.HasField("tpu"):
+        return
+
+    variant = device.tpu.variant
+    if not variant:
+        return
+
+    try:
+        topo = get_tpu_topology(variant)
+    except ValueError:
+        # Unknown topology — nothing to validate.
+        return
+
+    if topo.vm_count <= 1:
+        return
+
+    if replicas % topo.vm_count != 0:
+        raise ValueError(
+            f"TPU type '{variant}' requires {topo.vm_count} VMs per slice, "
+            f"so replicas must be a multiple of {topo.vm_count} (got replicas={replicas}). "
+            f"For a single slice, use replicas={topo.vm_count}. "
+            f"For N slices, use replicas=N*{topo.vm_count}."
+        )
 
 
 class Entrypoint:

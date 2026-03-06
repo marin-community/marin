@@ -1,4 +1,4 @@
-// Copyright 2025 The Marin Authors
+// Copyright The Marin Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ enum ScalingAction {
 }
 
 message ResourceSpec {
-  int32 cpu = 1;
+  int32 cpu_millicores = 1;
   int64 memory_bytes = 2;
   int64 disk_bytes = 3;
   int32 gpu_count = 4;
@@ -117,12 +117,15 @@ message ScaleGroupStatus {
   string availability_status = 61;   // "available", "requesting", "backoff", "quota_exceeded", "at_capacity"
   string availability_reason = 62;   // Human-readable reason (for blocked states)
   iris.time.Timestamp blocked_until = 63;  // Set for temporary blocked states (backoff/quota)
+
+  // Scale-up cooldown — set when cooldown is active (last_scale_up + cooldown > now)
+  iris.time.Timestamp scale_up_cooldown_until = 70;
 }
 
 // Autoscaler action/event log entry
 message AutoscalerAction {
   iris.time.Timestamp timestamp = 1;
-  string action_type = 2;     // "scale_up", "scale_down", "quota_exceeded", "backoff_triggered", "worker_failed"
+  string action_type = 2;     // "scale_up", "scale_down", "quota_exceeded", "backoff_triggered", "worker_failed", "rate_limited"
   string scale_group = 3;
   string slice_id = 4;        // Empty for group-level actions
   string reason = 5;

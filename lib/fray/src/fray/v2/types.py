@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Type definitions for fray v2.
@@ -240,6 +240,9 @@ class CpuConfig:
     def device_flops(self, dtype: str = "bf16") -> float:
         raise NotImplementedError("CPU FLOPS not available")
 
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": "cpu"}
+
 
 @dataclass(frozen=True)
 class GpuConfig:
@@ -262,6 +265,9 @@ class GpuConfig:
 
     def total_flops(self, dtype: str = "bf16") -> float:
         return self.device_flops(dtype) * self.count
+
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": ""}
 
 
 @dataclass(frozen=True)
@@ -295,6 +301,14 @@ class TpuConfig:
     def total_flops(self, dtype: str = "bf16") -> float:
         return self.device_flops(dtype) * self.chip_count()
 
+    def default_env_vars(self) -> dict[str, str]:
+        defaults: dict[str, str] = {"JAX_PLATFORMS": ""}
+        if self.variant.startswith(("v5litepod-", "v5e-", "v5p-")):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=50000"
+        elif self.variant.startswith("v6e-"):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=98304"
+        return defaults
+
 
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
@@ -311,7 +325,7 @@ class ResourceConfig:
 
     """
 
-    cpu: int = 1
+    cpu: float = 1
     ram: str = "4g"
     disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
@@ -343,7 +357,7 @@ class ResourceConfig:
         return ResourceConfig(device=device, replicas=replicas, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> ResourceConfig:
         device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 
@@ -363,12 +377,17 @@ class ActorConfig:
     `max_restarts` overrides the backend default for automatic actor restarts.
     Set to 0 for actors that must NOT auto-restart on preemption because they
     require remote initialization beyond __init__.
+
+    `max_task_retries` controls how many times a failed task (or actor
+    initialisation) is retried before being marked as permanently failed.
+    Maps to Ray's ``max_task_retries`` and Iris's ``max_retries_failure``.
     """
 
     max_concurrency: int = 1
     # TODO: max_restarts is conceptually a job-level property, revisit when we
     # drop Ray support.
     max_restarts: int | None = None
+    max_task_retries: int | None = None
 
 
 # ---------------------------------------------------------------------------

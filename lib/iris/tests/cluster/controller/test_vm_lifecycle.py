@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -126,6 +126,9 @@ class FakePlatform:
         self._existing_vms = existing_vms or []
         self._vm_to_create = vm_to_create or FakeWorkerHandle()
         self.created_vms: list[FakeWorkerHandle] = []
+
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
 
     def create_vm(self, config: config_pb2.VmConfig) -> FakeWorkerHandle:
         self.created_vms.append(self._vm_to_create)

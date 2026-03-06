@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Container runtime abstraction layer.
@@ -15,6 +15,7 @@ from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerHandle,
+    ContainerPhase,
     ContainerResult,
     ContainerRuntime,
     ContainerStats,
@@ -26,6 +27,7 @@ from iris.cluster.runtime.types import (
 __all__ = [
     "ContainerConfig",
     "ContainerHandle",
+    "ContainerPhase",
     "ContainerResult",
     "ContainerRuntime",
     "ContainerStats",

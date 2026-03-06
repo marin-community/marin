@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -391,7 +391,7 @@ class DistributedConfig:
 class RayConfig:
     address: Optional[str] = None
     start_workers: bool = True
-    auto_start_cluster: bool = True
+    auto_start_cluster: bool = False
 
     def initialize(self):
         if self.auto_start_cluster:

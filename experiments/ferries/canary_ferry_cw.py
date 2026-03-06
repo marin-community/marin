@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """CoreWeave canary ferry: llama-150M on SlimPajama-6B, 1B tokens, 8x H100.
@@ -9,7 +9,7 @@ hierarchical Feistel permutation.
 
 Usage (via Iris):
     iris --config=lib/iris/examples/coreweave.yaml job run \
-        -e MARIN_PREFIX s3://marin-test -e WANDB_API_KEY $WANDB_API_KEY \
+        -e MARIN_PREFIX s3://marin-test -e RUN_ID $RUN_ID -e WANDB_API_KEY $WANDB_API_KEY \
         -- python -m experiments.ferries.canary_ferry_cw
 """
 
@@ -18,6 +18,7 @@ import datetime
 import os
 
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_data_config
@@ -26,7 +27,7 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_150m
 from experiments.simple_train_config import SimpleTrainConfig
 
-CANARY_DATE = os.environ.get("CANARY_DATE", datetime.date.today().isoformat())
+RUN_ID = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 BATCH_SIZE = 512
 SEQ_LEN = 1024
@@ -58,23 +59,23 @@ data_config = lm_data_config(
 )
 
 train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_gpu(count=8, cpu=32, ram="256g", disk="256g"),
+    resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g"),
     train_batch_size=BATCH_SIZE,
     num_train_steps=NUM_STEPS,
     learning_rate=3e-3,
     weight_decay=0.1,
     train_seq_len=SEQ_LEN,
-    steps_per_eval=500,
+    steps_per_eval=50,
+    profiler=ProfilerConfig(enabled=True),
 )
 
 training_step = default_train(
-    name=f"canary-ferry-cw-{CANARY_DATE}",
+    name=f"canary-ferry-cw-{RUN_ID}",
     tokenized=data_config,
     model_config=llama_150m,
     train_config=train_config,
     tags=["canary", "ferry", "llama", "150m", "slimpajama", "coreweave"],
     eval_harness_tasks=[],
-    use_default_validation=False,
 )
 
 

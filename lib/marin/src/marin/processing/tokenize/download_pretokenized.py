@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -28,7 +28,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfigBase
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
     """Configuration for downloading a pre-existing Levanter cache from Hugging Face."""
 

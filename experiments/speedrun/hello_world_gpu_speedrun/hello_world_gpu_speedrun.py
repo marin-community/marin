@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -16,7 +16,7 @@ from marin.execution.executor import executor_main
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 speedrun_config = SpeedrunConfig(
     author=Author(

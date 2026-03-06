@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Docker runtime with cgroups v2 resource limits and BuildKit image caching.
@@ -16,8 +16,8 @@ import logging
 import os
 import re
 import shlex
-import shutil
 import subprocess
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.runtime.bundle import stage_bundle_to_local
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -36,6 +37,8 @@ from iris.cluster.runtime.profile import (
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
+    ContainerInfraError,
+    ContainerPhase,
     ContainerStats,
     ContainerStatus,
     ImageInfo,
@@ -45,6 +48,28 @@ from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
+
+# Substrings that indicate a docker/registry infrastructure problem rather than
+# a user-code error.  Checked case-insensitively against stderr from docker
+# create/start/pull.
+_INFRA_ERROR_PATTERNS: list[str] = [
+    "error getting credentials",
+    "denied: denied",
+    "unauthorized: authentication required",
+    "connection refused",
+    "dial tcp",
+    "no such host",
+    "i/o timeout",
+    "TLS handshake timeout",
+    "daemon is not running",
+    "Cannot connect to the Docker daemon",
+]
+
+
+def _is_docker_infra_error(stderr: str) -> bool:
+    """Return True if *stderr* matches a known infrastructure failure pattern."""
+    stderr_lower = stderr.lower()
+    return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
 def _build_device_flags(config: ContainerConfig) -> list[str]:
@@ -140,52 +165,29 @@ def _parse_memory_size(size_str: str) -> int:
 
 
 def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogLine]:
-    """Get container logs, optionally filtered by timestamp."""
-    logs: list[LogLine] = []
+    """Get container logs, optionally filtered by timestamp.
 
-    base_cmd = ["docker", "logs", "--timestamps"]
+    Uses a single `docker logs` call with capture_output to get both stdout and
+    stderr in one shot, then parses each stream separately.
+    """
+    cmd = ["docker", "logs", "--timestamps"]
     if since:
-        base_cmd.extend(["--since", since.as_formatted_date()])
-    base_cmd.append(container_id)
+        cmd.extend(["--since", since.as_formatted_date()])
+    cmd.append(container_id)
 
-    # Check if container exists
-    result = subprocess.run(
-        base_cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         return []
 
-    # Fetch stdout
-    stdout_result = subprocess.run(
-        base_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
-
-    for line in stdout_result.stdout.splitlines():
+    logs: list[LogLine] = []
+    for line in result.stdout.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
             logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
-
-    # Fetch stderr
-    stderr_result = subprocess.run(
-        base_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-
-    for line in stderr_result.stderr.splitlines():
+    for line in result.stderr.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
             logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
-
     return logs
 
 
@@ -283,7 +285,7 @@ class DockerContainerHandle:
                     build_logs.extend(new_logs)
                     last_log_time = Timestamp.from_seconds(new_logs[-1].timestamp.timestamp()).add_ms(1)
 
-                if not status.running:
+                if status.phase == ContainerPhase.STOPPED:
                     break
                 time.sleep(0.5)
 
@@ -343,7 +345,7 @@ exec {quoted_cmd}
             command=command,
             include_resources=True,
         )
-        self.runtime._track_container(self._run_container_id)
+        self.runtime.track_container(self._run_container_id)
         self._docker_start(self._run_container_id)
 
         logger.info(
@@ -368,7 +370,7 @@ exec {quoted_cmd}
     def status(self) -> ContainerStatus:
         """Check container status (running, exit code, error)."""
         if not self._run_container_id:
-            return ContainerStatus(running=False, error="Container not started")
+            return ContainerStatus(phase=ContainerPhase.STOPPED, error="Container not started")
         return self._docker_inspect(self._run_container_id)
 
     def log_reader(self) -> DockerLogReader:
@@ -474,7 +476,7 @@ exec {quoted_cmd}
         """Remove the run container and clean up resources."""
         if self._run_container_id:
             self._docker_remove(self._run_container_id)
-            self.runtime._untrack_container(self._run_container_id)
+            self.runtime.untrack_container(self._run_container_id)
             self._run_container_id = None
 
     # -------------------------------------------------------------------------
@@ -489,6 +491,7 @@ exec {quoted_cmd}
     ) -> str:
         """Create a Docker container. Returns container_id."""
         config = self.config
+        self.runtime.ensure_image(config.image)
 
         cmd = [
             "docker",
@@ -557,7 +560,10 @@ exec {quoted_cmd}
             check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to create container: {result.stderr}")
+            stderr = result.stderr
+            if _is_docker_infra_error(stderr):
+                raise ContainerInfraError(f"Failed to create container (infra): {stderr}")
+            raise RuntimeError(f"Failed to create container: {stderr}")
 
         return result.stdout.strip()
 
@@ -570,7 +576,10 @@ exec {quoted_cmd}
             check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to start container: {result.stderr}")
+            stderr = result.stderr
+            if _is_docker_infra_error(stderr):
+                raise ContainerInfraError(f"Failed to start container (infra): {stderr}")
+            raise RuntimeError(f"Failed to start container: {stderr}")
 
     def _docker_inspect(self, container_id: str) -> ContainerStatus:
         """Inspect container status."""
@@ -589,7 +598,7 @@ exec {quoted_cmd}
 
         if result.returncode != 0:
             return ContainerStatus(
-                running=False,
+                phase=ContainerPhase.STOPPED,
                 error=f"Container not found: id={container_id}",
                 error_kind=ContainerErrorKind.INFRA_NOT_FOUND,
             )
@@ -602,7 +611,7 @@ exec {quoted_cmd}
             oom_killed = state.get("OOMKilled", False)
 
             return ContainerStatus(
-                running=running,
+                phase=ContainerPhase.RUNNING if running else ContainerPhase.STOPPED,
                 exit_code=exit_code if not running else None,
                 error=error_msg,
                 error_kind=ContainerErrorKind.USER_CODE if error_msg else ContainerErrorKind.NONE,
@@ -610,7 +619,7 @@ exec {quoted_cmd}
             )
         except (json.JSONDecodeError, KeyError) as e:
             return ContainerStatus(
-                running=False,
+                phase=ContainerPhase.STOPPED,
                 error=f"Failed to parse inspect output: {e}",
                 error_kind=ContainerErrorKind.RUNTIME_ERROR,
             )
@@ -661,7 +670,7 @@ exec {quoted_cmd}
     def _docker_kill(self, container_id: str, force: bool = False) -> None:
         """Kill container."""
         status = self._docker_inspect(container_id)
-        if not status.running:
+        if status.phase == ContainerPhase.STOPPED:
             return
 
         signal = "SIGKILL" if force else "SIGTERM"
@@ -695,6 +704,54 @@ class DockerRuntime:
     def __init__(self) -> None:
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
+        # Serializes `docker pull` per image tag so that concurrent task threads
+        # don't each trigger docker-credential-gcloud against the metadata server,
+        # which causes sporadic "no active account" errors under load.
+        self._pull_lock = threading.Lock()
+        self._pulled_images: set[str] = set()
+
+    def ensure_image(self, image: str) -> None:
+        """Pull *image* if it isn't already present locally.
+
+        Only one `docker pull` runs at a time (via ``_pull_lock``).  This
+        prevents a thundering-herd of ``docker-credential-gcloud`` processes
+        when many task threads call ``docker create`` concurrently — each
+        invocation would otherwise shell out to the GCE metadata server for an
+        OAuth token, overwhelming it and causing sporadic auth failures.
+        """
+        if image in self._pulled_images:
+            return
+
+        with self._pull_lock:
+            # Double-check after acquiring lock
+            if image in self._pulled_images:
+                return
+
+            # Fast path: image already on disk
+            inspect = subprocess.run(
+                ["docker", "image", "inspect", image],
+                capture_output=True,
+                check=False,
+            )
+            if inspect.returncode == 0:
+                self._pulled_images.add(image)
+                return
+
+            logger.info("Pulling image %s", image)
+            result = subprocess.run(
+                ["docker", "pull", image],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr
+                if _is_docker_infra_error(stderr):
+                    raise ContainerInfraError(f"Failed to pull image {image} (infra): {stderr}")
+                raise RuntimeError(f"Failed to pull image {image}: {stderr}")
+
+            logger.info("Image %s pulled successfully", image)
+            self._pulled_images.add(image)
 
     def create_container(self, config: ContainerConfig) -> DockerContainerHandle:
         """Create a container handle from config.
@@ -715,16 +772,18 @@ class DockerRuntime:
         fetch_bundle: Callable[[str], Path],
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        bundle_path = fetch_bundle(bundle_gcs_path)
-        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
-        for name, data in workdir_files.items():
-            (workdir / name).write_bytes(data)
+        stage_bundle_to_local(
+            bundle_gcs_path=bundle_gcs_path,
+            workdir=workdir,
+            workdir_files=workdir_files,
+            fetch_bundle=fetch_bundle,
+        )
 
-    def _track_container(self, container_id: str) -> None:
+    def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""
         self._created_containers.add(container_id)
 
-    def _untrack_container(self, container_id: str) -> None:
+    def untrack_container(self, container_id: str) -> None:
         """Untrack a container ID."""
         self._created_containers.discard(container_id)
 

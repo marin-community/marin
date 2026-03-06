@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -20,8 +20,8 @@ import dupekit
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
-import fsspec
 import msgspec
+from iris.marin_fs import url_to_fs
 import wandb
 
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
@@ -29,6 +29,7 @@ from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +201,7 @@ def build_filter(
     def _merge_bloom(bloom_files: Iterator[str]):
         merged_bloom = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
         for bloom_file_path in bloom_files:
-            fs, path = fsspec.url_to_fs(bloom_file_path)
+            fs, path = url_to_fs(bloom_file_path)
             with fs.open(path, "rb") as f:
                 bloom_bytes = f.read()
             shard_bloom = dupekit.Bloom.load_bytes(bloom_bytes)
@@ -269,7 +270,7 @@ def mark_duplicates_bloom(
     def process_shard_with_bloom(records: Iterator[dict]) -> Iterator[dict]:
         """Load bloom filter once per shard and mark duplicates."""
         # Load bloom filter from storage
-        fs, path = fsspec.url_to_fs(bloom_path)
+        fs, path = url_to_fs(bloom_path)
         with fs.open(path, "rb") as f:
             bloom_bytes = f.read()
         bf = dupekit.Bloom.load_bytes(bloom_bytes)
@@ -405,7 +406,8 @@ def decontaminate(config: DeconConfig):
 
 @draccus.wrap()
 def main(config: DeconConfig):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
 
     result = decontaminate(config)
     print(f"Decontamination completed: {result}")

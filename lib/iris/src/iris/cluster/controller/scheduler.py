@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Pure task-to-worker matching without threading, dispatch, or state mutation.
@@ -34,12 +34,20 @@ from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_BUILDING_TASKS_PER_WORKER = 4
+DEFAULT_MAX_BUILDING_TASKS_PER_WORKER = 16
 """Default limit for concurrent BUILDING tasks per worker.
 
 When many tasks start simultaneously, their setup commands (uv sync, pip install)
 can overwhelm the worker. This limit provides back-pressure by deferring new
 task assignments until existing tasks complete their build phase.
+"""
+
+DEFAULT_MAX_ASSIGNMENTS_PER_WORKER = 1
+"""Default limit for task assignments per worker per scheduling cycle.
+
+Set to 1 for normal scheduling (round-robin distribution). The dry-run in
+compute_demand_entries sets this to sys.maxsize so that a big worker with
+spare CPU can absorb multiple tasks, preventing false demand signals.
 """
 
 
@@ -51,7 +59,7 @@ class WorkerSnapshot(Protocol):
     """
 
     worker_id: WorkerId
-    available_cpu: int
+    available_cpu_millicores: int
     available_memory: int
     available_gpus: int
     available_tpus: int
@@ -87,7 +95,9 @@ class RejectionReason:
     def __str__(self) -> str:
         match self.kind:
             case RejectionKind.CPU:
-                return f"Insufficient CPU (need {self.details['need']}, available {self.details['have']})"
+                need_cores = self.details["need"] / 1000
+                have_cores = self.details["have"] / 1000
+                return f"Insufficient CPU (need {need_cores:g} cores, available {have_cores:g} cores)"
             case RejectionKind.MEMORY:
                 need_gb = self.details["need"] / (1024**3)
                 have_gb = self.details["have"] / (1024**3)
@@ -235,7 +245,7 @@ class WorkerCapacity:
     """
 
     worker_id: WorkerId
-    available_cpu: int
+    available_cpu_millicores: int
     available_memory: int
     available_gpus: int
     available_tpus: int
@@ -260,7 +270,7 @@ class WorkerCapacity:
         """
         return WorkerCapacity(
             worker_id=worker.worker_id,
-            available_cpu=worker.available_cpu,
+            available_cpu_millicores=worker.available_cpu_millicores,
             available_memory=worker.available_memory,
             available_gpus=worker.available_gpus,
             available_tpus=worker.available_tpus,
@@ -296,8 +306,10 @@ class WorkerCapacity:
 
         res = req.resources
 
-        if res.cpu > self.available_cpu:
-            return RejectionReason(kind=RejectionKind.CPU, details={"need": res.cpu, "have": self.available_cpu})
+        if res.cpu_millicores > self.available_cpu_millicores:
+            return RejectionReason(
+                kind=RejectionKind.CPU, details={"need": res.cpu_millicores, "have": self.available_cpu_millicores}
+            )
 
         if res.memory_bytes > self.available_memory:
             return RejectionReason(
@@ -335,7 +347,7 @@ class WorkerCapacity:
     def deduct(self, req: JobRequirements) -> None:
         """Deduct job's resources from available capacity."""
         res = req.resources
-        self.available_cpu -= res.cpu
+        self.available_cpu_millicores -= res.cpu_millicores
         self.available_memory -= res.memory_bytes
         self.available_gpus -= get_gpu_count(res.device)
         self.available_tpus -= get_tpu_count(res.device)
@@ -364,8 +376,8 @@ class SchedulingContext:
     but do not update the posting lists. This is safe because posting lists
     are only used for attribute matching, not capacity checks.
 
-    Workers are tracked in scheduled_workers to ensure each worker receives
-    at most one task per cycle, providing round-robin distribution.
+    Workers are tracked via assignment_counts to limit how many tasks each
+    worker receives per cycle (default 1 for round-robin distribution).
     """
 
     all_worker_ids: set[WorkerId]
@@ -381,8 +393,11 @@ class SchedulingContext:
     # Key (device_type, variant) -> exact match; key (device_type, None) -> all workers of that type.
     device_index: dict[tuple[str, str | None], set[WorkerId]] = field(default_factory=dict)
 
-    # Workers that have already been assigned a task this cycle
-    scheduled_workers: set[WorkerId] = field(default_factory=set)
+    # Per-worker assignment count this cycle (replaces scheduled_workers set)
+    assignment_counts: dict[WorkerId, int] = field(default_factory=dict)
+
+    # Maximum assignments per worker per cycle
+    max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
 
     # Task IDs of pending tasks, in scheduling priority order
     pending_tasks: list[JobName] = field(default_factory=list)
@@ -398,6 +413,7 @@ class SchedulingContext:
         max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
         pending_tasks: list[JobName] | None = None,
         jobs: dict[JobName, JobRequirements] | None = None,
+        max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     ) -> "SchedulingContext":
         """Build scheduling context from worker list.
 
@@ -411,6 +427,7 @@ class SchedulingContext:
             max_building_tasks: Maximum building tasks allowed per worker
             pending_tasks: Task IDs in scheduling priority order
             jobs: Job requirements indexed by job ID
+            max_assignments_per_worker: Maximum task assignments per worker per cycle
         """
         building_counts = building_counts or {}
 
@@ -449,6 +466,7 @@ class SchedulingContext:
             device_index=device_index,
             pending_tasks=pending_tasks or [],
             jobs=jobs or {},
+            max_assignments_per_worker=max_assignments_per_worker,
         )
 
     def workers_for_device(self, device_type: str, device_variant: str | None) -> set[WorkerId]:
@@ -678,13 +696,13 @@ class Scheduler:
         # Cheap mode: try all matching workers, no detailed rejection tracking
         if not collect_details:
             for worker_id in candidate_ids:
-                if worker_id in context.scheduled_workers:
+                if context.assignment_counts.get(worker_id, 0) >= context.max_assignments_per_worker:
                     continue
                 capacity = context.capacities[worker_id]
                 rejection = capacity.can_fit(req)
                 if rejection is None:
                     capacity.deduct(req)
-                    context.scheduled_workers.add(worker_id)
+                    context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
                     return TaskScheduleResult(task_id=task_id, worker_id=worker_id)
             # No matching worker had capacity
             return TaskScheduleResult(task_id=task_id, failure_reason=None)
@@ -693,13 +711,13 @@ class Scheduler:
         rejection_counts: dict[RejectionKind, int] = defaultdict(int)
         rejection_samples: dict[RejectionKind, RejectionReason] = {}
         for worker_id in candidate_ids:
-            if worker_id in context.scheduled_workers:
+            if context.assignment_counts.get(worker_id, 0) >= context.max_assignments_per_worker:
                 continue
             capacity = context.capacities[worker_id]
             rejection = capacity.can_fit(req)
             if rejection is None:
                 capacity.deduct(req)
-                context.scheduled_workers.add(worker_id)
+                context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
                 return TaskScheduleResult(task_id=task_id, worker_id=worker_id)
             rejection_counts[rejection.kind] += 1
             # Keep first sample of each rejection kind for formatting
@@ -717,8 +735,8 @@ class Scheduler:
                 workers_with_capacity = sum(
                     1
                     for check_wid in candidate_ids
-                    if check_wid not in context.scheduled_workers
-                    and context.capacities[check_wid].available_cpu >= res.cpu
+                    if context.assignment_counts.get(check_wid, 0) < context.max_assignments_per_worker
+                    and context.capacities[check_wid].available_cpu_millicores >= res.cpu_millicores
                     and context.capacities[check_wid].available_memory >= res.memory_bytes
                 )
                 if workers_with_capacity > 0:
@@ -750,13 +768,16 @@ class Scheduler:
                 task_id=task_id,
                 failure_reason=(
                     f"No worker matches constraints and has sufficient resources "
-                    f"(need cpu={res.cpu}, memory={res.memory_bytes}, "
+                    f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
                     f"constraints={[c.key for c in constraints]})"
                 ),
             )
         return TaskScheduleResult(
             task_id=task_id,
-            failure_reason=(f"No worker has sufficient resources (need cpu={res.cpu}, memory={res.memory_bytes})"),
+            failure_reason=(
+                f"No worker has sufficient resources "
+                f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes})"
+            ),
         )
 
     def find_assignments(
@@ -900,7 +921,7 @@ class Scheduler:
             assignments: list[tuple[JobName, WorkerId]] = []
             for task_id, worker_id in zip(sorted_task_ids, available[:num_tasks], strict=False):
                 context.capacities[worker_id].deduct(req)
-                context.scheduled_workers.add(worker_id)
+                context.assignment_counts[worker_id] = context.assignment_counts.get(worker_id, 0) + 1
                 assignments.append((task_id, worker_id))
 
             logger.debug(
@@ -924,6 +945,8 @@ class Scheduler:
         building_counts: dict[WorkerId, int] | None = None,
         pending_tasks: list[JobName] | None = None,
         jobs: dict[JobName, JobRequirements] | None = None,
+        max_building_tasks: int | None = None,
+        max_assignments_per_worker: int | None = None,
     ) -> SchedulingContext:
         """Create a scheduling context for the given workers.
 
@@ -935,13 +958,22 @@ class Scheduler:
             building_counts: Map of worker_id -> count of tasks in BUILDING state
             pending_tasks: Task IDs in scheduling priority order
             jobs: Job requirements indexed by job ID
+            max_building_tasks: Override for max building tasks per worker.
+                If None, uses the scheduler's configured default.
+            max_assignments_per_worker: Override for max assignments per worker per cycle.
+                If None, uses DEFAULT_MAX_ASSIGNMENTS_PER_WORKER.
         """
+        limit = max_building_tasks if max_building_tasks is not None else self._max_building_tasks_per_worker
+        assignments_limit = (
+            max_assignments_per_worker if max_assignments_per_worker is not None else DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
+        )
         return SchedulingContext.from_workers(
             workers,
             building_counts=building_counts,
-            max_building_tasks=self._max_building_tasks_per_worker,
+            max_building_tasks=limit,
             pending_tasks=pending_tasks,
             jobs=jobs,
+            max_assignments_per_worker=assignments_limit,
         )
 
     def get_job_scheduling_diagnostics(

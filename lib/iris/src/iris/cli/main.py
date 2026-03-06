@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Top-level Iris CLI entry point.
@@ -65,6 +65,7 @@ def require_controller_url(ctx: click.Context) -> str:
 
         iris_config = IrisConfig(config)
         platform = iris_config.platform()
+        ctx.obj["platform"] = platform
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
             from iris.cluster.controller.local import LocalController

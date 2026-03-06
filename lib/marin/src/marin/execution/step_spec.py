@@ -1,28 +1,34 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
 
 import dataclasses
 import hashlib
 import json
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
-from fray.v2.types import ResourceConfig
+from iris.marin_fs import marin_prefix
 
 
 @dataclass(frozen=True)
 class StepSpec:
-    """Step identity, dependencies, and execution configuration."""
+    """Step identity, dependencies, and execution configuration.
+
+    StepSpec is a pure data object: it describes *what* to run, not *how*.
+    Caching, locking, heartbeats, and status writes are handled explicitly
+    by the step runner.
+    """
 
     # Identity
     name: str
     """Name of the step, used for readability and in the output path."""
     output_path_prefix: str | None = None
     """Output path prefix for the step. If not provided, it will be taken from the MARIN_PREFIX environment variable."""
-    deps: list["StepSpec"] = dataclasses.field(default_factory=list)
+    deps: list[StepSpec] = dataclasses.field(default_factory=list)
     """Steps that this step depends on. Their output paths are used for dependency tracking and cache invalidation."""
     hash_attrs: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Attributes to include in the hash calculation for the step. Used for cache invalidation.
@@ -38,6 +44,8 @@ class StepSpec:
     Callable that accepts the output path as the only argument, and produces the step output at that path
     when called. Usually this function would then call the specific function e.g. tokenize with the appropriate
     arguments. Usually you would specify this via a `lambda output_path: foo(output_path=output_path, bar=42)`.
+
+    May be a :class:`~marin.execution.remote.RemoteCallable` for Fray dispatch.
     """
 
     @cached_property
@@ -65,15 +73,5 @@ class StepSpec:
         if self.override_output_path is not None:
             return self.override_output_path
 
-        prefix = self.output_path_prefix or os.environ["MARIN_PREFIX"]
+        prefix = self.output_path_prefix or marin_prefix()
         return f"{prefix}/{self.name_with_hash}"
-
-    # Resources
-    resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
-    """CPU/GPU/TPU (defaults resolved)."""
-
-    env_vars: dict[str, str] = dataclasses.field(default_factory=dict)
-    """Environment variables (defaults resolved)."""
-
-    pip_dependency_groups: list[str] = dataclasses.field(default_factory=list)
-    """Pip deps (defaults resolved)."""

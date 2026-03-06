@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Container runtime protocols and data types.
@@ -26,6 +26,13 @@ from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
 
 
+class ContainerInfraError(RuntimeError):
+    """Container operation failed due to infrastructure issues (expired credentials,
+    unreachable registry, docker daemon problems). Uses preemption retry budget."""
+
+    pass
+
+
 class ContainerErrorKind(StrEnum):
     """Structured category for container/runtime errors."""
 
@@ -33,6 +40,19 @@ class ContainerErrorKind(StrEnum):
     USER_CODE = "user_code"
     INFRA_NOT_FOUND = "infra_not_found"
     RUNTIME_ERROR = "runtime_error"
+
+
+class ContainerPhase(StrEnum):
+    """Lifecycle phase of a container from the runtime's perspective.
+
+    PENDING: container created but not yet executing (K8s pod scheduling, image pull).
+    RUNNING: container is executing the main command.
+    STOPPED: container has exited (check exit_code/error for details).
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    STOPPED = "stopped"
 
 
 @dataclass
@@ -53,9 +73,9 @@ class ContainerConfig:
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
-        if not self.resources or not self.resources.cpu:
+        if not self.resources or not self.resources.cpu_millicores:
             return None
-        return self.resources.cpu * 1000
+        return self.resources.cpu_millicores
 
     def get_memory_mb(self) -> int | None:
         if not self.resources or not self.resources.memory_bytes:
@@ -91,7 +111,7 @@ class ContainerStats:
 class ContainerStatus:
     """Container state from runtime inspection."""
 
-    running: bool
+    phase: ContainerPhase
     exit_code: int | None = None
     error: str | None = None
     error_kind: ContainerErrorKind = ContainerErrorKind.NONE
@@ -241,6 +261,10 @@ class ContainerRuntime(Protocol):
 
     def list_containers(self) -> list[ContainerHandle]:
         """List all managed containers."""
+        ...
+
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        """List IDs of all iris-managed containers/sandboxes."""
         ...
 
     def remove_all_iris_containers(self) -> int:

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Task execution attempt handling.
@@ -9,6 +9,7 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 
 import json
 import logging
+import os
 import shutil
 import socket
 import threading
@@ -17,16 +18,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from google.protobuf import json_format
+
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
     ContainerHandle,
+    ContainerInfraError,
+    ContainerPhase,
     ContainerRuntime,
     RuntimeLogReader,
 )
-from google.protobuf import json_format
-
 from iris.cluster.types import (
     JobName,
     is_task_finished,
@@ -76,6 +79,34 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
     return f"Exit code: {exit_code}"
 
 
+# GCE persistent disks (pd-standard) provide only ~68 read / ~135 write IOPS on
+# small volumes, making uv sync extremely slow.  /dev/shm is tmpfs backed by RAM
+# and provides memory-speed IOPS.  The bootstrap script bind-mounts
+# /dev/shm/iris into the worker container so this path is available on GCE VMs.
+_TMPFS_DIR = Path("/dev/shm/iris")
+_TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
+
+
+def get_fast_io_dir(cache_dir: Path) -> Path:
+    """Return a fast IO directory for ephemeral task data.
+
+    Prefers /dev/shm/iris (tmpfs) for memory-speed IOPS when available and has
+    sufficient free space.  Falls back to *cache_dir* on persistent disk.
+    """
+    try:
+        if _TMPFS_DIR.is_dir():
+            stat = os.statvfs(_TMPFS_DIR)
+            free_bytes = stat.f_bavail * stat.f_frsize
+            if free_bytes >= _TMPFS_MIN_FREE_BYTES:
+                logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
+                return _TMPFS_DIR
+    except OSError:
+        logger.warning("OSError checking tmpfs at %s, falling back to persistent disk", _TMPFS_DIR, exc_info=True)
+    else:
+        logger.warning("Fast IO (tmpfs) not available at %s, falling back to persistent disk", _TMPFS_DIR)
+    return cache_dir
+
+
 class TaskCancelled(Exception):
     """Raised when a task is cancelled during execution."""
 
@@ -90,8 +121,6 @@ class TaskAttemptConfig:
     num_tasks: int
     attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
-    ports: dict[str, int]
-    workdir: Path
     cache_dir: Path
 
 
@@ -212,13 +241,18 @@ class TaskAttempt:
         controller_address: str | None,
         default_task_env: dict[str, str],
         default_task_image: str | None,
-        gcp_project: str,
+        resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
-        log_sink: LogSink,
+        log_sink_factory: Callable[[], LogSink],
         poll_interval_seconds: float = 5.0,
     ):
         """Initialize a TaskAttempt.
+
+        Construction is intentionally cheap (no I/O, no port allocation, no log
+        sink creation) so that submit_task() can return quickly on the heartbeat
+        thread.  Expensive setup (port allocation, working directory creation,
+        log sink creation) is deferred to the beginning of run().
 
         Args:
             config: Immutable configuration for this attempt
@@ -229,11 +263,14 @@ class TaskAttempt:
             controller_address: Controller address for env injection
             default_task_env: Worker-level default env vars injected into task containers
             default_task_image: Fully-qualified task container image from cluster config
-            gcp_project: GCP project ID for GHCR→AR image rewrite (empty if not on GCP)
-            port_allocator: Port allocator for retry logic
+            resolve_image: Resolves image tags for the current platform
+                (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
+            port_allocator: Port allocator for releasing ports on cleanup
             report_state: Callback to report task state changes to Worker
+            log_sink_factory: Callable that creates the LogSink for this attempt.
+                Called at the start of run() to defer expensive I/O (fsspec filesystem
+                init, directory creation) off the heartbeat thread.
             poll_interval_seconds: How often to poll container status
-            log_sink: Persistent log sink for this task attempt
         """
         self._bundle_provider = bundle_provider
         self._runtime = container_runtime
@@ -242,19 +279,20 @@ class TaskAttempt:
         self._controller_address = controller_address
         self._default_task_env = default_task_env
         self._default_task_image = default_task_image
-        self._gcp_project = gcp_project
+        self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
-        self._log_sink = log_sink
+        self._log_sink_factory = log_sink_factory
+        self._log_sink: LogSink | None = None
 
         # Task identity (from config)
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
         self.request: cluster_pb2.Worker.RunTaskRequest = config.request
-        self.ports: dict[str, int] = config.ports
-        self.workdir: Path | None = config.workdir
+        self.ports: dict[str, int] = {}
+        self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
         # Task state
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
@@ -282,6 +320,7 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
+        self._heartbeat_log_cursor: int = 0
 
     @property
     def container_id(self) -> str | None:
@@ -293,17 +332,53 @@ class TaskAttempt:
     @property
     def log_directory(self) -> str:
         """Return the storage directory for this task's logs."""
+        if self._log_sink is None:
+            return ""
         return self._log_sink.log_path
 
     def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
         """Return recent logs from the canonical log sink."""
+        if self._log_sink is None:
+            return []
         return self._log_sink.query_recent(max_entries=max_entries)
+
+    def drain_heartbeat_logs(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
+        """Drain log entries since the last heartbeat for delta forwarding."""
+        if self._log_sink is None:
+            return []
+        entries, new_cursor = self._log_sink.drain_since(self._heartbeat_log_cursor)
+        if len(entries) > max_entries:
+            entries = entries[-max_entries:]
+        self._heartbeat_log_cursor = new_cursor
+        return entries
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
         self.should_stop = True
         if self._container_handle:
             self._container_handle.stop(force=force)
+
+    @property
+    def has_container(self) -> bool:
+        """Whether this attempt has an active container handle."""
+        return self._container_handle is not None
+
+    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+        """Profile the running container process.
+
+        Args:
+            duration_seconds: How long to sample
+            profile_type: ProfileType message with oneof cpu/memory profiler config
+
+        Returns:
+            Raw profile output
+
+        Raises:
+            ValueError: If no container handle is available
+        """
+        if not self._container_handle:
+            raise ValueError(f"Task {self.task_id} has no container handle")
+        return self._container_handle.profile(duration_seconds, profile_type)
 
     def transition_to(
         self,
@@ -372,10 +447,34 @@ class TaskAttempt:
         if self.should_stop:
             raise TaskCancelled("Task was cancelled")
 
+    def _setup(self) -> None:
+        """Perform expensive setup work that was deferred from submit_task().
+
+        Allocates ports, creates the working directory, and initializes the log
+        sink.  Runs at the start of run() on the task thread so the heartbeat
+        RPC returns immediately.
+        """
+        # Allocate requested ports
+        port_names = list(self.request.ports)
+        allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
+        self.ports = dict(zip(port_names, allocated_ports, strict=True))
+
+        # Resolve fast IO directory (tmpfs when available, else cache_dir)
+        self._fast_io_dir = get_fast_io_dir(self._cache_dir)
+
+        # Create task working directory with attempt isolation
+        safe_task_id = self.task_id.to_safe_token()
+        self.workdir = self._fast_io_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
+        self.workdir.mkdir(parents=True, exist_ok=True)
+
+        # Create log sink (may involve fsspec filesystem initialization)
+        self._log_sink = self._log_sink_factory()
+
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
 
         The lifecycle is:
+        0. Setup: allocate ports, create workdir, create log sink
         1. Download bundle from GCS
         2. Resolve base image
         3. Create container handle
@@ -391,6 +490,8 @@ class TaskAttempt:
         )
         try:
             self._check_cancelled()
+            self._setup()
+            self._check_cancelled()
             self._download_bundle()
             self._check_cancelled()
             self._resolve_image()
@@ -403,16 +504,23 @@ class TaskAttempt:
             self._monitor()
         except TaskCancelled:
             self.transition_to(cluster_pb2.TASK_STATE_KILLED)
+        except ContainerInfraError as e:
+            error_msg = format_exception_with_traceback(e)
+            if self._log_sink is not None:
+                self._log_sink.append(source="error", data=f"Infrastructure error:\n{error_msg}")
+            self.transition_to(cluster_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            self._log_sink.append(source="error", data=f"Task failed:\n{error_msg}")
+            if self._log_sink is not None:
+                self._log_sink.append(source="error", data=f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             if is_task_finished(self.status):
                 # Flush logs to storage before notifying controller, so that
                 # clients who fetch logs immediately after seeing the terminal
                 # state will find complete data on disk.
-                self._log_sink.sync()
+                if self._log_sink is not None:
+                    self._log_sink.sync()
                 self._report_state()
             self._cleanup()
             logger.info(
@@ -431,6 +539,7 @@ class TaskAttempt:
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
+        self._building_start_monotonic = time.monotonic()
         self._report_state()  # Report BUILDING state to controller
 
         download_start = time.monotonic()
@@ -465,24 +574,10 @@ class TaskAttempt:
 
         No per-job Docker build — the pre-built base image has a pre-warmed
         uv cache. The remote client wraps the entrypoint with uv sync.
-
-        On GCP, rewrites ghcr.io/ images to the AR remote repo for this
-        worker's continent so pulls go through the pull-through cache.
         """
         if not self._default_task_image:
             raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")
-        self.image_tag = self._default_task_image
-
-        if self.image_tag.startswith("ghcr.io/"):
-            from iris.cluster.worker.env_probe import detect_gcp_zone
-            from iris.cluster.platform.bootstrap import zone_to_multi_region, rewrite_ghcr_to_ar_remote
-
-            zone = detect_gcp_zone()
-            if zone:
-                multi_region = zone_to_multi_region(zone)
-                assert multi_region, f"Unknown GCP zone prefix for task image rewrite: {zone}"
-                assert self._gcp_project, "gcp_project required for GHCR→AR task image rewrite"
-                self.image_tag = rewrite_ghcr_to_ar_remote(self.image_tag, multi_region, self._gcp_project)
+        self.image_tag = self._resolve_image_fn(self._default_task_image)
 
         logger.info("Using task image %s for task %s", self.image_tag, self.task_id)
 
@@ -517,10 +612,11 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        # Pre-create cache mount directories so Docker doesn't create them as root
-        uv_cache = self._cache_dir / "uv"
-        cargo_cache = self._cache_dir / "cargo"
-        cargo_target = self._cache_dir / "cargo-target"
+        # Pre-create cache mount directories so Docker doesn't create them as root.
+        # Use tmpfs-backed fast IO dir when available for better IOPS.
+        uv_cache = self._fast_io_dir / "uv"
+        cargo_cache = self._fast_io_dir / "cargo"
+        cargo_target = self._fast_io_dir / "cargo-target"
         uv_cache.mkdir(parents=True, exist_ok=True)
         cargo_cache.mkdir(parents=True, exist_ok=True)
         cargo_target.mkdir(parents=True, exist_ok=True)
@@ -574,14 +670,8 @@ class TaskAttempt:
             logger.info("Build phase completed for task %s", self.task_id)
 
     def _run_container(self) -> None:
-        """Start the main command during RUNNING state.
-
-        Non-blocking - returns immediately after starting.
-        """
+        """Start the container. Task stays in BUILDING until _monitor() confirms readiness."""
         assert self._container_handle is not None
-
-        self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-        self._report_state()
 
         self._container_handle.run()
         logger.info(
@@ -637,7 +727,14 @@ class TaskAttempt:
 
             # Check container status
             status = handle.status()
-            if not status.running:
+
+            if self.status == cluster_pb2.TASK_STATE_BUILDING and status.phase == ContainerPhase.RUNNING:
+                building_duration = time.monotonic() - self._building_start_monotonic
+                logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
+                self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
+                self._report_state()
+
+            if status.phase == ContainerPhase.STOPPED:
                 logger.info(
                     "Container exited for task %s (container_id=%s, exit_code=%s, error=%s)",
                     self.task_id,
@@ -690,7 +787,7 @@ class TaskAttempt:
                 if self.workdir:
                     self.disk_mb = collect_workdir_size_mb(self.workdir)
             except Exception:
-                pass  # Don't fail task on stats collection errors
+                logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
@@ -701,7 +798,7 @@ class TaskAttempt:
             for log_line in reader.read():
                 self._log_sink.append(source=log_line.source, data=log_line.data)
         except Exception:
-            pass  # Don't fail task on log streaming errors
+            logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
 
     def _cleanup(self) -> None:
         """Clean up task resources: container, ports, image protection, workdir.
@@ -718,7 +815,7 @@ class TaskAttempt:
         self.cleanup_done = True
 
         # Final log sync and metadata write
-        if is_task_finished(self.status):
+        if is_task_finished(self.status) and self._log_sink is not None:
             try:
                 # Write metadata
                 metadata = logging_pb2.TaskAttemptMetadata(
@@ -751,7 +848,8 @@ class TaskAttempt:
             except Exception as e:
                 logger.error(f"Failed to write final logs/metadata: {e}")
 
-        self._log_sink.close()
+        if self._log_sink is not None:
+            self._log_sink.close()
 
         # Clean up container handle (logs already captured in monitor loop)
         if self._container_handle:

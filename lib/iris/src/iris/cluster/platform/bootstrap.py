@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Bootstrap script generation for worker and controller VMs.
@@ -10,11 +10,12 @@ is performed by the worker environment probe at runtime.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-import shlex
 
 import yaml
+from google.protobuf.json_format import MessageToDict
 
 from iris.rpc import config_pb2
 
@@ -112,7 +113,7 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # Bootstrap script template for worker VMs.
-WORKER_BOOTSTRAP_SCRIPT = """
+WORKER_BOOTSTRAP_SCRIPT = """#!/bin/bash
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
@@ -136,6 +137,12 @@ sudo systemctl start docker || true
 # Create cache directory
 sudo mkdir -p {{ cache_dir }}
 
+# Create tmpfs working directory for fast IO (uv sync, .venv creation).
+# GCE persistent disks have very low IOPS on small volumes (~68 read, ~135
+# write for pd-standard), making dependency installation extremely slow.
+# /dev/shm is tmpfs backed by RAM, providing memory-speed IOPS.
+sudo mkdir -p /dev/shm/iris
+
 echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Pulling image: {{ docker_image }}"
 
@@ -155,10 +162,10 @@ sudo docker pull {{ docker_image }}
 
 echo "[iris-init] Phase: config_setup"
 sudo mkdir -p /etc/iris
-cat > /tmp/iris_config.json << 'IRIS_CONFIG_EOF'
-{{ config_json }}
-IRIS_CONFIG_EOF
-sudo mv /tmp/iris_config.json /etc/iris/config.json
+cat > /tmp/iris_worker_config.json << 'IRIS_WORKER_CONFIG_EOF'
+{{ worker_config_json }}
+IRIS_WORKER_CONFIG_EOF
+sudo mv /tmp/iris_worker_config.json /etc/iris/worker_config.json
 
 echo "[iris-init] Phase: worker_start"
 
@@ -176,15 +183,12 @@ fi
 sudo docker run -d --name iris-worker \\
     --network=host \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
+    -v /dev/shm/iris:/dev/shm/iris \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
-    -v /etc/iris/config.json:/etc/iris/config.json:ro \\
-    {{ env_flags }} \\
+    -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.worker.main serve \\
-        --host 0.0.0.0 --port {{ worker_port }} \\
-        --cache-dir {{ cache_dir }} \\
-        --controller-address {{ controller_address }} \\
-        --config /etc/iris/config.json
+        --worker-config /etc/iris/worker_config.json
 
 echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
@@ -221,55 +225,34 @@ exit 1
 """
 
 
-def build_worker_env_flags(
-    config: config_pb2.BootstrapConfig,
-    vm_address: str,
-) -> str:
-    """Generate docker -e flags with proper escaping.
-
-    TPU metadata is probed by the worker process via env_probe.py, so bootstrap
-    only forwards explicit bootstrap env vars plus IRIS_VM_ADDRESS.
-    """
-    env_vars = dict(config.env_vars)
-
-    flags = []
-    for k, v in env_vars.items():
-        flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
-    # Inject VM address so worker can include it in registration for autoscaler tracking
-    if vm_address:
-        flags.append(f"-e IRIS_VM_ADDRESS={shlex.quote(vm_address)}")
-
-    return " ".join(flags)
-
-
 def build_worker_bootstrap_script(
-    bootstrap_config: config_pb2.BootstrapConfig,
-    vm_address: str,
+    worker_config: config_pb2.WorkerConfig,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
-    Args:
-        bootstrap_config: Worker bootstrap settings
-        vm_address: VM IP address for autoscaler tracking
+    Serializes the WorkerConfig as JSON and embeds it in the bootstrap script.
+    The worker reads the JSON at startup via --worker-config.
     """
-    env_flags = build_worker_env_flags(bootstrap_config, vm_address)
-    if not bootstrap_config.controller_address:
-        raise ValueError("bootstrap_config.controller_address is required for worker bootstrap")
-    if not bootstrap_config.docker_image:
-        raise ValueError("bootstrap_config.docker_image is required for worker bootstrap")
-    if bootstrap_config.worker_port <= 0:
-        raise ValueError("bootstrap_config.worker_port must be > 0 for worker bootstrap")
-    if not bootstrap_config.cache_dir:
-        raise ValueError("bootstrap_config.cache_dir is required for worker bootstrap")
+    if not worker_config.controller_address:
+        raise ValueError("worker_config.controller_address is required for worker bootstrap")
+    if not worker_config.docker_image:
+        raise ValueError("worker_config.docker_image is required for worker bootstrap")
+    if worker_config.port <= 0:
+        raise ValueError("worker_config.port must be > 0 for worker bootstrap")
+    if not worker_config.cache_dir:
+        raise ValueError("worker_config.cache_dir is required for worker bootstrap")
+
+    worker_config_json = json.dumps(
+        MessageToDict(worker_config, preserving_proto_field_name=True),
+        indent=2,
+    )
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
-        cache_dir=bootstrap_config.cache_dir,
-        docker_image=bootstrap_config.docker_image,
-        worker_port=bootstrap_config.worker_port,
-        controller_address=bootstrap_config.controller_address,
-        env_flags=env_flags,
-        config_json=bootstrap_config.config_json,
+        cache_dir=worker_config.cache_dir,
+        docker_image=worker_config.docker_image,
+        worker_port=worker_config.port,
+        worker_config_json=worker_config_json,
     )
 
 
@@ -357,8 +340,9 @@ echo "[iris-controller] [5/5] Controller container started"
 # Wait for health
 echo "[iris-controller] Waiting for controller to become healthy..."
 RESTART_COUNT=0
-for i in $(seq 1 30); do
-    echo "[iris-controller] Health check attempt $i/30 at $(date -Iseconds)..."
+MAX_ATTEMPTS=150
+for i in $(seq 1 $MAX_ATTEMPTS); do
+    echo "[iris-controller] Health check attempt $i/$MAX_ATTEMPTS at $(date -Iseconds)..."
     if curl -sf http://localhost:{{ port }}/health > /dev/null 2>&1; then
         echo "[iris-controller] ================================================"
         echo "[iris-controller] Controller is healthy! Bootstrap complete."
@@ -390,7 +374,7 @@ for i in $(seq 1 30); do
 done
 
 echo "[iris-controller] ================================================"
-echo "[iris-controller] ERROR: Controller failed to become healthy after 60 seconds"
+echo "[iris-controller] ERROR: Controller failed to become healthy after 300 seconds"
 echo "[iris-controller] ================================================"
 echo "[iris-controller] Full container logs:"
 sudo docker logs {{ container_name }} 2>&1
@@ -449,10 +433,15 @@ def build_controller_bootstrap_script(
 
 def build_controller_bootstrap_script_from_config(
     config: config_pb2.IrisClusterConfig,
+    platform: object,
 ) -> str:
     """Build controller bootstrap script from the full cluster config.
 
     Serializes the config to YAML and embeds it in the bootstrap script.
+
+    Args:
+        config: Full cluster configuration.
+        platform: Platform instance used to resolve the controller image.
     """
     # Local import to avoid circular dependency (config.py imports from bootstrap)
     from iris.cluster.config import config_to_dict
@@ -460,12 +449,12 @@ def build_controller_bootstrap_script_from_config(
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     port = config.controller.gcp.port or config.controller.manual.port or 10000
     image = config.controller.image
+
     ctrl = config.controller
-    if ctrl.HasField("gcp") and ctrl.gcp.zone and image.startswith("ghcr.io/"):
-        multi_region = zone_to_multi_region(ctrl.gcp.zone)
-        if multi_region:
-            project = config.platform.gcp.project_id
-            assert project, "platform.gcp.project_id required for GHCR→AR controller image rewrite"
-            image = rewrite_ghcr_to_ar_remote(image, multi_region, project)
+    zone: str | None = None
+    if ctrl.HasField("gcp") and ctrl.gcp.zone:
+        zone = ctrl.gcp.zone
+
+    image = platform.resolve_image(image, zone=zone)
 
     return build_controller_bootstrap_script(image, port, config_yaml)

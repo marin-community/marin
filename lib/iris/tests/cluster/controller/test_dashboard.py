@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller dashboard behavioral logic.
@@ -13,12 +13,17 @@ import pytest
 from starlette.testclient import TestClient
 
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.events import JobSubmittedEvent, WorkerRegisteredEvent
+from iris.cluster.controller.events import (
+    JobSubmittedEvent,
+    TaskAssignedEvent,
+    TaskStateChangedEvent,
+    WorkerRegisteredEvent,
+)
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import cluster_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
 
 
@@ -63,7 +68,7 @@ def submit_job(
     request: cluster_pb2.Controller.LaunchJobRequest,
 ) -> JobName:
     """Submit a job via event."""
-    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root(job_id)
+    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     state.handle_event(
         JobSubmittedEvent(
@@ -126,7 +131,7 @@ def service(state, scheduler):
 @pytest.fixture
 def client(service):
     dashboard = ControllerDashboard(service)
-    return TestClient(dashboard._app)
+    return TestClient(dashboard.app)
 
 
 @pytest.fixture
@@ -174,9 +179,9 @@ def make_worker_metadata():
 @pytest.fixture
 def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
-        name=JobName.root("test-job").to_wire(),
+        name=JobName.root("test-user", "test-job").to_wire(),
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
     )
@@ -184,7 +189,7 @@ def job_request():
 
 @pytest.fixture
 def resource_spec():
-    return cluster_pb2.ResourceSpecProto(cpu=4, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
+    return cluster_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
 
 
 def test_list_jobs_returns_job_state_counts(client, state, job_request):
@@ -301,7 +306,7 @@ def test_list_jobs_includes_task_counts(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
     )
@@ -329,14 +334,48 @@ def test_list_jobs_includes_task_counts(client, state):
     assert j["taskStateCounts"]["pending"] == 1
 
 
+def test_list_users_returns_aggregates(client, state):
+    """ListUsers RPC returns one aggregate row per user."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "/alice/train", request)
+    submit_job(state, "/alice/eval", request)
+    submit_job(state, "/bob/train", request)
+
+    resp = rpc_post(client, "ListUsers")
+    users = {entry["user"]: entry for entry in resp.get("users", [])}
+
+    assert users["alice"]["jobStateCounts"]["pending"] == 2
+    assert users["alice"]["taskStateCounts"]["pending"] == 2
+    assert users["bob"]["jobStateCounts"]["pending"] == 1
+    assert users["bob"]["taskStateCounts"]["pending"] == 1
+
+
+def test_cluster_summary_includes_total_users(client, state):
+    """GetClusterSummary includes unique user count."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "/alice/train", request)
+    submit_job(state, "/bob/train", request)
+
+    resp = rpc_post(client, "GetClusterSummary")
+    assert resp["totalUsers"] == 2
+
+
 def test_get_job_status_returns_retry_info(client, state, job_request):
     """GetJobStatus RPC returns retry counts and current state.
 
     Jobs no longer track individual attempts - tasks do. The RPC returns
     aggregate retry information for the job.
     """
-    from iris.time_utils import Timestamp
-
     job_id = submit_job(state, "test-job", job_request)
     job = state.get_job(job_id)
     job.state = cluster_pb2.JOB_STATE_RUNNING
@@ -348,7 +387,7 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     tasks[0].preemption_count = 1
 
     # RPC uses camelCase: jobId not job_id
-    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("test-job").to_wire()})
+    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("test-user", "test-job").to_wire()})
     job_status = resp.get("job", {})
 
     # RPC uses camelCase field names
@@ -364,7 +403,7 @@ def test_get_job_status_returns_original_request(client, state):
         name="request-detail-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=4,
+            cpu_millicores=4000,
             memory_bytes=8 * 1024**3,
             disk_bytes=100 * 1024**3,
         ),
@@ -393,7 +432,7 @@ def test_get_job_status_returns_original_request(client, state):
     assert ep.get("runCommand", {}).get("argv") == ["python", "-c", "pass"]
     # Verify resources
     res = returned_request.get("resources", {})
-    assert res["cpu"] == 4
+    assert res["cpuMillicores"] == 4000
     assert int(res["memoryBytes"]) == 8 * 1024**3
     assert int(res["diskBytes"]) == 100 * 1024**3
     # Verify environment
@@ -415,7 +454,7 @@ def test_get_job_status_returns_error_for_missing_job(client):
     """GetJobStatus RPC returns error for non-existent job."""
     resp = client.post(
         "/iris.cluster.ControllerService/GetJobStatus",
-        json={"jobId": JobName.root("nonexistent").to_wire()},
+        json={"jobId": JobName.root("test-user", "nonexistent").to_wire()},
         headers={"Content-Type": "application/json"},
     )
     # Connect RPC returns non-200 status for errors
@@ -439,9 +478,6 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 @pytest.fixture
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
-    from iris.rpc import config_pb2, vm_pb2
-    from iris.time_utils import Timestamp
-
     autoscaler = Mock()
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         groups=[
@@ -496,7 +532,7 @@ def mock_autoscaler():
 def client_with_autoscaler(service_with_autoscaler):
     """Dashboard test client with autoscaler enabled."""
     dashboard = ControllerDashboard(service_with_autoscaler)
-    return TestClient(dashboard._app)
+    return TestClient(dashboard.app)
 
 
 def test_get_autoscaler_status_returns_status_when_enabled(client_with_autoscaler):
@@ -551,7 +587,7 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
     """Pending jobs surface autoscaler scale-up wait hints in job/detail APIs."""
     submit_job(state, "pending-scale", job_request)
 
-    task_id = JobName.root("pending-scale").task(0).to_wire()
+    task_id = JobName.root("test-user", "pending-scale").task(0).to_wire()
     mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         last_routing_decision=vm_pb2.RoutingDecision(
             group_to_launch={"tpu_v5e_32": 1},
@@ -561,29 +597,33 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
         )
     )
 
-    job_resp = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("pending-scale").to_wire()})
+    job_resp = rpc_post(
+        client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("test-user", "pending-scale").to_wire()}
+    )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
     assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in pending_reason
 
     jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
-    listed = [j for j in jobs_resp.get("jobs", []) if j.get("jobId") == JobName.root("pending-scale").to_wire()]
+    listed = [
+        j for j in jobs_resp.get("jobs", []) if j.get("jobId") == JobName.root("test-user", "pending-scale").to_wire()
+    ]
     assert listed
     assert "Waiting for worker scale-up in scale group 'tpu_v5e_32'" in listed[0].get("pendingReason", "")
 
 
-def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
+def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
     client_with_autoscaler,
     state,
     mock_autoscaler,
     make_worker_metadata,
 ):
-    """GetJobStatus should keep scheduler diagnostics when autoscaler has no active launch."""
+    """GetJobStatus should use autoscaler passive-wait hint even when no active launch."""
     register_worker(state, "w1", "h1:8080", make_worker_metadata())
 
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="diag-constraint",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=1,
         constraints=[
@@ -595,7 +635,7 @@ def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
         ],
     )
     submit_job(state, "diag-constraint", request)
-    task_id = JobName.root("diag-constraint").task(0).to_wire()
+    task_id = JobName.root("test-user", "diag-constraint").task(0).to_wire()
 
     mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         last_routing_decision=vm_pb2.RoutingDecision(
@@ -606,22 +646,23 @@ def test_pending_reason_keeps_scheduler_diagnostic_when_no_active_scale_up(
         )
     )
 
-    job_resp = rpc_post(client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("diag-constraint").to_wire()})
+    job_resp = rpc_post(
+        client_with_autoscaler, "GetJobStatus", {"jobId": JobName.root("test-user", "diag-constraint").to_wire()}
+    )
     pending_reason = job_resp.get("job", {}).get("pendingReason", "")
     assert pending_reason
-    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" not in pending_reason
-    assert "constraints" in pending_reason.lower() or "nonexistent-attr" in pending_reason
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in pending_reason
 
 
-def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
+def test_list_jobs_shows_passive_autoscaler_wait_hint(
     client_with_autoscaler,
     state,
     job_request,
     mock_autoscaler,
 ):
-    """ListJobs should not override pending diagnostics with non-active wait hints."""
+    """ListJobs should show passive autoscaler wait hints for pending jobs."""
     submit_job(state, "pending-no-launch", job_request)
-    task_id = JobName.root("pending-no-launch").task(0).to_wire()
+    task_id = JobName.root("test-user", "pending-no-launch").task(0).to_wire()
 
     mock_autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         last_routing_decision=vm_pb2.RoutingDecision(
@@ -633,9 +674,13 @@ def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
     )
 
     jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
-    listed = [j for j in jobs_resp.get("jobs", []) if j.get("jobId") == JobName.root("pending-no-launch").to_wire()]
+    listed = [
+        j
+        for j in jobs_resp.get("jobs", [])
+        if j.get("jobId") == JobName.root("test-user", "pending-no-launch").to_wire()
+    ]
     assert listed
-    assert listed[0].get("pendingReason", "") == ""
+    assert "Waiting for workers in scale group 'tpu_v5e_32' to become ready" in listed[0].get("pendingReason", "")
 
 
 # =============================================================================
@@ -643,11 +688,49 @@ def test_list_jobs_does_not_show_non_active_autoscaler_wait_hint(
 # =============================================================================
 
 
-def test_vm_detail_page_escapes_vm_id(client):
-    """VM detail page escapes the VM ID to prevent XSS."""
-    response = client.get('/vm/"onmouseover="alert(1)')
+def test_worker_detail_page_escapes_id(client):
+    """Worker detail page escapes the ID to prevent XSS."""
+    response = client.get('/worker/"onmouseover="alert(1)')
     assert response.status_code == 200
     assert "onmouseover" not in response.text or "&quot;" in response.text
+
+
+def test_get_worker_status_recent_tasks_have_timestamps(client, state, make_worker_metadata, job_request):
+    """GetWorkerStatus returns recent_tasks with started_at populated from attempt timestamps."""
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    job_id = submit_job(state, "ts-job", job_request)
+    task_id = job_id.task(0)
+
+    state.handle_event(TaskAssignedEvent(task_id=task_id, worker_id=wid))
+    state.handle_event(TaskStateChangedEvent(task_id=task_id, new_state=cluster_pb2.TASK_STATE_RUNNING, attempt_id=0))
+    state.handle_event(TaskStateChangedEvent(task_id=task_id, new_state=cluster_pb2.TASK_STATE_SUCCEEDED, attempt_id=0))
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    tasks = resp.get("recentTasks", [])
+    assert len(tasks) == 1
+    assert tasks[0]["taskId"] == task_id.to_wire()
+    assert tasks[0].get("startedAt"), "started_at must be populated from attempt timestamps"
+    assert tasks[0].get("finishedAt"), "finished_at must be populated from attempt timestamps"
+
+
+def test_get_worker_status_by_worker_id(client, state, make_worker_metadata):
+    """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
+    register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    assert resp.get("worker", {}).get("workerId") == "w1"
+    assert resp.get("worker", {}).get("healthy") is True
+    assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
+
+
+def test_get_worker_status_unknown_id_returns_error(client):
+    """GetWorkerStatus returns 404 for unknown IDs (no VM fallback)."""
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetWorkerStatus",
+        json={"id": "nonexistent-vm-0"},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code != 200
 
 
 def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):
@@ -685,7 +768,7 @@ def test_get_task_logs_for_missing_task_returns_empty(client):
     """GetTaskLogs returns empty batch when the task doesn't exist."""
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"id": JobName.root("nonexistent").task(0).to_wire()},
+        json={"id": JobName.root("test-user", "nonexistent").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
     # With batch API, nonexistent task returns empty task_logs, not an error
@@ -700,7 +783,7 @@ def test_get_task_logs_error_for_unassigned_task(client, state, job_request):
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"id": JobName.root("pending-job").task(0).to_wire()},
+        json={"id": JobName.root("test-user", "pending-job").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
     # Batch API returns 200 with error in batch
@@ -723,7 +806,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
@@ -737,7 +820,7 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     )
     submit_job(state, "cosched-job", request)
 
-    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("cosched-job").to_wire()})
+    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("test-user", "cosched-job").to_wire()})
     job = resp.get("job", {})
     reason = job.get("pendingReason", "")
     assert "no workers match constraints" in reason.lower(), f"Expected constraint failure reason, got: {reason}"
@@ -759,7 +842,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
@@ -773,7 +856,7 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     )
     submit_job(state, "big-cosched", request)
 
-    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("big-cosched").to_wire()})
+    resp = rpc_post(client, "GetJobStatus", {"jobId": JobName.root("test-user", "big-cosched").to_wire()})
     job = resp.get("job", {})
     reason = job.get("pendingReason", "")
     assert "need 4" in reason, f"Expected 'need 4' in reason, got: {reason}"
@@ -812,7 +895,7 @@ def test_list_jobs_returns_all_jobs_for_pagination(client, state):
         request = cluster_pb2.Controller.LaunchJobRequest(
             name=f"job-{i:03d}",
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
         )
         submit_job(state, f"job-{i:03d}", request)

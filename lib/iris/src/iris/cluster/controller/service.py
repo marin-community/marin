@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Controller RPC service implementation handling job, task, and worker operations.
@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import re
 import uuid
 from typing import Any, Protocol
 
@@ -23,11 +24,9 @@ from iris.cluster.controller.events import (
     JobSubmittedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.pending_diagnostics import (
-    build_job_pending_hints,
-    is_active_scale_up_hint,
-)
+from iris.cluster.controller.pending_diagnostics import build_job_pending_hints
 from iris.cluster.controller.scheduler import SchedulingContext
+from iris.cluster.controller.snapshot import SnapshotResult
 from iris.cluster.controller.state import (
     ControllerEndpoint,
     ControllerJob,
@@ -35,13 +34,12 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
 )
-from iris.cluster import task_logging
 from iris.cluster.types import JobName, WorkerId
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
-from iris.rpc.proto_utils import task_state_name
+from iris.rpc.proto_utils import job_state_name, task_state_name
 from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
@@ -51,6 +49,121 @@ DEFAULT_MAX_TOTAL_LINES = 10000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
+TERMINAL_USER_JOB_STATES = frozenset(
+    {
+        cluster_pb2.JOB_STATE_SUCCEEDED,
+        cluster_pb2.JOB_STATE_FAILED,
+        cluster_pb2.JOB_STATE_KILLED,
+        cluster_pb2.JOB_STATE_WORKER_FAILED,
+        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+    }
+)
+USER_TASK_STATES = (
+    cluster_pb2.TASK_STATE_PENDING,
+    cluster_pb2.TASK_STATE_ASSIGNED,
+    cluster_pb2.TASK_STATE_BUILDING,
+    cluster_pb2.TASK_STATE_RUNNING,
+    cluster_pb2.TASK_STATE_SUCCEEDED,
+    cluster_pb2.TASK_STATE_FAILED,
+    cluster_pb2.TASK_STATE_KILLED,
+    cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+    cluster_pb2.TASK_STATE_WORKER_FAILED,
+)
+USER_JOB_STATES = (
+    cluster_pb2.JOB_STATE_PENDING,
+    cluster_pb2.JOB_STATE_BUILDING,
+    cluster_pb2.JOB_STATE_RUNNING,
+    cluster_pb2.JOB_STATE_SUCCEEDED,
+    cluster_pb2.JOB_STATE_FAILED,
+    cluster_pb2.JOB_STATE_KILLED,
+    cluster_pb2.JOB_STATE_WORKER_FAILED,
+    cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+)
+
+
+def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2.TaskStatus:
+    """Convert a ControllerTask to a TaskStatus proto.
+
+    Handles attempt conversion, timestamps, and resource_usage.
+    The caller is responsible for resolving worker_address from worker_id if needed.
+    """
+    current_attempt = task.current_attempt
+
+    attempts = []
+    for attempt in task.attempts:
+        proto_attempt = cluster_pb2.TaskAttempt(
+            attempt_id=attempt.attempt_id,
+            worker_id=str(attempt.worker_id) if attempt.worker_id else "",
+            state=attempt.state,
+            exit_code=attempt.exit_code or 0,
+            error=attempt.error or "",
+            is_worker_failure=attempt.is_worker_failure,
+        )
+        if attempt.started_at is not None:
+            proto_attempt.started_at.CopyFrom(attempt.started_at.to_proto())
+        if attempt.finished_at is not None:
+            proto_attempt.finished_at.CopyFrom(attempt.finished_at.to_proto())
+        attempts.append(proto_attempt)
+
+    proto = cluster_pb2.TaskStatus(
+        task_id=task.task_id.to_wire(),
+        state=task.state,
+        worker_id=str(task.worker_id) if task.worker_id else "",
+        worker_address=worker_address,
+        exit_code=task.exit_code or 0,
+        error=task.error or "",
+        current_attempt_id=task.current_attempt_id,
+        attempts=attempts,
+    )
+    if current_attempt and current_attempt.started_at:
+        proto.started_at.CopyFrom(current_attempt.started_at.to_proto())
+    if current_attempt and current_attempt.finished_at:
+        proto.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+    if task.resource_usage:
+        proto.resource_usage.CopyFrom(task.resource_usage)
+    return proto
+
+
+def worker_status_message(w: ControllerWorker) -> str:
+    """Build a human-readable status message for unhealthy workers."""
+    if w.healthy:
+        return ""
+    if w.consecutive_failures > 0:
+        age = w.last_heartbeat.age_ms()
+        return f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {age // 1000}s ago)"
+    return "Unhealthy (no failures recorded)"
+
+
+def _task_state_key(state: int) -> str:
+    """Return the lowercase RPC key for a task state enum."""
+    return task_state_name(state).removeprefix("TASK_STATE_").lower()
+
+
+def _job_state_key(state: int) -> str:
+    """Return the lowercase RPC key for a job state enum."""
+    return job_state_name(state).removeprefix("JOB_STATE_").lower()
+
+
+def _active_job_count(job_state_counts: dict[int, int]) -> int:
+    """Return the count of non-terminal jobs in a user aggregate."""
+    return sum(count for state, count in job_state_counts.items() if state not in TERMINAL_USER_JOB_STATES)
+
+
+def _task_state_counts_for_summary(task_state_counts: dict[int, int]) -> dict[str, int]:
+    """Convert enum-keyed task counts to the string-keyed RPC shape."""
+    counts = {_task_state_key(state): 0 for state in USER_TASK_STATES}
+    for state, count in task_state_counts.items():
+        counts[_task_state_key(state)] = count
+    return counts
+
+
+def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str, int]:
+    """Convert enum-keyed job counts to the string-keyed RPC shape."""
+    counts = {_job_state_key(state): 0 for state in USER_JOB_STATES}
+    for state, count in job_state_counts.items():
+        counts[_job_state_key(state)] = count
+    return counts
 
 
 class AutoscalerProtocol(Protocol):
@@ -86,6 +199,8 @@ class ControllerProtocol(Protocol):
     def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext: ...
 
     def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str: ...
+
+    def begin_checkpoint(self) -> tuple[str, SnapshotResult]: ...
 
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...
@@ -228,41 +343,7 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
-            # Convert task attempts to proto
-            attempts = []
-            for attempt in task.attempts:
-                proto_attempt = cluster_pb2.TaskAttempt(
-                    attempt_id=attempt.attempt_id,
-                    worker_id=str(attempt.worker_id) if attempt.worker_id else "",
-                    state=attempt.state,
-                    exit_code=attempt.exit_code or 0,
-                    error=attempt.error or "",
-                    is_worker_failure=attempt.is_worker_failure,
-                )
-                if attempt.started_at is not None:
-                    proto_attempt.started_at.CopyFrom(attempt.started_at.to_proto())
-                if attempt.finished_at is not None:
-                    proto_attempt.finished_at.CopyFrom(attempt.finished_at.to_proto())
-                attempts.append(proto_attempt)
-
-            current_attempt = task.current_attempt
-
-            proto_task_status = cluster_pb2.TaskStatus(
-                task_id=task.task_id.to_wire(),
-                state=task.state,
-                worker_id=str(task.worker_id) if task.worker_id else "",
-                worker_address=worker_address,
-                exit_code=task.exit_code or 0,
-                error=task.error or "",
-                current_attempt_id=task.current_attempt_id,
-                attempts=attempts,
-                log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
-            )
-            if current_attempt and current_attempt.started_at:
-                proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
-            if current_attempt and current_attempt.finished_at:
-                proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
-            task_statuses.append(proto_task_status)
+            task_statuses.append(task_to_proto(task, worker_address=worker_address))
 
         # Get scheduling diagnostics for pending jobs
         pending_reason = ""
@@ -276,7 +357,7 @@ class ControllerServiceImpl:
             # Only override scheduler diagnostics when autoscaler is actively
             # requesting new capacity. Otherwise, scheduler root-cause details
             # (e.g., constraint/resource mismatch) are more actionable.
-            if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
+            if autoscaler_hint:
                 pending_reason = autoscaler_hint
 
         # Build the JobStatus proto and set timestamps
@@ -402,7 +483,7 @@ class ControllerServiceImpl:
             pending_reason = j.error or ""
             if j.state == cluster_pb2.JOB_STATE_PENDING:
                 autoscaler_hint = autoscaler_pending_hints.get(j.job_id.to_wire(), "")
-                if autoscaler_hint and is_active_scale_up_hint(autoscaler_hint):
+                if autoscaler_hint:
                     pending_reason = autoscaler_hint
 
             proto_job = cluster_pb2.JobStatus(
@@ -527,24 +608,9 @@ class ControllerServiceImpl:
             if worker:
                 worker_address = worker.address
 
-        current_attempt = task.current_attempt
-
-        proto_task_status = cluster_pb2.TaskStatus(
-            task_id=task.task_id.to_wire(),
-            state=task.state,
-            worker_id=str(task.worker_id) if task.worker_id else "",
-            worker_address=worker_address,
-            exit_code=task.exit_code or 0,
-            error=task.error or "",
-            current_attempt_id=task.current_attempt_id,
-            log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
+        return cluster_pb2.Controller.GetTaskStatusResponse(
+            task=task_to_proto(task, worker_address=worker_address),
         )
-        if current_attempt and current_attempt.started_at:
-            proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
-        if current_attempt and current_attempt.finished_at:
-            proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
-
-        return cluster_pb2.Controller.GetTaskStatusResponse(task=proto_task_status)
 
     def list_tasks(
         self,
@@ -570,50 +636,13 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
+            proto_task_status = task_to_proto(task, worker_address=worker_address)
+
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics
-            pending_reason = ""
-            can_be_scheduled = False
             if task.state == cluster_pb2.TASK_STATE_PENDING:
-                can_be_scheduled = task.can_be_scheduled()
+                proto_task_status.can_be_scheduled = task.can_be_scheduled()
 
-            # Use attempt timestamps since task-level timestamps are not set
-            current_attempt = task.current_attempt
-
-            # Convert task attempts to proto
-            attempts = []
-            for attempt in task.attempts:
-                proto_attempt = cluster_pb2.TaskAttempt(
-                    attempt_id=attempt.attempt_id,
-                    worker_id=str(attempt.worker_id) if attempt.worker_id else "",
-                    state=attempt.state,
-                    exit_code=attempt.exit_code or 0,
-                    error=attempt.error or "",
-                    is_worker_failure=attempt.is_worker_failure,
-                )
-                if attempt.started_at is not None:
-                    proto_attempt.started_at.CopyFrom(attempt.started_at.to_proto())
-                if attempt.finished_at is not None:
-                    proto_attempt.finished_at.CopyFrom(attempt.finished_at.to_proto())
-                attempts.append(proto_attempt)
-
-            proto_task_status = cluster_pb2.TaskStatus(
-                task_id=task.task_id.to_wire(),
-                state=task.state,
-                worker_id=str(task.worker_id) if task.worker_id else "",
-                worker_address=worker_address,
-                exit_code=task.exit_code or 0,
-                error=task.error or "",
-                current_attempt_id=task.current_attempt_id,
-                pending_reason=pending_reason,
-                can_be_scheduled=can_be_scheduled,
-                attempts=attempts,
-                log_directory=current_attempt.log_directory if current_attempt and current_attempt.log_directory else "",
-            )
-            if current_attempt and current_attempt.started_at:
-                proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
-            if current_attempt and current_attempt.finished_at:
-                proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
             task_statuses.append(proto_task_status)
 
         return cluster_pb2.Controller.ListTasksResponse(tasks=task_statuses)
@@ -671,16 +700,6 @@ class ControllerServiceImpl:
         """List all workers with their running task counts."""
         workers = []
         for w in self._state.list_all_workers():
-            # Generate status message for unhealthy workers
-            status_message = ""
-            if not w.healthy:
-                if w.consecutive_failures > 0:
-                    time_since_last_hb = w.last_heartbeat.age_ms()
-                    time_since_str = f"{time_since_last_hb // 1000}s ago" if time_since_last_hb else "never"
-                    status_message = f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {time_since_str})"
-                else:
-                    status_message = "Unhealthy (no failures recorded)"
-
             workers.append(
                 cluster_pb2.Controller.WorkerHealthStatus(
                     worker_id=w.worker_id,
@@ -690,7 +709,7 @@ class ControllerServiceImpl:
                     running_job_ids=[task_id.to_wire() for task_id in w.running_tasks],
                     address=w.address,
                     metadata=w.metadata,
-                    status_message=status_message,
+                    status_message=worker_status_message(w),
                 )
             )
         return cluster_pb2.Controller.ListWorkersResponse(workers=workers)
@@ -819,29 +838,6 @@ class ControllerServiceImpl:
 
     # --- VM Logs ---
 
-    def get_vm_logs(
-        self,
-        request: cluster_pb2.Controller.GetVmLogsRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.GetVmLogsResponse:
-        """Get initialization logs for a VM."""
-        autoscaler = self._controller.autoscaler
-        if not autoscaler:
-            raise ConnectError(Code.UNAVAILABLE, "Autoscaler not configured")
-
-        vm_info = autoscaler.get_vm(request.vm_id)
-        if not vm_info:
-            raise ConnectError(Code.NOT_FOUND, f"VM {request.vm_id} not found")
-
-        tail = request.tail if request.tail > 0 else None
-        logs = autoscaler.get_init_log(request.vm_id, tail)
-
-        return cluster_pb2.Controller.GetVmLogsResponse(
-            logs=logs,
-            vm_id=vm_info.vm_id,
-            state=vm_info.state,
-        )
-
     # --- Task/Job Logs (batch fetching) ---
 
     def get_task_logs(
@@ -849,10 +845,10 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetTaskLogsRequest,
         ctx: RequestContext,
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
-        """Get logs for a task or all tasks in a job from storage.
+        """Get logs for a task or all tasks in a job from the in-memory log store.
 
-        Fetches logs from durable storage (GCS) instead of proxying from workers.
-        This enables post-mortem access to logs after worker VMs terminate.
+        Logs are forwarded from workers via heartbeat and accumulated in the
+        controller's log store.  No remote storage I/O occurs.
 
         If request.id ends in a numeric index, treat as single task.
         Otherwise treat as job ID and fetch logs from all tasks.
@@ -862,8 +858,10 @@ class ControllerServiceImpl:
         job_name = JobName.from_wire(request.id)
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
+        log_store = self._state.log_store
 
-        # Detect if this is a task ID (ends in /N) or job ID and collect tasks
+        # Detect if this is a task ID (ends in /N) or job ID and collect tasks.
+        child_job_statuses: list[cluster_pb2.JobStatus] = []
         if job_name.is_task:
             task = self._state.get_task(job_name)
             tasks = [task] if task else []
@@ -875,22 +873,45 @@ class ControllerServiceImpl:
                     job_wire = job.job_id.to_wire()
                     if job_wire == prefix or job_wire.startswith(prefix + "/"):
                         tasks.extend(self._state.get_job_tasks(job.job_id))
+                        if job_wire != prefix:
+                            child_status = cluster_pb2.JobStatus(
+                                job_id=job_wire,
+                                state=job.state,
+                                exit_code=job.exit_code or 0,
+                                error=job.error or "",
+                            )
+                            if job.finished_at:
+                                child_status.finished_at.CopyFrom(job.finished_at.to_proto())
+                            child_job_statuses.append(child_status)
             else:
                 tasks.extend(self._state.get_job_tasks(job_name))
 
-        # Fetch logs from storage for each task/attempt
+        # Pre-compile regex filter so invalid patterns produce a clear error
+        # rather than an internal failure during iteration.
+        compiled_regex: re.Pattern[str] | None = None
+        if request.regex:
+            try:
+                compiled_regex = re.compile(request.regex)
+            except re.error as e:
+                return cluster_pb2.Controller.GetTaskLogsResponse(
+                    task_logs=[
+                        cluster_pb2.Controller.TaskLogBatch(
+                            error=f"Invalid regex filter: {e}",
+                        )
+                    ],
+                )
+
         task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
         total_lines = 0
         truncated = False
         last_timestamp_ms = request.since_ms
+        resume_offsets: dict[str, int] = {}
 
         for task in tasks:
             task_id_wire = task.task_id.to_wire()
 
-            # Determine which attempts to fetch
             attempts_to_fetch = []
             if requested_attempt_id >= 0:
-                # Specific attempt requested
                 if requested_attempt_id >= len(task.attempts):
                     task_logs.append(
                         cluster_pb2.Controller.TaskLogBatch(
@@ -901,72 +922,40 @@ class ControllerServiceImpl:
                     continue
                 attempts_to_fetch = [task.attempts[requested_attempt_id]]
             else:
-                # All attempts
                 attempts_to_fetch = task.attempts
 
-            # Fetch logs for each attempt
             for attempt in attempts_to_fetch:
-                if not attempt.worker_id:
-                    task_logs.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            error=f"Attempt {attempt.attempt_id} has no assigned worker",
-                        )
-                    )
-                    continue
+                remaining = max(0, max_lines - total_lines) if max_lines > 0 else 0
+                offset_key = f"{task_id_wire}/{attempt.attempt_id}"
+                skip_lines = int(request.resume_offsets.get(offset_key, 0))
+                log_result = log_store.get_logs(
+                    task.task_id,
+                    attempt.attempt_id,
+                    since_ms=request.since_ms,
+                    skip_lines=skip_lines,
+                    regex_filter=compiled_regex,
+                    max_lines=remaining,
+                    tail=True,
+                    min_level=request.min_level,
+                )
 
-                if not attempt.log_directory:
-                    task_logs.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            worker_id=str(attempt.worker_id),
-                            error=(
-                                f"Attempt {attempt.attempt_id} has no log directory "
-                                "(worker may not have reported it yet)"
-                            ),
-                        )
-                    )
-                    continue
+                resume_offsets[offset_key] = log_result.lines_read
 
-                try:
-                    reader = task_logging.LogReader.from_log_directory(log_directory=attempt.log_directory)
-                    log_entries = reader.read_logs(
-                        source=None,  # All sources
-                        regex_filter=request.regex if request.regex else None,
-                        max_lines=max(0, max_lines - total_lines) if max_lines > 0 else 0,
-                    )
+                for entry in log_result.entries:
+                    if entry.timestamp.epoch_ms > last_timestamp_ms:
+                        last_timestamp_ms = entry.timestamp.epoch_ms
 
-                    worker_logs = []
-                    for entry in log_entries:
-                        # Filter by timestamp if requested
-                        if request.since_ms > 0 and entry.timestamp.epoch_ms <= request.since_ms:
-                            continue
+                batch = cluster_pb2.Controller.TaskLogBatch(
+                    task_id=task_id_wire,
+                    worker_id=str(attempt.worker_id) if attempt.worker_id else "",
+                    logs=log_result.entries,
+                )
+                task_logs.append(batch)
 
-                        worker_logs.append(entry)
-
-                        if entry.timestamp.epoch_ms > last_timestamp_ms:
-                            last_timestamp_ms = entry.timestamp.epoch_ms
-
-                    batch = cluster_pb2.Controller.TaskLogBatch(
-                        task_id=task_id_wire,
-                        worker_id=str(attempt.worker_id),
-                        logs=worker_logs,
-                    )
-                    task_logs.append(batch)
-
-                    total_lines += len(worker_logs)
-                    if max_lines > 0 and total_lines >= max_lines:
-                        truncated = True
-                        break
-
-                except Exception as e:
-                    task_logs.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            worker_id=str(attempt.worker_id),
-                            error=f"Failed to fetch logs from storage: {e}",
-                        )
-                    )
+                total_lines += len(log_result.entries)
+                if max_lines > 0 and total_lines >= max_lines:
+                    truncated = True
+                    break
 
             if truncated:
                 break
@@ -975,6 +964,8 @@ class ControllerServiceImpl:
             task_logs=task_logs,
             last_timestamp_ms=last_timestamp_ms,
             truncated=truncated,
+            child_job_statuses=child_job_statuses,
+            resume_offsets=resume_offsets,
         )
 
     # --- Profiling ---
@@ -1034,6 +1025,58 @@ class ControllerServiceImpl:
                 actions.append(proto_action)
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
 
+    # --- Cluster Summary ---
+
+    def get_cluster_summary(
+        self,
+        request: cluster_pb2.Controller.GetClusterSummaryRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetClusterSummaryResponse:
+        """Lightweight cluster-wide counters for the dashboard header."""
+        jobs = self._state.list_all_jobs()
+        state_counts: dict[str, int] = {}
+        for job in jobs:
+            name = job_state_name(job.state)
+            key = name.removeprefix("JOB_STATE_").lower()
+            state_counts[key] = state_counts.get(key, 0) + 1
+
+        workers = self._state.list_all_workers()
+        healthy = sum(1 for w in workers if w.healthy)
+
+        return cluster_pb2.Controller.GetClusterSummaryResponse(
+            job_state_counts=state_counts,
+            total_jobs=len(jobs),
+            total_workers=len(workers),
+            healthy_workers=healthy,
+            total_users=len(self._state.list_user_stats()),
+        )
+
+    def list_users(
+        self,
+        request: cluster_pb2.Controller.ListUsersRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.ListUsersResponse:
+        """Return live per-user aggregate counts for the dashboard."""
+        del request, ctx
+        users = sorted(
+            self._state.list_user_stats(),
+            key=lambda entry: (
+                -_active_job_count(entry.job_state_counts),
+                -(entry.task_state_counts.get(cluster_pb2.TASK_STATE_RUNNING, 0)),
+                entry.user,
+            ),
+        )
+        return cluster_pb2.Controller.ListUsersResponse(
+            users=[
+                cluster_pb2.Controller.UserSummary(
+                    user=entry.user,
+                    task_state_counts=_task_state_counts_for_summary(entry.task_state_counts),
+                    job_state_counts=_job_state_counts_for_summary(entry.job_state_counts),
+                )
+                for entry in users
+            ]
+        )
+
     # --- Process Logs ---
 
     def get_process_logs(
@@ -1058,3 +1101,79 @@ class ControllerServiceImpl:
                 for r in records
             ]
         )
+
+    # --- Worker Detail ---
+
+    def get_worker_status(
+        self,
+        request: cluster_pb2.Controller.GetWorkerStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetWorkerStatusResponse:
+        """Return detail for a single worker, keyed by worker ID.
+
+        Workers and VMs are independent: the worker detail page shows only
+        worker state (health, tasks, logs). VM status lives on the Autoscaler
+        tab.
+        """
+        with rpc_error_handler("get_worker_status"):
+            if not request.id:
+                raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
+
+            worker = self._state.get_worker(request.id)
+            if not worker:
+                raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
+
+            worker_health = cluster_pb2.Controller.WorkerHealthStatus(
+                worker_id=worker.worker_id,
+                healthy=worker.healthy,
+                consecutive_failures=worker.consecutive_failures,
+                last_heartbeat=worker.last_heartbeat.to_proto(),
+                running_job_ids=[tid.to_wire() for tid in worker.running_tasks],
+                address=worker.address,
+                metadata=worker.metadata,
+                status_message=worker_status_message(worker),
+            )
+
+            # Fetch worker daemon logs if worker is healthy
+            worker_logs: list[cluster_pb2.ProcessLogRecord] = []
+            if worker.healthy:
+                try:
+                    stub = self._controller.stub_factory.get_stub(worker.address)
+                    resp = stub.get_process_logs(
+                        cluster_pb2.Worker.GetProcessLogsRequest(limit=200),
+                        timeout_ms=10000,
+                    )
+                    worker_logs = list(resp.records)
+                except Exception:
+                    logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
+
+            # Collect recent task history for this worker
+            tasks = self._state.get_tasks_for_worker(worker.worker_id, limit=50)
+            recent_tasks = [task_to_proto(task) for task in tasks]
+
+            resp = cluster_pb2.Controller.GetWorkerStatusResponse(
+                worker_logs=worker_logs,
+                recent_tasks=recent_tasks,
+            )
+            resp.worker.CopyFrom(worker_health)
+            if worker.resource_snapshot:
+                resp.current_resources.CopyFrom(worker.resource_snapshot)
+            for snapshot in worker.resource_history:
+                resp.resource_history.append(snapshot)
+            return resp
+
+    def begin_checkpoint(
+        self,
+        request: cluster_pb2.Controller.BeginCheckpointRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.BeginCheckpointResponse:
+        with rpc_error_handler("begin checkpoint"):
+            path, result = self._controller.begin_checkpoint()
+            resp = cluster_pb2.Controller.BeginCheckpointResponse(
+                snapshot_path=path,
+                job_count=result.job_count,
+                task_count=result.task_count,
+                worker_count=result.worker_count,
+            )
+            resp.created_at.CopyFrom(result.proto.created_at)
+            return resp
