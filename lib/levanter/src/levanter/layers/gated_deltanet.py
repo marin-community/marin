@@ -38,17 +38,16 @@ from jax import lax
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis, NamedArray
 
 
 # ---------- small utilities ----------
 
 
-def _l2norm(x: NamedArray, axis: hax.AxisSelector, eps: float = 1e-6) -> NamedArray:
+def _l2norm(x: hax.NamedArray, axis: hax.AxisSelector, eps: float = 1e-6) -> hax.NamedArray:
     """L2-normalize x along a named axis.
 
     Args:
-        x: NamedArray of any shape.
+        x: hax.NamedArray of any shape.
         axis: the single axis to normalize along (e.g., the head dimension Dk).
     """
     x32 = x.astype(jnp.float32)
@@ -141,15 +140,15 @@ def _causal_depthwise_conv1d_update(
 class GatedRmsNorm(eqx.Module):
     """RMSNorm(x) * SiLU(gate)"""
 
-    axis: Axis
-    weight: NamedArray  # [axis]
+    axis: hax.Axis
+    weight: hax.NamedArray  # [axis]
     eps: float = eqx.field(default=1e-6, static=True)
 
     @staticmethod
-    def init(axis: Axis, eps: float = 1e-6) -> "GatedRmsNorm":
+    def init(axis: hax.Axis, eps: float = 1e-6) -> "GatedRmsNorm":
         return GatedRmsNorm(axis=axis, weight=hax.ones(axis), eps=eps)
 
-    def __call__(self, x: NamedArray, gate: NamedArray) -> NamedArray:
+    def __call__(self, x: hax.NamedArray, gate: hax.NamedArray) -> hax.NamedArray:
         in_dtype = x.dtype
         x32 = x.astype(jnp.float32)
         var = hax.mean(hax.square(x32), axis=self.axis)
@@ -176,7 +175,7 @@ class GatedDeltaNetConfig:
       - Small depthwise causal conv over concatenated channels [Q|K|V].
     """
 
-    Embed: Axis
+    Embed: hax.Axis
     num_k_heads: int
     num_v_heads: int
     head_k_dim: int
@@ -185,20 +184,20 @@ class GatedDeltaNetConfig:
     rms_norm_eps: float = 1e-6
 
     @property
-    def KHeads(self) -> Axis:
-        return Axis("k_heads", self.num_k_heads)
+    def KHeads(self) -> hax.Axis:
+        return hax.Axis("k_heads", self.num_k_heads)
 
     @property
-    def VHeads(self) -> Axis:
-        return Axis("v_heads", self.num_v_heads)
+    def VHeads(self) -> hax.Axis:
+        return hax.Axis("v_heads", self.num_v_heads)
 
     @property
-    def KHeadDim(self) -> Axis:
-        return Axis("k_head_dim", self.head_k_dim)
+    def KHeadDim(self) -> hax.Axis:
+        return hax.Axis("k_head_dim", self.head_k_dim)
 
     @property
-    def VHeadDim(self) -> Axis:
-        return Axis("v_head_dim", self.head_v_dim)
+    def VHeadDim(self) -> hax.Axis:
+        return hax.Axis("v_head_dim", self.head_v_dim)
 
     @property
     def key_dim(self) -> int:
@@ -209,20 +208,20 @@ class GatedDeltaNetConfig:
         return self.num_v_heads * self.head_v_dim
 
     @property
-    def mix_qkvz_axis(self) -> Axis:
+    def mix_qkvz_axis(self) -> hax.Axis:
         # [Q | K | V | Z]; the layer projects all at once
-        return Axis("qkvz", self.key_dim * 2 + self.value_dim * 2)
+        return hax.Axis("qkvz", self.key_dim * 2 + self.value_dim * 2)
 
     @property
-    def ba_axis(self) -> Axis:
+    def ba_axis(self) -> hax.Axis:
         # [b | a]; per value head: β = σ(b), g uses a via Mamba2-style discretization
-        return Axis("ba", self.num_v_heads * 2)
+        return hax.Axis("ba", self.num_v_heads * 2)
 
 
 # ---------- Triangular masks ----------
 
 
-def _tri_upper_eq_mask(Ci: Axis, Cj: Axis) -> NamedArray:
+def _tri_upper_eq_mask(Ci: hax.Axis, Cj: hax.Axis) -> hax.NamedArray:
     """Mask for i <= j (upper-triangular incl. diagonal) in (Ci, Cj) coordinates.
 
     Used to zero-out invalid contributions when building strictly lower-triangular
@@ -235,28 +234,28 @@ def _tri_upper_eq_mask(Ci: Axis, Cj: Axis) -> NamedArray:
     return I <= J
 
 
-def _diag_mask(Ci: Axis, Cj: Axis) -> NamedArray:
+def _diag_mask(Ci: hax.Axis, Cj: hax.Axis) -> hax.NamedArray:
     ii = hax.arange(Ci)
     jj = hax.arange(Cj)
     I = ii.broadcast_axis(Cj)
     J = jj.broadcast_axis(Ci)
-    return cast(NamedArray, I == J)
+    return cast(hax.NamedArray, I == J)
 
 
 # ---------- Kernels ----------
 
 
 def recurrent_gated_delta_rule(
-    query: NamedArray,  # [batch, position, heads, k_head_dim]
-    key: NamedArray,  # [batch, position, heads, k_head_dim]
-    value: NamedArray,  # [batch, position, heads, v_head_dim]
-    g: NamedArray,  # [batch, position, heads] (log-decay; α = exp(g))
-    beta: NamedArray,  # [batch, position, heads] (β ∈ (0,1))
+    query: hax.NamedArray,  # [batch, position, heads, k_head_dim]
+    key: hax.NamedArray,  # [batch, position, heads, k_head_dim]
+    value: hax.NamedArray,  # [batch, position, heads, v_head_dim]
+    g: hax.NamedArray,  # [batch, position, heads] (log-decay; α = exp(g))
+    beta: hax.NamedArray,  # [batch, position, heads] (β ∈ (0,1))
     *,
     initial_state: Optional[jnp.ndarray] = None,  # (B, H, dk, dv)
     output_final_state: bool = False,
     use_qk_l2norm_in_kernel: bool = True,
-) -> Tuple[NamedArray, Optional[jnp.ndarray]]:
+) -> Tuple[hax.NamedArray, Optional[jnp.ndarray]]:
     """Sequential (decode) GDN kernel
 
     For each t:
@@ -267,7 +266,7 @@ def recurrent_gated_delta_rule(
       o_t  = S_t^T q_t                 # [B, H, d_v] (readout)
 
     Args:
-      query, key, value: NamedArray tensors with explicit [batch, position, heads, dim]
+      query, key, value: hax.NamedArray tensors with explicit [batch, position, heads, dim]
       g:   log-decay; α = exp(g) is the forget gate in (0,1)
       beta: learning-rate gate β in (0,1)
       initial_state: optional S_0 (B, H, d_k, d_v)
@@ -358,17 +357,17 @@ def recurrent_gated_delta_rule(
 
 
 def chunk_gated_delta_rule(
-    query: NamedArray,  # [batch, position, heads, k_head_dim]
-    key: NamedArray,  # [batch, position, heads, k_head_dim]
-    value: NamedArray,  # [batch, position, heads, v_head_dim]
-    g: NamedArray,  # [batch, position, heads]  (log-decay; α=exp(g))
-    beta: NamedArray,  # [batch, position, heads]  (β)
+    query: hax.NamedArray,  # [batch, position, heads, k_head_dim]
+    key: hax.NamedArray,  # [batch, position, heads, k_head_dim]
+    value: hax.NamedArray,  # [batch, position, heads, v_head_dim]
+    g: hax.NamedArray,  # [batch, position, heads]  (log-decay; α=exp(g))
+    beta: hax.NamedArray,  # [batch, position, heads]  (β)
     *,
     chunk_size: int = 64,
     initial_state: Optional[jnp.ndarray] = None,  # (B,H,dk,dv)
     output_final_state: bool = False,
     use_qk_l2norm_in_kernel: bool = True,
-) -> tuple[NamedArray, Optional[jnp.ndarray]]:
+) -> tuple[hax.NamedArray, Optional[jnp.ndarray]]:
     """Chunkwise-parallel GDN (DeltaNet UT/WY extended with decay).
 
     High-level sketch (per head):
@@ -412,11 +411,11 @@ def chunk_gated_delta_rule(
     PosPad = q.resolve_axis("position")
     Lt = PosPad.size
     Nc = Lt // chunk_size
-    Chunks = Axis("chunks", Nc)
-    C = Axis("chunk", chunk_size)
+    Chunks = hax.Axis("chunks", Nc)
+    C = hax.Axis("chunk", chunk_size)
 
     # Helper to reshape [B, Lpad, H, d] → [B, Nc, C, H, d]
-    def _chunk(x: NamedArray) -> NamedArray:
+    def _chunk(x: hax.NamedArray) -> hax.NamedArray:
         return x.unflatten_axis(PosPad, (Chunks, C))
 
     q_c = _chunk(q)
@@ -432,8 +431,8 @@ def chunk_gated_delta_rule(
     g_cum = hax.cumsum(g_c, axis=C)  # [B, Nc, C, H]
 
     # --- Build strictly lower-triangular A in (Ci, Cj) coordinates ---
-    Ci = Axis("Ci", C.size)
-    Cj = Axis("Cj", C.size)
+    Ci = hax.Axis("Ci", C.size)
+    Cj = hax.Axis("Cj", C.size)
 
     kb_ci = k_beta.rename({C.name: Ci.name})  # [B,Nc,Ci,H,Dk]
     k_cj = k_c.rename({C.name: Cj.name})  # [B,Nc,Cj,H,Dk]
@@ -649,9 +648,9 @@ class GatedDeltaNet(eqx.Module):
 
     def _fix_qkvz_ordering(
         self,
-        mixed_qkvz: NamedArray,  # [B, Pos, qkvz]
-        mixed_ba: NamedArray,  # [B, Pos, 2*num_v_heads]
-    ) -> Tuple[NamedArray, NamedArray, NamedArray, NamedArray, NamedArray, NamedArray]:
+        mixed_qkvz: hax.NamedArray,  # [B, Pos, qkvz]
+        mixed_ba: hax.NamedArray,  # [B, Pos, 2*num_v_heads]
+    ) -> Tuple[hax.NamedArray, hax.NamedArray, hax.NamedArray, hax.NamedArray, hax.NamedArray, hax.NamedArray]:
         """Split packed projections into per-head tensors and align head layout. (match HF version)
 
         Input shapes:
@@ -669,7 +668,7 @@ class GatedDeltaNet(eqx.Module):
         cfg = self.config
         ratio = cfg.num_v_heads // cfg.num_k_heads
 
-        per_head = Axis("per_head", 2 * cfg.head_k_dim + 2 * ratio * cfg.head_v_dim)
+        per_head = hax.Axis("per_head", 2 * cfg.head_k_dim + 2 * ratio * cfg.head_v_dim)
         x = mixed_qkvz.unflatten_axis("qkvz", (cfg.KHeads, per_head))
 
         def sl(start, size):
@@ -683,14 +682,14 @@ class GatedDeltaNet(eqx.Module):
 
         # (KHeads, ratio*dv) → (VHeads, VHeadDim)
         v = v_chunk.unflatten_axis(
-            v_chunk.resolve_axis("per_head"), (Axis("v_group", ratio), cfg.VHeadDim)
+            v_chunk.resolve_axis("per_head"), (hax.Axis("v_group", ratio), cfg.VHeadDim)
         ).flatten_axes(("k_heads", "v_group"), cfg.VHeads)
         z = z_chunk.unflatten_axis(
-            z_chunk.resolve_axis("per_head"), (Axis("v_group", ratio), cfg.VHeadDim)
+            z_chunk.resolve_axis("per_head"), (hax.Axis("v_group", ratio), cfg.VHeadDim)
         ).flatten_axes(("k_heads", "v_group"), cfg.VHeads)
 
         # b | a are per V-head; shape path mirrors HF:
-        per_ba = Axis("per_ba", 2 * ratio)
+        per_ba = hax.Axis("per_ba", 2 * ratio)
         ba = mixed_ba.unflatten_axis("ba", (cfg.KHeads, per_ba))
         b_chunk = ba["per_ba", hax.ds(0, ratio)]
         a_chunk = ba["per_ba", hax.ds(ratio, ratio)]
@@ -701,13 +700,13 @@ class GatedDeltaNet(eqx.Module):
 
     def __call__(
         self,
-        x: NamedArray,
+        x: hax.NamedArray,
         *,
         inference: bool = True,
         chunk_size: int = 64,
-        attention_mask: Optional[NamedArray] = None,
+        attention_mask: Optional[hax.NamedArray] = None,
         decode_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None,  # (conv_state, S_state)
-    ) -> Tuple[NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
+    ) -> Tuple[hax.NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
         """Run the full GDN token mixer.
 
         Args:
@@ -739,9 +738,9 @@ class GatedDeltaNet(eqx.Module):
 
         # 2) Depthwise causal conv over concatenated [Q|K|V] channels
         #    HF orders channels as: [Q_flat | K_flat | V_flat] (no Z).
-        q_ch = q.flatten_axes((cfg.KHeads, cfg.KHeadDim), Axis("channels", cfg.key_dim))
-        k_ch = k.flatten_axes((cfg.KHeads, cfg.KHeadDim), Axis("channels", cfg.key_dim))
-        v_ch = v.flatten_axes((cfg.VHeads, cfg.VHeadDim), Axis("channels", cfg.value_dim))
+        q_ch = q.flatten_axes((cfg.KHeads, cfg.KHeadDim), hax.Axis("channels", cfg.key_dim))
+        k_ch = k.flatten_axes((cfg.KHeads, cfg.KHeadDim), hax.Axis("channels", cfg.key_dim))
+        v_ch = v.flatten_axes((cfg.VHeads, cfg.VHeadDim), hax.Axis("channels", cfg.value_dim))
         qkv_ch = hax.concatenate("channels", [q_ch, k_ch, v_ch])  # [B, Pos, channels]
         qkv_ncl = hax.rearrange(qkv_ch, ("batch", "channels", "position")).array  # (N, C, L)
 
@@ -789,7 +788,7 @@ class GatedDeltaNet(eqx.Module):
         # every V-head has its own (q,k) and thus its own rectangular S.
         ratio = cfg.num_v_heads // cfg.num_k_heads
         if ratio > 1:
-            VGroup = Axis("v_group", ratio)
+            VGroup = hax.Axis("v_group", ratio)
             q = q.broadcast_axis(VGroup).flatten_axes((cfg.KHeads, VGroup), cfg.VHeads)
             k = k.broadcast_axis(VGroup).flatten_axes((cfg.KHeads, VGroup), cfg.VHeads)
         else:
@@ -863,7 +862,9 @@ class GatedDeltaNet(eqx.Module):
     def load_state_dict(self, state: dict[str, jnp.ndarray]) -> "GatedDeltaNet":
         cfg = self.config
 
-        def _assign_linear_weight(named_linear: hnn.Linear, np_weight: jnp.ndarray, out_axis: Axis, in_axis: Axis):
+        def _assign_linear_weight(
+            named_linear: hnn.Linear, np_weight: jnp.ndarray, out_axis: hax.Axis, in_axis: hax.Axis
+        ):
             w_named = hax.named(jnp.asarray(np_weight, dtype=jnp.float32), (out_axis.name, in_axis.name))
             return dataclasses.replace(named_linear, weight=w_named)
 
