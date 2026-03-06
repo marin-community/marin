@@ -1317,7 +1317,7 @@ def _actually_run_eval_harness(
 
     max_length = max_length or model.max_length
 
-    EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
+    EvalPos = axis("position", max_length)
     num_parameters = parameter_count(model)
     logger.info(
         f"Evaluating with max length {EvalPos.size} and batch size {EvalBatch.size}. There are"

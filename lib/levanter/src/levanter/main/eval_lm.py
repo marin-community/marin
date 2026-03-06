@@ -58,7 +58,8 @@ def main(config: EvalLmConfig):
 
     eval_batch_size = config.trainer.eval_batch_size
     batch_axis_name = config.trainer.batch_axis_name
-    Pos = config.model.max_Pos.resize(config.max_eval_length)
+    eval_length = min(config.max_eval_length, config.model.max_seq_len)
+    Pos = config.model.max_Pos.resize(eval_length)
 
     if config.eval_on_train:
         datasets_dict = config.data.train_grug_sets(seq_len=Pos.size, key=jax.random.PRNGKey(0))
