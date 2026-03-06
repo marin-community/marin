@@ -281,6 +281,7 @@ class Job:
         raise_on_failure: bool = True,
         stream_logs: bool = False,
         include_children: bool = False,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
 
@@ -289,6 +290,7 @@ class Job:
             poll_interval: Maximum time between status checks
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
+            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
             Final JobStatus
@@ -300,7 +302,7 @@ class Job:
         if not stream_logs:
             status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
         else:
-            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children)
+            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children, min_level)
 
         if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
             raise JobFailedError(self._job_id, status)
@@ -312,6 +314,7 @@ class Job:
         timeout: float,
         poll_interval: float,
         include_children: bool,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait while streaming logs from all tasks using batch log fetching.
 
@@ -326,6 +329,7 @@ class Job:
             include_children=include_children,
             since_ms=0,
             state_logger=DefaultTaskStateLogger(),
+            min_level=min_level,
         )
 
     def terminate(self) -> None:
@@ -818,6 +822,7 @@ class IrisClient:
         max_lines: int = 0,
         regex: str | None = None,
         attempt_id: int = -1,
+        min_level: str = "",
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
@@ -828,6 +833,7 @@ class IrisClient:
             max_lines: Maximum number of log lines to return (0 = unlimited)
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
+            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
@@ -839,6 +845,7 @@ class IrisClient:
             max_total_lines=max_lines,
             regex=regex,
             attempt_id=attempt_id,
+            min_level=min_level,
         )
 
         result: list[TaskLogEntry] = []

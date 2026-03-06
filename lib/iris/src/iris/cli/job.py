@@ -830,6 +830,12 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 )
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
 @click.option(
+    "--level",
+    type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
+    default=None,
+    help="Minimum log level to display (e.g., --level warning).",
+)
+@click.option(
     "--include-children/--no-include-children",
     default=False,
     help="Include logs from child jobs (nested submissions).",
@@ -841,6 +847,7 @@ def logs(
     since_ms: int | None,
     since_seconds: int | None,
     follow: bool,
+    level: str | None,
     include_children: bool,
 ) -> None:
     """Stream task logs for a job using batch log fetching."""
@@ -856,6 +863,8 @@ def logs(
     start_since_ms = since_ms or 0
     job_name = JobName.from_wire(job_id)
 
+    min_level = level.upper() if level else ""
+
     if follow:
         job = Job(client, job_name)
         job.wait(
@@ -863,6 +872,7 @@ def logs(
             include_children=include_children,
             timeout=float("inf"),
             raise_on_failure=False,
+            min_level=min_level,
         )
         return
 
@@ -870,6 +880,7 @@ def logs(
         job_name,
         include_children=include_children,
         start=Timestamp.from_ms(start_since_ms) if start_since_ms > 0 else None,
+        min_level=min_level,
     )
     for entry in entries:
         ts = entry.timestamp.as_short_time()
