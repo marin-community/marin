@@ -103,8 +103,10 @@ def delete_tpu_node(node_name: str, project: str, zone: str, quiet: bool = False
     run_gcloud_command(cmd)
 
 
-def find_tpu_by_ip(target_ip: str, project: str, zone: str) -> tuple[str, str, int] | None:
+def find_tpu_by_ip(target_ip: str, project: str, zone: str = "-") -> tuple[str, str, int] | None:
     """Find TPU node by its internal IP address.
+
+    Searches all zones by default (zone="-").
 
     Returns:
         Tuple of (tpu_name, zone, worker_index) or None if not found
