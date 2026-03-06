@@ -33,10 +33,11 @@ from iris.cluster.types import (
     JobName,
     ReservationEntry,
     ResourceSpec,
+    _find_closest,
     get_tpu_topology,
     gpu_device,
+    known_regions_and_zones,
     region_constraint,
-    validate_region_zone,
     zone_constraint,
     tpu_device,
 )
@@ -230,6 +231,46 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
         f"Expected a known variant (e.g., H100), VARIANTxCOUNT (e.g., H100x8), "
         f"or a bare count (e.g., 8). Known variants: {known}"
     )
+
+
+def validate_region_zone(
+    regions: tuple[str, ...] | None,
+    zone: str | None,
+    config,
+) -> None:
+    """Validate --region/--zone CLI values against the cluster config.
+
+    Raises click.BadParameter if a value doesn't match any known region/zone.
+    Only validates when a config is available (i.e. --config was passed).
+    """
+    if config is None:
+        return
+
+    known_regions, known_zones = known_regions_and_zones(config)
+
+    if not known_regions and not known_zones:
+        return
+
+    if regions:
+        for r in regions:
+            if r not in known_regions:
+                suggestion = _find_closest(r, known_regions)
+                hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+                raise click.BadParameter(
+                    f"'{r}' is not a known region in the cluster config.{hint}"
+                    f" Known regions: {', '.join(sorted(known_regions))}",
+                    param_hint="'--region'",
+                )
+
+    if zone:
+        if zone not in known_zones:
+            suggestion = _find_closest(zone, known_zones)
+            hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+            raise click.BadParameter(
+                f"'{zone}' is not a known zone in the cluster config.{hint}"
+                f" Known zones: {', '.join(sorted(known_zones))}",
+                param_hint="'--zone'",
+            )
 
 
 def build_resources(
