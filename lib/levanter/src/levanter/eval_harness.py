@@ -87,6 +87,7 @@ from levanter.utils.partitioning import (
     infer_resource_partitions,
     named_jit,
     round_vocab_axis_for_partitioning,
+    shard,
 )
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
@@ -620,7 +621,7 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
-            batch = hax.shard(batch, self.batch_axis_resources)
+            batch = shard(batch, self.batch_axis_resources)
 
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
@@ -1493,7 +1494,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
                     subpath="model",
                     axis_mapping=parameter_axis_mapping,
                 )
-            model = hax.shard(model, parameter_axis_mapping)
+            model = shard(model, parameter_axis_mapping)
 
         model = inference_mode(model, True)
 
@@ -1736,7 +1737,7 @@ def _make_dummy_batch(EvalBatch, EvalPos):
         loss_weight=hax.zeros(EvalPos, dtype=jnp.float32),
         segment_ids=hax.zeros(EvalPos, dtype=jnp.int32),
     )
-    out = hax.shard(dummy_batch, {})
+    out = shard(dummy_batch, {})
     return out
 
 
