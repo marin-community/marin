@@ -225,7 +225,7 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
 }
 
 
-def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
+def _load_torch(path, dtype, fs: AbstractFileSystem | None = None, mesh=None):
     import torch  # noqa: F401
 
     device = torch.device("cpu")
@@ -256,7 +256,7 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
     for k, v in tqdm(state_dict.items(), total=len(state_dict), desc="Loading weights"):
         v = _convert_to_jnp(v, dtype)
         if v is not None:
-            v = _shard_best_effort(v, dtype)
+            v = _shard_best_effort(v, dtype, mesh=mesh)
         d[k] = v
 
     return d
@@ -633,14 +633,14 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if os.path.exists(os.path.join(id, SAFE_TENSORS_MODEL)):
                 state_dict = _load_safe_tensors(os.path.join(id, SAFE_TENSORS_MODEL), dtype, mesh=mesh)
             elif os.path.exists(os.path.join(id, PYTORCH_MODEL)):
-                state_dict = _load_torch(os.path.join(id, PYTORCH_MODEL), dtype)
+                state_dict = _load_torch(os.path.join(id, PYTORCH_MODEL), dtype, mesh=mesh)
             else:
                 try:
                     model_path = hf_hub_download(id, SAFE_TENSORS_MODEL, revision=rev)
                     state_dict = _load_safe_tensors(model_path, dtype, mesh=mesh)
                 except (EntryNotFoundError, HFValidationError):
                     model_path = hf_hub_download(id, PYTORCH_MODEL, revision=rev)
-                    state_dict = _load_torch(model_path, dtype)
+                    state_dict = _load_torch(model_path, dtype, mesh=mesh)
 
             return state_dict
 
@@ -674,7 +674,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 if loader is _load_safe_tensors:
                     shard_state_dict = loader(shard_path, dtype, mesh=mesh)
                 else:
-                    shard_state_dict = loader(shard_path, dtype)
+                    shard_state_dict = loader(shard_path, dtype, mesh=mesh)
                 final_state_dict.update(shard_state_dict)
 
         return final_state_dict
@@ -701,7 +701,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 shard_state_dict = _load_safe_tensors(shard_path, dtype, fs=fs, mesh=mesh)
             else:
                 assert loader is not None
-                shard_state_dict = _load_torch(shard_path, dtype, fs=fs)
+                shard_state_dict = _load_torch(shard_path, dtype, fs=fs, mesh=mesh)
 
             final_state_dict.update(shard_state_dict)
 
@@ -1410,7 +1410,7 @@ def _shard_hf_checkpoint(
     return shards, index
 
 
-def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
+def _shard_best_effort(array_or_slice, dtype, mesh=None) -> jax.Array:
     # get_shape is for safetensors, shape is for numpy arrays
     # (there's no exported type for the safetensors array, so we just duck type)
     if hasattr(array_or_slice, "get_shape"):
@@ -1418,7 +1418,7 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
     else:
         shape = array_or_slice.shape
 
-    sharding = best_effort_sharding(shape)
+    sharding = best_effort_sharding(shape, mesh=mesh)
 
     def get_slice(indices):
         arr = array_or_slice[indices]
