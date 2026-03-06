@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -146,7 +146,9 @@ class Block(eqx.Module):
     def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
         attn_in = self.rms_attn(x)
         mlp_in = self.rms_mlp(x)
-        return x + self.attn(attn_in, mask) + self.mlp(mlp_in)
+        # Parallel branches double residual update magnitude unless re-scaled.
+        residual = self.attn(attn_in, mask) + self.mlp(mlp_in)
+        return x + residual * (2**-0.5)
 
 
 class Transformer(eqx.Module):

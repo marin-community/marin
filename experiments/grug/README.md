@@ -23,6 +23,7 @@
 2. Make model/training changes in that variant, not in shared trainer libraries.
 3. Set run knobs in `<variant>/launch.py` (run id, data mix, optimizer, TPU type).
 4. Launch from the variant's `launch.py` entrypoint.
+5. Document each new variant in [`variants.md`](variants.md) with launch/monitoring notes.
 
 ## Quickstart launch
 
@@ -39,6 +40,11 @@ uv run lib/marin/src/marin/run/ray_run.py \
   --env_vars WANDB_API_KEY=${WANDB_API_KEY} \
   -- python experiments/grug/base/launch.py
 ```
+
+## Variant catalog
+
+- Variant-specific docs live in [`variants.md`](variants.md).
+- Add every new `experiments/grug/<variant>/` there with launch and monitoring guidance.
 
 ## Visual diff for template variants
 

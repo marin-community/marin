@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -6,6 +6,8 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
+import os
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -13,6 +15,9 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
+from fray.cluster import ResourceConfig
+from fray.v2.client import current_client
+from fray.v2.types import Entrypoint, JobRequest, create_environment
 from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -40,6 +45,28 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.parallel_attn_mlp.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
+_DEFAULT_GRUG_TPU_VARIANT = "v6e-32"
+
+
+def _resolve_tpu_variant() -> str:
+    return os.environ.get("GRUG_TPU_VARIANT", _DEFAULT_GRUG_TPU_VARIANT)
+
+
+def _resolve_tpu_regions() -> tuple[str, ...] | None:
+    csv = os.environ.get("GRUG_TPU_REGIONS")
+    if csv:
+        regions = tuple(region.strip() for region in csv.split(",") if region.strip())
+        return regions or None
+    region = os.environ.get("GRUG_TPU_REGION")
+    if region:
+        region = region.strip()
+        return (region,) if region else None
+    return None
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    return int(value) if value is not None else default
 
 
 @dataclass(frozen=True)
@@ -112,12 +139,16 @@ def build_train_loader(
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
+    prefetch_size = _env_int("GRUG_PREFETCH_SIZE", 32)
+    max_buffered_batches = _env_int("GRUG_MAX_BUFFERED_BATCHES", 64)
     return DataLoader(
         dataset,
         batch_schedule.schedule,
         mesh=mesh,
         axis_resources={"__BATCH__": axis_resource},
         batch_axis_name="__BATCH__",
+        prefetch_size=prefetch_size,
+        max_buffered_batches=max_buffered_batches,
         allow_nondivisible_batch_size=False,
     )
 
@@ -295,8 +326,8 @@ def _make_train_step(
     return train_step
 
 
-def run_grug(config: GrugRunConfig) -> None:
-    """Entry point for the grug template training loop."""
+def _run_grug_local(config: GrugRunConfig) -> None:
+    """Run the grug template training loop in the current process."""
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -468,6 +499,33 @@ def run_grug(config: GrugRunConfig) -> None:
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
+
+
+def _safe_grug_job_name(run_id: str) -> str:
+    """Sanitize run id into a Fray/Iris-friendly job name suffix."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", run_id)
+
+
+def run_grug(config: GrugRunConfig) -> None:
+    """Dispatch grug training to a TPU Fray job."""
+    trainer = config.trainer.trainer
+    if trainer.id is None:
+        raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    run_id = _safe_grug_job_name(trainer.id)
+    tpu_variant = _resolve_tpu_variant()
+    tpu_regions = _resolve_tpu_regions()
+    resources = ResourceConfig.with_tpu(tpu_variant, regions=tpu_regions)
+    request = JobRequest(
+        name=f"grug-train-{run_id}",
+        entrypoint=Entrypoint.from_callable(_run_grug_local, args=[config]),
+        resources=resources,
+        environment=create_environment(extras=["tpu"]),
+        max_retries_failure=3,
+    )
+    logger.info("Dispatching grug training via Fray: %s (tpu=%s, regions=%s)", request.name, tpu_variant, tpu_regions)
+    job = current_client().submit(request)
+    job.wait(raise_on_failure=True)
 
 
 __all__ = [

@@ -37,3 +37,10 @@ This file is the paper trail for grug experiments.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: template-first workflow centered on `experiments/grug/base/`.
+
+### grug-parallel-attn-mlp-trial
+- Path: `experiments/grug/parallel_attn_mlp/`
+- Introduced: TBD
+- Last known-good: TBD
+- Status: active
+- Purpose: test parallel block wiring with `x + attn(ln(x)) + mlp(ln(x))` (no sliding-window attention changes).

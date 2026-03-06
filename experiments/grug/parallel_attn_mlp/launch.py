@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Variant: grug parallel-attn-mlp trial run.
@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 import jmp
-from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
@@ -68,6 +67,23 @@ NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
 )
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    return int(value) if value is not None else default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    return float(value) if value is not None else default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _resolve_run_id(default_run_id: str) -> str:
     """Resolve run id and append `FERRY_DATE` when launching from ferry workflows."""
     run_id = os.environ.get("GRUG_RUN_ID", default_run_id)
@@ -75,6 +91,10 @@ def _resolve_run_id(default_run_id: str) -> str:
     if ferry_date:
         run_id = f"{run_id}-{ferry_date}"
     return run_id
+
+
+def _resolve_wandb_group(default_group: str) -> str:
+    return os.environ.get("GRUG_WANDB_GROUP", default_group)
 
 
 def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
@@ -117,6 +137,19 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
 
 
 RESOLVED_RUN_ID = _resolve_run_id("grug-parallel-attn-mlp-trial")
+RESOLVED_WANDB_GROUP = _resolve_wandb_group("grug-parallel-attn-mlp-trial")
+RESOLVED_DISABLE_EVAL = _env_bool("GRUG_DISABLE_EVAL", False)
+RESOLVED_EVAL_CONFIG = (
+    None
+    if RESOLVED_DISABLE_EVAL
+    else GrugEvalConfig(
+        eval_batch_size=512,
+        steps_per_eval=_env_int("GRUG_STEPS_PER_EVAL", 200),
+        max_eval_batches=8,
+        eval_current=True,
+        eval_ema=False,
+    )
+)
 
 
 grug_parallel_attn_mlp_trial = ExecutorStep(
@@ -129,44 +162,36 @@ grug_parallel_attn_mlp_trial = ExecutorStep(
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
-        steps=versioned(2_000),
-        batch_size=versioned(512),
+        steps=versioned(_env_int("GRUG_STEPS", 2_000)),
+        batch_size=versioned(_env_int("GRUG_BATCH_SIZE", 512)),
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
             project="marin",
             tags=["grug", "parallel-attn-mlp"],
-            group="grug-parallel-attn-mlp-trial",
+            group=RESOLVED_WANDB_GROUP,
             name=None,  # filled from run_id in _resolve_tracker
         ),
         optimizer=versioned(
             AdamConfig(
-                learning_rate=3e-3,
-                weight_decay=0.1,
+                learning_rate=_env_float("GRUG_LR", 3e-3),
+                weight_decay=_env_float("GRUG_WEIGHT_DECAY", 0.1),
                 lr_schedule="cosine",
-                decay=0.2,
-                min_lr_ratio=0.1,
-                warmup=1000,
+                decay=_env_float("GRUG_DECAY", 0.2),
+                min_lr_ratio=_env_float("GRUG_MIN_LR_RATIO", 0.1),
+                warmup=_env_int("GRUG_WARMUP", 1000),
+                max_grad_norm=_env_float("GRUG_MAX_GRAD_NORM", 1.0),
             )
         ),
         grug_trainer=versioned(
             GrugTrainerConfig(
-                z_loss_weight=1e-4,
+                z_loss_weight=_env_float("GRUG_Z_LOSS_WEIGHT", 1e-4),
                 ema_beta=None,
                 log_every=1,
             )
         ),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=512,
-                steps_per_eval=200,
-                max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
-            )
-        ),
+        eval=versioned(RESOLVED_EVAL_CONFIG),
     ),
-    resources=ResourceConfig.with_tpu("v6e-32"),
 )
 
 
