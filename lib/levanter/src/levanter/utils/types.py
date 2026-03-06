@@ -21,7 +21,6 @@ from typing import (
 from jaxtyping import PyTree
 
 if TYPE_CHECKING:
-    import haliax as hax
     from haliax.types import IntScalar, Scalar
 else:
     IntScalar = Any
@@ -77,7 +76,7 @@ class ComputeLossFunction(Protocol[M_con, X]):
         self,
         model: M_con,
         *inputs: X,
-        reduction: Optional["hax.ReductionFunction"] = cast(Optional["hax.ReductionFunction"], None),
-        reduction_axis: Optional["hax.AxisSelection"] = None,
+        reduction: Optional[Callable[..., Any]] = cast(Optional[Callable[..., Any]], None),
+        reduction_axis: Optional[Any] = None,
         **kwargs,
-    ) -> Scalar | "hax.NamedArray": ...
+    ) -> Scalar | Any: ...
