@@ -13,7 +13,7 @@ from jaxtyping import PyTree
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax.jax_utils import named_call
+from jax import named_call
 
 import levanter.tracker
 from levanter.callbacks import StepInfo
