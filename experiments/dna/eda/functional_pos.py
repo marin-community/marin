@@ -2,14 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-EDA: Perplexity vs Downstream Task Performance.
+EDA: Functional Position Validation Metric.
 
 Train models of 3 sizes (~6M, ~60M, ~600M) on datasets from different
-evolutionary timescales (mammals, primates, vertebrates) and filtering
-thresholds while tracking both LM loss and TraitGym Mendelian VEP AUPRC
-during training.
+evolutionary timescales (mammals, primates, vertebrates) while tracking
+LL(functional) - LL(nonfunctional) as a validation metric. Functional vs
+nonfunctional positions are determined by conservation scores, encoded as
+uppercase (functional) / lowercase (nonfunctional) in the validation dataset.
 
-https://github.com/Open-Athena/bolinas-dna/issues/8
+Each model gets two validation sets tokenized from the same HF dataset:
+- val_functional: only uppercase positions contribute to loss
+- val_nonfunctional: only lowercase positions contribute to loss
+
+https://github.com/Open-Athena/bolinas-dna/issues/10
 """
 
 import dataclasses
@@ -19,6 +24,7 @@ from levanter.data.text import DNALmDatasetFormat
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import lm_data_config
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.dna.defaults import dna_effective_seq_len
@@ -36,26 +42,17 @@ MODEL_SEQ_LEN = dna_effective_seq_len(DNA_SEQ_LEN, TOKENIZER)  # 256 with BOS on
 assert MODEL_SEQ_LEN == 256, f"Expected 256, got {MODEL_SEQ_LEN}"
 
 TIMESCALES = ["mammals", "primates", "vertebrates"]
-FILTERS = {
-    "id0.3-cov0.3": "id0.3_cov0.3",
-    "id1-cov1": "id1_cov1",
+FILTER_SUFFIX = "id0.3_cov0.3"
+
+TRAIN_DATASETS = {
+    ts: f"bolinas-dna/genomes-v4-genome_set-{ts}-intervals-v1_255_128-{FILTER_SUFFIX}" for ts in TIMESCALES
 }
 
-DATASETS = {
-    f"{ts}-{filt_name}": f"bolinas-dna/genomes-v4-genome_set-{ts}-intervals-v1_255_128-{filt_suffix}"
-    for ts in TIMESCALES
-    for filt_name, filt_suffix in FILTERS.items()
-}
+# Single validation dataset with conservation-based uppercase/lowercase encoding
+VAL_DATASET = "bolinas-dna/human-conservation-255"
 
 # =============================================================================
-# Model configs
-#
-# Model size labels (6m, 60m, 600m) follow the Qwen3 naming convention for
-# standard NLP vocab sizes. Actual param counts are lower with the small
-# DNA character tokenizer vocab:
-#   6m:   ~8M   (hidden=256,  inter=896,  layers=8)
-#   60m:  ~61M  (hidden=512,  inter=1792, layers=16)
-#   600m: ~440M (qwen3_0_6b_hd128 architecture)
+# Model configs (same as perplexity_vs_downstream)
 # =============================================================================
 
 qwen3_6m = Qwen3Config(
@@ -90,32 +87,48 @@ MODEL_CONFIGS = {
 }
 
 # =============================================================================
-# Tokenize each dataset
+# Tokenize training datasets (repeat-masking as usual)
 # =============================================================================
 
-tokenized_datasets = {
-    name: default_tokenize(
+tokenized_train = {
+    ts: default_tokenize(
         name=f"{dataset.split('/')[-1]}-char-bos",
         dataset=dataset,
         tokenizer=TOKENIZER,
         format=DNALmDatasetFormat(lowercase_weight=0.01),
     )
-    for name, dataset in DATASETS.items()
+    for ts, dataset in TRAIN_DATASETS.items()
 }
 
 # =============================================================================
-# Train: 10K steps, 2K warmup, cosine decay, TraitGym eval every 1K steps
+# Tokenize validation dataset twice: functional-only and nonfunctional-only
 # =============================================================================
 
-# Batch size doubled from 2048 to 4096 for 256 context length (matching
-# tokens/batch with 512-context experiments).
+val_functional = default_tokenize(
+    name=f"{VAL_DATASET.split('/')[-1]}-char-bos-functional",
+    dataset=VAL_DATASET,
+    tokenizer=TOKENIZER,
+    format=DNALmDatasetFormat(uppercase_weight=1.0, lowercase_weight=0.0),
+)
+
+val_nonfunctional = default_tokenize(
+    name=f"{VAL_DATASET.split('/')[-1]}-char-bos-nonfunctional",
+    dataset=VAL_DATASET,
+    tokenizer=TOKENIZER,
+    format=DNALmDatasetFormat(uppercase_weight=0.0, lowercase_weight=1.0),
+)
+
+# =============================================================================
+# Train: 10K steps, cosine decay, TraitGym eval every 1K steps
+# =============================================================================
+
 BASE_TRAIN_CONFIG = SimpleTrainConfig(
     resources=ResourceConfig.with_tpu("v4-8"),  # overridden per model
     train_batch_size=4096,
     num_train_steps=10_000,
     learning_rate=1e-3,  # overridden per model
     lr_schedule="cosine",
-    warmup=0.2,  # 2K warmup steps
+    warmup=0.2,
     decay=0.1,
     steps_per_eval=1000,
     steps_per_task_eval=1000,
@@ -124,23 +137,33 @@ BASE_TRAIN_CONFIG = SimpleTrainConfig(
 )
 
 training_steps = []
-for dataset_name in DATASETS:
+for ts in TIMESCALES:
     for model_name, (model_config, lr, resources) in MODEL_CONFIGS.items():
         train_config = dataclasses.replace(
             BASE_TRAIN_CONFIG,
             resources=resources,
             learning_rate=lr,
         )
+
+        # Wire up training data with two validation sets
+        data_config = lm_data_config(
+            training_set=tokenized_train[ts],
+            validation_sets={
+                "val_functional": val_functional,
+                "val_nonfunctional": val_nonfunctional,
+            },
+        )
+
         train_step = default_train(
-            name=f"eda-ppl-vs-downstream-{dataset_name}-{model_name}",
-            tokenized=tokenized_datasets[dataset_name],
+            name=f"eda-functional-pos-{ts}-{model_name}",
+            tokenized=data_config,
             model_config=model_config,
             train_config=train_config,
-            tags=["dna", "eda", "perplexity_vs_downstream", dataset_name, model_name],
+            tags=["dna", "eda", "functional_pos", ts, model_name],
             eval_harness_tasks=[TRAITGYM_MENDELIAN_V2_255],
             eval_harness_max_packed_segments=1,
             use_default_validation=False,
-            wandb_group="eda-ppl-vs-downstream",
+            wandb_group="eda-functional-pos",
         )
         training_steps.append(train_step)
 

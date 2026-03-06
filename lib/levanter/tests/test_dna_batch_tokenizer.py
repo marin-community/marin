@@ -27,7 +27,7 @@ BOS_EOS_TOKENIZER = "bolinas-dna/tokenizer-char"
 def test_no_special_tokens():
     """With a tokenizer that has no BOS/EOS, output matches input length."""
     tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.01)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.01)
 
     assert bt.num_special_tokens == 0
 
@@ -44,9 +44,9 @@ def test_no_special_tokens():
 
 @_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
 def test_soft_mask_weights_no_special_tokens():
-    """Uppercase gets weight 1.0, lowercase gets soft_mask_weight."""
+    """Uppercase gets uppercase_weight, lowercase gets lowercase_weight."""
     tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.1)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     batch = [{"seq": "ACgt"}]
     result = bt(batch)[0]
@@ -58,7 +58,7 @@ def test_soft_mask_weights_no_special_tokens():
 def test_bos_eos_tokens_added():
     """With a tokenizer that has BOS/EOS, they are prepended/appended."""
     tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.01)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.01)
 
     assert bt.num_special_tokens == 2
 
@@ -81,7 +81,7 @@ def test_bos_eos_tokens_added():
 def test_loss_weights_with_bos_eos():
     """BOS/EOS positions get weight 1.0; interior follows soft-masking."""
     tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.1)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     batch = [{"seq": "ACgt"}]
     result = bt(batch)[0]
@@ -95,7 +95,7 @@ def test_loss_weights_with_bos_eos():
 def test_batch_consistency_with_bos_eos():
     """All sequences in a batch get BOS/EOS and have the same length."""
     tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.01)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.01)
 
     batch = [{"seq": "AAAA"}, {"seq": "CCCC"}, {"seq": "TTTT"}]
     results = bt(batch)
@@ -108,18 +108,19 @@ def test_batch_consistency_with_bos_eos():
 @_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
 def test_metadata_no_special_tokens():
     tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.5)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.5)
     meta = bt.metadata
 
     assert meta["has_bos"] is False
     assert meta["has_eos"] is False
-    assert meta["soft_mask_weight"] == 0.5
+    assert meta["uppercase_weight"] == 1.0
+    assert meta["lowercase_weight"] == 0.5
 
 
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_metadata_with_special_tokens():
     tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.01)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.01)
     meta = bt.metadata
 
     assert meta["has_bos"] is True
@@ -132,7 +133,7 @@ def test_bos_only():
     tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
     # Patch out EOS so only BOS is active
     tokenizer.eos_token_id = None
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.1)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     assert bt.num_special_tokens == 1
 
@@ -142,6 +143,18 @@ def test_bos_only():
     np.testing.assert_allclose(result["loss_weight"], [1.0, 1.0, 1.0, 0.1, 0.1])
 
 
+@_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
+def test_uppercase_weight_zero():
+    """Setting uppercase_weight=0 zeroes out uppercase positions (nonfunctional mask)."""
+    tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
+    bt = DNABatchTokenizer(tokenizer, uppercase_weight=0.0, lowercase_weight=1.0)
+
+    batch = [{"seq": "ACgt"}]
+    result = bt(batch)[0]
+
+    np.testing.assert_allclose(result["loss_weight"], [0.0, 0.0, 1.0, 1.0])
+
+
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_eos_only():
     """When only EOS is defined, only EOS is appended (no BOS)."""
@@ -149,7 +162,7 @@ def test_eos_only():
     eos_id = tokenizer.eos_token_id
     # Patch out BOS so only EOS is active
     tokenizer.bos_token_id = None
-    bt = DNABatchTokenizer(tokenizer, soft_mask_weight=0.1)
+    bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     assert bt.num_special_tokens == 1
 

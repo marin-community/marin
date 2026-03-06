@@ -213,11 +213,11 @@ class BatchTokenizer(BaseBatchTokenizer):
 
 class DNABatchTokenizer(BaseBatchTokenizer):
     """
-    A batch processor that tokenizes DNA sequences with soft-masking support.
+    A batch processor that tokenizes DNA sequences with case-based loss weighting.
 
     Assigns loss weights based on character case:
-    - Uppercase (ACGT): weight = 1.0
-    - Lowercase (acgt): weight = soft_mask_weight
+    - Uppercase (ACGT): weight = uppercase_weight
+    - Lowercase (acgt): weight = lowercase_weight
 
     If the tokenizer defines BOS/EOS token IDs, they are automatically prepended/appended
     to the token sequences. Their loss weight is set to 1.0. Use ``num_special_tokens``
@@ -233,12 +233,14 @@ class DNABatchTokenizer(BaseBatchTokenizer):
         self,
         tokenizer: HfTokenizer,
         text_field: str = "seq",
-        soft_mask_weight: float = 1.0,
+        uppercase_weight: float = 1.0,
+        lowercase_weight: float = 1.0,
         *,
         override_resources=None,
     ):
         super().__init__(tokenizer, text_field, override_resources=override_resources)
-        self.soft_mask_weight = soft_mask_weight
+        self.uppercase_weight = uppercase_weight
+        self.lowercase_weight = lowercase_weight
         self._has_bos = tokenizer.bos_token_id is not None
         self._has_eos = tokenizer.eos_token_id is not None
 
@@ -264,7 +266,7 @@ class DNABatchTokenizer(BaseBatchTokenizer):
 
         char_arrays = np.array([list(t) for t in texts], dtype="U1")
         is_upper = np.char.isupper(char_arrays)
-        loss_weights = np.where(is_upper, 1.0, self.soft_mask_weight).astype(np.float32)
+        loss_weights = np.where(is_upper, self.uppercase_weight, self.lowercase_weight).astype(np.float32)
 
         input_ids = encodings["input_ids"].astype(np.int32)
 
@@ -301,7 +303,8 @@ class DNABatchTokenizer(BaseBatchTokenizer):
         return {
             "tokenizer": self.tokenizer.name_or_path,
             "vocab_size": len(self.tokenizer),
-            "soft_mask_weight": self.soft_mask_weight,
+            "uppercase_weight": self.uppercase_weight,
+            "lowercase_weight": self.lowercase_weight,
             "has_bos": self._has_bos,
             "has_eos": self._has_eos,
         }

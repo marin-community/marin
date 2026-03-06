@@ -42,7 +42,7 @@ tokenized = default_tokenize(
     name="genomes-v4-humans-256-tokenizer-char",
     dataset=DATASET,
     tokenizer=TOKENIZER,
-    format=DNALmDatasetFormat(soft_mask_weight=0.01),
+    format=DNALmDatasetFormat(lowercase_weight=0.01),
 )
 
 # =============================================================================
