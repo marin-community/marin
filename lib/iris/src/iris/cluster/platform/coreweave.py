@@ -1435,7 +1435,7 @@ def _coreweave_tunnel(
     service_name: str,
     remote_port: int,
     local_port: int | None = None,
-    timeout: float = 30.0,
+    timeout: float = 90.0,
 ) -> Iterator[str]:
     """kubectl port-forward to a K8s Service, yielding the local URL.
 
@@ -1448,7 +1448,7 @@ def _coreweave_tunnel(
         local_port = find_free_port()
 
     deadline = Deadline.from_seconds(timeout)
-    backoff = ExponentialBackoff(initial=1.0, maximum=10.0, factor=2.0)
+    backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
     proc: subprocess.Popen | None = None
 
     while not deadline.expired():
