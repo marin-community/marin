@@ -1,21 +1,39 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, Tuple, TypeAlias, TypeVar, Union, cast
+from __future__ import annotations
+
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from jaxtyping import PyTree
 
-import haliax as hax
-from haliax.types import Scalar
+if TYPE_CHECKING:
+    import haliax as hax
+    from haliax.types import Scalar
+else:
+    Scalar = Any
 
 
 M = TypeVar("M")  # Model
 M_con = TypeVar("M_con", contravariant=True)  # Model
 X = TypeVar("X", contravariant=True)  # Input
 
-try:
+if TYPE_CHECKING:
     from haliax.nn.scan import BlockFoldable, ScanCheckpointPolicy
-except ImportError:
+else:
 
     class BlockFoldable(Protocol[M]):  # type: ignore
         def fold(self, *args, **kwargs): ...
@@ -58,7 +76,7 @@ class ComputeLossFunction(Protocol[M_con, X]):
         self,
         model: M_con,
         *inputs: X,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
-        reduction_axis: Optional[hax.AxisSelection] = None,
+        reduction: Optional["hax.ReductionFunction"] = cast(Optional["hax.ReductionFunction"], None),
+        reduction_axis: Optional["hax.AxisSelection"] = None,
         **kwargs,
-    ) -> Scalar | hax.NamedArray: ...
+    ) -> Scalar | "hax.NamedArray": ...
