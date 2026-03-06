@@ -223,6 +223,7 @@ class WrappedLossFunction:
         """
         with hax.axis_mapping(self._compute_axis_mapping):
             model = self._mp.cast_to_compute(model)
+            model = hax.shard_with_axis_mapping(model, self._compute_axis_mapping)
             result = self._raw_fn(model, *batch, **batch_kwargs)
 
         if isinstance(result, tuple) and len(result) == 2:
@@ -689,6 +690,7 @@ class Trainer:
             model = eqx.combine(trainable_model, state.model)
             with hax.axis_mapping(self.compute_axis_mapping):
                 model = self.mp.cast_to_compute(model)
+                model = hax.shard_with_axis_mapping(model, self.compute_axis_mapping)
                 result = self._raw_loss_function(model, *batch, **batch_kwargs, key=key)
                 # result is (loss, metrics) tuple
                 loss_for_opt, _metrics = result
@@ -738,6 +740,7 @@ class Trainer:
             )
 
         with hax.axis_mapping(self.compute_axis_mapping):
+            model = hax.shard_with_axis_mapping(model, self.compute_axis_mapping)
             (loss, metrics), grads = grad_fn(model, *batch, **batch_kwargs)
 
         return loss, grads, metrics
@@ -818,7 +821,7 @@ class TrainerConfig:
 
     # config related to partitioning
     mesh: MeshConfig = MeshConfig()
-    use_explicit_mesh_axes: bool = False
+    use_explicit_mesh_axes: bool = True
     """If True, build the device mesh with `AxisType.Explicit` axes.
 
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
