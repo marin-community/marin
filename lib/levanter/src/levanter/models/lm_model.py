@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Any, Generic, Optional, Protocol, Type, TypeVar, cast
+from typing import Any, Callable, Generic, Optional, Protocol, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -27,6 +27,7 @@ LmT = TypeVar("LmT", bound="LmHeadModel")
 LmTensor = Any
 LmAttentionMask = AttentionMask | Any
 LmAuxData = Any
+ReductionSpec = str | Callable[..., Any] | None
 
 
 class ArrayLmHeadModel(Protocol):
@@ -38,8 +39,8 @@ class ArrayLmHeadModel(Protocol):
         *,
         batch_axis: Axis | str | None = "batch",
         key=None,
-        reduction: str | hax.ReductionFunction | None = "mean",
-        reduction_axis: Optional[hax.AxisSelection] = None,
+        reduction: ReductionSpec = "mean",
+        reduction_axis: Optional[Any] = None,
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
@@ -348,8 +349,8 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         example: LmExample,
         *,
         key=None,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
-        reduction_axis: Optional[hax.AxisSelection] = None,
+        reduction: Optional[Callable[..., Any]] = cast(Optional[Callable[..., Any]], hax.mean),
+        reduction_axis: Optional[Any] = None,
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
@@ -388,8 +389,8 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         *,
         batch_axis: Axis | str | None = "batch",
         key=None,
-        reduction: str | hax.ReductionFunction | None = "mean",
-        reduction_axis: Optional[hax.AxisSelection] = None,
+        reduction: ReductionSpec = "mean",
+        reduction_axis: Optional[Any] = None,
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
@@ -427,14 +428,14 @@ def _as_named_lm_example(example: Any, *, Pos: Axis, batch_axis: Axis | str | No
 
 
 def _normalize_reduction(
-    reduction: str | hax.ReductionFunction | None,
-) -> Optional[hax.ReductionFunction]:
+    reduction: ReductionSpec,
+) -> Optional[Callable[..., Any]]:
     if reduction is None:
         return None
     if reduction == "mean":
-        return cast(hax.ReductionFunction, hax.mean)
+        return hax.mean
     if reduction == "sum":
-        return cast(hax.ReductionFunction, hax.sum)
+        return hax.sum
     if callable(reduction):
-        return cast(hax.ReductionFunction, reduction)
+        return reduction
     raise ValueError(f"Unsupported reduction spec: {reduction!r}")
