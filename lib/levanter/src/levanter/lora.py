@@ -49,7 +49,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypeVar, Union
 
 import equinox as eqx
 import jax
@@ -58,7 +58,6 @@ from jaxtyping import PyTree
 import haliax
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis
 from haliax.state_dict import (
     ModuleWithStateDictSerialization,
     StateDict,
@@ -82,6 +81,11 @@ logger = logging.getLogger(__name__)
 
 
 M = TypeVar("M", bound=PyTree)
+
+if TYPE_CHECKING:
+    from haliax import Axis
+else:
+    Axis = Any
 
 # Remaining Tasks
 # - bias
