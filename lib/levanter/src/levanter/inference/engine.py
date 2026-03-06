@@ -19,7 +19,6 @@ import jax.numpy as jnp
 import numpy as np
 from haliax import NamedArray
 from haliax.jax_utils import is_jax_array_like
-from haliax.partitioning import ResourceMapping
 
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
@@ -653,6 +652,7 @@ def _handle_clones(
 
     # Device-side release of finished sequences (jit-safe)
     return gen_state, outputs
+
 
 # @named_jit(donate_args=(True, False, False))
 @functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
