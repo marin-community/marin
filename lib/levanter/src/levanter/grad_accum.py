@@ -7,6 +7,7 @@ from typing import Callable, Optional, ParamSpec, TypeVar
 
 import equinox as eqx
 import haliax as hax
+import haliax.quantization as hq
 import jax
 import jax.numpy as jnp
 from haliax import Axis
@@ -142,8 +143,6 @@ def microbatched(
                 )
 
                 # Accumulate gradients with quantization
-                import haliax.quantization as hq
-
                 # TODO: this uses the latest value for the scale for fp8, which seems not ideal but probably ok?
                 overwrites, updates = hq.partition_for_grad_overwrite(this_grads)
                 new_grads = hq.apply_updates(acc_grads, updates, overwrites)
