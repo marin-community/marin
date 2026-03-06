@@ -9,7 +9,6 @@ import equinox as eqx
 import jax
 import jmp
 
-import haliax
 from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
 from haliax.types import IntScalar, Scalar
 from jax import numpy as jnp
@@ -17,7 +16,7 @@ from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation, OptState
 
 from levanter.optim.model_averaging import ModelAveraging, ModelAveragingConfig
-from levanter.utils.jax_utils import is_inexact_arrayish
+from levanter.utils.jax_utils import is_inexact_arrayish, is_named_array
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import FilterTree
 
@@ -195,7 +194,7 @@ def _partition_trainable_params(model, filter):
         trainable, non-trainable
     """
     filter = make_floating_point_trainable_filter(filter)
-    return eqx.partition(model, filter, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
+    return eqx.partition(model, filter, is_leaf=is_named_array)
 
 
 def trainables_only(model, filter):
@@ -215,7 +214,7 @@ def cast_params_by_trainability(model, mp, is_trainable):
     trainable, non_trainable = _partition_trainable_params(model, is_trainable)
     trainable = mp.cast_to_param(trainable)
     non_trainable = mp.cast_to_compute(non_trainable)
-    return eqx.combine(trainable, non_trainable, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
+    return eqx.combine(trainable, non_trainable, is_leaf=is_named_array)
 
 
 def saveable_training_mask(trainer_state: S, is_trainable_param: FilterTree = True) -> FilterTree:
