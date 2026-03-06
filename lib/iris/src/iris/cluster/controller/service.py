@@ -19,6 +19,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.controller.bundle_store import BundleStore
+from iris.cluster.log_store import task_log_key
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -34,8 +35,8 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
 )
+from iris.cluster.log_store import PROCESS_LOG_KEY
 from iris.cluster.types import JobName, WorkerId
-from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
@@ -223,12 +224,10 @@ class ControllerServiceImpl:
         state: ControllerState,
         controller: ControllerProtocol,
         bundle_prefix: str,
-        log_buffer: LogBuffer | None = None,
     ):
         self._state = state
         self._controller = controller
         self._bundle_store = BundleStore(bundle_prefix)
-        self._log_buffer = log_buffer
 
     def _get_autoscaler_pending_hints(self) -> dict[str, str]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -929,8 +928,7 @@ class ControllerServiceImpl:
                 offset_key = f"{task_id_wire}/{attempt.attempt_id}"
                 skip_lines = int(request.resume_offsets.get(offset_key, 0))
                 log_result = log_store.get_logs(
-                    task.task_id,
-                    attempt.attempt_id,
+                    task_log_key(task.task_id, attempt.attempt_id),
                     since_ms=request.since_ms,
                     skip_lines=skip_lines,
                     regex_filter=compiled_regex,
@@ -942,6 +940,7 @@ class ControllerServiceImpl:
                 resume_offsets[offset_key] = log_result.lines_read
 
                 for entry in log_result.entries:
+                    entry.attempt_id = attempt.attempt_id
                     if entry.timestamp.epoch_ms > last_timestamp_ms:
                         last_timestamp_ms = entry.timestamp.epoch_ms
 
@@ -1077,30 +1076,30 @@ class ControllerServiceImpl:
             ]
         )
 
-    # --- Process Logs ---
-
-    def get_process_logs(
+    def fetch_logs(
         self,
-        request: cluster_pb2.Controller.GetProcessLogsRequest,
+        request: cluster_pb2.FetchLogsRequest,
         ctx: Any,
-    ) -> cluster_pb2.Controller.GetProcessLogsResponse:
-        """Get controller process logs from the in-memory ring buffer."""
-        if not self._log_buffer:
-            return cluster_pb2.Controller.GetProcessLogsResponse(records=[])
-        prefix = request.prefix or None
-        limit = request.limit if request.limit > 0 else 200
-        records = self._log_buffer.query(prefix=prefix, limit=limit)
-        return cluster_pb2.Controller.GetProcessLogsResponse(
-            records=[
-                cluster_pb2.ProcessLogRecord(
-                    timestamp=r.timestamp,
-                    level=r.level,
-                    logger_name=r.logger_name,
-                    message=r.message,
-                )
-                for r in records
-            ]
+    ) -> cluster_pb2.FetchLogsResponse:
+        """Fetch logs from the LogStore by key with filtering and pagination."""
+        compiled_regex = None
+        if request.regex:
+            try:
+                compiled_regex = re.compile(request.regex)
+            except re.error as e:
+                raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid regex: {e}") from e
+
+        max_lines = request.max_lines if request.max_lines > 0 else 1000
+        result = self._state.log_store.get_logs(
+            request.source,
+            since_ms=request.since_ms,
+            skip_lines=request.skip_lines,
+            regex_filter=compiled_regex,
+            max_lines=max_lines,
+            tail=request.tail,
+            min_level=request.min_level,
         )
+        return cluster_pb2.FetchLogsResponse(entries=result.entries, lines_read=result.lines_read)
 
     # --- Worker Detail ---
 
@@ -1134,16 +1133,20 @@ class ControllerServiceImpl:
                 status_message=worker_status_message(worker),
             )
 
-            # Fetch worker daemon logs if worker is healthy
-            worker_logs: list[cluster_pb2.ProcessLogRecord] = []
+            # Fetch worker daemon logs via FetchLogs(/process) if worker is healthy
+            worker_log_entries: list[cluster_pb2.FetchLogsResponse] = []
             if worker.healthy:
                 try:
                     stub = self._controller.stub_factory.get_stub(worker.address)
-                    resp = stub.get_process_logs(
-                        cluster_pb2.Worker.GetProcessLogsRequest(limit=200),
+                    fetch_resp = stub.fetch_logs(
+                        cluster_pb2.FetchLogsRequest(
+                            source=PROCESS_LOG_KEY,
+                            max_lines=200,
+                            tail=True,
+                        ),
                         timeout_ms=10000,
                     )
-                    worker_logs = list(resp.records)
+                    worker_log_entries = list(fetch_resp.entries)
                 except Exception:
                     logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
 
@@ -1152,7 +1155,7 @@ class ControllerServiceImpl:
             recent_tasks = [task_to_proto(task) for task in tasks]
 
             resp = cluster_pb2.Controller.GetWorkerStatusResponse(
-                worker_logs=worker_logs,
+                worker_log_entries=worker_log_entries,
                 recent_tasks=recent_tasks,
             )
             resp.worker.CopyFrom(worker_health)

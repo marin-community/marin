@@ -72,11 +72,23 @@ message ProfileTaskResponse {
   string error = 2;             // Non-empty if profiling failed
 }
 
-message ProcessLogRecord {
-  double timestamp = 1;
-  string level = 2;
-  string logger_name = 3;
-  string message = 4;
+// Unified log fetching request, shared by controller and worker services.
+// The source key identifies the log stream:
+//   /process                - local process logs (controller or worker)
+//   /job/name/task/0:0      - task attempt logs (task_wire:attempt_id)
+message FetchLogsRequest {
+  string source = 1;           // Log source key
+  int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
+  int32 skip_lines = 3;        // Lines to skip (cursor for polling)
+  string regex = 4;            // Regex filter on log data
+  int32 max_lines = 5;         // Max entries to return (0 = default 1000)
+  bool tail = 6;               // Return last N entries instead of first N
+  string min_level = 7;        // Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+}
+
+message FetchLogsResponse {
+  repeated iris.logging.LogEntry entries = 1;
+  int32 lines_read = 2;        // Total line count at end of read (cursor for next poll)
 }
 
 enum JobState {
@@ -734,16 +746,6 @@ message Controller {
     map<string, int64> resume_offsets = 5;  // Per-attempt line offset cursor for next poll
   }
 
-  // --- Process Logs ---
-  message GetProcessLogsRequest {
-    string prefix = 1;   // Logger name prefix filter (empty = all)
-    int32 limit = 2;     // Max records to return (0 = default 200)
-  }
-
-  message GetProcessLogsResponse {
-    repeated ProcessLogRecord records = 1;
-  }
-
   // --- Worker Detail (unified VM + worker view) ---
   message GetWorkerStatusRequest {
     string id = 1;  // VM ID or worker ID — resolved against both
@@ -760,8 +762,10 @@ message Controller {
     // Bootstrap logs (from VM init)
     string bootstrap_logs = 4;
 
-    // Worker daemon logs (proxied from worker, empty if unhealthy/absent)
-    repeated ProcessLogRecord worker_logs = 5;
+    // Worker daemon logs (proxied from worker via FetchLogs, empty if unhealthy/absent)
+    repeated iris.logging.LogEntry worker_log_entries = 9;
+
+    reserved 5;  // was: repeated ProcessLogRecord worker_logs
 
     // Recent tasks that ran or are running on this worker (newest first)
     repeated TaskStatus recent_tasks = 6;
@@ -816,15 +820,6 @@ message Worker {
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
 
-  // --- Process Logs ---
-  message GetProcessLogsRequest {
-    string prefix = 1;   // Logger name prefix filter (empty = all)
-    int32 limit = 2;     // Max records to return (0 = default 200)
-  }
-
-  message GetProcessLogsResponse {
-    repeated ProcessLogRecord records = 1;
-  }
 }
 
 // ============================================================================
@@ -891,8 +886,8 @@ service ControllerService {
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
 
-  // Controller process logs
-  rpc GetProcessLogs(Controller.GetProcessLogsRequest) returns (Controller.GetProcessLogsResponse);
+  // Unified log fetching (process logs, task logs, etc. by key)
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
 
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
@@ -908,7 +903,7 @@ service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
-  rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 }

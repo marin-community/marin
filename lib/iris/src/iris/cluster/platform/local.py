@@ -457,8 +457,6 @@ class LocalPlatform:
         vm_ids: list[str] = []
         addresses: list[str] = []
         assert self._cache_path is not None
-        log_prefix = f"file://{(self._cache_path / 'iris-logs').as_posix()}"
-
         # Determine worker count from TPU topology if applicable
         worker_count = num_vms
         is_tpu = config.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
@@ -513,7 +511,6 @@ class LocalPlatform:
                 controller_address=self._controller_address,
                 worker_id=worker_id,
                 default_task_image="process-runtime-unused",
-                log_prefix=log_prefix,
                 poll_interval=Duration.from_seconds(0.1),
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")

@@ -229,7 +229,7 @@ message WorkerConfig {
 
   // Storage
   string cache_dir = 7;
-  string log_prefix = 8;                     // URI prefix for logs
+  reserved 8;  // was: log_prefix
 
   // Task defaults
   string default_task_image = 9;
@@ -266,7 +266,7 @@ message SshConfig {
 
 message StorageConfig {
   string bundle_prefix = 1;  // URI prefix for job bundles (e.g. s3://iris/bundles, gs://bucket/path)
-  string log_prefix = 2;     // URI prefix for task logs (e.g. s3://iris/logs)
+  reserved 2;  // was: log_prefix
 }
 
 // ============================================================================

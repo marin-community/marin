@@ -335,10 +335,10 @@ def test_controller_logs(cluster, page, screenshot):
     dashboard_click(page, 'button.tab-btn:has-text("Logs")')
 
     if not _is_noop_page(page):
-        page.wait_for_selector("#log-container", timeout=10000)
+        page.wait_for_selector(".log-container", timeout=10000)
         page.wait_for_function(
             "() => document.querySelectorAll('.log-line').length > 0"
-            " || document.querySelector('.empty-state') !== null",
+            " || document.querySelector('.log-empty') !== null",
             timeout=10000,
         )
     screenshot("controller-logs")
