@@ -41,15 +41,12 @@ DNA_SEQ_LEN = 255
 MODEL_SEQ_LEN = dna_effective_seq_len(DNA_SEQ_LEN, TOKENIZER)  # 256 with BOS only
 assert MODEL_SEQ_LEN == 256, f"Expected 256, got {MODEL_SEQ_LEN}"
 
-TIMESCALES = ["mammals", "primates", "vertebrates"]
-FILTER_SUFFIX = "id0.3_cov0.3"
+TIMESCALES = ["primates", "mammals", "vertebrates"]
 
-TRAIN_DATASETS = {
-    ts: f"bolinas-dna/genomes-v4-genome_set-{ts}-intervals-v1_255_128-{FILTER_SUFFIX}" for ts in TIMESCALES
-}
+TRAIN_DATASETS = {ts: f"bolinas-dna/genomes-v5-genome_set-{ts}-intervals-v1_255_128" for ts in TIMESCALES}
 
 # Single validation dataset with conservation-based uppercase/lowercase encoding
-VAL_DATASET = "bolinas-dna/human-conservation-255"
+VAL_DATASET = "bolinas-dna/genomes-v5-intervals-v1_255_255"
 
 # =============================================================================
 # Model configs (same as perplexity_vs_downstream)
