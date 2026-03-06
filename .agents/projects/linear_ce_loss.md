@@ -1334,3 +1334,33 @@ Notes:
 - v4 tuned-table impact:
   - keep `TPU v4` `huge-batch-small-h` entry at `b=1024,h=1024,v=256` (bf16/f32).
   - for this path, retune deltas among successful `v=256` variants were marginal and did not justify additional table fragmentation.
+
+### 2026-03-06: full v5p sweep (`v5p-8`) + tuned-table updates
+- Setup:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml --tpu-type v5p-8`
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+  - artifacts on TPU: `/tmp/ce_sweep_v5p_20260306`
+- Sweep buckets run:
+  - `small_vocab`, `mid_h_large_vocab`, `large_batch_small_h`, `huge_batch_small_h`, `llama3_ish`, `medium_batch_mid_h`
+  - each with `b_block_size=1024`, explicit `h/v` grids, and `--include-infer`.
+- Best observed configs from this sweep:
+  - `small_vocab`: `b1024_h512_v1024` (`~1.656M tok/s`)
+  - `mid_h_large_vocab`: `b1024_h256_v1024` (`~362.7k tok/s`)
+  - `large_batch_small_h`: `b1024_h512_v2048` (`~768.2k tok/s`)
+  - `huge_batch_small_h`: `b1024_h128_v1024` (`~410.4k tok/s`; close tie with `h=256/512/1024`)
+  - `llama3_ish`: `b1024_h256_v512` (`~79.5k tok/s`)
+  - `medium_batch_mid_h`: `b1024_h2048_v512` (`~168.2k tok/s`; near tie with `h=256/512/1024`)
+- Failure attribution:
+  - aggregate failed classifications across all six buckets:
+    - `forward`: `27`
+    - `backward`: `0`
+    - `unsupported (shape-divisibility)`: `40`
+    - `other`: `0`
+  - all VMEM OOMs observed in this run were forward/JVP-path OOMs.
+- Tuned table updates applied (`tuned_block_sizes.py`):
+  - `TPU v5p` and `TPU v5` (both bf16 and float32):
+    - `small-vocab`: `v_block_size 512 -> 1024`
+    - `llama3-ish`: `v_block_size 1024 -> 512`
+    - `large-batch-small-h`: `v_block_size 1024 -> 2048`
+    - `medium-batch-medium-h`: `v_block_size 2048 -> 512`
+  - retained `h_block_size` choices from existing bucket definitions so entries remain valid across the full bucket ranges.
