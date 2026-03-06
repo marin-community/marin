@@ -253,6 +253,27 @@ Keep these sections in the issue body:
 - For long remote runs, track a monotonic progress signal (for example rows emitted, steps completed, checkpoints written) and tail recent logs for context.
 - Validate machine-readable extraction before publishing results (for example expected row counts and key uniqueness) and de-duplicate when needed.
 
+Iris/W&B reconciliation rule (long Iris runs):
+- Do not trust a single status source when health looks suspicious.
+- Cross-check Iris control-plane state and logs against W&B run state/heartbeat before declaring the run healthy.
+- If Iris reports `JOB_STATE_RUNNING` while W&B has stalled heartbeats or marks the run `crashed`, treat that as a potential stale-state incident and escalate with evidence.
+- Include these commands in the issue update so a human can quickly verify:
+
+```bash
+# Iris state snapshot (JSON)
+uv run iris --config <config> job list --json --prefix <job_prefix>
+
+# Iris logs near the suspect window
+uv run iris --config <config> job logs <job_id> --since-seconds 18000 | tail -n 200
+
+# W&B state/heartbeat
+uv run python - <<'PY'
+import wandb
+run = wandb.Api().run("<entity>/<project>/<run_id>")
+print(run.state, run.heartbeat_at)
+PY
+```
+
 Ops hygiene checklist (before claiming regression):
 - confirm no stale benchmark process is still occupying accelerator,
 - confirm lockfiles/state are clean,
