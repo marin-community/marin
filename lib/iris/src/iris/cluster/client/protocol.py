@@ -72,6 +72,7 @@ class ClusterClient(Protocol):
         include_children: bool,
         since_ms: int = 0,
         state_logger: TaskStateLogger | None = None,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus: ...
 
     def terminate_job(self, job_id: JobName) -> None: ...
@@ -105,6 +106,7 @@ class ClusterClient(Protocol):
         max_total_lines: int = 0,
         regex: str | None = None,
         attempt_id: int = -1,
+        min_level: str = "",
     ) -> cluster_pb2.Controller.GetTaskLogsResponse: ...
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse: ...

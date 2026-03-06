@@ -150,6 +150,7 @@ class RemoteClusterClient:
         include_children: bool,
         since_ms: int = 0,
         state_logger: TaskStateLogger | None = None,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait for job completion while streaming task logs via the controller RPC.
 
@@ -185,6 +186,7 @@ class RemoteClusterClient:
                     include_children=include_children,
                     since_ms=last_timestamp_ms,
                     resume_offsets=resume_offsets,
+                    min_level=min_level,
                 )
                 consecutive_log_failures = 0
                 log_fetch_backoff.reset()
@@ -338,6 +340,7 @@ class RemoteClusterClient:
         regex: str | None = None,
         attempt_id: int = -1,
         resume_offsets: dict[str, int] | None = None,
+        min_level: str = "",
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
         """Fetch logs for a task or job via the controller RPC.
 
@@ -352,6 +355,7 @@ class RemoteClusterClient:
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
             resume_offsets: Per-attempt line offset cursors from previous response
+            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
         """
         request = cluster_pb2.Controller.GetTaskLogsRequest(
             id=target.to_wire(),
@@ -361,6 +365,7 @@ class RemoteClusterClient:
             regex=regex or "",
             attempt_id=attempt_id,
             resume_offsets=resume_offsets or {},
+            min_level=min_level,
         )
 
         def _call():
