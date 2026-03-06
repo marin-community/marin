@@ -3738,3 +3738,84 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated but regressive**. This Macro-H variant reduced the same forward/backward closed-call shard-map kernels, but did not improve end-to-end step time and again introduced substantial `while` overhead.
 - Next bold hypothesis:
   - Escalate to **Macro Move E** with a decomposition that reduces backward/recurrent state pressure while explicitly avoiding new control-flow regions (`while` growth), then re-measure closed-call and end-to-end metrics.
+
+### Iteration 61 - Macro Move H / stack-axis shared-RHS batching in fused train recurrent + backward kernels (validated, regressed, reverted)
+
+- Coverage slot: H (2/5)
+- Covered set so far: {I, E, H}
+- Date: 2026-03-06T12:52:00Z
+- Commit: none (failed attempt)
+- Starting commit: `aa5f85c425f9d387cba7eba7457f61a393fc27c8`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_loopgate_iter006_130m_ch128_seg16_20steps-7748b1-profiler-v0/plugins/profile/2026_02_21_13_45_31/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` bucket: `76.745 ms` (dominant)
+  - forward closed-call source: `gated_deltanet.py:1497` = `32.944 ms`
+  - backward closed-call source: `gated_deltanet.py:3432` = `26.256 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move H**: shared-RHS pair batching in fused train recurrent + backward kernels (`QK/KKT`, `inter/v_prime`, and backward shared-RHS adjoints) (`+10-20%`, medium/high TPU lowering risk).
+  2. **Macro Move I**: full train prepare+recurrent fusion variant that explicitly avoids new control-flow regions (`+10-20%`, high launch/control-flow risk).
+  3. **Macro Move E**: shared-K V-tiling decomposition in backward/recurrent train kernels (`+15-30%`, high decomposition/correctness risk).
+
+- Selected macro-move category: **H) Batch matmuls by stacking left operands that share the same right operand**.
+- Selected hypothesis: reduce train-path custom-call time by replacing repeated shared-RHS dots with stack-axis pair `dot_general` calls in the fused train recurrent math and chunk backward core.
+- Diversity note (vs Iteration 60): Iteration 60 batched recurrent/backward in segmented/fullseq recurrent kernels; this run moved Macro H directly into the **fused train forward recurrent section** and backward chunk core used by the active training path.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_mxu_matmul_shared_rhs_interleaved_pair_f32(...)` helper and wired shared-RHS batching into:
+    - fused train forward recurrent section: batched `QK/KKT` and batched `inter/v_prime`.
+    - chunk backward core: batched `QK/KKT`, batched `[d_inter, d_v_prime] @ S_prev^T`, and batched `[d_QK, dKKT] @ k`.
+  - First variant (row-packed concat) hit deterministic TPU Mosaic lowering failure (`tpu.concatenate ... result/input offset mismatch on non-concat dimension`).
+  - Replaced the helper with a concat-free stack-axis `dot_general` pair implementation; TPU correctness validation then passed.
+  - End-to-end profile remained regressive, so speculative kernel edits were reverted.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`, managed dev TPU):
+    - first attempt command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - first failure signature: `Mosaic failed to compile TPU kernel ... result/input offset mismatch on non-concat dimension` (deterministic compile failure from concat-packed helper).
+    - single allowed retry (after helper rewrite) command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - retry result: `87 passed, 2 skipped`.
+
+- Profile run (completed):
+  - command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_loopgate_iter008_macroH_stackdot --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_loopgate_iter008_macroH_stackdot_130m_ch128_seg16_2-e677d1`
+  - W&B profiler artifact:
+    - `run-gdn_loopgate_iter008_macroH_stackdot_130m_ch128_seg16_2-e677d1-profiler:v0`
+  - Downloaded trace:
+    - `.profiles/wandb/gdn_loopgate_iter008_macroH_stackdot_130m_ch128_seg16_2-e677d1-profiler-v0/plugins/profile/2026_03_06_12_45_49/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, vs baseline trace above):
+  - Bucket deltas:
+    - `shard_map`: `76.745 ms -> 41.907 ms` (`-45.39%`)
+    - `fusion`: `45.666 ms -> 34.954 ms` (`-23.46%`)
+    - `all-gather`: `20.032 ms -> 10.119 ms` (`-49.48%`)
+    - `while`: `0.000 ms -> 31.618 ms` (new large overhead)
+  - Train closed-call `shard_map/pallas_call` source deltas:
+    - forward source `gated_deltanet.py:1497 -> 2567`: `32.944 ms -> 22.648 ms` (`-31.25%`)
+    - backward source `gated_deltanet.py:3432 -> 4069`: `26.256 ms -> 14.039 ms` (`-46.53%`)
+
+- MFU/throughput delta (history-window median, `global_step in [10,18]`, vs baseline run `gdn_loopgate_iter006_130m_ch128_seg16_20steps-7748b1`):
+  - `throughput/mfu`: `5.718951 -> 5.310412` (`-7.14%`)
+  - `throughput/tokens_per_second`: `185006.959 -> 171790.812` (`-7.14%`)
+  - `throughput/duration`: `0.177118s -> 0.190744s` (`+7.69%`)
+  - vs active champion (`throughput/mfu=5.748507` from `.agents/logs/gdn_codex_loop/perf_state.json`): `-7.62%`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call` source: `32.944 ms -> 22.648 ms` (`-31.25%`).
+    - Backward closed-call `shard_map/pallas_call` source: `26.256 ms -> 14.039 ms` (`-46.53%`).
+    - `throughput/mfu -7.14%`, `throughput/tokens_per_second -7.14%`, `throughput/duration +7.69%`.
+  - Governance:
+    - MFU gain `<3%` with unchanged dominant train hotspot family (`shard_map/custom-call`) and large new `while` overhead.
+    - Attempt marked **low-impact/regressive**; speculative kernel edits reverted.
+
+- Assessment: **validated but regressive**. This Macro-H variant again reduced forward/backward closed-call `shard_map/pallas_call` times but failed to improve end-to-end step time due newly dominant `while` overhead.
+- Next bold hypothesis:
+  - Put **Macro H on cooldown** (two consecutive `<3%` outcomes with unchanged dominant hotspot family in Iterations 60 and 61).
+  - Escalate to **Macro Move I** with a launch/dataflow redesign that explicitly removes added control-flow overhead while preserving train-path closed-call wins.
