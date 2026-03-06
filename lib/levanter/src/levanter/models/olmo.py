@@ -12,7 +12,6 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
@@ -86,16 +85,16 @@ class Olmo2Config(HFCompatConfig):
     reference_checkpoint: str = "allenai/OLMo-2-1124-7B"
     tokenizer: Optional[str] = None
 
-    # Axis
+    # Axes
     @property
-    def Embed(self) -> Axis:
-        return Axis(name="embed", size=self.hidden_dim)
+    def Embed(self) -> hax.Axis:
+        return hax.Axis(name="embed", size=self.hidden_dim)
 
-    Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
-    KVHeads = property(lambda self: Axis(name="kv_head", size=self.num_kv_heads))
-    Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
-    Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
-    HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
+    Heads = property(lambda self: hax.Axis(name="heads", size=self.num_heads))
+    KVHeads = property(lambda self: hax.Axis(name="kv_head", size=self.num_kv_heads))
+    Layers = property(lambda self: hax.Axis(name="layers", size=self.num_layers))
+    Mlp = property(lambda self: hax.Axis(name="mlp", size=self.intermediate_dim))
+    HeadSize = property(lambda self: hax.Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
     def __post_init__(self):
         assert (
@@ -173,7 +172,7 @@ class Olmo2Config(HFCompatConfig):
     def model_type(self) -> Type["Olmo2LMHeadModel"]:
         return Olmo2LMHeadModel
 
-    def mk_LayerNorm(self, axis: AxisSpec) -> hnn.RmsNorm:
+    def mk_LayerNorm(self, axis: hax.AxisSpec) -> hnn.RmsNorm:
         return self.norm_config.build(axis)
 
     def total_trainable_params(self, vocab_size):
@@ -271,7 +270,12 @@ class Olmo2MLP(eqx.Module):
 
     @staticmethod
     def init(
-        Embed: Axis, Mlp: Axis, activation_fn: Union[ActivationFunctionEnum, Callable], *, key, use_bias: bool = False
+        Embed: hax.Axis,
+        Mlp: hax.Axis,
+        activation_fn: Union[ActivationFunctionEnum, Callable],
+        *,
+        key,
+        use_bias: bool = False,
     ) -> "Olmo2MLP":
         k_fc, k_up_proj, k_down_proj = jrandom.split(key, 3)
         gate_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_fc, use_bias=use_bias, out_first=True)
@@ -282,7 +286,7 @@ class Olmo2MLP(eqx.Module):
         return Olmo2MLP(gate_proj, up_proj, down_proj, activation_fn)
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: hax.NamedArray, *, key=None) -> hax.NamedArray:
         k_gate, k_up, k_down = maybe_rng_split(key, 3)
         hidden_states = self.gate_proj(x, key=k_gate)
         hidden_states = self.act(hidden_states)
@@ -351,8 +355,13 @@ class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key=None,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         key_proj, key_o = maybe_rng_split(key, 2)
 
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
@@ -418,8 +427,13 @@ class Olmo2DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key=None,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
         # Self attention with norm before residual
@@ -456,10 +470,15 @@ class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        attn_mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
+        x = cast(hax.NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
@@ -467,11 +486,11 @@ class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
 class Olmo2Embedding(ModuleWithStateDictSerialization, eqx.Module):
     """Token embedding for Olmo2"""
 
-    Vocab: Axis = eqx.field(static=True)
+    Vocab: hax.Axis = eqx.field(static=True)
     token_embeddings: hnn.Embedding
 
     @staticmethod
-    def init(Vocab: Axis, config: Olmo2Config, *, key) -> "Olmo2Embedding":
+    def init(Vocab: hax.Axis, config: Olmo2Config, *, key) -> "Olmo2Embedding":
         return Olmo2Embedding(Vocab, hnn.Embedding.init(Vocab, config.Embed, key=key))
 
     @named_call
@@ -479,7 +498,7 @@ class Olmo2Embedding(ModuleWithStateDictSerialization, eqx.Module):
         input_embeds = self.token_embeddings(input_ids)
         return input_embeds
 
-    def unembed(self, x: NamedArray):
+    def unembed(self, x: hax.NamedArray):
         return self.token_embeddings.unembed(x)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
@@ -504,11 +523,11 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     @classmethod
-    def init(cls, Vocab: Axis, config: Olmo2Config, *, key) -> "Olmo2LMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: Olmo2Config, *, key) -> "Olmo2LMHeadModel":
         k_t, k_emb, k_head = jrandom.split(key, 3)
         transformer = Olmo2Transformer.init(config, key=k_t)
         embeddings = Olmo2Embedding.init(Vocab, config, key=k_emb)
@@ -529,17 +548,17 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
 
     def __call__(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
-        pos_ids: NamedArray | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[Union[hax.NamedArray, AttentionMask]] = None,
+        pos_ids: hax.NamedArray | None = None,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> hax.NamedArray:
         """
         Args:
-            input_ids (NamedArray): [batch, position]
+            input_ids (hax.NamedArray): [batch, position]
                 Indices of input sequence tokens in the vocabulary.
-            attn_mask (Union[NamedArray, AttentionMask], optional): [batch, position]
+            attn_mask (Union[hax.NamedArray, AttentionMask], optional): [batch, position]
                 Mask to avoid performing attention on the padding token indices of the encoder input.
         """
         k_t, k_head = maybe_rng_split(key, 2)
@@ -560,12 +579,12 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[AttentionMask | hax.NamedArray] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         """
         Compute the activations for the next token in a sequence.
         Args:
@@ -574,7 +593,7 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
             key: PRNGKeyArray for random number generation
 
         Returns:
-            NamedArray: activations with shape {Pos, Embed}
+            hax.NamedArray: activations with shape {Pos, Embed}
         """
         # Get token embeddings
         x = self.embeddings.embed(input_ids)
