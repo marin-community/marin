@@ -3,11 +3,9 @@
 
 from typing import Any
 
+import haliax as hax
 import jax
 import optax
-
-import haliax.nn
-from haliax import NamedArray
 
 from levanter.tracker.histogram import Histogram
 from levanter.utils import jax_utils
@@ -43,7 +41,7 @@ def summary_statistics_for_tree(
 
     """
     if split_scan_layers:
-        is_leaf = lambda n: isinstance(n, haliax.nn.Stacked) or is_named_array(n)  # noqa: E731
+        is_leaf = lambda n: isinstance(n, hax.nn.Stacked) or is_named_array(n)  # noqa: E731
     else:
         is_leaf = is_named_array
 
@@ -55,8 +53,8 @@ def summary_statistics_for_tree(
             jax.tree.leaves(tree, is_leaf=is_leaf),
             strict=True,
         ):
-            if split_scan_layers and isinstance(g, haliax.nn.Stacked):
-                vmapped_norms, vmapped_hists = haliax.vmap(_rec_log_magnitudes, g.Block)({}, {}, "", g.stacked)
+            if split_scan_layers and isinstance(g, hax.nn.Stacked):
+                vmapped_norms, vmapped_hists = hax.vmap(_rec_log_magnitudes, g.Block)({}, {}, "", g.stacked)
 
                 for k, v in vmapped_norms.items():
                     for i in range(g.Block.size):
@@ -66,7 +64,7 @@ def summary_statistics_for_tree(
                     for i in range(g.Block.size):
                         hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
 
-            elif isinstance(g, NamedArray):
+            elif isinstance(g, hax.NamedArray):
                 if include_norms:
                     norms[key_path] = optax.global_norm(g)
                 if include_histogram:
