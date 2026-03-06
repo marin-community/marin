@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import equinox as eqx
 import jax
@@ -36,6 +36,11 @@ from levanter.utils.tree_utils import inference_mode
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from haliax import Axis
+else:
+    Axis = Any
+
 
 class DpoModel(eqx.Module):
     policy: LmHeadModel
@@ -46,18 +51,24 @@ def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
     return model.policy if isinstance(model, DpoModel) else model
 
 
+def _as_jax_array(x: Any) -> jax.Array:
+    return jnp.asarray(getattr(x, "array", x))
+
+
 def dpo_loss_from_logps(
-    delta_pi: jnp.ndarray,
-    delta_ref: jnp.ndarray,
+    delta_pi: Any,
+    delta_ref: Any,
     *,
     beta: float,
 ) -> tuple[jnp.ndarray, dict[str, Metric]]:
-    logits = (delta_pi - delta_ref) * beta
+    delta_pi_arr = _as_jax_array(delta_pi)
+    delta_ref_arr = _as_jax_array(delta_ref)
+    logits = (delta_pi_arr - delta_ref_arr) * beta
     loss = jnp.mean(jax.nn.softplus(-logits))
     metrics = {
         "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi), ReductionType.MEAN),
-        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref), ReductionType.MEAN),
+        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi_arr), ReductionType.MEAN),
+        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref_arr), ReductionType.MEAN),
         "dpo_accuracy": Metric.from_value(jnp.mean(logits > 0), ReductionType.MEAN),
     }
     return loss, metrics

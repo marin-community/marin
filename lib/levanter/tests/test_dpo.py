@@ -223,10 +223,10 @@ def test_build_dpo_dataset_with_strict_preference_config(monkeypatch):
 
 def test_dpo_loss_decreases_with_margin():
     Batch = hax.Axis("batch", 2)
-    delta_ref = hax.zeros(Batch)
+    delta_ref = jnp.zeros((Batch.size,), dtype=jnp.float32)
 
-    delta_small = hax.named(jnp.array([0.1, 0.2], dtype=jnp.float32), Batch)
-    delta_large = hax.named(jnp.array([1.0, 1.2], dtype=jnp.float32), Batch)
+    delta_small = jnp.array([0.1, 0.2], dtype=jnp.float32)
+    delta_large = jnp.array([1.0, 1.2], dtype=jnp.float32)
 
     loss_small, metrics_small = dpo_loss_from_logps(delta_small, delta_ref, beta=1.0)
     loss_large, metrics_large = dpo_loss_from_logps(delta_large, delta_ref, beta=1.0)
@@ -237,8 +237,8 @@ def test_dpo_loss_decreases_with_margin():
 
 def test_dpo_metrics_are_explicit_metrics():
     Batch = hax.Axis("batch", 2)
-    delta_ref = hax.zeros(Batch)
-    delta_pi = hax.named(jnp.array([0.4, 0.8], dtype=jnp.float32), Batch)
+    delta_ref = jnp.zeros((Batch.size,), dtype=jnp.float32)
+    delta_pi = jnp.array([0.4, 0.8], dtype=jnp.float32)
 
     _, metrics = dpo_loss_from_logps(delta_pi, delta_ref, beta=1.0)
 
@@ -259,7 +259,8 @@ def test_logp_sum_passes_key_for_dropout():
     example = LmExample.causal(tokens)
 
     out = _logp_sum(model, example, key=jrandom.PRNGKey(1))
-    assert isinstance(out, hax.NamedArray)
+    assert isinstance(out, jax.Array)
+    assert out.ndim == 0
 
 
 def test_preference_chat_processor_outputs_masks(tokenizer_path: Path):
