@@ -37,7 +37,6 @@ import numpy as np
 from draccus import field
 from haliax import Axis
 from haliax.quantization import QuantizationConfig
-from haliax.types import Scalar
 from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh
 from jax.tree_util import register_dataclass
@@ -69,7 +68,7 @@ from levanter.utils.jax_utils import ensure_scalar, is_named_array, zeros_like_t
 from levanter.utils.mesh import MeshConfig, activate_mesh, create_mesh_from_axis_specs
 from levanter.utils.partitioning import named_jit, shard, shard_with_axis_mapping
 from levanter.utils.tree_utils import inference_mode
-from levanter.utils.types import ComputeLossFunction, FilterSpec, ResourceMapping
+from levanter.utils.types import ComputeLossFunction, FilterSpec, ResourceMapping, Scalar
 
 logger = pylogging.getLogger(__name__)
 
