@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2ECluster: context manager for running Controller + Worker clusters in tests.
@@ -248,7 +248,7 @@ class E2ECluster:
             return (
                 JobName.from_string(job_or_id).to_wire()
                 if job_or_id.startswith("/")
-                else JobName.root(job_or_id).to_wire()
+                else JobName.root("test-user", job_or_id).to_wire()
             )
         return str(job_or_id.job_id)
 

@@ -1,4 +1,4 @@
-// Copyright 2025 The Marin Authors
+// Copyright The Marin Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -129,9 +129,7 @@ message TaskStatus {
   // Scheduling diagnostics for pending tasks (dashboard display)
   string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
-
-  // Log storage location (e.g., "gs://bucket/path/worker-123/job/task/0")
-  string log_directory = 18;
+  // field 18 was log_directory, removed
 }
 
 // Record of a single task execution attempt
@@ -169,6 +167,9 @@ message WorkerResourceSnapshot {
   // Aggregate task stats
   int32 running_task_count = 7;
   int32 total_process_count = 8;
+  // Network bandwidth (bytes/sec, computed as delta between heartbeats)
+  int64 net_recv_bps = 9;
+  int64 net_sent_bps = 10;
 }
 
 message BuildMetrics {
@@ -223,6 +224,27 @@ message JobStatus {
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
 // Job state is derived from task states, and retry semantics are per-task.
+
+// ============================================================================
+// RESERVATION
+// ============================================================================
+
+// A single reservation entry describing one worker's worth of resources.
+// Duplicate entries to reserve multiple workers of the same type.
+message ReservationEntry {
+  // Resource spec for one worker.
+  ResourceSpecProto resources = 1;
+
+  // Constraints for routing (region, zone, preemptible, etc.).
+  repeated Constraint constraints = 2;
+}
+
+// Reservation configuration attached to a job. The autoscaler pre-provisions
+// capacity and the reserving job is held pending until all entries are fulfilled.
+message ReservationConfig {
+  // Resource entries to reserve. Each entry = one worker.
+  repeated ReservationEntry entries = 1;
+}
 
 // ============================================================================
 // RESOURCE SPECIFICATION
@@ -450,6 +472,10 @@ message Controller {
     // name is in a terminal state. If false (default), finished jobs are automatically
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
+
+    // Resource reservation. When set, the autoscaler pre-provisions capacity
+    // and the reserving job is held pending until the reservation is satisfied.
+    ReservationConfig reservation = 30;
   }
 
   message LaunchJobResponse {
@@ -542,8 +568,10 @@ message Controller {
     int32 exit_code = 4;
     string error = 5;
     iris.time.Timestamp finished_at = 6;
-    string log_directory = 7;
+    // field 7 was log_directory, removed
     ResourceUsage resource_usage = 8;
+    // Delta log entries since last heartbeat (capped per heartbeat)
+    repeated iris.logging.LogEntry log_entries = 9;
   }
 
 
@@ -642,6 +670,16 @@ message Controller {
     repeated TransactionAction actions = 1;
   }
 
+  // --- Checkpoint ---
+  message BeginCheckpointRequest {}
+  message BeginCheckpointResponse {
+    string snapshot_path = 1;
+    iris.time.Timestamp created_at = 2;
+    int32 job_count = 3;
+    int32 task_count = 4;
+    int32 worker_count = 5;
+  }
+
   // --- Cluster Summary ---
   message GetClusterSummaryRequest {}
   message GetClusterSummaryResponse {
@@ -649,6 +687,19 @@ message Controller {
     int32 total_jobs = 2;
     int32 total_workers = 3;
     int32 healthy_workers = 4;
+    int32 total_users = 5;
+  }
+
+  message UserSummary {
+    string user = 1;
+    map<string, int32> task_state_counts = 2;
+    map<string, int32> job_state_counts = 3;
+  }
+
+  message ListUsersRequest {}
+
+  message ListUsersResponse {
+    repeated UserSummary users = 1;
   }
 
   // --- Task/Job Logs (batch fetching) ---
@@ -659,6 +710,7 @@ message Controller {
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
     string regex = 5;                // Regex filter (propagated to workers)
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
+    map<string, int64> resume_offsets = 7;  // Per-attempt line offset cursor: key = "{task_wire}/{attempt_id}"
   }
 
   message TaskLogBatch {
@@ -677,6 +729,8 @@ message Controller {
     // Included on every response so the client can detect state transitions
     // (e.g. child moved to FAILED) without a separate ListJobs RPC.
     repeated JobStatus child_job_statuses = 4;
+
+    map<string, int64> resume_offsets = 5;  // Per-attempt line offset cursor for next poll
   }
 
   // --- Process Logs ---
@@ -748,24 +802,6 @@ message Worker {
 
   message ListTasksResponse {
     repeated TaskStatus tasks = 1;
-  }
-
-  message FetchLogsFilter {
-    string regex = 1;
-    int64 start_line = 2;
-    int64 start_ms = 3;
-    int64 end_ms = 4;
-    int64 max_lines = 5;
-  }
-
-  message FetchTaskLogsRequest {
-    string task_id = 1;
-    FetchLogsFilter filter = 2;
-    int32 attempt_id = 3;  // Filter to specific attempt (-1 = all attempts)
-  }
-
-  message FetchTaskLogsResponse {
-    repeated iris.logging.LogEntry logs = 1;
   }
 
   message KillTaskRequest {
@@ -849,6 +885,7 @@ service ControllerService {
 
   // Cluster summary (aggregated counts)
   rpc GetClusterSummary(Controller.GetClusterSummaryRequest) returns (Controller.GetClusterSummaryResponse);
+  rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
@@ -861,12 +898,14 @@ service ControllerService {
 
   // Unified worker detail (VM + worker + logs in one call)
   rpc GetWorkerStatus(Controller.GetWorkerStatusRequest) returns (Controller.GetWorkerStatusResponse);
+
+  // Checkpoint
+  rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
 }
 
 service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
-  rpc FetchTaskLogs(Worker.FetchTaskLogsRequest) returns (Worker.FetchTaskLogsResponse);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
   rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);

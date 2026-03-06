@@ -473,6 +473,46 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
 /* Dimmed rows for idle groups with no slices */
 .row-inactive td { opacity: 0.45; }
 
+/* Demand disclosure toggle */
+.demand-toggle {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  color: var(--color-accent);
+  white-space: nowrap;
+}
+.demand-toggle:hover { text-decoration: underline; }
+
+/* Expandable demand detail sub-row */
+.demand-detail-row td {
+  padding: 0 12px 8px 12px;
+  background: #f6f8fa;
+  border-bottom: 1px solid var(--color-border);
+}
+.demand-detail-row:hover { background: #f6f8fa; }
+.demand-detail-content { padding: 6px 0 2px 24px; }
+
+.demand-detail-job {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+.demand-detail-job-name {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--color-text);
+}
+.demand-detail-job-counts {
+  color: var(--color-text-secondary);
+}
+.demand-detail-overflow {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  padding: 2px 0;
+}
+
 .future-feature {
   color: #57606a;
   font-style: italic;
@@ -1041,6 +1081,7 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
   background: #eaeef2;
   border-radius: 2px;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .inline-gauge__fill {
@@ -1052,5 +1093,95 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--color-text-secondary);
-  min-width: 28px;
+  white-space: nowrap;
+}
+
+/* === Live Utilization Panel (worker detail) === */
+.utilization-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+
+.utilization-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 16px 0;
+}
+
+.utilization-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .utilization-panel__grid { grid-template-columns: 1fr; }
+}
+
+.utilization-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+}
+
+.utilization-metric__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.utilization-metric__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.utilization-metric__value {
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.utilization-metric__value--accent { color: var(--color-accent); }
+.utilization-metric__value--success { color: var(--color-success); }
+.utilization-metric__value--warning { color: var(--color-warning); }
+.utilization-metric__value--danger { color: var(--color-danger); }
+.utilization-metric__value--purple { color: var(--color-purple); }
+
+.utilization-metric__chart {
+  display: flex;
+}
+
+.utilization-metric__chart .sparkline {
+  width: 100%;
+  height: 40px;
+}
+
+/* === Sparkline (inline trend chart) === */
+.sparkline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Sparkline paired with an inline gauge in a table cell */
+.resource-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.resource-cell .sparkline {
+  flex-shrink: 0;
 }

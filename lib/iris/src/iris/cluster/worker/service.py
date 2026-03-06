@@ -1,10 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """WorkerService RPC implementation using Connect RPC."""
 
 import logging
-import re
 import time
 from typing import Protocol
 
@@ -15,7 +14,7 @@ from connectrpc.request import RequestContext
 from iris.chaos import chaos
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import LogBuffer
-from iris.rpc import cluster_pb2, logging_pb2
+from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
 from iris.time_utils import Timer
 
@@ -32,7 +31,6 @@ class TaskProvider(Protocol):
     def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def get_logs(self, task_id: str, start_line: int = 0, attempt_id: int = -1) -> list[logging_pb2.LogEntry]: ...
     def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
     def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes: ...
 
@@ -67,42 +65,6 @@ class WorkerServiceImpl:
         return cluster_pb2.Worker.ListTasksResponse(
             tasks=[task.to_proto() for task in tasks],
         )
-
-    def fetch_task_logs(
-        self,
-        request: cluster_pb2.Worker.FetchTaskLogsRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.FetchTaskLogsResponse:
-        """Fetch logs for a task, optionally filtered by attempt."""
-        start_line = request.filter.start_line if request.filter.start_line else 0
-        # attempt_id=0 is valid (first attempt), so use the value directly
-        # Convention: -1 means "all attempts", caller sets explicitly
-        attempt_id = request.attempt_id
-        logs = self._provider.get_logs(request.task_id, start_line=start_line, attempt_id=attempt_id)
-
-        # Apply additional filters
-        result = []
-        for entry in logs:
-            # Time range filter (start_ms is exclusive for incremental polling)
-            if request.filter.start_ms and entry.timestamp.epoch_ms <= request.filter.start_ms:
-                continue
-            if request.filter.end_ms and entry.timestamp.epoch_ms > request.filter.end_ms:
-                continue
-            # TODO: Regex filter is vulnerable to DoS via catastrophic backtracking.
-            # Malicious regex like (a+)+ can cause minutes of CPU time. Consider using
-            # the re2 library or adding timeout/complexity limits.
-            # Regex filter
-            if request.filter.regex:
-                if not re.search(request.filter.regex, entry.data):
-                    continue
-
-            result.append(entry)
-
-            # Max lines limit
-            if request.filter.max_lines and len(result) >= request.filter.max_lines:
-                break
-
-        return cluster_pb2.Worker.FetchTaskLogsResponse(logs=result)
 
     def health_check(
         self,

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import time
@@ -7,7 +7,8 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.rpc.errors import call_with_retry, connect_error_with_traceback, extract_error_details, is_retryable_error
+from iris.rpc.errors import call_with_retry, connect_error_with_traceback, extract_error_details
+from iris.time_utils import ExponentialBackoff
 
 
 def test_connect_error_with_traceback_populates_timestamp() -> None:
@@ -20,41 +21,6 @@ def test_connect_error_with_traceback_populates_timestamp() -> None:
     assert details is not None
     assert details.exception_type.endswith("ValueError")
     assert details.timestamp.epoch_ms > 0
-
-
-def test_is_retryable_error_unavailable() -> None:
-    """UNAVAILABLE errors should be retryable."""
-    err = ConnectError(Code.UNAVAILABLE, "Service unavailable")
-    assert is_retryable_error(err) is True
-
-
-def test_is_retryable_error_internal() -> None:
-    """INTERNAL errors should be retryable."""
-    err = ConnectError(Code.INTERNAL, "Connection reset")
-    assert is_retryable_error(err) is True
-
-
-def test_is_retryable_error_not_found() -> None:
-    """NOT_FOUND errors should not be retryable."""
-    err = ConnectError(Code.NOT_FOUND, "Job not found")
-    assert is_retryable_error(err) is False
-
-
-def test_is_retryable_error_invalid_argument() -> None:
-    """INVALID_ARGUMENT errors should not be retryable."""
-    err = ConnectError(Code.INVALID_ARGUMENT, "Bad request")
-    assert is_retryable_error(err) is False
-
-
-def test_is_retryable_error_deadline_exceeded() -> None:
-    err = ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
-    assert is_retryable_error(err) is True
-
-
-def test_is_retryable_error_non_connect_error() -> None:
-    """Non-ConnectError exceptions should not be retryable."""
-    err = ValueError("Something wrong")
-    assert is_retryable_error(err) is False
 
 
 def test_call_with_retry_succeeds_first_attempt() -> None:
@@ -114,7 +80,7 @@ def test_call_with_retry_retries_on_deadline_exceeded() -> None:
             raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
         return "success"
 
-    result = call_with_retry("test_op", retry_then_succeed, initial_backoff=0.001, max_backoff=0.001)
+    result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.001, maximum=0.001))
     assert result == "success"
     assert call_count == 3
 

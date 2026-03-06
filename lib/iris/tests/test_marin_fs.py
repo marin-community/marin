@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -8,12 +8,21 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iris.marin_fs import (
+    CROSS_REGION_READ_THRESHOLD_BYTES,
+    MARIN_CROSS_REGION_OVERRIDE_ENV,
+    CrossRegionGuardedFS,
+    CrossRegionReadError,
+    _fs_is_gcs,
+    _regions_match,
     check_gcs_paths_same_region,
+    filesystem,
     marin_prefix,
     marin_region,
     marin_temp_bucket,
+    open_url,
     region_from_metadata,
     region_from_prefix,
+    url_to_fs,
 )
 
 
@@ -37,16 +46,19 @@ def test_region_from_metadata_returns_none_on_failure():
         assert region_from_metadata() is None
 
 
-def test_region_from_prefix():
-    assert region_from_prefix("gs://marin-us-east1/scratch") == "us-east1"
-
-
-def test_region_from_prefix_not_a_marin_bucket():
-    assert region_from_prefix("gs://other-bucket/foo") is None
-
-
-def test_region_from_prefix_empty():
-    assert region_from_prefix("") is None
+@pytest.mark.parametrize(
+    "prefix, expected",
+    [
+        ("gs://marin-us-east1/scratch", "us-east1"),
+        ("gs://marin-us-central2/data", "us-central2"),
+        # Abbreviated bucket name normalizes to canonical GCP region.
+        ("gs://marin-eu-west4/tokenized", "europe-west4"),
+        ("gs://other-bucket/foo", None),
+        ("", None),
+    ],
+)
+def test_region_from_prefix(prefix, expected):
+    assert region_from_prefix(prefix) == expected
 
 
 def test_marin_prefix_from_env():
@@ -81,6 +93,15 @@ def test_marin_region_from_env_prefix():
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-west4/scratch"}),
     ):
         assert marin_region() == "us-west4"
+
+
+def test_marin_region_normalizes_eu_west4():
+    """Regression test: marin-eu-west4 bucket must resolve to europe-west4."""
+    with (
+        patch("iris.marin_fs.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-eu-west4/tokenized"}),
+    ):
+        assert marin_region() == "europe-west4"
 
 
 def test_marin_region_none_when_unresolvable():
@@ -187,3 +208,226 @@ def test_check_gcs_paths_same_region_allows_unknown_region_for_local_runs():
         local_ok=True,
         region_getter=fail_region_lookup,
     )
+
+
+# ---------------------------------------------------------------------------
+# _regions_match tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "vm_region, bucket_location, expected",
+    [
+        ("us-central1", "us-central1", True),
+        ("US-Central1", "us-central1", True),
+        ("europe-west4", "europe-west4", True),
+        ("us-central1", "eu-west4", False),
+        ("us-central1", "us", True),
+        ("us-east1", "us", True),
+        ("europe-west4", "eu", True),
+        ("asia-northeast1", "asia", True),
+        ("eu-west4", "us", False),
+        ("us-central1", "asia", False),
+    ],
+)
+def test_regions_match(vm_region, bucket_location, expected):
+    assert _regions_match(vm_region, bucket_location) is expected
+
+
+# ---------------------------------------------------------------------------
+# CrossRegionGuardedFS tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeGCSFS:
+    """Minimal fake GCS filesystem for testing the cross-region guard.
+
+    Stores files as {path: bytes} and reports protocol ``gs``.
+    """
+
+    protocol = "gs"
+
+    def __init__(self) -> None:
+        self._files: dict[str, bytes] = {}
+
+    def add_file(self, path: str, data: bytes) -> None:
+        self._files[path] = data
+
+    def size(self, path: str) -> int | None:
+        data = self._files.get(path)
+        return len(data) if data is not None else None
+
+    def open(self, path: str, mode: str = "rb", **kwargs):
+        return self._files.get(path, b"")
+
+    def cat_file(self, path: str, start=None, end=None, **kwargs) -> bytes:
+        return self._files.get(path, b"")
+
+    def cat(self, path, recursive=False, on_error="raise", **kwargs):
+        if isinstance(path, str):
+            return self._files.get(path, b"")
+        return {p: self._files.get(p, b"") for p in path}
+
+    def get_file(self, rpath: str, lpath: str, **kwargs) -> None:
+        pass
+
+    def get(self, rpath, lpath, recursive=False, **kwargs) -> None:
+        pass
+
+    def exists(self, path: str) -> bool:
+        return path in self._files
+
+
+class _FakeLocalFS:
+    """Minimal fake local filesystem (protocol ``file``)."""
+
+    protocol = "file"
+
+    def open(self, path: str, mode: str = "rb", **kwargs):
+        return b""
+
+    def size(self, path: str) -> int:
+        return 999_999_999
+
+
+def test_fs_is_gcs_detects_gs_protocol():
+    assert _fs_is_gcs(_FakeGCSFS()) is True
+    assert _fs_is_gcs(_FakeLocalFS()) is False
+
+
+def test_guarded_fs_blocks_large_cross_region_read():
+    fs = _FakeGCSFS()
+    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
+    fs.add_file("remote-bucket/big-file.bin", large_data)
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    with pytest.raises(CrossRegionReadError, match=MARIN_CROSS_REGION_OVERRIDE_ENV):
+        guarded.open("remote-bucket/big-file.bin", "rb")
+
+
+def test_guarded_fs_allows_small_cross_region_read():
+    fs = _FakeGCSFS()
+    small_data = b"x" * 1024  # 1 KB
+    fs.add_file("remote-bucket/small-file.bin", small_data)
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    # Should not raise
+    guarded.open("remote-bucket/small-file.bin", "rb")
+
+
+def test_guarded_fs_allows_same_region_large_read():
+    fs = _FakeGCSFS()
+    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
+    fs.add_file("local-bucket/big-file.bin", large_data)
+
+    # cross_region_checker returns False → same region
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: False)
+
+    guarded.open("local-bucket/big-file.bin", "rb")
+
+
+def test_guarded_fs_override_env_allows_large_cross_region_read():
+    fs = _FakeGCSFS()
+    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
+    fs.add_file("remote-bucket/big-file.bin", large_data)
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    with patch.dict(os.environ, {MARIN_CROSS_REGION_OVERRIDE_ENV: "testuser"}):
+        guarded.open("remote-bucket/big-file.bin", "rb")
+
+
+def test_guarded_fs_skips_non_gcs_filesystem():
+    fs = _FakeLocalFS()
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    # Should not raise even though cross_region_checker returns True,
+    # because the filesystem is not GCS.
+    guarded.open("/some/local/path", "rb")
+
+
+def test_guarded_fs_allows_write_mode():
+    fs = _FakeGCSFS()
+    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
+    fs.add_file("remote-bucket/big-file.bin", large_data)
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    # Write mode should not trigger the guard
+    guarded.open("remote-bucket/big-file.bin", "wb")
+
+
+@pytest.mark.parametrize(
+    "method, args",
+    [
+        ("cat_file", ("remote-bucket/big-file.bin",)),
+        ("cat", (["remote-bucket/big-file.bin"],)),
+        ("get_file", ("remote-bucket/big-file.bin", "/tmp/local")),
+        ("get", ("remote-bucket/big-file.bin", "/tmp/local")),
+        ("get", (["remote-bucket/big-file.bin"], "/tmp/local")),
+    ],
+    ids=["cat_file", "cat_list", "get_file", "get_str", "get_list"],
+)
+def test_guarded_fs_read_method_blocked(method, args):
+    fs = _FakeGCSFS()
+    large_data = b"x" * (CROSS_REGION_READ_THRESHOLD_BYTES + 1)
+    fs.add_file("remote-bucket/big-file.bin", large_data)
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    with pytest.raises(CrossRegionReadError):
+        getattr(guarded, method)(*args)
+
+
+def test_guarded_fs_custom_threshold():
+    fs = _FakeGCSFS()
+    data = b"x" * 500  # 500 bytes
+    fs.add_file("remote-bucket/file.bin", data)
+
+    # Threshold of 100 bytes → should block
+    guarded = CrossRegionGuardedFS(
+        fs,
+        threshold_bytes=100,
+        cross_region_checker=lambda _bucket: True,
+    )
+
+    with pytest.raises(CrossRegionReadError):
+        guarded.open("remote-bucket/file.bin", "rb")
+
+
+def test_guarded_fs_delegates_non_read_methods():
+    fs = _FakeGCSFS()
+    fs.add_file("bucket/file.txt", b"hello")
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: True)
+
+    # exists() is not intercepted, should delegate transparently
+    assert guarded.exists("bucket/file.txt") is True
+    assert guarded.exists("bucket/nope.txt") is False
+
+
+def test_url_to_fs_returns_guarded_for_local(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("hello")
+
+    fs, _path = url_to_fs(str(test_file))
+    # Local filesystems are not wrapped in CrossRegionGuardedFS
+    assert not isinstance(fs, CrossRegionGuardedFS)
+
+
+def test_open_url_local_file(tmp_path):
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("hello")
+
+    # Local files should work fine
+    result = open_url(str(test_file), "r")
+    with result as f:
+        assert f.read() == "hello"
+
+
+def test_filesystem_local():
+    fs = filesystem("file")
+    # Local filesystems are not wrapped
+    assert not isinstance(fs, CrossRegionGuardedFS)

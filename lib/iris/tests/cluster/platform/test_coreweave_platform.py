@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral tests for CoreweavePlatform.
@@ -1630,97 +1630,6 @@ def _seed_controller_deployment(fake_kubectl: FakeKubectl, image: str = "ghcr.io
         },
         "status": {"availableReplicas": 1},
     }
-
-
-def test_reload_updates_configmap_and_controller(fake_kubectl: FakeKubectl):
-    """reload() updates ConfigMap with new config and performs rolling update on controller Deployment."""
-    platform = _make_platform()
-    _seed_controller_deployment(fake_kubectl)
-
-    cluster_config = _make_cluster_config_with_workers(controller_image="ghcr.io/marin-community/iris-controller:v2")
-
-    address = platform.reload(cluster_config)
-
-    # ConfigMap should be updated
-    assert "iris-cluster-config" in fake_kubectl._configmaps
-    cm_data = fake_kubectl._configmaps["iris-cluster-config"]["data"]
-    config_dict = json.loads(cm_data["config.json"])
-    assert config_dict["controller"]["image"] == "ghcr.io/marin-community/iris-controller:v2"
-
-    # Controller Deployment image should be updated via set_image
-    container = fake_kubectl._deployments["iris-controller"]["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"] == "ghcr.io/marin-community/iris-controller:v2"
-
-    assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
-    platform.shutdown()
-
-
-def test_reload_replaces_worker_pods(fake_kubectl: FakeKubectl):
-    """reload() deletes old worker Pod and recreates it with updated image."""
-    platform = _make_platform()
-    _seed_controller_deployment(fake_kubectl)
-    _seed_worker_pod(fake_kubectl, slice_id="iris-h100-8x-1000", scale_group="h100-8x")
-
-    pod_name = "iris-worker-iris-h100-8x-1000"
-    assert pod_name in fake_kubectl._pods
-
-    cluster_config = _make_cluster_config_with_workers(
-        scale_group_name="h100-8x",
-        worker_image="ghcr.io/marin-community/iris-worker:v2",
-    )
-
-    # The reload will: delete old Pod, create new Pod via apply, then wait for readiness.
-    deleted = threading.Event()
-    original_delete = fake_kubectl._handle_delete_pod
-
-    def tracking_delete(args, namespace):
-        result = original_delete(args, namespace)
-        deleted.set()
-        return result
-
-    fake_kubectl._handle_delete_pod = tracking_delete
-
-    def auto_ready_new_pod():
-        deleted.wait(timeout=10)
-        # Wait for the Pod to be re-created via apply
-        _wait_for_condition(lambda: pod_name in fake_kubectl._pods, timeout=10)
-        fake_kubectl.make_pod_ready(pod_name)
-
-    t = threading.Thread(target=auto_ready_new_pod, daemon=True)
-    t.start()
-
-    platform.reload(cluster_config)
-
-    # The recreated worker Pod should have the updated image
-    assert pod_name in fake_kubectl._pods
-    container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
-    assert container["image"] == "ghcr.io/marin-community/iris-worker:v2"
-
-    t.join(timeout=5)
-    platform.shutdown()
-
-
-def test_reload_skips_missing_scale_group(fake_kubectl: FakeKubectl):
-    """reload() warns and skips Pod recreation when scale group is not in config."""
-    platform = _make_platform()
-    _seed_controller_deployment(fake_kubectl)
-    # Seed a worker with scale_group "unknown-group" which won't be in config
-    _seed_worker_pod(fake_kubectl, slice_id="iris-unknown-group-2000", scale_group="unknown-group")
-
-    old_pod_name = "iris-worker-iris-unknown-group-2000"
-    assert old_pod_name in fake_kubectl._pods
-
-    # Config only has "h100-8x" scale group, not "unknown-group"
-    cluster_config = _make_cluster_config_with_workers(scale_group_name="h100-8x")
-
-    platform.reload(cluster_config)
-
-    # Old Pod should be deleted (always happens)
-    assert old_pod_name not in fake_kubectl._pods
-    # No new Pod should be created (scale group not in config)
-    worker_pods = [k for k in fake_kubectl._pods if k.startswith("iris-worker-")]
-    assert len(worker_pods) == 0
-    platform.shutdown()
 
 
 # ============================================================================

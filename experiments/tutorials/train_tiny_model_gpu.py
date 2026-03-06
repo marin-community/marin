@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -36,7 +36,7 @@ wikitext_tokenized = default_tokenize(
 
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
-    resources=ResourceConfig.with_gpu(count=8, cpu=32, disk="128G", ram="128G"),
+    resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G"),
     train_batch_size=256,
     num_train_steps=100,
     learning_rate=6e-4,

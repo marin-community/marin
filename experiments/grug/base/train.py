@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
+from fray.cluster import ResourceConfig
+from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -26,7 +28,9 @@ from levanter.checkpoint import load_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
+from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
@@ -34,6 +38,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.base.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
@@ -71,6 +76,7 @@ class GrugRunConfig:
 
     model: GrugModelConfig
     data: LmDataConfig
+    resources: ResourceConfig
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -83,13 +89,14 @@ def build_train_dataset(
     batch_schedule: BatchSchedule,
     key: PRNGKeyArray,
 ) -> MixtureDataset[GrugLmExample]:
+    pos = Axis("position", max_seq_len)
     mix_key, shuffle_key = jax.random.split(key)
     weights = data_config.train_weights
     if isinstance(weights, list):
         weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
 
     initial_batch_size = batch_schedule.batch_size_at_step(0)
-    datasets = data_config.train_grug_sets(seq_len=max_seq_len, key=shuffle_key, initial_batch_size=initial_batch_size)
+    datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
     return MixtureDataset(
         datasets=datasets,
         weights=weights,
@@ -124,8 +131,9 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
-) -> TaggedEvaluator[GrugLmExample, Transformer] | None:
-    tagged_eval_sets = data_config.tagged_eval_grug_sets(seq_len=max_seq_len)
+) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
+    pos = Axis("position", max_seq_len)
+    tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
         return None
@@ -137,10 +145,13 @@ def build_tagged_evaluator(
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
     batch_axis_resource = eval_cfg.eval_batch_pspec[0]
     eval_axis_mapping = {"batch": batch_axis_resource}
+    eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 
-    def eval_loss_fn(model: Transformer, batch: GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
-        per_pos_loss = model.compute_next_token_loss(
+    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        if isinstance(batch, LmExample):
+            batch = grug_lm_example_from_named(batch)
+        per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
@@ -153,7 +164,7 @@ def build_tagged_evaluator(
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
-        EvalBatch=eval_cfg.eval_batch_size,
+        EvalBatch=eval_batch,
         tagged_eval_sets=tagged_eval_sets,
         loss_fn=eval_loss_fn,
         tokenizer=tokenizer,
@@ -216,6 +227,22 @@ class GrugTrainState:
     ema_params: Transformer
 
 
+def initial_state(
+    model_config: GrugModelConfig,
+    *,
+    optimizer: optax.GradientTransformation,
+    mp: jmp.Policy,
+    key: PRNGKeyArray,
+) -> GrugTrainState:
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    return GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=params,
+    )
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -238,7 +265,7 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.compute_next_token_loss(
+            return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
@@ -287,7 +314,7 @@ def _make_train_step(
     return train_step
 
 
-def run_grug(config: GrugRunConfig) -> None:
+def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
@@ -331,12 +358,11 @@ def run_grug(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            params = trainer.mp.cast_to_param(Transformer.init(config.model, key=model_rng))
-            return GrugTrainState(
-                step=jnp.array(0, dtype=jnp.int32),
-                params=params,
-                opt_state=optimizer.init(params),
-                ema_params=params,
+            return initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=trainer.mp,
+                key=model_rng,
             )
 
         state = _init_state(model_key)
@@ -462,10 +488,25 @@ def run_grug(config: GrugRunConfig) -> None:
     levanter.tracker.current_tracker().finish()
 
 
+def run_grug(config: GrugRunConfig) -> None:
+    """Dispatch grug training through Fray jobs."""
+    trainer = config.trainer.trainer
+    if trainer.id is None:
+        raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    dispatch_grug_training_run(
+        run_id=trainer.id,
+        config=config,
+        local_entrypoint=_run_grug_local,
+        resources=config.resources,
+    )
+
+
 __all__ = [
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "initial_state",
     "run_grug",
 ]
