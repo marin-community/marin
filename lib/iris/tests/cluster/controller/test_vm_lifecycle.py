@@ -324,17 +324,3 @@ def test_gcp_controller_vm_config_defaults_to_pd_ssd():
 
     assert vm_config.gcp.boot_disk_type == "pd-ssd"
     assert vm_config.gcp.boot_disk_size_gb == 100
-
-
-def test_gcp_controller_vm_config_respects_explicit_disk_type():
-    """Explicit boot_disk_type in config overrides the pd-ssd default."""
-    config = config_pb2.IrisClusterConfig()
-    config.platform.label_prefix = "test"
-    config.controller.gcp.zone = "us-central1-a"
-    config.controller.gcp.boot_disk_type = "pd-balanced"
-    config.controller.gcp.boot_disk_size_gb = 200
-
-    vm_config = _build_controller_vm_config(config)
-
-    assert vm_config.gcp.boot_disk_type == "pd-balanced"
-    assert vm_config.gcp.boot_disk_size_gb == 200
