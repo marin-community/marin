@@ -10,7 +10,6 @@ import jax
 import jmp
 
 import haliax as hax
-from haliax import Axis
 
 import levanter
 from levanter.checkpoint import load_checkpoint
@@ -28,7 +27,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
-from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
+from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning
 from levanter.utils.tree_utils import inference_mode
 
 
@@ -93,7 +92,7 @@ def main(config: EvalLmConfig):
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), compute_axis_mapping)
+        Vocab = round_vocab_axis_for_partitioning(vocab_size, compute_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 

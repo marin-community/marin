@@ -12,7 +12,6 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from haliax import Axis
 
 import levanter
 import levanter.callbacks
@@ -33,7 +32,7 @@ from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count, use_cpu_device
-from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
+from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning
 from levanter.utils.tree_utils import inference_mode
 
 logger = logging.getLogger(__name__)
@@ -319,7 +318,7 @@ def main(config: TrainDpoConfig):
         Pos = config.model.max_Pos.resize(train_length)
 
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
+        Vocab = round_vocab_axis_for_partitioning(vocab_size, parameter_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 

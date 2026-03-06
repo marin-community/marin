@@ -10,7 +10,6 @@ from typing import Optional
 
 import jax.numpy as jnp
 import jax.random as jrandom
-from haliax import Axis
 
 import levanter
 import levanter.callbacks
@@ -29,7 +28,7 @@ from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
-from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
+from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +158,7 @@ def main(config: TrainLmConfig):
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
         # tokens: gpt-2 has 50257, for example. So we round up.
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
+        Vocab = round_vocab_axis_for_partitioning(vocab_size, parameter_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 

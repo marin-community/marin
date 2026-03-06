@@ -10,7 +10,6 @@ import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
-from haliax import Axis
 
 import levanter
 from levanter.callbacks import profile_ctx
@@ -23,7 +22,7 @@ from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
-from levanter.utils.partitioning import round_axis_for_partitioning
+from levanter.utils.partitioning import round_vocab_axis_for_partitioning
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +117,7 @@ def main(config: SampleLmConfig):
     # NB: we use the compute_axis_mapping b/c we're doing inference
     with config.trainer.use_device_mesh():
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), config.trainer.compute_axis_mapping)
+        Vocab = round_vocab_axis_for_partitioning(vocab_size, config.trainer.compute_axis_mapping)
         model = _load_model(config, Vocab, key=key)
         assert isinstance(model, LlamaLMHeadModel), "Only LlamaLMHeadModel supported"
 

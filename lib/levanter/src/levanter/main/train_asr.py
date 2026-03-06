@@ -12,7 +12,6 @@ import jax.numpy as jnp
 import jax.random as jrandom
 
 import haliax as hax
-from haliax import Axis
 
 import levanter
 from levanter import callbacks
@@ -23,7 +22,7 @@ from levanter.models.whisper import WhisperConfig
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
-from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
+from levanter.utils.partitioning import named_jit, round_vocab_axis_for_partitioning
 
 
 logger = logging.getLogger(__name__)
@@ -134,7 +133,7 @@ def main(config: TrainASRConfig):
         # tokens: gpt-2 has 50257, for example. So we round up.
 
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
+        Vocab = round_vocab_axis_for_partitioning(vocab_size, parameter_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 

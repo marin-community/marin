@@ -28,7 +28,6 @@ import equinox as eqx
 import jax
 import jax.random as jrandom
 import jmp
-from haliax import Axis
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
@@ -52,7 +51,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.mesh import MeshConfig
-from levanter.utils.partitioning import round_axis_for_partitioning
+from levanter.utils.partitioning import round_vocab_axis_for_partitioning
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -67,7 +66,7 @@ def weight_loader(server, server_config, current_model: LmHeadModel) -> LmHeadMo
     with use_cpu_device():
         key = jrandom.PRNGKey(server_config.seed)
         vocab_size = len(server.inference_context.tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), server_config.trainer.param_axis_mapping)
+        Vocab = round_vocab_axis_for_partitioning(vocab_size, server_config.trainer.param_axis_mapping)
         model = eqx.filter_eval_shape(server_config.model.build, Vocab, key=key)
         model = load_checkpoint(model, model, subpath="model")
         model = server_config.trainer.mp.cast_to_compute(model)
@@ -94,7 +93,7 @@ def _load_model(
     vocab_size = len(tokenizer)
 
     with trainer_config.use_device_mesh():
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), trainer_config.compute_axis_mapping)
+        Vocab = round_vocab_axis_for_partitioning(vocab_size, trainer_config.compute_axis_mapping)
 
         if levanter_checkpoint is not None:
             model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
