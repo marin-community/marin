@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import Optional, cast
 
 import equinox as eqx
-import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 
@@ -17,7 +16,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.inference.utils import INVALID
+from levanter.inference.utils import INVALID, make_stop_token_array
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
@@ -146,9 +145,7 @@ def main(config: SampleLmConfig):
             stop_ids_list = tokenizer(stop_sequence, add_special_tokens=False)["input_ids"]
             if len(stop_ids_list) == 0:
                 raise ValueError("Stop sequence must be non-empty")
-            stop_ids = hax.named(jnp.asarray(stop_ids_list, dtype=jnp.int32), axis="position").broadcast_axis(
-                {"stop_seq": 1}
-            )
+            stop_ids = make_stop_token_array(stop_ids_list)
         else:
             stop_ids = None
 

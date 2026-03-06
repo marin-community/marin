@@ -9,6 +9,14 @@ from haliax import NamedArray
 INVALID = 2_000_000
 
 
+def make_stop_token_array(stop_tokens: list[int] | jnp.ndarray):
+    """Build a single-stop-sequence NamedArray with ``stop_seq`` and ``position`` axes."""
+    stop_arr = jnp.asarray(stop_tokens, dtype=jnp.int32)
+    if stop_arr.ndim != 1 or stop_arr.size == 0:
+        raise ValueError("stop_tokens must be a non-empty 1D sequence")
+    return hax.named(stop_arr, axis="position").broadcast_axis({"stop_seq": 1})
+
+
 def is_invalid(x, invalid=INVALID):
     return (x < 0) | (x == invalid)
 

@@ -20,7 +20,6 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Union
 
-import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
@@ -38,6 +37,7 @@ from transformers import PreTrainedTokenizer
 
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.utils import make_stop_token_array
 from levanter.models.lm_model import LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.hf_utils import HfTokenizer
@@ -375,9 +375,7 @@ class InferenceContext:
             # Create stop tokens if specified
             stop_ids = None
             if req.stop_tokens:
-                stop_ids = hax.named(jnp.asarray(req.stop_tokens, dtype=jnp.int32), axis="position").broadcast_axis(
-                    {"stop_seq": 1}
-                )
+                stop_ids = make_stop_token_array(req.stop_tokens)
 
             # dumb fallback seed if none provided
             if req.seed is None:
