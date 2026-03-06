@@ -101,7 +101,9 @@ def get_fast_io_dir(cache_dir: Path) -> Path:
                 logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
                 return _TMPFS_DIR
     except OSError:
-        pass
+        logger.warning("OSError checking tmpfs at %s, falling back to persistent disk", _TMPFS_DIR, exc_info=True)
+    else:
+        logger.warning("Fast IO (tmpfs) not available at %s, falling back to persistent disk", _TMPFS_DIR)
     return cache_dir
 
 
