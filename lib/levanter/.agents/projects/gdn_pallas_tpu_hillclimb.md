@@ -3661,3 +3661,80 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated but regressive**. Macro E reduced the same train closed-call costs substantially, but introduced enough control-flow/loop overhead to regress end-to-end throughput.
 - Next bold hypothesis:
   - Pivot to **Macro Move H** (shared-RHS matmul batching without introducing new `while` overhead), then re-check whether train-path `shard_map/custom-call` remains dominant.
+
+### Iteration 60 - Macro Move H / stack-axis shared-RHS batching in train recurrent+backward kernels (validated, regressed, reverted)
+
+- Coverage slot: H (1/5)
+- Covered set so far: {I, E, H}
+- Date: 2026-03-06T11:06:43Z
+- Commit: none (failed attempt)
+- Starting commit: `67cd2ee1202732746d560b4a0cf26217332c568d`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` bucket: `78.098 ms` (dominant)
+  - forward closed-call source: `gated_deltanet.py:2486` = `41.324 ms`
+  - backward closed-call source: `gated_deltanet.py:3972` = `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move H**: shared-RHS train recurrent/backward batching via stack-axis `dot_general` (no concat packing) (`+10-18%`, medium/high TPU lowering risk).
+  2. **Macro Move E**: V-tiling + shared-K backward accumulation to reduce per-program VMEM pressure (`+15-30%`, high decomposition risk).
+  3. **Macro Move I**: fuse full-sequence train forward prepare+recurrent with no extra control-flow regions (`+10-20%`, high control-flow risk given prior `while` regressions).
+
+- Selected macro-move category: **H) Batch matmuls by stacking left operands that share the same right operand**.
+- Selected hypothesis: apply a new Macro-H variant that batches shared-RHS recurrent/backward dots with a leading stack axis (instead of concat-based packing) to reduce matmul invocations while avoiding prior concat/layout pathologies.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_mxu_matmul_shared_rhs_pair_f32` helper (single `dot_general` over stacked LHS pair with shared RHS).
+  - Applied shared-RHS batching in train recurrent/backward kernels:
+    - recurrent: batched `inter` + `v_prime` (`[q_scaled, k_cumdecay] @ S`) in segmented/fullseq recurrent kernels,
+    - backward: batched `QK/KKT` recompute, batched `[d_inter, d_v_prime] @ S_prev^T`, and batched `[d_QK, dKKT] @ k`.
+  - Local smoke tests and required TPU validation passed.
+  - Profile run regressed MFU; speculative kernel changes were reverted.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`, managed dev TPU):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped`.
+
+- Profile run (completed):
+  - command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_iter60_macroH_stacklhs --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_iter60_macroH_stacklhs_130m_ch128_seg16_20steps-0a211d`
+  - W&B profiler artifact:
+    - `run-gdn_iter60_macroH_stacklhs_130m_ch128_seg16_20steps-0a211d-profiler:v0`
+  - Downloaded trace:
+    - `.profiles/wandb/plugins/profile/2026_03_06_10_59_55/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, vs baseline trace above):
+  - Bucket deltas:
+    - `shard_map`: `78.098 ms -> 42.046 ms` (`-46.16%`)
+    - `fusion`: `45.618 ms -> 34.979 ms` (`-23.32%`)
+    - `all-gather`: `20.158 ms -> 10.101 ms` (`-49.89%`)
+    - `while`: `0.000 ms -> 31.641 ms` (new large overhead)
+  - Train closed-call shard-map source deltas:
+    - forward source `gated_deltanet.py:2486 -> 2584`: `41.324 ms -> 22.779 ms` (`-44.88%`)
+    - backward source `gated_deltanet.py:3972 -> 4086`: `26.266 ms -> 14.041 ms` (`-46.54%`)
+
+- MFU/throughput delta (history-window median, `global_step in [10,18]`, vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.830017 -> 5.353005` (`-8.18%`)
+  - `throughput/tokens_per_second`: `188599.934 -> 173168.680` (`-8.18%`)
+  - `throughput/duration`: `0.173743s -> 0.189226s` (`+8.91%`)
+  - vs active champion (`throughput/mfu=5.748507` from `.agents/logs/gdn_codex_loop/perf_state.json`): `-6.88%`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call` source: `41.324 ms -> 22.779 ms` (`-44.88%`).
+    - Backward closed-call `shard_map/pallas_call` source: `26.266 ms -> 14.041 ms` (`-46.54%`).
+    - `throughput/mfu -8.18%`, `throughput/tokens_per_second -8.18%`, `throughput/duration +8.91%`.
+  - Governance:
+    - MFU gain `<3%` with unchanged dominant train hotspot family (`shard_map/custom-call`) and a large new `while` overhead.
+    - Attempt marked **low-impact/regressive**; speculative kernel edits reverted.
+
+- Assessment: **validated but regressive**. This Macro-H variant reduced the same forward/backward closed-call shard-map kernels, but did not improve end-to-end step time and again introduced substantial `while` overhead.
+- Next bold hypothesis:
+  - Escalate to **Macro Move E** with a decomposition that reduces backward/recurrent state pressure while explicitly avoiding new control-flow regions (`while` growth), then re-measure closed-call and end-to-end metrics.
