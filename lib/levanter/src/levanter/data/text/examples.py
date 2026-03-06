@@ -11,7 +11,6 @@ import jax.numpy as jnp
 from jax.tree_util import register_dataclass
 
 import haliax as hax
-from haliax import NamedOrNumeric
 
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.layers.attention import AttentionMask
@@ -82,7 +81,7 @@ class GrugLmExample:
     @staticmethod
     def from_prompt_and_completion(
         tokens: jax.Array,
-        prompt_length: NamedOrNumeric,
+        prompt_length: hax.NamedOrNumeric,
         *,
         ignore_id: int | None = None,
         all_causal: bool = True,
@@ -102,7 +101,7 @@ class GrugLmExample:
         return GrugLmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     @staticmethod
-    def causal_loss_mask(seq_len: int, prompt_length: NamedOrNumeric | None = None) -> jax.Array:
+    def causal_loss_mask(seq_len: int, prompt_length: hax.NamedOrNumeric | None = None) -> jax.Array:
         if seq_len <= 0:
             raise ValueError(f"seq_len must be positive, got {seq_len}")
 
