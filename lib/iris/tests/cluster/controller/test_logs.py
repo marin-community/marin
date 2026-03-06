@@ -235,20 +235,25 @@ def test_clear_attempt_removes_offsets(log_store: ControllerLogStore):
 
 
 def test_eviction_caps_total_rows():
-    """Appending beyond max_records triggers eviction of oldest rows."""
-    store = ControllerLogStore(max_records=50)
+    """Appending beyond max_records triggers eviction down to max_records // 2."""
+    max_records = 50
+    store = ControllerLogStore(max_records=max_records)
     try:
-        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(200)]
-        # Append in chunks
-        for i in range(0, 200, 10):
-            store.append(TASK_ID, 0, entries[i : i + 10])
-        # Force append_count so the next append triggers eviction check
-        from iris.cluster.controller.logs import _EVICT_CHECK_INTERVAL
+        # Append max_records entries in one shot to trigger eviction check
+        # (append_count reaches max_records).
+        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(max_records)]
+        store.append(TASK_ID, 0, entries)
 
-        store._append_count = _EVICT_CHECK_INTERVAL - 1
-        store.append(TASK_ID, 0, [_make_entry("trigger", epoch_ms=999)])
+        # Not yet over max_records, so no eviction.
+        total = store._write_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+        assert total == max_records
 
-        total = store._conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        assert total <= 51  # max_records + the trigger entry (eviction runs after insert)
+        # Append another max_records entries to go over the limit and trigger eviction.
+        entries2 = [_make_entry(f"line2-{i}", epoch_ms=100 + i) for i in range(max_records)]
+        store.append(TASK_ID, 0, entries2)
+
+        total = store._write_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+        # Should have been evicted down to max_records // 2 = 25
+        assert total <= max_records // 2 + 1
     finally:
         store.close()
