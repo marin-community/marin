@@ -24,51 +24,69 @@ _LEVEL_PREFIX = {
     "CRITICAL": "C",
 }
 
-# Standard Python log levels, used for best-effort log line parsing.
-LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+# Reverse map: single-letter prefix -> canonical level name.
+_PREFIX_TO_LEVEL = {v: k for k, v in _LEVEL_PREFIX.items()}
+
+# Canonical level names, derived from _LEVEL_PREFIX keys.
+LOG_LEVEL_NAMES = tuple(_LEVEL_PREFIX.keys())
 
 
 def parse_log_level(line: str) -> str | None:
     """Best-effort parse a log level from a log line.
 
-    Recognizes common patterns:
-    - Single-letter prefix: "I20260102 ..." or "E20260102 ..."
-    - Bracketed level: "[INFO]", "[ERROR]", etc.
-    - Bare level: "INFO", "WARNING", "ERROR" as a space-delimited word
+    Recognizes the single-letter prefix format produced by LevelPrefixFormatter:
+        "I20260102 12:34:56 ..."  ->  "INFO"
+        "E20260102 12:44:05 ..."  ->  "ERROR"
 
     Returns the canonical level name (e.g. "INFO") or None.
     """
-    if not line:
+    if not line or len(line) < 2:
         return None
 
     # Single-letter prefix format: "I20260102 12:34:56 ..."
-    if len(line) >= 2 and line[0] in "DIWEC" and line[1:2].isdigit():
-        for level, prefix in _LEVEL_PREFIX.items():
-            if line[0] == prefix:
-                return level
-        return None
-
-    # Bracketed format: "[INFO]", "[ WARNING ]"
-    bracket_start = line.find("[")
-    if bracket_start >= 0:
-        bracket_end = line.find("]", bracket_start)
-        if bracket_end > bracket_start:
-            candidate = line[bracket_start + 1 : bracket_end].strip().upper()
-            if candidate in LOG_LEVELS:
-                return candidate
-
-    # Space-delimited level word (common in "timestamp - INFO - message" or "timestamp INFO message")
-    for level in LOG_LEVELS:
-        # Look for the level as a whole word (bounded by spaces, hyphens, or start/end)
-        idx = line.find(level)
-        if idx >= 0:
-            before_ok = idx == 0 or line[idx - 1] in " -:|"
-            after_pos = idx + len(level)
-            after_ok = after_pos >= len(line) or line[after_pos] in " -:|]"
-            if before_ok and after_ok:
-                return level
+    if line[0] in _PREFIX_TO_LEVEL and line[1:2].isdigit():
+        return _PREFIX_TO_LEVEL[line[0]]
 
     return None
+
+
+def str_to_log_level(level_name: str) -> int:
+    """Convert a canonical level name (e.g. "INFO") to the LogLevel proto enum value.
+
+    Returns LOG_LEVEL_UNKNOWN (0) for unrecognized names.
+    Uses lazy import to avoid pulling in protobuf at module load time.
+    """
+    from iris.rpc import logging_pb2
+
+    _STR_TO_ENUM = {
+        "DEBUG": logging_pb2.LOG_LEVEL_DEBUG,
+        "INFO": logging_pb2.LOG_LEVEL_INFO,
+        "WARNING": logging_pb2.LOG_LEVEL_WARNING,
+        "ERROR": logging_pb2.LOG_LEVEL_ERROR,
+        "CRITICAL": logging_pb2.LOG_LEVEL_CRITICAL,
+    }
+    return (
+        _STR_TO_ENUM.get(level_name.upper(), logging_pb2.LOG_LEVEL_UNKNOWN)
+        if level_name
+        else logging_pb2.LOG_LEVEL_UNKNOWN
+    )
+
+
+def log_level_to_str(level: int) -> str:
+    """Convert a LogLevel proto enum value to canonical level name.
+
+    Returns "" for LOG_LEVEL_UNKNOWN (0).
+    """
+    from iris.rpc import logging_pb2
+
+    _ENUM_TO_STR = {
+        logging_pb2.LOG_LEVEL_DEBUG: "DEBUG",
+        logging_pb2.LOG_LEVEL_INFO: "INFO",
+        logging_pb2.LOG_LEVEL_WARNING: "WARNING",
+        logging_pb2.LOG_LEVEL_ERROR: "ERROR",
+        logging_pb2.LOG_LEVEL_CRITICAL: "CRITICAL",
+    }
+    return _ENUM_TO_STR.get(level, "")
 
 
 class LevelPrefixFormatter(logging.Formatter):

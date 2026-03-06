@@ -12,14 +12,13 @@ import logging
 import time
 
 import pytest
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 
 pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
 
 
 def _emit_multi_level_logs():
     """Callable that emits log lines at multiple levels."""
-    import logging
     import sys
 
     # Set up logging with the unified format (matching CALLABLE_RUNNER)
@@ -73,9 +72,9 @@ def test_task_logs_have_level_field(cluster):
                 markers_found[marker] = entry.level
 
     assert "info-marker" in markers_found, f"info-marker not found in logs. Entries: {[e.data for e in entries]}"
-    assert markers_found["info-marker"] == "INFO"
-    assert markers_found.get("warning-marker") == "WARNING"
-    assert markers_found.get("error-marker") == "ERROR"
+    assert markers_found["info-marker"] == logging_pb2.LOG_LEVEL_INFO
+    assert markers_found.get("warning-marker") == logging_pb2.LOG_LEVEL_WARNING
+    assert markers_found.get("error-marker") == logging_pb2.LOG_LEVEL_ERROR
 
 
 def test_log_level_filter(cluster):
@@ -107,9 +106,11 @@ def test_log_level_filter(cluster):
 
     # Should have warning and error markers but not info
     filtered_data = [e.data for e in filtered]
-    assert any("warning-marker" in d for d in filtered_data), f"warning-marker missing from filtered logs: {filtered_data}"
+    assert any(
+        "warning-marker" in d for d in filtered_data
+    ), f"warning-marker missing from filtered logs: {filtered_data}"
     assert any("error-marker" in d for d in filtered_data), f"error-marker missing from filtered logs: {filtered_data}"
     # Info marker should be filtered out (it has level=INFO which is below WARNING)
-    assert not any("info-marker" in d for d in filtered_data if d), (
-        f"info-marker should be filtered out at WARNING level: {filtered_data}"
-    )
+    assert not any(
+        "info-marker" in d for d in filtered_data if d
+    ), f"info-marker should be filtered out at WARNING level: {filtered_data}"

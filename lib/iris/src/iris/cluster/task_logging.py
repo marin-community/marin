@@ -15,7 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from google.protobuf import json_format
 
-from iris.logging import BufferedLogRecord, LogBuffer, parse_log_level
+from iris.logging import BufferedLogRecord, LogBuffer, parse_log_level, str_to_log_level
 from iris.marin_fs import filesystem
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
@@ -31,14 +31,14 @@ class LogSink(Protocol):
     Implementations handle storing logs and metadata for task attempts.
     """
 
-    def append(self, *, source: str, data: str, level: str = "") -> None:
+    def append(self, *, source: str, data: str, level: int = 0) -> None:
         """Append a log entry to the sink with implicit current timestamp.
 
         Args:
             source: Log source ("stdout", "stderr", "build")
             data: Log line content
-            level: Log level (DEBUG/INFO/WARNING/ERROR/CRITICAL). If empty,
-                   best-effort parsing is attempted on the data.
+            level: LogLevel enum value. If 0 (UNKNOWN), best-effort parsing
+                   is attempted on the data.
         """
         ...
 
@@ -127,12 +127,13 @@ class FsspecLogSink:
         self._path_prefix = path
         self._sync_thread.start()
 
-    def append(self, *, source: str, data: str, level: str = "") -> None:
+    def append(self, *, source: str, data: str, level: int = 0) -> None:
         """Append a log entry with current timestamp and best-effort level tagging."""
         if len(data) > MAX_LINE_LENGTH:
             data = data[:MAX_LINE_LENGTH]
         if not level:
-            level = parse_log_level(data) or ""
+            parsed = parse_log_level(data)
+            level = str_to_log_level(parsed) if parsed else 0
         log_entry = logging_pb2.LogEntry(
             timestamp=Timestamp.now().to_proto(),
             source=source,
@@ -282,12 +283,13 @@ class LocalLogSink:
         self._lock = Lock()
         self._metadata: logging_pb2.TaskAttemptMetadata | None = None
 
-    def append(self, *, source: str, data: str, level: str = "") -> None:
+    def append(self, *, source: str, data: str, level: int = 0) -> None:
         """Append a log entry to in-memory buffer."""
         if len(data) > MAX_LINE_LENGTH:
             data = data[:MAX_LINE_LENGTH]
         if not level:
-            level = parse_log_level(data) or ""
+            parsed = parse_log_level(data)
+            level = str_to_log_level(parsed) if parsed else 0
         log_entry = logging_pb2.LogEntry(
             timestamp=Timestamp.now().to_proto(),
             source=source,

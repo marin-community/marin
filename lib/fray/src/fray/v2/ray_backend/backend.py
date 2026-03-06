@@ -29,6 +29,7 @@ from fray.v2.types import (
     create_environment,
     get_tpu_topology,
 )
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -457,7 +458,6 @@ class _RayActorHostBase:
         # library code using logging.getLogger(__name__).info() is visible.
         # Ray forwards stdout/stderr to the driver, but Python's root logger
         # defaults to WARNING in fresh processes.
-        from iris.logging import configure_logging
 
         configure_logging(level=logging.INFO)
 

@@ -40,6 +40,7 @@ from marin.rl.types import RolloutGroup
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer
+from iris.logging import configure_logging
 
 logger = logging.getLogger("ray")
 
@@ -129,7 +130,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
         tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
 
         with remove_tpu_lockfile_on_exit():
-            from iris.logging import configure_logging
 
             configure_logging(level=logging.INFO)
 

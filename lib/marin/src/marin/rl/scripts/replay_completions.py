@@ -33,6 +33,7 @@ from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 from openai import AsyncOpenAI
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -250,8 +251,6 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
     args = parser.parse_args()
-
-    from iris.logging import configure_logging
 
     configure_logging(level=logging.INFO)
 

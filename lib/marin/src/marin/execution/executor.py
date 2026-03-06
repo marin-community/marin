@@ -107,6 +107,7 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
+from iris.logging import configure_logging
 
 logger = logging.getLogger("ray")
 
@@ -1016,7 +1017,6 @@ class ExecutorMainConfig:
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
-    from iris.logging import configure_logging
 
     configure_logging(level=logging.INFO)
     time_in = time.time()

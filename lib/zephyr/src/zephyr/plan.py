@@ -43,6 +43,7 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -773,8 +774,6 @@ def run_stage(
     Yields:
         ChunkHeader followed by list of items for each chunk produced
     """
-
-    from iris.logging import configure_logging
 
     configure_logging(level=logging.INFO)
 

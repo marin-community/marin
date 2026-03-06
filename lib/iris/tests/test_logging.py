@@ -118,20 +118,15 @@ def test_configure_logging_captures_records():
 @pytest.mark.parametrize(
     "line,expected",
     [
-        # Single-letter prefix format
+        # Single-letter prefix format (the only supported format)
         ("I20260306 12:44:05 iris.worker starting up", "INFO"),
         ("E20260306 12:44:05 iris.worker failed", "ERROR"),
         ("W20260306 12:44:05 iris.worker slow", "WARNING"),
         ("D20260306 12:44:05 iris.worker debug", "DEBUG"),
         ("C20260306 12:44:05 iris.worker critical", "CRITICAL"),
-        # Bracketed format
-        ("[INFO] some message", "INFO"),
-        ("2025-01-01 [WARNING] something bad", "WARNING"),
-        ("[ERROR] crash!", "ERROR"),
-        # Space-delimited format
-        ("2025-01-01 12:00:00 - INFO - message", "INFO"),
-        ("2025-01-01 12:00:00 WARNING message", "WARNING"),
-        ("2025-01-01 ERROR something", "ERROR"),
+        # Other formats are not recognized (we've normalized to single-letter prefix)
+        ("[INFO] some message", None),
+        ("2025-01-01 12:00:00 - INFO - message", None),
         # No level detected
         ("just some random output", None),
         ("", None),
@@ -139,7 +134,7 @@ def test_configure_logging_captures_records():
     ],
 )
 def test_parse_log_level(line, expected):
-    """parse_log_level detects levels from common log formats."""
+    """parse_log_level detects levels from the single-letter prefix format only."""
     assert parse_log_level(line) == expected
 
 

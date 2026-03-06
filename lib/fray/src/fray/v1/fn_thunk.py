@@ -31,6 +31,7 @@ import cloudpickle
 from iris.marin_fs import open_url
 
 from fray.v1.cluster.base import Entrypoint
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,6 @@ def main(path: str):
     Args:
         path: fsspec-compatible path to the cloudpickled callable
     """
-    from iris.logging import configure_logging
 
     configure_logging(level=logging.INFO)
     try:
