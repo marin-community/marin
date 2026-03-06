@@ -61,7 +61,7 @@ from levanter.utils.jax_utils import best_effort_sharding, is_jax_array_like, sy
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.mesh import get_active_mesh
-from levanter.utils.partitioning import named_jit
+from levanter.utils.partitioning import named_jit, vocab_axis
 from levanter.utils.py_utils import dataclass_with_default_init
 from levanter.utils.types import ResourceMapping
 
@@ -561,7 +561,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     @cached_property
     def Vocab(self) -> Axis:
-        return Axis("vocab", len(self.tokenizer))
+        return vocab_axis(len(self.tokenizer))
 
     def config_from_hf_config(self, hf_config, overrides: Optional[dict] = None) -> LevConfig:
         config = self.LevConfigClass.from_hf_config(hf_config)
