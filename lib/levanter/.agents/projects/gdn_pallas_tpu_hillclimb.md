@@ -3738,3 +3738,87 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated but regressive**. This Macro-H variant reduced the same forward/backward closed-call shard-map kernels, but did not improve end-to-end step time and again introduced substantial `while` overhead.
 - Next bold hypothesis:
   - Escalate to **Macro Move E** with a decomposition that reduces backward/recurrent state pressure while explicitly avoiding new control-flow regions (`while` growth), then re-measure closed-call and end-to-end metrics.
+
+### Iteration 61 - Macro Move H / shared-RHS matmul batching retry in train kernels (deterministic kernel failure, reverted, infra-blocked validation)
+
+- Coverage slot: H (2/5)
+- Covered set so far: {I, E, H}
+- Date: 2026-03-06T14:58:55Z
+- Commit: none (failed attempt)
+- Starting commit: `e3224b912c814145e6a9aaf21870d1da3a5aed7e`
+- Dominant bottleneck carried in (latest local trace comparison baseline `.profiles/wandb/plugins/profile/2026_03_06_10_59_55/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` bucket: `42.046 ms` (still dominant)
+  - forward closed-call source: `gated_deltanet.py:2584` = `22.779 ms`
+  - backward closed-call source: `gated_deltanet.py:4086` = `14.041 ms`
+  - large non-GDN control-flow bucket remained: `while` = `31.641 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move H**: stack-axis shared-RHS batching in train forward/backward closed-call kernels (`+10-18%`, medium/high lowering risk).
+  2. **Macro Move J**: `Ct x Seg` grid sweep (`Ct={64,96,128}`, `Seg={8,16,32}`) after structural variant (`+5-12%`, medium risk).
+  3. **Macro Move E**: shared-K V-tiling decomposition with explicit control-flow budget (`+10-20%`, high risk).
+
+- Selected macro-move category: **H) Batch matmuls by stacking left operands that share the same right operand**.
+- Selected hypothesis: batch shared-RHS matmuls in train recurrent/backward hotspots (`QK/KKT`, `[d_inter,d_v_prime] @ S_prev^T`, `[d_QK,dKKT] @ k`) to reduce matmul count and closed-call time.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added `_mxu_matmul_shared_rhs_pair_f32` and wired shared-RHS stacked `dot_general` calls into train fused forward and backward kernels.
+  - First TPU failure signature: `UnboundLocalError` on `dKKT` in backward path.
+  - After local fix/retry, second TPU failure signature remained deterministic (`UnboundLocalError` on `d_q` in the same modified backward path).
+  - Per retry budget, treated as deterministic failure and reverted speculative kernel edits.
+  - Tree returned to clean baseline before profiling.
+
+- Correctness checks:
+  - Managed dev TPU (required `tests=both`) command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - retry (same command/signature class) once, then stopped per retry-budget policy.
+  - Post-revert validation attempts:
+    - dev TPU retry: same command failed infra (`ssh ... Operation timed out`, then `Could not resolve hostname dev-tpu-calvinxu-gdn`).
+    - Ray fallback: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both` failed with environment fixture error (`_configure_marin_prefix did not yield a value`).
+  - Result: no successful TPU correctness validation in this iteration due deterministic kernel failure followed by infra/environment blockers.
+
+- Profile run (completed via fallback):
+  - Dev TPU command attempted first:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_iter10_macroH_reverted --marin-prefix gs://marin-us-east5 --no-sync`
+    - failed: `Could not resolve hostname dev-tpu-calvinxu-gdn`.
+  - Ray fallback command:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_iter10_macroH_reverted --no-wait`
+    - job id: `ray-run-calvinxu-bash-20260306-144750`
+    - completion check: `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-bash-20260306-144750 --show-logs --tail 400` -> `SUCCEEDED`.
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_iter10_macroH_reverted_130m_ch128_seg16_20steps-d1480f`
+  - W&B profiler artifact:
+    - `run-gdn_iter10_macroH_reverted_130m_ch128_seg16_20steps-d1480f-profiler:v0`
+  - Downloaded trace:
+    - `.profiles/wandb/plugins/profile/2026_03_06_06_53_56/perfetto_trace.json.gz`
+
+- Hotspots observed (TPU:0 XLA Ops `pid=3, tid=3`, before/after = Iteration 60 trace `2026_03_06_10_59_55` vs this run `2026_03_06_06_53_56`):
+  - Bucket deltas:
+    - `shard_map`: `42.046 ms -> 39.014 ms` (`-7.21%`)
+    - `fusion`: `34.979 ms -> 35.045 ms` (`+0.19%`)
+    - `while`: `31.641 ms -> 31.674 ms` (`+0.10%`, effectively unchanged)
+  - Train closed-call shard-map source deltas:
+    - forward source `gated_deltanet.py:2584 -> 2504`: `22.779 ms -> 20.661 ms` (`-9.30%`)
+    - backward source `gated_deltanet.py:4086 -> 3992`: `14.041 ms -> 13.129 ms` (`-6.50%`)
+
+- MFU/throughput delta (history-window median, `global_step in [10,18]`):
+  - vs prior Macro-H run (`gdn_iter60_macroH_stacklhs_130m_ch128_seg16_20steps-0a211d`):
+    - `throughput/mfu`: `5.353005 -> 5.325362` (`-0.52%`)
+    - `throughput/tokens_per_second`: `173168.680 -> 172274.429` (`-0.52%`)
+    - `throughput/duration`: `0.189226s -> 0.190208s` (`+0.52%`)
+  - vs active champion (`throughput/mfu=5.748507` from `.agents/logs/gdn_codex_loop/perf_state.json`): `-7.36%`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> deterministic kernel failure on modified code; post-revert validation was infra/environment blocked (`dev-tpu` hostname resolution, Ray fixture setup failure).
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call` source: `22.779 ms -> 20.661 ms` (`-9.30%`).
+    - Backward closed-call `shard_map/pallas_call` source: `14.041 ms -> 13.129 ms` (`-6.50%`).
+    - `throughput/mfu -0.52%`, `throughput/tokens_per_second -0.52%`, `throughput/duration +0.52%`.
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot family remained train-path `shard_map/custom-call` with unchanged large `while` bucket.
+    - Attempt marked **low-impact / infra-blocked** and not promoted.
+    - Per session directive (`Macro H infra-blocked twice -> pivot`), next hypothesis moves to **Macro Move J**.
+
+- Assessment: **failed attempt**. The Macro-H variant did not reach validated TPU correctness and produced no end-to-end gain evidence; speculative code was reverted before finishing the run.
+- Next bold hypothesis:
+  - Execute **Macro Move J** next with the required compact sweep table (`Ct={64,96,128}`, `Seg={8,16,32}`), then use the best point for the next structural kernel redesign.
