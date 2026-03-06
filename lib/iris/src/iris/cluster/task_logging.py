@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Task logging for persisting and reading logs from durable storage."""
@@ -15,8 +15,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from google.protobuf import json_format
 
-import fsspec
-from iris.logging import BufferedLogRecord, LogBuffer
+from iris.logging import BufferedLogRecord, LogBuffer, parse_log_level, str_to_log_level
+from iris.marin_fs import filesystem
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
 from iris.time_utils import Duration, Timestamp
@@ -31,8 +31,15 @@ class LogSink(Protocol):
     Implementations handle storing logs and metadata for task attempts.
     """
 
-    def append(self, *, source: str, data: str) -> None:
-        """Append a log entry to the sink with implicit current timestamp."""
+    def append(self, *, source: str, data: str, level: int = 0) -> None:
+        """Append a log entry to the sink with implicit current timestamp.
+
+        Args:
+            source: Log source ("stdout", "stderr", "build")
+            data: Log line content
+            level: LogLevel enum value. If 0 (UNKNOWN), best-effort parsing
+                   is attempted on the data.
+        """
         ...
 
     def sync(self) -> None:
@@ -58,6 +65,17 @@ class LogSink(Protocol):
 
         Returns:
             List of recent log entries (most recent last)
+        """
+        ...
+
+    def drain_since(self, cursor: int) -> tuple[list[logging_pb2.LogEntry], int]:
+        """Return log entries appended since the given cursor.
+
+        Args:
+            cursor: Index into the internal log buffer. Pass 0 on first call.
+
+        Returns:
+            Tuple of (new entries, new cursor to pass next time).
         """
         ...
 
@@ -105,19 +123,23 @@ class FsspecLogSink:
         assert "://" in config.prefix, f"log prefix must be a URL, got: {config.prefix}"
         scheme, path = config.prefix.split("://", 1)
         self._scheme = scheme
-        self._fs = fsspec.filesystem(scheme)
+        self._fs = filesystem(scheme)
         self._path_prefix = path
         self._sync_thread.start()
 
-    def append(self, *, source: str, data: str) -> None:
-        """Append a log entry with current timestamp."""
+    def append(self, *, source: str, data: str, level: int = 0) -> None:
+        """Append a log entry with current timestamp and best-effort level tagging."""
         if len(data) > MAX_LINE_LENGTH:
             data = data[:MAX_LINE_LENGTH]
+        if not level:
+            parsed = parse_log_level(data)
+            level = str_to_log_level(parsed) if parsed else 0
         log_entry = logging_pb2.LogEntry(
             timestamp=Timestamp.now().to_proto(),
             source=source,
             data=data,
             attempt_id=self._config.attempt_id,
+            level=level,
         )
         with self._lock:
             self._logs.append(log_entry)
@@ -194,6 +216,13 @@ class FsspecLogSink:
                 return list(self._logs)
             return list(self._logs[-max_entries:])
 
+    def drain_since(self, cursor: int) -> tuple[list[logging_pb2.LogEntry], int]:
+        with self._lock:
+            new_cursor = len(self._logs)
+            if cursor >= new_cursor:
+                return [], new_cursor
+            return list(self._logs[cursor:new_cursor]), new_cursor
+
     @property
     def log_path(self) -> str:
         """Get URL path for this task attempt's logs."""
@@ -254,15 +283,19 @@ class LocalLogSink:
         self._lock = Lock()
         self._metadata: logging_pb2.TaskAttemptMetadata | None = None
 
-    def append(self, *, source: str, data: str) -> None:
+    def append(self, *, source: str, data: str, level: int = 0) -> None:
         """Append a log entry to in-memory buffer."""
         if len(data) > MAX_LINE_LENGTH:
             data = data[:MAX_LINE_LENGTH]
+        if not level:
+            parsed = parse_log_level(data)
+            level = str_to_log_level(parsed) if parsed else 0
         log_entry = logging_pb2.LogEntry(
             timestamp=Timestamp.now().to_proto(),
             source=source,
             data=data,
             attempt_id=self._config.attempt_id,
+            level=level,
         )
         with self._lock:
             self._logs.append(log_entry)
@@ -295,6 +328,14 @@ class LocalLogSink:
             # Get last max_entries items from deque
             return list(self._logs)[-max_entries:] if len(self._logs) > max_entries else list(self._logs)
 
+    def drain_since(self, cursor: int) -> tuple[list[logging_pb2.LogEntry], int]:
+        with self._lock:
+            all_logs = list(self._logs)
+            new_cursor = len(all_logs)
+            if cursor >= new_cursor:
+                return [], new_cursor
+            return all_logs[cursor:new_cursor], new_cursor
+
     @property
     def log_path(self) -> str:
         """Return virtual path for consistency with FsspecLogSink."""
@@ -326,7 +367,7 @@ class LogReader:
         self._tail = ""
         assert "://" in logs_path, f"log path must be a URL, got: {logs_path}"
         scheme, _ = logs_path.split("://", 1)
-        self._fs = fsspec.filesystem(scheme)
+        self._fs = filesystem(scheme)
 
     @classmethod
     def from_attempt(
@@ -504,15 +545,18 @@ class LogReader:
 class ProcessLogSink:
     """Periodic sink for process logs using fsspec JSONL storage.
 
-    Writes logs for a single worker process to:
-    {prefix}/process/worker/{worker_id}/logs.jsonl
+    Writes logs for a process to:
+    {prefix}/process/{process_name}/logs.jsonl
+
+    For workers, process_name is "worker/{worker_id}".
+    For the controller, process_name is "controller".
     """
 
     def __init__(
         self,
         *,
         prefix: str,
-        worker_id: str,
+        process_name: str,
         log_buffer: LogBuffer,
         sync_interval: Duration | None = None,
         max_entries: int = 5000,
@@ -520,18 +564,18 @@ class ProcessLogSink:
         if "://" not in prefix:
             raise ValueError(f"log prefix must be a URL, got: {prefix}")
         self._prefix = prefix.rstrip("/")
-        self._worker_id = worker_id
+        self._process_name = process_name
         self._log_buffer = log_buffer
         self._sync_interval = sync_interval or Duration.from_seconds(10.0)
         self._max_entries = max_entries
         self._last_seq = 0
         self._scheme, path = self._prefix.split("://", 1)
-        self._fs = fsspec.filesystem(self._scheme)
+        self._fs = filesystem(self._scheme)
         self._path_prefix = path
         self._stop_event = Event()
         self._sync_thread = Thread(
             target=self._sync_loop,
-            name=f"process-log-sync-{worker_id}",
+            name=f"process-log-sync-{process_name}",
             daemon=True,
         )
         self._sync_thread.start()
@@ -542,7 +586,7 @@ class ProcessLogSink:
 
     @property
     def _storage_log_path(self) -> str:
-        return f"{self._path_prefix}/process/worker/{self._worker_id}/logs.jsonl"
+        return f"{self._path_prefix}/process/{self._process_name}/logs.jsonl"
 
     def _sync_loop(self) -> None:
         interval_s = self._sync_interval.to_seconds()

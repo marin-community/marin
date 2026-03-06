@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Writers for common output formats."""
@@ -15,7 +15,7 @@ import itertools
 import os
 from typing import Any
 
-import fsspec
+from iris.marin_fs import open_url, url_to_fs
 import msgspec
 import logging
 
@@ -47,7 +47,7 @@ def atomic_rename(output_path: str) -> Iterable[str]:
         # File is now at output.jsonl.gz
     """
     temp_path = unique_temp_path(output_path)
-    fs = fsspec.core.url_to_fs(output_path)[0]
+    fs = url_to_fs(output_path)[0]
 
     try:
         yield temp_path
@@ -67,7 +67,7 @@ def ensure_parent_dir(path: str) -> None:
     # Use os.path.dirname for local paths, otherwise use fsspec
     if "://" in path:
         output_dir = path.rsplit("/", 1)[0]
-        fs, dir_path = fsspec.core.url_to_fs(output_dir)
+        fs, dir_path = url_to_fs(output_dir)
         if not fs.exists(dir_path):
             fs.mkdirs(dir_path, exist_ok=True)
     else:
@@ -84,7 +84,7 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     encoder = msgspec.json.Encoder()
 
     with atomic_rename(output_path) as temp_path:
-        fs, resolved_temp = fsspec.core.url_to_fs(temp_path)
+        fs, resolved_temp = url_to_fs(temp_path)
         if output_path.endswith(".zst"):
             import zstandard as zstd
 
@@ -359,7 +359,7 @@ def write_levanter_cache(
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     # write success sentinel
-    with fsspec.open(f"{output_path}/.success", "w") as f:
+    with open_url(f"{output_path}/.success", "w") as f:
         f.write("")
 
     return {"path": output_path, "count": count}
@@ -371,7 +371,7 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
 
     count = 0
     with atomic_rename(output_path) as temp_path:
-        fs, resolved_temp = fsspec.core.url_to_fs(temp_path)
+        fs, resolved_temp = url_to_fs(temp_path)
         with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
             for record in records:
                 f.write(record)

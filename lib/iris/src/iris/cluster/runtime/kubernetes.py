@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Kubernetes-native runtime for task execution.
@@ -569,9 +569,6 @@ class KubernetesRuntime:
             if pod_name:
                 self._kubectl.delete("pod", pod_name, force=True)
         return len(pods)
-
-    def remove(self, container_id: str) -> None:
-        """No-op: pod lifecycle is managed by ContainerHandle.stop() / delete()."""
 
     def cleanup(self) -> None:
         for handle in self._handles:

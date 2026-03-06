@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Readers for common input formats.
@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import fsspec
+from iris.marin_fs import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
@@ -86,7 +87,7 @@ def open_file(file_path: str, mode: str = "rb"):
     # opener (AbstractBufferedFile) rather than the filesystem constructor.
     # fsspec.open() routes all **kwargs to the FS constructor, where S3's
     # AioSession rejects unknown kwargs like block_size.
-    fs, resolved_path = fsspec.core.url_to_fs(file_path)
+    fs, resolved_path = url_to_fs(file_path)
     with fs.open(
         resolved_path,
         mode,
@@ -260,6 +261,10 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     vf = vortex.open(spec.path)
     dataset = vf.to_dataset()
 
+    # Empty vortex files have no schema, so column projection would fail
+    if dataset.count_rows() == 0:
+        return
+
     if spec.row_start is not None and spec.row_end is not None:
         indices = np.arange(spec.row_start, spec.row_end, dtype=np.uint64)
         indices = pa.array(indices)
@@ -354,7 +359,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         >>> output_files = list(ctx.execute(ds))
     """
     spec = _as_spec(source)
-    with fsspec.open(spec.path, "rb") as f:
+    with open_url(spec.path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):

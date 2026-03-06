@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # nodryrun
@@ -13,7 +13,7 @@ from marin.processing.tokenize import lm_mixture_data_config
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
 nemotron_cc_mixture = lm_mixture_data_config(

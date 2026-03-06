@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Compute Python package dependencies for Ray jobs."""
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ray.runtime_env import RuntimeEnv
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 # Packages to ignore when computing the runtime environment.
 # These will always be instead sourced from the base environment.

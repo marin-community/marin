@@ -1,11 +1,30 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Human-readable report generation from profile summaries."""
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass, field
+
 from marin.profiling.schema import ProfileSummary
+
+
+@dataclass
+class _RegionGapStats:
+    count: int = 0
+    total_gap_duration: float = 0.0
+    payload_counts: Counter[str] = field(default_factory=Counter)
+
+
+@dataclass(frozen=True)
+class _RegionFirstGapRow:
+    region_path: str
+    count: int
+    total_gap_duration: float
+    avg_gap_duration: float
+    top_payload_ops: str
 
 
 def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
@@ -28,6 +47,17 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     lines.append("## Trace Provenance")
     lines.append(f"- Trace SHA256: `{summary.trace_provenance.trace_sha256 or 'unknown'}`")
     lines.append(f"- Observed run_ids: `{', '.join(summary.trace_provenance.run_ids[:8]) or 'unknown'}`")
+    lines.append("")
+    lines.append("## Trace Overview")
+    lines.append(f"- Complete events: `{summary.trace_overview.num_complete_events}`")
+    lines.append(f"- Total events: `{summary.trace_overview.num_events_total}`")
+    lines.append(f"- Processes: `{summary.trace_overview.num_processes}`")
+    lines.append(f"- Threads: `{summary.trace_overview.num_threads}`")
+    lines.append(f"- Suspected truncation: `{'yes' if summary.trace_overview.suspected_truncation else 'no'}`")
+    if summary.trace_overview.quality_warnings:
+        lines.append("- Quality warnings:")
+        for warning in summary.trace_overview.quality_warnings:
+            lines.append(f"  - {warning}")
     lines.append("")
     lines.append("## Step Time (Steady State)")
     lines.append(f"- Steps counted: `{step.count}`")
@@ -105,23 +135,23 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
         lines.append(f"| {op.collective} | {op.count} | {_fmt(op.total_duration)} | {_fmt(op.avg_duration)} |")
     lines.append("")
     lines.append("## Pre-Op Gaps")
-    lines.append("| Op | Count | Total Gap | Max Gap | Avg Gap |")
-    lines.append("|---|---:|---:|---:|---:|")
+    lines.append("| Payload Op | Marker Op | Count | Total Gap | Max Gap | Avg Gap |")
+    lines.append("|---|---|---:|---:|---:|---:|")
     for gap in summary.gap_before_ops[:top_k]:
         total_gap = _fmt(gap.total_gap_duration)
         max_gap = _fmt(gap.max_gap_duration)
         avg_gap = _fmt(gap.avg_gap_duration)
-        lines.append(f"| {_md_code(gap.name)} | {gap.count} | {total_gap} | {max_gap} | {avg_gap} |")
+        payload = gap.payload_op or gap.name
+        marker = gap.marker_op or payload
+        lines.append(f"| {_md_code(payload)} | {_md_code(marker)} | {gap.count} | {total_gap} | {max_gap} | {avg_gap} |")
     lines.append("")
-    lines.append("## Gap Context (By Region)")
-    lines.append("| Op | Region Path | Count | Total Gap | Avg Gap |")
-    lines.append("|---|---|---:|---:|---:|")
-    for context in summary.gap_region_contexts[:top_k]:
-        total_gap = _fmt(context.total_gap_duration)
-        avg_gap = _fmt(context.avg_gap_duration)
+    lines.append("## Gap Context (Region-First)")
+    lines.append("| Region Path | Count | Total Gap | Avg Gap | Top Payload Ops |")
+    lines.append("|---|---:|---:|---:|---|")
+    for row in _region_first_gap_rows(summary, top_k=top_k):
         lines.append(
-            f"| {_md_code(context.op_name)} | {_md_code(context.region_path)} | "
-            f"{context.count} | {total_gap} | {avg_gap} |"
+            f"| {_md_code(row.region_path)} | {row.count} | {_fmt(row.total_gap_duration)} | "
+            f"{_fmt(row.avg_gap_duration)} | {_md_code(row.top_payload_ops)} |"
         )
     lines.append("")
     lines.append("## Optimization Candidates")
@@ -177,3 +207,35 @@ def _hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
 def _md_code(value: str) -> str:
     escaped = value.replace("`", "\\`").replace("|", "\\|")
     return f"`{escaped}`"
+
+
+def _region_first_gap_rows(summary: ProfileSummary, *, top_k: int) -> list[_RegionFirstGapRow]:
+    aggregate: dict[str, _RegionGapStats] = {}
+    for context in summary.gap_region_contexts:
+        bucket = aggregate.setdefault(context.region_path, _RegionGapStats())
+        bucket.count += context.count
+        bucket.total_gap_duration += context.total_gap_duration
+        bucket.payload_counts[context.op_name] += context.count
+
+    ranked = sorted(
+        aggregate.items(),
+        key=lambda item: (
+            -item[1].total_gap_duration,
+            item[0],
+        ),
+    )
+    rows: list[_RegionFirstGapRow] = []
+    for region_path, stats in ranked[:top_k]:
+        count = stats.count
+        total = stats.total_gap_duration
+        top_payloads = ", ".join(name for name, _ in stats.payload_counts.most_common(3))
+        rows.append(
+            _RegionFirstGapRow(
+                region_path=region_path,
+                count=count,
+                total_gap_duration=total,
+                avg_gap_duration=(total / count) if count else 0.0,
+                top_payload_ops=top_payloads or "n/a",
+            )
+        )
+    return rows

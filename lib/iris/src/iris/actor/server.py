@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Actor server implementation for hosting actor instances.
@@ -84,6 +84,8 @@ class ActorServer:
         Returns:
             Unique actor ID
         """
+        if name in self._actors:
+            raise ValueError(f"Actor '{name}' is already registered")
         actor_id = ActorId(f"{name}-{uuid.uuid4().hex[:8]}")
         methods = {m: getattr(actor, m) for m in dir(actor) if not m.startswith("_") and callable(getattr(actor, m))}
         self._actors[name] = RegisteredActor(

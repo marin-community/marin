@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -15,13 +15,14 @@ import time
 from dataclasses import dataclass, field
 
 import draccus
-import fsspec
 from huggingface_hub import HfFileSystem
+from iris.marin_fs import open_url, url_to_fs
 from huggingface_hub.errors import HfHubHTTPError
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ class DownloadConfig:
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
-    fs, _ = fsspec.core.url_to_fs(output_path)
+    fs, _ = url_to_fs(output_path)
     try:
         fs.mkdirs(output_path, exist_ok=True)
         test_path = os.path.join(output_path, "test_write_access")
@@ -103,7 +104,7 @@ def stream_file_to_fsspec(
             the download will fail if the downloaded size doesn't match.
     """
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
-    target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
+    target_fs, _ = url_to_fs(gcs_output_path)
     chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
     # 15 minutes max sleep
@@ -123,7 +124,7 @@ def stream_file_to_fsspec(
                 try:
                     with (
                         hf_fs.open(file_path, "rb", block_size=chunk_size) as src_file,
-                        fsspec.open(temp_path, "wb") as dest_file,
+                        open_url(temp_path, "wb") as dest_file,
                     ):
                         start_time = time.monotonic()
                         next_progress_log = start_time + progress_log_interval_seconds
@@ -197,7 +198,8 @@ def stream_file_to_fsspec(
 
 
 def download_hf(cfg: DownloadConfig) -> None:
-    logging.basicConfig(level=logging.INFO)
+
+    configure_logging(level=logging.INFO)
 
     # Set cfg.append_sha_to_path=True to mimic the older behavior of writing to gcs_output_path/<revision>.
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.

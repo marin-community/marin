@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
+from fray.cluster import ResourceConfig
 from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -37,6 +38,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.base.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,7 @@ class GrugRunConfig:
 
     model: GrugModelConfig
     data: LmDataConfig
+    resources: ResourceConfig
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -148,7 +151,7 @@ def build_tagged_evaluator(
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
-        per_pos_loss = model.compute_next_token_loss(
+        per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
@@ -224,6 +227,22 @@ class GrugTrainState:
     ema_params: Transformer
 
 
+def initial_state(
+    model_config: GrugModelConfig,
+    *,
+    optimizer: optax.GradientTransformation,
+    mp: jmp.Policy,
+    key: PRNGKeyArray,
+) -> GrugTrainState:
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    return GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=params,
+    )
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -246,7 +265,7 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.compute_next_token_loss(
+            return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
@@ -295,7 +314,7 @@ def _make_train_step(
     return train_step
 
 
-def run_grug(config: GrugRunConfig) -> None:
+def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
@@ -339,12 +358,11 @@ def run_grug(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            params = trainer.mp.cast_to_param(Transformer.init(config.model, key=model_rng))
-            return GrugTrainState(
-                step=jnp.array(0, dtype=jnp.int32),
-                params=params,
-                opt_state=optimizer.init(params),
-                ema_params=params,
+            return initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=trainer.mp,
+                key=model_rng,
             )
 
         state = _init_state(model_key)
@@ -470,10 +488,25 @@ def run_grug(config: GrugRunConfig) -> None:
     levanter.tracker.current_tracker().finish()
 
 
+def run_grug(config: GrugRunConfig) -> None:
+    """Dispatch grug training through Fray jobs."""
+    trainer = config.trainer.trainer
+    if trainer.id is None:
+        raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    dispatch_grug_training_run(
+        run_id=trainer.id,
+        config=config,
+        local_entrypoint=_run_grug_local,
+        resources=config.resources,
+    )
+
+
 __all__ = [
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "initial_state",
     "run_grug",
 ]

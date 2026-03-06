@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 import equinox as eqx
-import haliax as hax
 import jax
 import jax.random as jrandom
 import jmp
@@ -94,12 +93,17 @@ def _load_model(
     tokenizer = load_tokenizer(hf_checkpoint)
     vocab_size = len(tokenizer)
 
-    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+    with trainer_config.use_device_mesh():
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), trainer_config.compute_axis_mapping)
 
         if levanter_checkpoint is not None:
             model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
-            model = load_checkpoint(model, levanter_checkpoint, subpath="model")
+            model = load_checkpoint(
+                model,
+                levanter_checkpoint,
+                subpath="model",
+                axis_mapping=trainer_config.parameter_axis_mapping,
+            )
             model = mp.cast_to_compute(model)
             return model, None
         else:
@@ -258,7 +262,7 @@ class ReplContext:
 
             self.server.reload(_reload)
         else:
-            with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
+            with self.config.trainer.use_device_mesh():
                 self.server = InferenceServer.create(self.config.server, model=model, tokenizer=tokenizer)
 
         console.print(f"[green]✓ Loaded {path}[/green]")

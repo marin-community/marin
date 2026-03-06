@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -79,7 +79,7 @@ def main(config: EvalLmConfig):
     if config.checkpoint_path is not None and config.hf_checkpoint is not None:
         raise ValueError("Must specify either checkpoint_path or hf_checkpoint, not both")
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -92,8 +92,7 @@ def main(config: EvalLmConfig):
         def eval_loss_fn(model: LmHeadModel, batch: LmExample) -> LossFnOutput:
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
-            with hax.axis_mapping(compute_axis_mapping):
-                per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
+            per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
             per_pos_weight = batch.loss_weight.array
             per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
             return per_pos_loss, per_pos_weight, per_pos_token_id
@@ -107,20 +106,19 @@ def main(config: EvalLmConfig):
             max_examples_per_dataset=max_examples,
         )
 
-        @hax.named_jit
+        @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_loss(model: LmHeadModel, example: LmExample):
-            with hax.axis_mapping(compute_axis_mapping):
-                model = inference_mode(model, True)
-                model = mp.cast_to_compute(model)
-                return model.compute_next_token_loss(example, key=None)
+            model = inference_mode(model, True)
+            model = mp.cast_to_compute(model)
+            return model.compute_next_token_loss(example, key=None)
 
+        @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = mp.cast_to_compute(model)
-            with hax.axis_mapping(compute_axis_mapping):
-                activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-                head = model.get_lm_head()
-                logits = hax.dot(activations, head, axis=model.Embed)
-                return logits
+            activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+            head = model.get_lm_head()
+            logits = hax.dot(activations, head, axis=model.Embed)
+            return logits
 
         # initialize the model
         if config.checkpoint_path is not None:
@@ -140,7 +138,10 @@ def main(config: EvalLmConfig):
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
             model = converter.load_pretrained(
-                model_config.model_type, ref=config.hf_checkpoint, dtype=mp.compute_dtype
+                model_config.model_type,
+                ref=config.hf_checkpoint,
+                axis_mapping=parameter_axis_mapping,
+                dtype=mp.compute_dtype,
             )
         else:
             assert False, "Should not get here"

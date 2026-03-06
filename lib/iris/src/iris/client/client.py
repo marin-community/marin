@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """High-level client with automatic job hierarchy and namespace-based actor discovery.
@@ -31,11 +31,16 @@ from connectrpc.errors import ConnectError
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
     BundleCreator,
+    ClusterClient,
     JobInfo,
-    LocalClusterClient,
     RemoteClusterClient,
     get_job_info,
     resolve_job_user,
+)
+from iris.cluster.controller.local import (
+    LocalController,
+    make_local_cluster_config,
+    wait_for_worker_registration,
 )
 from iris.cluster.types import (
     Constraint,
@@ -44,8 +49,10 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     Namespace,
+    ReservationEntry,
     ResourceSpec,
     merge_constraints,
+    validate_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -364,7 +371,7 @@ class NamespacedEndpointRegistry:
 
     def __init__(
         self,
-        cluster: LocalClusterClient | RemoteClusterClient,
+        cluster: ClusterClient,
         namespace: Namespace,
         job_id: JobName,
     ):
@@ -412,7 +419,7 @@ class NamespacedEndpointRegistry:
 class NamespacedResolver:
     """Resolver that auto-prefixes names with namespace."""
 
-    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient, namespace: Namespace | None = None):
+    def __init__(self, cluster: ClusterClient, namespace: Namespace | None = None):
         self._cluster = cluster
         self._namespace = namespace
 
@@ -485,16 +492,23 @@ class IrisClient:
                 print(entry.data)
     """
 
-    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient, namespace: Namespace = Namespace("")):
+    def __init__(
+        self,
+        cluster: ClusterClient,
+        namespace: Namespace = Namespace(""),
+        controller: LocalController | None = None,
+    ):
         """Initialize IrisClient with a cluster client.
 
         Prefer using factory methods (local(), remote()) over direct construction.
 
         Args:
-            cluster: Low-level cluster client (LocalClusterClient or RemoteClusterClient)
+            cluster: Low-level cluster client (RemoteClusterClient)
+            controller: Optional LocalController to manage lifecycle for local mode.
         """
         self._cluster_client = cluster
         self._namespace = namespace
+        self._controller = controller
 
     @classmethod
     def local(cls, config: LocalClientConfig | None = None) -> "IrisClient":
@@ -504,11 +518,15 @@ class IrisClient:
             config: Configuration for local execution
 
         Returns:
-            IrisClient wrapping LocalClusterClient
+            IrisClient wrapping a RemoteClusterClient connected to a local controller.
         """
         cfg = config or LocalClientConfig()
-        cluster = LocalClusterClient.create(max_workers=cfg.max_workers)
-        return cls(cluster)
+        config_proto = make_local_cluster_config(cfg.max_workers)
+        controller = LocalController(config_proto)
+        address = controller.start()
+        wait_for_worker_registration(address)
+        cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
+        return cls(cluster, controller=controller)
 
     @classmethod
     def remote(
@@ -584,6 +602,7 @@ class IrisClient:
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
         user: str | None = None,
+        reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -601,6 +620,7 @@ class IrisClient:
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
+            reservation: Resource entries to pre-provision before scheduling (None = no reservation)
 
         Returns:
             Job handle for the submitted job
@@ -613,6 +633,7 @@ class IrisClient:
             raise ValueError("Job name cannot contain '/'")
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
+        validate_tpu_replicas(resources.device, replicas)
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -660,6 +681,11 @@ class IrisClient:
         environment_proto = environment.to_proto() if environment else None
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
+        reservation_proto = None
+        if reservation:
+            reservation_proto = cluster_pb2.ReservationConfig(
+                entries=[e.to_proto() for e in reservation],
+            )
 
         try:
             self._cluster_client.submit_job(
@@ -675,6 +701,7 @@ class IrisClient:
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
+                reservation=reservation_proto,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:
@@ -834,12 +861,14 @@ class IrisClient:
         return result
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the client.
+        """Shutdown the client and, in local mode, the controller.
 
         Args:
             wait: If True, wait for pending jobs to complete (local mode only)
         """
         self._cluster_client.shutdown(wait=wait)
+        if self._controller is not None:
+            self._controller.stop()
 
 
 @dataclass
@@ -1001,19 +1030,16 @@ def get_iris_ctx() -> IrisContext | None:
     if job_info is None:
         return None
 
-    else:
-        # Set up client if controller address is available
-        client = None
-        if job_info.controller_address:
-            bundle_gcs_path = job_info.bundle_gcs_path
+    # Set up client if controller address is available
+    client = None
+    if job_info.controller_address:
+        bundle_gcs_path = job_info.bundle_gcs_path
+        client = IrisClient.remote(
+            controller_address=job_info.controller_address,
+            bundle_gcs_path=bundle_gcs_path,
+        )
 
-            # Create remote client for context use
-            client = IrisClient.remote(
-                controller_address=job_info.controller_address,
-                bundle_gcs_path=bundle_gcs_path,
-            )
-
-        ctx = IrisContext.from_job_info(job_info, client=client)
+    ctx = IrisContext.from_job_info(job_info, client=client)
     _iris_context.set(ctx)
     return ctx
 

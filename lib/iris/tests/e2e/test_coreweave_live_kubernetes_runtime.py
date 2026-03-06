@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Live CoreWeave validation using KubernetesRuntime directly."""
@@ -10,13 +10,13 @@ import os
 import posixpath
 import time
 import uuid
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
-import zipfile
 
+import fsspec.core
 import pytest
 from iris.cluster.config import load_config
-import fsspec.core
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.runtime.types import ContainerConfig, ContainerPhase
 from iris.rpc import cluster_pb2
@@ -47,7 +47,9 @@ def coreweave_runtime() -> KubernetesRuntime:
     Simulates the env vars that CoreweavePlatform._s3_env_vars() sets on
     worker pods so KubernetesRuntime forwards them to task pods.
     """
+    pytest.skip("Coreweave tests require live resources.")
     import json
+
     from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
 
     iris_root = Path(__file__).resolve().parents[2]
@@ -123,6 +125,7 @@ def _upload_test_bundle(bundle_prefix: str, run_id: str) -> tuple[str, object, s
 def _coreweave_upload_env(config) -> object:
     """Temporarily configure env vars and fsspec config so S3 uploads use R2 credentials."""
     import json
+
     import fsspec.config
     from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
 

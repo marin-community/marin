@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Benchmark Iris controller performance under realistic load.
@@ -45,6 +45,7 @@ from iris.cluster.manager import connect_cluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -641,7 +642,6 @@ def single_worker(
 
 
 if __name__ == "__main__":
-    from iris.logging import configure_logging
 
     configure_logging(level=logging.INFO)
     cli()

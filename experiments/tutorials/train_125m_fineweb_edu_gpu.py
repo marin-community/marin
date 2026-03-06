@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -19,7 +19,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10M
 
 llama_150m_train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_gpu(count=1),
+    resources=ResourceConfig.with_gpu("H100", count=1),
     train_batch_size=32,
     num_train_steps=1000,
     learning_rate=3e-4,

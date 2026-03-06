@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -90,7 +90,7 @@ def connected_components(
         # Group nodes in buckets
         .group_by(
             lambda x: x["bucket"],
-            _reduce_buckets,
+            reducer=_reduce_buckets,
         )
         # Go from bucket -> links
         .flat_map(partial(_gen_links_within_buckets, preserve_singletons=preserve_singletons))
@@ -99,7 +99,7 @@ def connected_components(
         #  * adjacency list from links
         .group_by(
             lambda x: x[0]["record_id_norm"],
-            _build_adjacency,
+            reducer=_build_adjacency,
         ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
         verbose=True,
     )

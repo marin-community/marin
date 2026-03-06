@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Worker failure E2E tests.
@@ -73,11 +73,11 @@ def test_task_fails_once_then_succeeds(cluster):
 
 
 def test_worker_health_in_dashboard(cluster, page, screenshot):
-    """Fleet tab shows at least one healthy machine."""
+    """Workers tab shows at least one healthy worker."""
     cluster.wait_for_workers(1)
     dashboard_goto(page, f"{cluster.url}/")
     wait_for_dashboard_ready(page)
-    dashboard_click(page, 'button.tab-btn:has-text("Fleet")')
+    dashboard_click(page, 'button.tab-btn:has-text("Workers")')
 
-    assert_visible(page, "text=ready")
-    screenshot("fleet-healthy")
+    assert_visible(page, "text=healthy")
+    screenshot("workers-healthy")

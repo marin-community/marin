@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for the fray v2 Iris backend.
@@ -8,7 +8,6 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
 import pickle
-
 from fray.v2.iris_backend import (
     IrisActorHandle,
     convert_constraints,
