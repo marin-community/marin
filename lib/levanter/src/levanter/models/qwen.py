@@ -10,7 +10,6 @@ import jax.random as jrandom
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
@@ -163,8 +162,13 @@ class QwenDecoderLayer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key=None,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
         # Apply sliding window attention if configured and past max_window_layers
@@ -209,10 +213,15 @@ class QwenTransformer(LlamaTransformer):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        attn_mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
+        x = cast(hax.NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
@@ -228,17 +237,17 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
         return self.transformer.config
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[AttentionMask | hax.NamedArray] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         """
         Compute the activations for the next token in a sequence.
         Args:
@@ -247,7 +256,7 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
             key: PRNGKeyArray for random number generation
 
         Returns:
-            NamedArray: activations with shape {Pos, Embed}
+            hax.NamedArray: activations with shape {Pos, Embed}
 
         """
         x = self.embeddings.embed(input_ids)
@@ -273,7 +282,7 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
             return dataclasses.replace(self, embeddings=new_embeddings)
 
     @classmethod
-    def init(cls, Vocab: Axis, config: QwenConfig, *, key) -> "QwenLMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: QwenConfig, *, key) -> "QwenLMHeadModel":
         k_t, k_emb = jrandom.split(key, 2)
         transformer = QwenTransformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
@@ -380,7 +389,7 @@ class Qwen3LMHeadModel(LlamaLMHeadModel):
     """Identical to LlamaLMHeadModel except built off a Qwen3Config."""
 
     @classmethod
-    def init(cls, Vocab: Axis, config: Qwen3Config, *, key):  # type: ignore[override]
+    def init(cls, Vocab: hax.Axis, config: Qwen3Config, *, key):  # type: ignore[override]
         k_t, k_emb = jrandom.split(key, 2)
         transformer = LlamaTransformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
