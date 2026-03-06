@@ -36,6 +36,7 @@ from iris.cluster.types import (
     get_tpu_topology,
     gpu_device,
     region_constraint,
+    validate_region_zone,
     zone_constraint,
     tpu_device,
 )
@@ -591,6 +592,7 @@ def run(
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    validate_region_zone(region or None, zone, ctx.obj.get("config"))
 
     command = list(cmd)
     if not command:
