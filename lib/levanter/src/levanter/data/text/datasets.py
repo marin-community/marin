@@ -10,7 +10,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypeVar
 
 import equinox as eqx
 import jax
@@ -18,7 +18,6 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 from draccus import ChoiceRegistry, field
-from haliax import Axis
 from jaxtyping import PRNGKeyArray
 
 import levanter
@@ -52,8 +51,14 @@ from levanter.store.tree_store import TreeStore
 from levanter.utils import fsspec_utils
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import key_iterator
+from levanter.utils.partitioning import axis
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.utils.logging import silence_transformer_nag
+
+if TYPE_CHECKING:
+    from haliax import Axis
+else:
+    Axis = Any
 
 
 silence_transformer_nag()  # noqa
@@ -684,7 +689,7 @@ class LmDataConfig:
     def _position_axis(seq_len: int) -> Axis:
         if seq_len <= 0:
             raise ValueError(f"seq_len must be positive, got {seq_len}")
-        return Axis("position", seq_len)
+        return axis("position", seq_len)
 
     def train_set(
         self,
@@ -932,7 +937,7 @@ def count_corpus_sizes(
 ) -> dict:
     stats = {}
     train_caches = config.build_caches("train")
-    Pos = Axis("position", seq_len)
+    Pos = axis("position", seq_len)
 
     weights: dict[str, float]
     if isinstance(config.train_weights, list):
