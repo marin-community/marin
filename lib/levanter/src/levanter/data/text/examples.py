@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jax.tree_util import register_dataclass
 
 import haliax as hax
-from haliax import AxisSelector, NamedArray, NamedOrNumeric
+from haliax import NamedOrNumeric
 
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.layers.attention import AttentionMask
@@ -138,7 +138,7 @@ def grug_attention_mask_from_named(mask: AttentionMask) -> GrugAttentionMask:
     )
 
 
-def _resolve_batch_axis(batch_axis: AxisSelector | None, batch_size: int) -> Axis:
+def _resolve_batch_axis(batch_axis: hax.AxisSelector | None, batch_size: int) -> Axis:
     if batch_axis is None:
         return make_batch_axis("batch", batch_size)
     if isinstance(batch_axis, hax.Axis):
@@ -153,11 +153,11 @@ def _resolve_batch_axis(batch_axis: AxisSelector | None, batch_size: int) -> Axi
 def named_attention_mask_from_grug(
     mask: GrugAttentionMask,
     Pos: Axis,
-    batch_axis: AxisSelector | None = None,
+    batch_axis: hax.AxisSelector | None = None,
 ) -> AttentionMask:
     KeyPos = Pos.alias("key_position")
 
-    segment_ids: tuple[NamedArray, NamedArray] | None = None
+    segment_ids: tuple[hax.NamedArray, hax.NamedArray] | None = None
     if mask.segment_ids is not None:
         q_seg, kv_seg = mask.segment_ids
 
@@ -193,7 +193,7 @@ def named_attention_mask_from_grug(
 
 
 def grug_lm_example_from_named(example: LmExample) -> GrugLmExample:
-    if isinstance(example.attn_mask, NamedArray):
+    if isinstance(example.attn_mask, hax.NamedArray):
         raise NotImplementedError("NamedArray attention masks are not supported for Grug conversion.")
 
     return GrugLmExample(
@@ -206,7 +206,7 @@ def grug_lm_example_from_named(example: LmExample) -> GrugLmExample:
 def named_lm_example_from_grug(
     example: GrugLmExample,
     Pos: Axis,
-    batch_axis: AxisSelector | None = None,
+    batch_axis: hax.AxisSelector | None = None,
 ) -> LmExample:
     if example.tokens.shape != example.loss_weight.shape:
         raise ValueError(
@@ -219,7 +219,7 @@ def named_lm_example_from_grug(
                 f"GrugLmExample token length ({example.tokens.shape[0]}) must match Pos axis size ({Pos.size})"
             )
         token_axes: tuple[Axis, ...] = (Pos,)
-        resolved_batch_axis: AxisSelector | None = None
+        resolved_batch_axis: hax.AxisSelector | None = None
     elif example.tokens.ndim == 2:
         Batch = _resolve_batch_axis(batch_axis, example.tokens.shape[0])
         if example.tokens.shape[1] != Pos.size:
