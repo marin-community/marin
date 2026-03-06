@@ -589,7 +589,7 @@ class Controller:
         self._log_store_handler = LogStoreHandler(self._state.log_store, key=PROCESS_LOG_KEY)
         self._log_store_handler.setLevel(logging.DEBUG)
         self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger().addHandler(self._log_store_handler)
+        logging.getLogger("iris").addHandler(self._log_store_handler)
 
         # Background loop state
         self._threads = threads if threads is not None else get_thread_container()

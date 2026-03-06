@@ -169,7 +169,6 @@ def worker(mock_bundle_cache, mock_runtime, tmp_path):
         poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     return Worker(
         config,
@@ -618,7 +617,6 @@ def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
         poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
         default_task_env={"SHARED_KEY": "default_value", "DEFAULT_ONLY": "from_default"},
     )
     w = Worker(config, bundle_provider=mock_bundle_cache, container_runtime=mock_runtime)
@@ -691,7 +689,6 @@ def test_port_binding_failure(mock_bundle_cache, tmp_path):
         poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     worker = Worker(
         config,
@@ -790,7 +787,6 @@ def real_worker(cache_dir):
         port_range=(40000, 40100),
         poll_interval=Duration.from_seconds(0.5),  # Faster polling for tests
         default_task_image="iris-task:latest",
-        log_prefix=f"file://{(cache_dir / 'iris-logs').as_posix()}",
     )
     worker = Worker(config, container_runtime=runtime)
     yield worker

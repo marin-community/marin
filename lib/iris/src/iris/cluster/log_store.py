@@ -42,8 +42,6 @@ _MAX_RECORDS = 100_000_000
 
 PROCESS_LOG_KEY = "/process"
 
-_FLUSH_THRESHOLD = 100
-
 
 def task_log_key(task_id: JobName, attempt_id: int) -> str:
     """Build a hierarchical key for task attempt logs."""
@@ -129,9 +127,7 @@ class LogStore:
         if tail and max_lines > 0 and not has_filter:
             effective_skip = max(skip_lines, total - max_lines)
             rows = self._read_conn.execute(
-                "SELECT source, data, epoch_ms, level FROM logs "
-                "WHERE key = ? "
-                "ORDER BY id LIMIT -1 OFFSET ?",
+                "SELECT source, data, epoch_ms, level FROM logs " "WHERE key = ? " "ORDER BY id LIMIT -1 OFFSET ?",
                 (key, effective_skip),
             ).fetchall()
         elif tail and max_lines > 0 and has_filter:
@@ -141,9 +137,7 @@ class LogStore:
                 where_extra += " AND epoch_ms > ?"
                 params.append(since_ms)
             rows = self._read_conn.execute(
-                "SELECT source, data, epoch_ms, level FROM logs "
-                f"WHERE key = ?{where_extra} "
-                "ORDER BY id",
+                "SELECT source, data, epoch_ms, level FROM logs " f"WHERE key = ?{where_extra} " "ORDER BY id",
                 params,
             ).fetchall()
             if regex_filter:
@@ -256,18 +250,16 @@ class LogCursor:
 
 
 class LogStoreHandler(logging.Handler):
-    """Logging handler that writes formatted records into a LogStore.
+    """Logging handler that writes formatted records directly into a LogStore.
 
-    Buffers entries and flushes when the buffer reaches _FLUSH_THRESHOLD or
-    when flush() is called explicitly. This avoids a SQLite commit per record.
+    Each log record is written to SQLite immediately. WAL mode handles
+    concurrent writes without contention on low-volume process logs.
     """
 
     def __init__(self, log_store: LogStore, key: str = PROCESS_LOG_KEY):
         super().__init__()
         self._log_store = log_store
         self._key = key
-        self._buffer: list[logging_pb2.LogEntry] = []
-        self._lock = Lock()
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -277,26 +269,6 @@ class LogStoreHandler(logging.Handler):
                 level=str_to_log_level(record.levelname),
             )
             entry.timestamp.epoch_ms = int(record.created * 1000)
-
-            with self._lock:
-                self._buffer.append(entry)
-                if len(self._buffer) >= _FLUSH_THRESHOLD:
-                    self._flush_locked()
+            self._log_store.append(self._key, [entry])
         except Exception:
             self.handleError(record)
-
-    def flush(self) -> None:
-        with self._lock:
-            self._flush_locked()
-
-    def _flush_locked(self) -> None:
-        """Flush buffered entries to the LogStore. Caller must hold self._lock."""
-        if not self._buffer:
-            return
-        entries = self._buffer
-        self._buffer = []
-        self._log_store.append(self._key, entries)
-
-    def close(self) -> None:
-        self.flush()
-        super().close()

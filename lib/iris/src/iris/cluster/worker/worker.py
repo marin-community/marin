@@ -20,7 +20,6 @@ from iris.cluster.types import JobName
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
-    DefaultEnvironmentProvider,
     EnvironmentProvider,
     HostMetricsCollector,
     build_worker_metadata,
@@ -53,7 +52,6 @@ class WorkerConfig:
     default_task_env: dict[str, str] = field(default_factory=dict)
     default_task_image: str | None = None
     resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
-    log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(600.0))
     accelerator_type: int = 0
@@ -89,7 +87,6 @@ def worker_config_from_proto(
         default_task_env=dict(proto.default_task_env),
         default_task_image=proto.default_task_image or None,
         resolve_image=resolve_image or (lambda image: image),
-        log_prefix=proto.log_prefix or None,
         poll_interval=(
             Duration.from_ms(proto.poll_interval.milliseconds)
             if proto.HasField("poll_interval")
@@ -132,14 +129,11 @@ class Worker:
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Resolve worker metadata: explicit > environment_provider > hardware probe
-        self._inferred_log_prefix: str | None = None
         if worker_metadata is not None:
             self._worker_metadata = worker_metadata
         elif environment_provider is not None:
             self._worker_metadata = environment_provider.probe()
-            self._inferred_log_prefix = environment_provider.log_prefix()
         else:
-            env = DefaultEnvironmentProvider()
             hardware = probe_hardware()
             self._worker_metadata = build_worker_metadata(
                 hardware=hardware,
@@ -148,7 +142,6 @@ class Worker:
                 gpu_count_override=config.gpu_count,
                 worker_attributes=config.worker_attributes,
             )
-            self._inferred_log_prefix = env.log_prefix()
 
         # Task state: maps (task_id, attempt_id) -> TaskAttempt.
         # Preserves all attempts so logs for historical attempts remain accessible.
@@ -161,7 +154,7 @@ class Worker:
         self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
         self._log_store_handler.setLevel(logging.DEBUG)
         self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger().addHandler(self._log_store_handler)
+        logging.getLogger("iris").addHandler(self._log_store_handler)
 
         self._service = WorkerServiceImpl(self, log_store=self._log_store)
         self._dashboard = WorkerDashboard(

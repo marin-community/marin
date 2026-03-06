@@ -39,7 +39,6 @@ platform:
 
 storage:
   bundle_prefix: s3://marin-test/iris/bundles
-  log_prefix: s3://marin-test/iris/logs
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

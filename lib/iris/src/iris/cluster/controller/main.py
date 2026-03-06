@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def default_bundle_prefix() -> str:
     """Return a region-local temp bucket path for bundle storage.
 
-    Uses the same marin_temp_bucket API that log_prefix uses, with a 7-day TTL
+    Uses marin_temp_bucket with a 7-day TTL
     since bundles are ephemeral and regenerated on each job submission.
     """
     return marin_temp_bucket(ttl_days=7, prefix="iris/bundles")
@@ -110,8 +110,6 @@ def serve(
                 base_worker_config.CopyFrom(cluster_config.defaults.worker)
                 if not base_worker_config.controller_address:
                     base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
-                if cluster_config.storage.log_prefix:
-                    base_worker_config.log_prefix = cluster_config.storage.log_prefix
                 base_worker_config.platform.CopyFrom(cluster_config.platform)
 
             autoscaler = create_autoscaler(
