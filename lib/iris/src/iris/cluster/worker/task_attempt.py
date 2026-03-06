@@ -9,6 +9,7 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 
 import json
 import logging
+import os
 import shutil
 import socket
 import threading
@@ -76,6 +77,32 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
         return f"Exit code {exit_code}: killed by {signal_name}"
 
     return f"Exit code: {exit_code}"
+
+
+# GCE persistent disks (pd-standard) provide only ~68 read / ~135 write IOPS on
+# small volumes, making uv sync extremely slow.  /dev/shm is tmpfs backed by RAM
+# and provides memory-speed IOPS.  The bootstrap script bind-mounts
+# /dev/shm/iris into the worker container so this path is available on GCE VMs.
+_TMPFS_DIR = Path("/dev/shm/iris")
+_TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
+
+
+def get_fast_io_dir(cache_dir: Path) -> Path:
+    """Return a fast IO directory for ephemeral task data.
+
+    Prefers /dev/shm/iris (tmpfs) for memory-speed IOPS when available and has
+    sufficient free space.  Falls back to *cache_dir* on persistent disk.
+    """
+    try:
+        if _TMPFS_DIR.is_dir():
+            stat = os.statvfs(_TMPFS_DIR)
+            free_bytes = stat.f_bavail * stat.f_frsize
+            if free_bytes >= _TMPFS_MIN_FREE_BYTES:
+                logger.info("Using tmpfs at %s for fast IO (%d MB free)", _TMPFS_DIR, free_bytes // (1024 * 1024))
+                return _TMPFS_DIR
+    except OSError:
+        pass
+    return cache_dir
 
 
 class TaskCancelled(Exception):
@@ -430,9 +457,12 @@ class TaskAttempt:
         allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
         self.ports = dict(zip(port_names, allocated_ports, strict=True))
 
+        # Resolve fast IO directory (tmpfs when available, else cache_dir)
+        self._fast_io_dir = get_fast_io_dir(self._cache_dir)
+
         # Create task working directory with attempt isolation
         safe_task_id = self.task_id.to_safe_token()
-        self.workdir = self._cache_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
+        self.workdir = self._fast_io_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
 
         # Create log sink (may involve fsspec filesystem initialization)
@@ -580,10 +610,11 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        # Pre-create cache mount directories so Docker doesn't create them as root
-        uv_cache = self._cache_dir / "uv"
-        cargo_cache = self._cache_dir / "cargo"
-        cargo_target = self._cache_dir / "cargo-target"
+        # Pre-create cache mount directories so Docker doesn't create them as root.
+        # Use tmpfs-backed fast IO dir when available for better IOPS.
+        uv_cache = self._fast_io_dir / "uv"
+        cargo_cache = self._fast_io_dir / "cargo"
+        cargo_target = self._fast_io_dir / "cargo-target"
         uv_cache.mkdir(parents=True, exist_ok=True)
         cargo_cache.mkdir(parents=True, exist_ok=True)
         cargo_target.mkdir(parents=True, exist_ok=True)

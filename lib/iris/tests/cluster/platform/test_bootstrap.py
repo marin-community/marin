@@ -37,6 +37,13 @@ def test_build_worker_bootstrap_script_includes_controller_address() -> None:
     assert "gcr.io/test/iris-worker:latest" in script
 
 
+def test_build_worker_bootstrap_script_mounts_tmpfs() -> None:
+    script = build_worker_bootstrap_script(_worker_config())
+
+    assert "mkdir -p /dev/shm/iris" in script
+    assert "-v /dev/shm/iris:/dev/shm/iris" in script
+
+
 def test_build_worker_bootstrap_script_configures_ar_auth() -> None:
     ar_image = "us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:latest"
     cfg = _worker_config(docker_image=ar_image)
