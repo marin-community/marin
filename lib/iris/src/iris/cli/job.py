@@ -27,9 +27,6 @@ from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import Constraint, WellKnownAttribute, region_constraint, zone_constraint
 from iris.cluster.types import (
-    REGION_ATTRIBUTE_KEY,
-    ZONE_ATTRIBUTE_KEY,
-    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -38,9 +35,7 @@ from iris.cluster.types import (
     ResourceSpec,
     get_tpu_topology,
     gpu_device,
-    region_constraint,
     tpu_device,
-    zone_constraint,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -266,10 +261,10 @@ def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
     zones: set[str] = set()
     for sg in config.scale_groups.values():
         attrs = sg.worker.attributes
-        if REGION_ATTRIBUTE_KEY in attrs:
-            regions.add(attrs[REGION_ATTRIBUTE_KEY])
-        if ZONE_ATTRIBUTE_KEY in attrs:
-            zones.add(attrs[ZONE_ATTRIBUTE_KEY])
+        if WellKnownAttribute.REGION in attrs:
+            regions.add(attrs[WellKnownAttribute.REGION])
+        if WellKnownAttribute.ZONE in attrs:
+            zones.add(attrs[WellKnownAttribute.ZONE])
     return regions, zones
 
 
