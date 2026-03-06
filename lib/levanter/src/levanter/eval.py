@@ -184,17 +184,12 @@ def _default_lm_eval_loss_fn(
     *,
     EvalBatch: hax.Axis,
     mp: jmp.Policy | None,
-    axis_mapping: ResourceMapping | None,
 ) -> LossFnOutput:
     model = inference_mode(model, True)
     named_batch = _ensure_named_lm_example(batch, EvalBatch=EvalBatch, model_pos=model.Pos)
     if mp is not None:
         model = mp.cast_to_compute(model)
-    if axis_mapping is not None:
-        with hax.axis_mapping(axis_mapping):
-            per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
-    else:
-        per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
     per_pos_weight = named_batch.loss_weight.array
     per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
     return per_pos_loss, per_pos_weight, per_pos_token_id
@@ -243,7 +238,7 @@ def cb_tagged_lm_evaluate(
     if loss_fn is None:
 
         def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
-            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp, axis_mapping=axis_mapping)
+            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
 
     evaluator = TaggedEvaluator(
         EvalBatch=EvalBatch,
@@ -393,7 +388,7 @@ class TaggedEvaluator(Generic[Ex, M]):
 
     def __init__(
         self,
-        EvalBatch: hax.Axis,
+        EvalBatch: hax.Axis | int,
         tagged_eval_sets: Sequence[tuple[AsyncDataset[Ex], Sequence[str]]],
         loss_fn: Callable[[M, Ex], LossFnOutput],
         tokenizer: Optional[HfTokenizer] = None,
@@ -401,6 +396,8 @@ class TaggedEvaluator(Generic[Ex, M]):
         axis_mapping=None,
         max_examples_per_dataset=None,
     ):
+        if isinstance(EvalBatch, int):
+            EvalBatch = hax.Axis("batch", EvalBatch)
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
         self.loader = DataLoader(
@@ -429,7 +426,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
         per_pos_out_sharding = self.per_pos_out_sharding
 
-        @hax.named_jit
+        @hax.named_jit(axis_resources=self.axis_mapping)
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
             losses, weights, token_ids = self.loss_fn(model, batch)
             weighted_loss = losses * weights  # b t

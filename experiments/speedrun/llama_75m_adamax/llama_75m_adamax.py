@@ -62,7 +62,7 @@ class AdamaxConfig(OptimizerConfig):
 
 # --------------------- speedrun Using Adamax ------------------------
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 speedrun_config = SpeedrunConfig(
     author=Author(

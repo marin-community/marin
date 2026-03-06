@@ -10,8 +10,9 @@ tokenizations. All datasets support a consistent FAMILY:SPLIT syntax in the CLI.
 Dataset families are organized in separate modules:
 - dolma: DOLMA 1.7 (15 splits)
 - dolmino: DOLMINO (12 splits + combined math)
-- nemotron: NEMOTRON CC (7 quality-based splits)
-- finepdfs: FinePDFs multilingual PDF text (per-language subsets)
+- nemotron: NEMOTRON CC v1 (7 quality-based splits)
+- nemotron_v2: Nemotron v2 collection (CC v2/v2.1, Code, Math, Specialized, SFT)
+- finepdfs: FinePDFs multilingual PDF text (per-language subsets
 - simple: Single-corpus datasets
 
 Use `python -m experiments.pretraining_datasets list` to see all available datasets.
@@ -48,6 +49,11 @@ from experiments.pretraining_datasets.nemotron import (
     tokenize_nemotron,
     tokenize_nemotron_subset,
 )
+from experiments.pretraining_datasets.nemotron_v2 import (
+    NEMOTRON_V2_DATASETS,
+    downloads as nemotron_v2_downloads,
+    tokenize_nemotron_v2_family,
+)
 from experiments.pretraining_datasets.simple import downloads as simple_downloads, tokenized as simple_tokenized
 
 # Re-export constants
@@ -61,6 +67,7 @@ __all__ = [
     "FINEPDFS_LANGUAGES",
     "NEMOTRON_DATASETS",
     "NEMOTRON_LLAMA3_OVERRIDES",
+    "NEMOTRON_V2_DATASETS",
     "NEMOTRON_WEIGHTS",
     "nemotron_mix",
     "tokenize_dolma",
@@ -70,6 +77,7 @@ __all__ = [
     "tokenize_finepdfs",
     "tokenize_nemotron",
     "tokenize_nemotron_subset",
+    "tokenize_nemotron_v2_family",
 ]
 
 
@@ -131,5 +139,14 @@ DATASETS = {
         "subsets": list(DOLMA_DATASETS.keys()),
         "download": dolma_downloads["dolma"],
         "tokenize_fn": tokenize_dolma,
+    },
+    # Nemotron v2 datasets (from nvidia/Nemotron-Pre-Training-Datasets collection)
+    **{
+        family: {
+            "subsets": list(info["subsets"].keys()),
+            "download": nemotron_v2_downloads[family],
+            "tokenize_fn": lambda f=family: tokenize_nemotron_v2_family(f),
+        }
+        for family, info in NEMOTRON_V2_DATASETS.items()
     },
 }

@@ -19,7 +19,7 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(name="William Held", affiliation="Georgia Tech", url="https://WilliamHeld.com")
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def get_num_train_steps(param_count, batch_size, max_seq_len):

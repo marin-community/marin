@@ -746,7 +746,10 @@ class Controller:
                 break
             if self._checkpoint_in_progress:
                 continue
-            self._heartbeat_all_workers()
+            try:
+                self._heartbeat_all_workers()
+            except Exception:
+                logger.exception("Heartbeat round failed, will retry next interval")
 
     def _is_reservation_satisfied(self, job: ControllerJob) -> bool:
         """Check if a job's reservation is fully satisfied.

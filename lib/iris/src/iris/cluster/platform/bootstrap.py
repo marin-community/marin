@@ -137,6 +137,12 @@ sudo systemctl start docker || true
 # Create cache directory
 sudo mkdir -p {{ cache_dir }}
 
+# Create tmpfs working directory for fast IO (uv sync, .venv creation).
+# GCE persistent disks have very low IOPS on small volumes (~68 read, ~135
+# write for pd-standard), making dependency installation extremely slow.
+# /dev/shm is tmpfs backed by RAM, providing memory-speed IOPS.
+sudo mkdir -p /dev/shm/iris
+
 echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Pulling image: {{ docker_image }}"
 
@@ -177,6 +183,7 @@ fi
 sudo docker run -d --name iris-worker \\
     --network=host \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
+    -v /dev/shm/iris:/dev/shm/iris \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
     -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
     {{ docker_image }} \\

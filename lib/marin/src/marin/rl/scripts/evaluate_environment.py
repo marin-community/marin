@@ -40,8 +40,9 @@ from marin.rl.types import RolloutGroup
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer
+from iris.logging import configure_logging
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _to_list(arr) -> list:
@@ -129,7 +130,8 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
         tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
 
         with remove_tpu_lockfile_on_exit():
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+
+            configure_logging(level=logging.INFO)
 
             env_name = config.env_config.env_class.split(".")[-1]
             trainer_config.id = f"eval-rollout-{env_name}"

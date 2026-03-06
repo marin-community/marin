@@ -12,7 +12,7 @@ import re
 
 from marin.execution.executor import InputName
 
-logger = logging.getLogger("ray")  # Initialize logger
+logger = logging.getLogger(__name__)
 
 
 def ckpt_path_to_step_name(path: str | InputName) -> str:

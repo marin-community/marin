@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ControllerLogStore with line-offset streaming."""
+"""Tests for ControllerLogStore (SQLite-backed)."""
 
 import re
 import threading
@@ -194,7 +194,7 @@ def test_line_offsets_rebuilt_on_restart(tmp_path: Path):
 
 
 def test_tail_uses_offset_array(log_store: ControllerLogStore):
-    """tail=True returns last N via offset skip."""
+    """tail=True returns last N."""
     entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(50)]
     log_store.append(TASK_ID, 0, entries)
 
@@ -205,7 +205,7 @@ def test_tail_uses_offset_array(log_store: ControllerLogStore):
 
 
 def test_has_logs_no_known_attempts(tmp_path: Path):
-    """has_logs uses path.exists() without _known_attempts cache."""
+    """has_logs works across store instances."""
     log_dir = tmp_path / "logs"
     store1 = ControllerLogStore(log_dir=log_dir)
     store1.append(TASK_ID, 0, [_make_entry("hello")])
@@ -227,3 +227,28 @@ def test_clear_attempt_removes_offsets(log_store: ControllerLogStore):
     result = log_store.get_logs(TASK_ID, 0)
     assert result.entries == []
     assert result.lines_read == 0
+
+
+# =============================================================================
+# Eviction
+# =============================================================================
+
+
+def test_eviction_caps_total_rows():
+    """Appending beyond max_records triggers eviction of oldest rows."""
+    store = ControllerLogStore(max_records=50)
+    try:
+        entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(200)]
+        # Append in chunks
+        for i in range(0, 200, 10):
+            store.append(TASK_ID, 0, entries[i : i + 10])
+        # Force append_count so the next append triggers eviction check
+        from iris.cluster.controller.logs import _EVICT_CHECK_INTERVAL
+
+        store._append_count = _EVICT_CHECK_INTERVAL - 1
+        store.append(TASK_ID, 0, [_make_entry("trigger", epoch_ms=999)])
+
+        total = store._conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+        assert total <= 51  # max_records + the trigger entry (eviction runs after insert)
+    finally:
+        store.close()

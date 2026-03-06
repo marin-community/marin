@@ -53,7 +53,7 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    train_batch_pspec: P = field(default_factory=lambda: P(("data",)))
+    train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
@@ -65,7 +65,7 @@ class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
     eval_batch_size: int = 512
-    eval_batch_pspec: P = field(default_factory=lambda: P(("data",)))
+    eval_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
@@ -115,7 +115,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("data",)),
+    batch_pspec: P = P(("data", "expert")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
@@ -484,6 +484,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
                 if router_metrics:
                     levanter.tracker.log(router_metrics, step=step)
+                if "train/cross_entropy_loss" in metrics:
+                    levanter.tracker.log({"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]}, step=step)
 
                 if watch_stats is not None:
                     levanter.tracker.log(watch_stats, step=step)

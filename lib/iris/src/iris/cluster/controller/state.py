@@ -1210,6 +1210,12 @@ class ControllerState:
 
     def _on_job_cancelled(self, txn: TransactionLog, event: JobCancelledEvent) -> None:
         job = self._jobs[event.job_id]
+        logger.warning(
+            "Job %s being cancelled: reason=%s current_state=%s",
+            event.job_id,
+            event.reason,
+            cluster_pb2.JobState.Name(job.state),
+        )
 
         for task_id in self._tasks_by_job.get(event.job_id, []):
             task = self._tasks[task_id]
@@ -1365,10 +1371,12 @@ class ControllerState:
         old_state_name = cluster_pb2.TaskState.Name(old_state)
         new_state_name = cluster_pb2.TaskState.Name(task.state)
 
+        # Terminal transitions and retries are logged at WARNING so operators can
+        # diagnose why jobs are finishing. Non-terminal progress is DEBUG.
         if result == TaskTransitionResult.EXCEEDED_RETRY_LIMIT:
             logger.warning(
                 "Task %s exhausted retries: %s -> %s attempt=%d "
-                "failure_count=%d/%d preemption_count=%d/%d result=%s is_finished=%s",
+                "failure_count=%d/%d preemption_count=%d/%d result=%s is_finished=%s error=%s",
                 event.task_id,
                 old_state_name,
                 new_state_name,
@@ -1379,11 +1387,16 @@ class ControllerState:
                 task.max_retries_preemption,
                 result.name,
                 is_finished,
+                event.error,
             )
-        elif event.new_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
+        elif event.new_state in (
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_FAILED,
+        ):
             logger.warning(
-                "Task %s worker failed: %s -> %s attempt=%d "
-                "failure_count=%d/%d preemption_count=%d/%d result=%s is_finished=%s",
+                "Task %s terminal: %s -> %s attempt=%d "
+                "failure_count=%d/%d preemption_count=%d/%d result=%s is_finished=%s error=%s",
                 event.task_id,
                 old_state_name,
                 new_state_name,
@@ -1394,6 +1407,7 @@ class ControllerState:
                 task.max_retries_preemption,
                 result.name,
                 is_finished,
+                event.error,
             )
         else:
             logger.debug(
