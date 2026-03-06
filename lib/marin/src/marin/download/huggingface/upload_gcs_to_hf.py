@@ -227,8 +227,9 @@ def upload_to_huggingface(local_path: str, repo_id: str, step: int, version_name
 
 def upload_gcs_to_hf(cfg: UploadConfig) -> None:
     """Main function to upload model checkpoints from GCS to Hugging Face."""
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
 
     # Collect all step directories
     all_step_dirs = []

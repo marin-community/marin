@@ -25,6 +25,7 @@ message LogEntry {
   string source = 2;  // "stdout", "stderr", or "build"
   string data = 3;    // Log line content
   int32 attempt_id = 4;  // Which attempt produced this log
+  string level = 5;   // Best-effort parsed log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 }
 
 // Collection of log entries for a single source (stdout/stderr/build).

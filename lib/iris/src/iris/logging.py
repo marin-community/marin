@@ -11,8 +11,75 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
 
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-LOG_DATEFMT = "%Y%m%d %H%M%S"
+LOG_FORMAT = "%(levelprefix)s%(asctime)s %(name)s %(message)s"
+LOG_DATEFMT = "%Y%m%d %H:%M:%S"
+
+# Map log level names to single-character prefixes for compact log output.
+# E.g., INFO -> "I", ERROR -> "E", WARNING -> "W".
+_LEVEL_PREFIX = {
+    "DEBUG": "D",
+    "INFO": "I",
+    "WARNING": "W",
+    "ERROR": "E",
+    "CRITICAL": "C",
+}
+
+# Standard Python log levels, used for best-effort log line parsing.
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def parse_log_level(line: str) -> str | None:
+    """Best-effort parse a log level from a log line.
+
+    Recognizes common patterns:
+    - Single-letter prefix: "I20260102 ..." or "E20260102 ..."
+    - Bracketed level: "[INFO]", "[ERROR]", etc.
+    - Bare level: "INFO", "WARNING", "ERROR" as a space-delimited word
+
+    Returns the canonical level name (e.g. "INFO") or None.
+    """
+    if not line:
+        return None
+
+    # Single-letter prefix format: "I20260102 12:34:56 ..."
+    if len(line) >= 2 and line[0] in "DIWEC" and line[1:2].isdigit():
+        for level, prefix in _LEVEL_PREFIX.items():
+            if line[0] == prefix:
+                return level
+        return None
+
+    # Bracketed format: "[INFO]", "[ WARNING ]"
+    bracket_start = line.find("[")
+    if bracket_start >= 0:
+        bracket_end = line.find("]", bracket_start)
+        if bracket_end > bracket_start:
+            candidate = line[bracket_start + 1 : bracket_end].strip().upper()
+            if candidate in LOG_LEVELS:
+                return candidate
+
+    # Space-delimited level word (common in "timestamp - INFO - message" or "timestamp INFO message")
+    for level in LOG_LEVELS:
+        # Look for the level as a whole word (bounded by spaces, hyphens, or start/end)
+        idx = line.find(level)
+        if idx >= 0:
+            before_ok = idx == 0 or line[idx - 1] in " -:|"
+            after_pos = idx + len(level)
+            after_ok = after_pos >= len(line) or line[after_pos] in " -:|]"
+            if before_ok and after_ok:
+                return level
+
+    return None
+
+
+class LevelPrefixFormatter(logging.Formatter):
+    """Formatter that prepends a single-letter level prefix (I/W/E/D/C).
+
+    Produces lines like: I20260306 12:44:05 iris.worker starting up
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        return super().format(record)
 
 
 @dataclass(frozen=True)
@@ -119,7 +186,7 @@ def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
     root.setLevel(level)
     root.handlers.clear()
 
-    formatter = logging.Formatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
+    formatter = LevelPrefixFormatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
 
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(level)

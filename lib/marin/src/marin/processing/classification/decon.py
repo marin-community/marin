@@ -405,7 +405,9 @@ def decontaminate(config: DeconConfig):
 
 @draccus.wrap()
 def main(config: DeconConfig):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
 
     result = decontaminate(config)
     print(f"Decontamination completed: {result}")

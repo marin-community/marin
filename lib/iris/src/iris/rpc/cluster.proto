@@ -711,6 +711,7 @@ message Controller {
     string regex = 5;                // Regex filter (propagated to workers)
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
     map<string, int64> resume_offsets = 7;  // Per-attempt line offset cursor: key = "{task_wire}/{attempt_id}"
+    string min_level = 8;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
   }
 
   message TaskLogBatch {

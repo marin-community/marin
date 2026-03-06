@@ -449,5 +449,7 @@ def tokenize(config: TokenizeConfigBase):
 
 @draccus.wrap()
 def main(config: TokenizeConfig):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
     tokenize(config)

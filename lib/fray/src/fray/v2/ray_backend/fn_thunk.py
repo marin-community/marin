@@ -18,7 +18,6 @@ Usage as library:
 """
 
 import logging
-import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -67,9 +66,9 @@ def main(path: str):
     Args:
         path: fsspec-compatible path to the cloudpickled callable
     """
-    logging.basicConfig(
-        level=logging.INFO, format="%(filename)s:%(lineno)d %(asctime)s %(levelname)s %(message)s", stream=sys.stderr
-    )
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
     try:
         logger.info("Loading callable from %s", path)
         with open_url(path, "rb") as f:

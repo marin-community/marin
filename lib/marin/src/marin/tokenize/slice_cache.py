@@ -201,7 +201,9 @@ def _patch_source_config(
 
 
 def _slice_cache_in_ray(cfg: SliceCacheConfig):
-    logging.basicConfig(level=logging.INFO)
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
     logger.info(f"Starting slice cache with config: {cfg}")
     return _do_slice_cache(cfg)
 

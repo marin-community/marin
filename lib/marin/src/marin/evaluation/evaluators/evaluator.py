@@ -127,7 +127,9 @@ def launch_evaluate_with_ray(
         if configure_logging:
             import logging
 
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            from iris.logging import configure_logging as _init_logging
+
+            _init_logging(level=logging.INFO)
         evaluator.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
     def _run() -> None:

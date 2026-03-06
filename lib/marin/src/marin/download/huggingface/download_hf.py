@@ -152,7 +152,9 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
 
 
 def download_hf(cfg: DownloadConfig) -> None:
-    logging.basicConfig(level=logging.INFO)
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
 
     # Set cfg.append_sha_to_path=True to mimic the older behavior of writing to gcs_output_path/<revision>.
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.

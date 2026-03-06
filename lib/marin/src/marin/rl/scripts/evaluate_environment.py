@@ -129,7 +129,9 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
         tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
 
         with remove_tpu_lockfile_on_exit():
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            from iris.logging import configure_logging
+
+            configure_logging(level=logging.INFO)
 
             env_name = config.env_config.env_class.split(".")[-1]
             trainer_config.id = f"eval-rollout-{env_name}"

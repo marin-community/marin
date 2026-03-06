@@ -555,12 +555,26 @@ import sys
 import traceback
 import logging
 
+# Reinitialize logging with the unified Iris format.
+# Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
+_LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
+
+class _LevelPrefixFormatter(logging.Formatter):
+    def format(self, record):
+        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        return super().format(record)
+
+_root = logging.getLogger()
+_root.handlers.clear()
+_handler = logging.StreamHandler(sys.stderr)
+_handler.setFormatter(_LevelPrefixFormatter(
+    fmt="%(levelprefix)s%(asctime)s %(name)s %(message)s",
+    datefmt="%Y%m%d %H:%M:%S",
+))
+_root.addHandler(_handler)
+_root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
-)
 
 workdir = os.environ["IRIS_WORKDIR"]
 

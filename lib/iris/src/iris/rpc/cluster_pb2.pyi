@@ -874,7 +874,7 @@ class Controller(_message.Message):
         users: _containers.RepeatedCompositeFieldContainer[Controller.UserSummary]
         def __init__(self, users: _Optional[_Iterable[_Union[Controller.UserSummary, _Mapping]]] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
-        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex", "attempt_id", "resume_offsets")
+        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex", "attempt_id", "resume_offsets", "min_level")
         class ResumeOffsetsEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -889,6 +889,7 @@ class Controller(_message.Message):
         REGEX_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         RESUME_OFFSETS_FIELD_NUMBER: _ClassVar[int]
+        MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
         id: str
         include_children: bool
         since_ms: int
@@ -896,7 +897,8 @@ class Controller(_message.Message):
         regex: str
         attempt_id: int
         resume_offsets: _containers.ScalarMap[str, int]
-        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., regex: _Optional[str] = ..., attempt_id: _Optional[int] = ..., resume_offsets: _Optional[_Mapping[str, int]] = ...) -> None: ...
+        min_level: str
+        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., regex: _Optional[str] = ..., attempt_id: _Optional[int] = ..., resume_offsets: _Optional[_Mapping[str, int]] = ..., min_level: _Optional[str] = ...) -> None: ...
     class TaskLogBatch(_message.Message):
         __slots__ = ("task_id", "logs", "error", "worker_id")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]

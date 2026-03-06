@@ -129,5 +129,7 @@ def download(cfg: DownloadConfig) -> None:
 @draccus.wrap()
 def main(cfg: DownloadConfig) -> None:
     """CLI entrypoint for downloading and processing Ar5iv dataset."""
-    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+    from iris.logging import configure_logging
+
+    configure_logging(level=logging.INFO)
     download(cfg)

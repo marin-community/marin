@@ -16,6 +16,7 @@ from pathlib import Path
 from threading import RLock
 
 from iris.cluster.types import JobName
+from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 
 _SCHEMA = """\
@@ -25,7 +26,8 @@ CREATE TABLE IF NOT EXISTS logs (
     attempt_id INTEGER NOT NULL,
     source TEXT NOT NULL,
     data TEXT NOT NULL,
-    epoch_ms INTEGER NOT NULL
+    epoch_ms INTEGER NOT NULL,
+    level INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_task_attempt ON logs(task_wire, attempt_id, id);
 """
@@ -76,12 +78,13 @@ class ControllerLogStore:
             entry.source,
             entry.data,
             entry.timestamp.epoch_ms,
+            entry.level,
         )
 
     @staticmethod
     def _row_to_entry(row: tuple) -> logging_pb2.LogEntry:
-        # row: (source, data, epoch_ms, attempt_id)
-        entry = logging_pb2.LogEntry(source=row[0], data=row[1], attempt_id=row[3])
+        # row: (source, data, epoch_ms, attempt_id, level)
+        entry = logging_pb2.LogEntry(source=row[0], data=row[1], attempt_id=row[3], level=row[4])
         entry.timestamp.epoch_ms = row[2]
         return entry
 
@@ -92,7 +95,7 @@ class ControllerLogStore:
         rows = [self._entry_to_row(task_wire, attempt_id, e) for e in entries]
         with self._lock:
             self._conn.executemany(
-                "INSERT INTO logs (task_wire, attempt_id, source, data, epoch_ms) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO logs (task_wire, attempt_id, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?, ?)",
                 rows,
             )
             self._conn.commit()
@@ -110,54 +113,57 @@ class ControllerLogStore:
         regex_filter: re.Pattern[str] | None = None,
         max_lines: int = 0,
         tail: bool = False,
+        min_level: str = "",
     ) -> LogReadResult:
         task_wire = task_id.to_wire()
+        min_level_enum = str_to_log_level(min_level) if min_level else 0
+
         with self._lock:
             total = self._count_lines(task_wire, attempt_id)
             if total == 0:
                 return LogReadResult(entries=[], lines_read=0)
 
-            has_filter = regex_filter is not None or since_ms > 0
+            has_filter = regex_filter is not None or since_ms > 0 or min_level_enum > 0
 
             # Build the query depending on mode
             if tail and max_lines > 0 and not has_filter:
                 # Optimized tail without filters: skip to last N rows via OFFSET
                 effective_skip = max(skip_lines, total - max_lines)
                 rows = self._conn.execute(
-                    "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                    "SELECT source, data, epoch_ms, attempt_id, level FROM logs "
                     "WHERE task_wire = ? AND attempt_id = ? "
                     "ORDER BY id LIMIT -1 OFFSET ?",
                     (task_wire, attempt_id, effective_skip),
                 ).fetchall()
             elif tail and max_lines > 0 and has_filter:
-                # Tail with filters: fetch all candidate rows, filter in Python, take last N
+                # Tail with filters: fetch candidate rows, filter in Python, take last N
+                params: list = [task_wire, attempt_id]
+                where_extra = ""
                 if since_ms > 0:
-                    rows = self._conn.execute(
-                        "SELECT source, data, epoch_ms, attempt_id FROM logs "
-                        "WHERE task_wire = ? AND attempt_id = ? AND epoch_ms > ? "
-                        "ORDER BY id",
-                        (task_wire, attempt_id, since_ms),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        "SELECT source, data, epoch_ms, attempt_id FROM logs "
-                        "WHERE task_wire = ? AND attempt_id = ? "
-                        "ORDER BY id LIMIT -1 OFFSET ?",
-                        (task_wire, attempt_id, skip_lines),
-                    ).fetchall()
+                    where_extra += " AND epoch_ms > ?"
+                    params.append(since_ms)
+                rows = self._conn.execute(
+                    "SELECT source, data, epoch_ms, attempt_id, level FROM logs "
+                    f"WHERE task_wire = ? AND attempt_id = ?{where_extra} "
+                    "ORDER BY id",
+                    params,
+                ).fetchall()
                 if regex_filter:
                     rows = [r for r in rows if regex_filter.search(r[1])]
+                if min_level_enum > 0:
+                    # level=0 (UNKNOWN) is always included so untagged output is never hidden.
+                    rows = [r for r in rows if r[4] == 0 or r[4] >= min_level_enum]
                 rows = rows[-max_lines:]
             else:
                 # Forward mode
-                params: list = [task_wire, attempt_id]
+                params = [task_wire, attempt_id]
                 where_extra = ""
                 if since_ms > 0:
                     where_extra += " AND epoch_ms > ?"
                     params.append(since_ms)
 
                 query = (
-                    "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                    "SELECT source, data, epoch_ms, attempt_id, level FROM logs "
                     f"WHERE task_wire = ? AND attempt_id = ?{where_extra} "
                     "ORDER BY id LIMIT -1 OFFSET ?"
                 )
@@ -166,6 +172,9 @@ class ControllerLogStore:
 
                 if regex_filter:
                     rows = [r for r in rows if regex_filter.search(r[1])]
+                if min_level_enum > 0:
+                    # level=0 (UNKNOWN) is always included so untagged output is never hidden.
+                    rows = [r for r in rows if r[4] == 0 or r[4] >= min_level_enum]
 
                 if max_lines > 0:
                     rows = rows[:max_lines]

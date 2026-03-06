@@ -457,11 +457,9 @@ class _RayActorHostBase:
         # library code using logging.getLogger(__name__).info() is visible.
         # Ray forwards stdout/stderr to the driver, but Python's root logger
         # defaults to WARNING in fresh processes.
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s:%(lineno)d %(message)s",
-            force=True,
-        )
+        from iris.logging import configure_logging
+
+        configure_logging(level=logging.INFO)
 
         # Create handle by name - will resolve via ray.get_actor() when used
         handle = RayActorHandle(actor_name)
