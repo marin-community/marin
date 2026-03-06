@@ -728,6 +728,7 @@ class GcpVmSliceHandle:
 
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
+DEFAULT_BOOT_DISK_TYPE = "pd-standard"
 
 
 class GcpPlatform:
@@ -817,6 +818,7 @@ class GcpPlatform:
         zone = gcp.zone
         machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = gcp.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
+        boot_disk_type = gcp.boot_disk_type or DEFAULT_BOOT_DISK_TYPE
 
         cmd = [
             "gcloud",
@@ -828,6 +830,7 @@ class GcpPlatform:
             f"--zone={zone}",
             f"--machine-type={machine_type}",
             f"--boot-disk-size={boot_disk_size}GB",
+            f"--boot-disk-type={boot_disk_type}",
             "--image-family=debian-12",
             "--image-project=debian-cloud",
             "--scopes=cloud-platform",

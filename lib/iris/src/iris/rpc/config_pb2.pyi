@@ -72,14 +72,16 @@ class ManualProvider(_message.Message):
     def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ...) -> None: ...
 
 class GcpVmConfig(_message.Message):
-    __slots__ = ("zone", "machine_type", "boot_disk_size_gb")
+    __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "boot_disk_type")
     ZONE_FIELD_NUMBER: _ClassVar[int]
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
+    BOOT_DISK_TYPE_FIELD_NUMBER: _ClassVar[int]
     zone: str
     machine_type: str
     boot_disk_size_gb: int
-    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ...) -> None: ...
+    boot_disk_type: str
+    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., boot_disk_type: _Optional[str] = ...) -> None: ...
 
 class ManualVmConfig(_message.Message):
     __slots__ = ("host", "ssh_user", "ssh_key_file")
@@ -339,16 +341,18 @@ class StorageConfig(_message.Message):
     def __init__(self, bundle_prefix: _Optional[str] = ..., log_prefix: _Optional[str] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
-    __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "port")
+    __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "port", "boot_disk_type")
     ZONE_FIELD_NUMBER: _ClassVar[int]
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
+    BOOT_DISK_TYPE_FIELD_NUMBER: _ClassVar[int]
     zone: str
     machine_type: str
     boot_disk_size_gb: int
     port: int
-    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
+    boot_disk_type: str
+    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ..., boot_disk_type: _Optional[str] = ...) -> None: ...
 
 class ManualControllerConfig(_message.Message):
     __slots__ = ("host", "port")

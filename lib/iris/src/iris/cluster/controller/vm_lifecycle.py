@@ -309,7 +309,8 @@ def _build_controller_vm_config(
 
         vm_config.gcp.zone = zone
         vm_config.gcp.machine_type = gcp_ctrl.machine_type or "n2-standard-4"
-        vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 50
+        vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or 100
+        vm_config.gcp.boot_disk_type = gcp_ctrl.boot_disk_type or "pd-ssd"
     elif which == "manual":
         manual_ctrl = config.controller.manual
         if not manual_ctrl.host:
