@@ -1,27 +1,37 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Disk-backed log store for controller task attempts.
+"""SQLite-backed log store for controller task attempts.
 
-Appends log entries to per-attempt JSONL files. Maintains an in-memory
-list of byte offsets per line so that polling readers can skip to their
-last-seen position in O(1) instead of re-scanning from byte 0.
-
-Supports an optional persistent directory so that controller restarts
-preserve logs. When no directory is given, a temp dir is used (tests).
+Replaces per-attempt JSONL files with a single SQLite database, eliminating
+the per-file FD pressure that can exhaust process limits when many tasks
+run concurrently. Uses WAL mode for concurrent reader/writer access.
 """
 
-import json
 import re
+import sqlite3
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 
-from google.protobuf import json_format
-
 from iris.cluster.types import JobName
 from iris.rpc import logging_pb2
+
+_SCHEMA = """\
+CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_wire TEXT NOT NULL,
+    attempt_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    data TEXT NOT NULL,
+    epoch_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_attempt ON logs(task_wire, attempt_id, id);
+"""
+
+_MAX_RECORDS = 100_000_000
+_EVICT_CHECK_INTERVAL = 100_000  # check eviction every N appends
 
 
 @dataclass
@@ -31,83 +41,64 @@ class LogReadResult:
 
 
 class ControllerLogStore:
-    """Disk-backed log store for task attempts.
-
-    Directory layout:
-        {log_dir}/{job_wire}/{attempt_id}/logs.jsonl
+    """SQLite-backed log store for task attempts.
 
     Thread-safe: heartbeat writers (complete_heartbeat) and RPC readers
-    (get_task_logs) may run concurrently.
+    (get_task_logs) may run concurrently. WAL mode allows readers to
+    proceed without blocking the writer.
     """
 
-    def __init__(self, log_dir: Path | None = None):
+    def __init__(self, log_dir: Path | None = None, *, max_records: int = _MAX_RECORDS):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if log_dir is not None:
             log_dir.mkdir(parents=True, exist_ok=True)
-            self._log_dir = log_dir
+            db_path = str(log_dir / "logs.db")
         else:
             self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_controller_logs_")
-            self._log_dir = Path(self._temp_dir.name)
-        self._lock = RLock()
-        self._line_offsets: dict[tuple[JobName, int], list[int]] = {}
+            db_path = str(Path(self._temp_dir.name) / "logs.db")
 
-    def _attempt_path(self, task_id: JobName, attempt_id: int) -> Path:
-        task_wire = task_id.to_wire().lstrip("/")
-        return self._log_dir / task_wire / str(attempt_id) / "logs.jsonl"
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.execute("PRAGMA synchronous = NORMAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
+        self._conn.executescript(_SCHEMA)
+        self._conn.commit()
+
+        self._lock = RLock()
+        self._max_records = max_records
+        self._append_count = 0
 
     @staticmethod
-    def _entry_to_json(entry: logging_pb2.LogEntry) -> str:
-        return json.dumps(
-            json_format.MessageToDict(entry, preserving_proto_field_name=True),
-            ensure_ascii=False,
+    def _entry_to_row(task_wire: str, attempt_id: int, entry: logging_pb2.LogEntry) -> tuple:
+        return (
+            task_wire,
+            attempt_id,
+            entry.source,
+            entry.data,
+            entry.timestamp.epoch_ms,
         )
 
     @staticmethod
-    def _json_to_entry(line: str) -> logging_pb2.LogEntry:
-        entry = logging_pb2.LogEntry()
-        json_format.Parse(line, entry)
+    def _row_to_entry(row: tuple) -> logging_pb2.LogEntry:
+        # row: (source, data, epoch_ms, attempt_id)
+        entry = logging_pb2.LogEntry(source=row[0], data=row[1], attempt_id=row[3])
+        entry.timestamp.epoch_ms = row[2]
         return entry
 
     def append(self, task_id: JobName, attempt_id: int, entries: list) -> None:
         if not entries:
             return
-        key = (task_id, attempt_id)
-        path = self._attempt_path(task_id, attempt_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        new_offsets: list[int] = []
-        with open(path, "ab") as f:
-            for e in entries:
-                new_offsets.append(f.tell())
-                f.write((self._entry_to_json(e) + "\n").encode("utf-8"))
-
+        task_wire = task_id.to_wire()
+        rows = [self._entry_to_row(task_wire, attempt_id, e) for e in entries]
         with self._lock:
-            self._line_offsets.setdefault(key, []).extend(new_offsets)
-
-    def _ensure_line_offsets(self, key: tuple[JobName, int]) -> list[int]:
-        """Return the offset array, rebuilding from disk if needed (restart recovery)."""
-        with self._lock:
-            offsets = self._line_offsets.get(key)
-            if offsets is not None:
-                return offsets
-
-        path = self._attempt_path(*key)
-        if not path.exists():
-            return []
-
-        offsets = []
-        with open(path, "rb") as f:
-            while True:
-                pos = f.tell()
-                line = f.readline()
-                if not line:
-                    break
-                if line.strip():
-                    offsets.append(pos)
-
-        with self._lock:
-            self._line_offsets[key] = offsets
-        return offsets
+            self._conn.executemany(
+                "INSERT INTO logs (task_wire, attempt_id, source, data, epoch_ms) VALUES (?, ?, ?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
+            self._append_count += 1
+            if self._append_count % _EVICT_CHECK_INTERVAL == 0:
+                self._evict_if_needed()
 
     def get_logs(
         self,
@@ -120,62 +111,106 @@ class ControllerLogStore:
         max_lines: int = 0,
         tail: bool = False,
     ) -> LogReadResult:
-        key = (task_id, attempt_id)
-        path = self._attempt_path(task_id, attempt_id)
-        if not path.exists():
-            return LogReadResult(entries=[], lines_read=0)
-
-        offsets = self._ensure_line_offsets(key)
-
-        # When filtering (regex/since_ms), we can't predict how many raw lines
-        # yield max_lines matches, so we scan everything and take the tail slice.
-        has_filter = regex_filter is not None or since_ms > 0
-        if tail and max_lines > 0 and not has_filter:
-            skip_lines = max(skip_lines, len(offsets) - max_lines)
-
-        if skip_lines >= len(offsets):
-            return LogReadResult(entries=[], lines_read=len(offsets))
-
-        result: list[logging_pb2.LogEntry] = []
-        with open(path, "rb") as f:
-            if skip_lines > 0:
-                f.seek(offsets[skip_lines])
-            for raw_line in f:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = self._json_to_entry(line.decode("utf-8"))
-                except Exception:
-                    continue
-                if since_ms > 0 and entry.timestamp.epoch_ms <= since_ms:
-                    continue
-                if regex_filter and not regex_filter.search(entry.data):
-                    continue
-                result.append(entry)
-                if max_lines > 0 and len(result) >= max_lines and not (tail and has_filter):
-                    break
-
-        # For tail + filter, take only the last max_lines matches.
-        if tail and has_filter and max_lines > 0 and len(result) > max_lines:
-            result = result[-max_lines:]
-
+        task_wire = task_id.to_wire()
         with self._lock:
-            total = len(self._line_offsets.get(key, []))
-        return LogReadResult(entries=result, lines_read=total)
+            total = self._count_lines(task_wire, attempt_id)
+            if total == 0:
+                return LogReadResult(entries=[], lines_read=0)
+
+            has_filter = regex_filter is not None or since_ms > 0
+
+            # Build the query depending on mode
+            if tail and max_lines > 0 and not has_filter:
+                # Optimized tail without filters: skip to last N rows via OFFSET
+                effective_skip = max(skip_lines, total - max_lines)
+                rows = self._conn.execute(
+                    "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                    "WHERE task_wire = ? AND attempt_id = ? "
+                    "ORDER BY id LIMIT -1 OFFSET ?",
+                    (task_wire, attempt_id, effective_skip),
+                ).fetchall()
+            elif tail and max_lines > 0 and has_filter:
+                # Tail with filters: fetch all candidate rows, filter in Python, take last N
+                if since_ms > 0:
+                    rows = self._conn.execute(
+                        "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                        "WHERE task_wire = ? AND attempt_id = ? AND epoch_ms > ? "
+                        "ORDER BY id",
+                        (task_wire, attempt_id, since_ms),
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                        "WHERE task_wire = ? AND attempt_id = ? "
+                        "ORDER BY id LIMIT -1 OFFSET ?",
+                        (task_wire, attempt_id, skip_lines),
+                    ).fetchall()
+                if regex_filter:
+                    rows = [r for r in rows if regex_filter.search(r[1])]
+                rows = rows[-max_lines:]
+            else:
+                # Forward mode
+                params: list = [task_wire, attempt_id]
+                where_extra = ""
+                if since_ms > 0:
+                    where_extra += " AND epoch_ms > ?"
+                    params.append(since_ms)
+
+                query = (
+                    "SELECT source, data, epoch_ms, attempt_id FROM logs "
+                    f"WHERE task_wire = ? AND attempt_id = ?{where_extra} "
+                    "ORDER BY id LIMIT -1 OFFSET ?"
+                )
+                params.append(skip_lines)
+                rows = self._conn.execute(query, params).fetchall()
+
+                if regex_filter:
+                    rows = [r for r in rows if regex_filter.search(r[1])]
+
+                if max_lines > 0:
+                    rows = rows[:max_lines]
+
+        entries = [self._row_to_entry(r) for r in rows]
+        return LogReadResult(entries=entries, lines_read=total)
 
     def has_logs(self, task_id: JobName, attempt_id: int) -> bool:
-        return self._attempt_path(task_id, attempt_id).exists()
+        task_wire = task_id.to_wire()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM logs WHERE task_wire = ? AND attempt_id = ? LIMIT 1",
+                (task_wire, attempt_id),
+            ).fetchone()
+            return row is not None
 
     def clear_attempt(self, task_id: JobName, attempt_id: int) -> None:
-        key = (task_id, attempt_id)
+        task_wire = task_id.to_wire()
         with self._lock:
-            self._line_offsets.pop(key, None)
-        path = self._attempt_path(task_id, attempt_id)
-        if path.exists():
-            path.unlink()
+            self._conn.execute(
+                "DELETE FROM logs WHERE task_wire = ? AND attempt_id = ?",
+                (task_wire, attempt_id),
+            )
+            self._conn.commit()
 
     def close(self) -> None:
-        """Clean up the temporary directory (no-op for persistent dirs)."""
+        """Close the database connection and clean up temp dir if applicable."""
+        self._conn.close()
         if self._temp_dir is not None:
             self._temp_dir.cleanup()
+
+    def _count_lines(self, task_wire: str, attempt_id: int) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM logs WHERE task_wire = ? AND attempt_id = ?",
+            (task_wire, attempt_id),
+        ).fetchone()
+        return row[0]
+
+    def _evict_if_needed(self) -> None:
+        """Delete oldest rows when the total count exceeds the cap. Must hold self._lock."""
+        count = self._conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+        if count > self._max_records:
+            excess = count - self._max_records
+            self._conn.execute(
+                "DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id LIMIT ?)",
+                (excess,),
+            )
+            self._conn.commit()
