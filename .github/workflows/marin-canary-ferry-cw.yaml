@@ -18,6 +18,8 @@ jobs:
       cancel-in-progress: true
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
+      WANDB_ENTITY: marin-community
+      WANDB_PROJECT: marin
 
     steps:
       - name: Checkout code
@@ -64,6 +66,8 @@ jobs:
             --memory=16G --disk=16G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-us-west-04a/marin/ \
             -e RUN_ID "$RUN_ID" \
+            -e WANDB_ENTITY "$WANDB_ENTITY" \
+            -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
             -- python -m experiments.ferries.canary_ferry_cw
@@ -79,7 +83,9 @@ jobs:
         shell: bash -l {0}
         run: |
           .venv/bin/python -m marin.profiling.cli summarize \
-            --run-target "marin-community/marin/$RUN_ID" \
+            --run-target "$RUN_ID" \
+            --entity "$WANDB_ENTITY" \
+            --project "$WANDB_PROJECT" \
             --output profile_summary.json
           .venv/bin/python -m marin.profiling.cli report \
             --summary profile_summary.json \
