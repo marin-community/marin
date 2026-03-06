@@ -1,15 +1,19 @@
 # Recipe: Add a Scaling Heuristic
 
-A scaling heuristic maps `(model_size, token_budget)` → hyperparameters (LR, beta2, epsilon,
-batch size, schedule, etc.). It is *not* a scaling law — a scaling law tells you *what* to
-train (optimal model size and tokens for a compute budget); a heuristic tells you *how* to
-train it (optimizer settings). For a given FLOP budget, the heuristic generates many
-candidate runs (different model sizes, each with appropriate hyperparameters), and an
-IsoFLOP sweep finds which candidate is optimal. A scaling ladder then trains
-compute-optimal models at larger budgets.
+A scaling heuristic maps `(model_size, token_budget)` to training hyperparameters like LR,
+beta2, epsilon, batch size, and schedule.
 
-New heuristics are needed for new optimizers, training techniques, or architectures. Dataset
-changes can typically reuse existing heuristics.
+It is not the same thing as a scaling law:
+
+- A scaling law tells you what to train for a compute budget.
+- A scaling heuristic tells you how to train each candidate.
+
+For a given FLOP budget, the heuristic generates a set of candidate runs with different model
+sizes and matching hyperparameters. An IsoFLOP sweep compares those candidates and finds the
+best one. A scaling ladder then trains compute-optimal models at larger budgets.
+
+You usually need a new heuristic when you introduce a new optimizer, training method, or
+architecture. Dataset changes can usually reuse an existing heuristic.
 
 ## What you produce
 
@@ -25,16 +29,17 @@ changes can typically reuse existing heuristics.
 
 ### 1) Signs of life
 
-Confirm the approach is worth pursuing at a single reference scale:
-- Grug variant experiment (see `docs/recipes/change_grug.md`).
-- Quick A/B at ~130M params vs current best.
-- Published results or theory.
+First, make sure the idea looks promising at one reference scale. Good signs include:
+
+- A Grug variant experiment (see `docs/recipes/change_grug.md`).
+- A quick A/B at about 130M parameters against the current best setup.
+- Published results or supporting theory.
 
 ### 2) Tune reference hyperparameters
 
-Fix a reference model and data size (~130M params, ~2.5B tokens, Nemotron mix). Sweep the
-optimizer hyperparameter space using `experiments/references/reference_hyperparameter_sweep.py`
-(Vizier-guided) or equivalent.
+Pick one reference model and data budget, usually around 130M params and 2.5B tokens on the
+Nemotron mix. Then sweep the optimizer hyperparameter space with
+`experiments/references/reference_hyperparameter_sweep.py` or an equivalent setup.
 
 ```sh
 RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
@@ -44,18 +49,19 @@ RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
   -- python experiments/references/reference_hyperparameter_sweep.py
 ```
 
-Edit `SweepSettings` for your search space, model, budget, and metric.
+Update `SweepSettings` for your search space, model, budget, and metric.
 
-Optionally tune at additional scales for empirical data on how hyperparameters shift with
-model size — this feeds into step 3.
+If useful, tune a few additional scales so you can see how the best hyperparameters move with
+model size. That gives you better inputs for step 3.
 
 ### 3) Define scaling rules
 
-Start from the tuned reference point and define how each hyperparameter changes with
-hidden_dim, batch size, and tokens. https://arxiv.org/abs/2512.22382 gives theory for
-scaling Adam hyperparameters as a function of width and batch size — use it as a starting
-point, adjust based on empirical results from step 2. Expect to iterate between this step
-and step 4 as you validate and refine the rules.
+Start from the tuned reference point and define how each hyperparameter should change with
+hidden_dim, batch size, and token count. https://arxiv.org/abs/2512.22382 is a useful
+starting point for Adam-style scaling with width and batch size. Use that as guidance, then
+adjust based on the empirical results from step 2.
+
+Expect to go back and forth between this step and step 4. That is normal.
 
 Implement as a frozen dataclass in `experiments/scaling_law_sweeps/<name>.py` that satisfies
 the `ScalingHeuristic` protocol (`marin.scaling_laws.isoflop_analysis.ScalingHeuristic`).
@@ -118,7 +124,8 @@ Scaling rules to define (notation: `B` = batch size, `B0` = reference batch size
 See `experiments/scaling_law_sweeps/completed_adamh.py` and
 `experiments/scaling_law_sweeps/c_adamc.py` for complete examples.
 
-Before sweeping: print candidate grids for a few budgets and verify no degenerate values.
+Before you launch a sweep, print the candidate grids for a few budgets and make sure the
+values look sane.
 
 ### 4) Validate at ~1e19 FLOPs
 
@@ -141,7 +148,7 @@ if __name__ == "__main__":
     executor_main(steps=steps)
 ```
 
-Check:
+What to check:
 - No loss spikes or divergence at any candidate size.
 - New heuristic outperforms (or matches) old heuristic at all candidate sizes.
 - Best candidate (minimum loss point) is preferably in the middle of the range, not at a boundary; if it lands on a boundary, widen the candidate range and re-check.
@@ -149,11 +156,12 @@ Check:
 Compare against old heuristic runs using a Colab notebook querying the WandB API
 ([example](https://colab.research.google.com/drive/1sNWqvf09FcDeB3qY1dD3JqZF546348Os)).
 
-If problems: find a smaller-scale proxy, fix the scaling rule there, re-validate.
+If something looks wrong, find the smallest cheap setup that reproduces the problem, fix the
+rule there, and then re-run the ~1e19 check.
 
 ### 5) Full IsoFLOP sweep
 
-After step 4 passes, register the full-budget suite in `experiments/isoflop_sweep.py`:
+Once the sanity check passes, register the full-budget suite in `experiments/isoflop_sweep.py`:
 
 ```python
 SCALING_SUITES = {
@@ -175,11 +183,11 @@ RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
   -- python experiments/isoflop_sweep.py
 ```
 
-The analysis step is invoked as part of the scaling ladder (step 6), not separately.
-See `experiments/exp1337_delphi_suite.py` for how `run_isoflop_analysis_step` is wired
-as an `ExecutorStep` that takes the sweep training runs as input. It fits `D* ~ A * C^alpha`
-and writes `isoflop_analysis_result.json` to the output path — this file is consumed by
-the scaling ladder's optimal training runs.
+The analysis step runs as part of the scaling ladder in step 6, not as a separate manual
+step. See `experiments/exp1337_delphi_suite.py` for how `run_isoflop_analysis_step` is wired
+as an `ExecutorStep` that consumes the sweep runs. It fits `D* ~ A * C^alpha` and writes
+`isoflop_analysis_result.json`, which the scaling ladder then uses for the optimal training
+runs.
 
 Use `scaling_plots.py` for visualization (isoflop curves and scaling fit plots).
 
@@ -199,12 +207,12 @@ Train compute-optimal models at larger budgets. See `experiments/exp1337_delphi_
 
 Update `experiments/ferries/canary_ferry.py` with the new best setup. Keep the canary model
 size and FLOP budget roughly fixed (~30M params, ~1B tokens) so the canary remains a fast,
-cheap daily check rather than a full training run; update optimizer config, model config,
-and training parameters to match what you now believe is best.
+cheap daily check rather than a full training run. Update the optimizer config, model config,
+and training parameters to match your new best setup.
 
 ## Iteration
 
-General principle: **find a smaller scale that reproduces the problem, fix it there, scale back up.**
+General rule: **find a smaller scale that reproduces the problem, fix it there, then scale back up.**
 
 - **Loss spikes at step 4**: bad scaling rule for some model sizes — reproduce cheaply, fix rule.
 - **Poor scaling law fits at step 5**: outlier runs or degenerate configs at some budgets.
