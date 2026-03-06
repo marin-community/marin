@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional, cast
 
 import equinox as eqx
+import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 
@@ -62,7 +63,7 @@ class SampleLmConfig:
     log_kernel_jaxprs_path: Optional[str] = None
 
 
-def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
+def _load_model(config: SampleLmConfig, Vocab: hax.Axis, *, key) -> LmHeadModel:
     """Load a model either from a checkpoint or HF repo."""
 
     if config.checkpoint_path is None and config.hf_checkpoint is None:
