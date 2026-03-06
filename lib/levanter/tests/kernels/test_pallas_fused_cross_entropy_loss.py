@@ -240,6 +240,11 @@ def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
     assert pallas_tpu._infer_num_tensorcores() == 1
 
 
+def test_device_key_tpu_v5_lite_maps_to_v5e():
+    assert tuned_block_sizes._device_key("TPU v5 lite") == "TPU v5e"
+    assert tuned_block_sizes._device_key("TPU v5litepod") == "TPU v5e"
+
+
 def test_pallas_tpu_backward_uses_pallas_by_default(monkeypatch):
     monkeypatch.delenv("LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH", raising=False)
     captured: dict[str, bool] = {}
@@ -908,6 +913,33 @@ def test_infer_block_sizes_tpu_v5p_updated_tuning(
         v=v,
         dtype=jnp.bfloat16,
         device_kind="TPU v5p",
+    )
+    assert block_sizes == expected
+
+
+@pytest.mark.parametrize(
+    ("b", "h", "v", "expected"),
+    [
+        (1024, 512, 16_384, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
+        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
+        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048)),
+        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
+        (8_192, 4_096, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
+        (16_384, 2_048, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
+    ],
+)
+def test_infer_block_sizes_tpu_v5e_updated_tuning(
+    b: int,
+    h: int,
+    v: int,
+    expected: fused_api.BlockSizes,
+):
+    block_sizes = infer_block_sizes(
+        b=b,
+        h=h,
+        v=v,
+        dtype=jnp.bfloat16,
+        device_kind="TPU v5 lite",
     )
     assert block_sizes == expected
 

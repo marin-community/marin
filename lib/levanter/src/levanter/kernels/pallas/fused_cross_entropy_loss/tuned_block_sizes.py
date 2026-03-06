@@ -90,12 +90,18 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
     },
     "TPU v5e": {
-        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
-        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("bfloat16", "mid-h-large-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
-        ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
-        ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("bfloat16", "huge-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
+        ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
+        ("float32", "mid-h-large-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+        ("float32", "huge-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
     },
     "TPU v6": {
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
@@ -413,7 +419,7 @@ def _device_key(device_kind: Optional[str]) -> Optional[str]:
         return "TPU v4"
     if "v5p" in device_kind:
         return "TPU v5p"
-    if "v5e" in device_kind:
+    if "v5e" in device_kind or "v5lite" in device_kind or "v5 lite" in device_kind:
         return "TPU v5e"
     if "v5" in device_kind:
         return "TPU v5"

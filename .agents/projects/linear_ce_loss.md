@@ -1364,3 +1364,37 @@ Notes:
     - `large-batch-small-h`: `v_block_size 1024 -> 2048`
     - `medium-batch-medium-h`: `v_block_size 2048 -> 512`
   - retained `h_block_size` choices from existing bucket definitions so entries remain valid across the full bucket ranges.
+
+### 2026-03-06: full v5e sweep (`v5litepod-8`) + tuned-table updates
+- Setup:
+  - `scripts/ray/dev_tpu.py --config infra/marin-us-west4.yaml --tpu-type v5litepod-8`
+  - TPU reported `device_kind="TPU v5 lite"`.
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+  - artifacts on TPU: `/tmp/ce_sweep_v5e_20260306`
+- Sweep buckets run:
+  - `small_vocab`, `mid_h_large_vocab`, `large_batch_small_h`, `huge_batch_small_h`, `llama3_ish`, `medium_batch_mid_h`
+  - each with `b_block_size=1024`, explicit `h/v` grids, and `--include-infer`.
+- Best observed configs from this sweep:
+  - `small_vocab`: `b1024_h128_v1024` (`~1.521M tok/s`)
+  - `mid_h_large_vocab`: `b1024_h512_v1024` (`~164.1k tok/s`)
+  - `large_batch_small_h`: `b1024_h128_v2048` (`~328.3k tok/s`)
+  - `huge_batch_small_h`: `b1024_h128_v1024` (`~161.8k tok/s`; `h=256/512/1024` within noise)
+  - `llama3_ish`: `b1024_h512_v512` (`~30.8k tok/s`)
+  - `medium_batch_mid_h`: `b1024_h256_v512` (`~66.0k tok/s`; near tie with `h=512/1024/2048`)
+- Failure attribution:
+  - aggregate failed classifications across all six buckets:
+    - `forward`: `25`
+    - `backward`: `0`
+    - `unsupported (shape-divisibility)`: `35`
+    - `other`: `0`
+  - all VMEM OOMs observed in this run were forward/JVP-path OOMs.
+- Tuned table updates applied (`tuned_block_sizes.py`):
+  - `TPU v5e` (both bf16 and float32):
+    - `small-vocab`: `v_block_size 512 -> 1024`
+    - `llama3-ish`: `v_block_size 1024 -> 512`
+    - add `mid-h-large-vocab`: `b=1024,h=256,v=1024`
+    - add `huge-batch-small-h`: `b=1024,h=256,v=1024`
+    - add `medium-batch-medium-h`: `b=1024,h=256,v=512`
+    - keep `large-batch-small-h` at `b=1024,h=512,v=2048`
+  - device-key normalization update:
+    - map both `TPU v5e` and `TPU v5 lite` / `TPU v5litepod` strings to `TPU v5e` so v5litepod-8 uses the v5e table directly.
