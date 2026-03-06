@@ -314,13 +314,12 @@ def test_stop_controller_duplicate_vms_raises(config):
         stop_controller(platform, config)
 
 
-def test_gcp_controller_vm_config_defaults_to_pd_ssd():
-    """GCP controller VM defaults to pd-ssd disk at 100GB for high IOPS."""
+def test_gcp_controller_vm_config_defaults_to_100gb_disk():
+    """GCP controller VM defaults to 100GB disk."""
     config = config_pb2.IrisClusterConfig()
     config.platform.label_prefix = "test"
     config.controller.gcp.zone = "us-central1-a"
 
     vm_config = _build_controller_vm_config(config)
 
-    assert vm_config.gcp.boot_disk_type == "pd-ssd"
     assert vm_config.gcp.boot_disk_size_gb == 100

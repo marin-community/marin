@@ -70,7 +70,7 @@ message GcpVmConfig {
   string zone = 1;
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
-  string boot_disk_type = 4;    // Default: "pd-standard" (use "pd-ssd" for high IOPS)
+  reserved 4;  // was: boot_disk_type (platform chooses disk type internally)
 }
 
 message ManualVmConfig {
@@ -280,7 +280,7 @@ message GcpControllerConfig {
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
   int32 port = 4;               // Default: 10000
-  string boot_disk_type = 5;    // Default: "pd-ssd" (controller needs high IOPS for DB)
+  reserved 5;  // was: boot_disk_type (platform chooses disk type internally)
 }
 
 // Manually-managed controller configuration (SSH bootstrap)

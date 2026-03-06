@@ -728,7 +728,10 @@ class GcpVmSliceHandle:
 
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
-DEFAULT_BOOT_DISK_TYPE = "pd-standard"
+# pd-ssd provides ~6000 IOPS vs ~38 on pd-standard, critical for controller DB
+# and generally better for all GCE VMs. We hardcode this rather than exposing
+# it in config since it's GCP-specific and pd-ssd is the right choice.
+DEFAULT_BOOT_DISK_TYPE = "pd-ssd"
 
 
 class GcpPlatform:
@@ -818,7 +821,7 @@ class GcpPlatform:
         zone = gcp.zone
         machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = gcp.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
-        boot_disk_type = gcp.boot_disk_type or DEFAULT_BOOT_DISK_TYPE
+        boot_disk_type = DEFAULT_BOOT_DISK_TYPE
 
         cmd = [
             "gcloud",

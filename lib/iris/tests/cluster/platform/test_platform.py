@@ -399,31 +399,6 @@ def test_gcp_create_vm_validates_config():
             platform.create_vm(cfg)
 
 
-def test_gcp_create_vm_passes_boot_disk_type():
-    """create_vm includes --boot-disk-type in the gcloud command."""
-    fake = FakeGcloud()
-    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpPlatform(gcp_config, label_prefix="iris")
-
-    cfg = config_pb2.VmConfig(name="test-vm")
-    cfg.gcp.zone = "us-central1-a"
-    cfg.gcp.machine_type = "n2-standard-4"
-    cfg.gcp.boot_disk_type = "pd-ssd"
-
-    captured_cmds: list[list[str]] = []
-    original_fake = fake.__call__
-
-    def capturing_fake(cmd, **kwargs):
-        captured_cmds.append(list(cmd))
-        return original_fake(cmd, **kwargs)
-
-    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=capturing_fake):
-        platform.create_vm(cfg)
-
-    create_cmd = next(c for c in captured_cmds if "create" in c)
-    assert any("--boot-disk-type=pd-ssd" in arg for arg in create_cmd)
-
-
 def test_gcp_list_slices_skips_deleting_tpus():
     """list_slices omits TPUs in DELETING state."""
     fake = FakeGcloud()

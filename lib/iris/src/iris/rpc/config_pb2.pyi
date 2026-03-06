@@ -72,16 +72,14 @@ class ManualProvider(_message.Message):
     def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ...) -> None: ...
 
 class GcpVmConfig(_message.Message):
-    __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "boot_disk_type")
+    __slots__ = ("zone", "machine_type", "boot_disk_size_gb")
     ZONE_FIELD_NUMBER: _ClassVar[int]
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
-    BOOT_DISK_TYPE_FIELD_NUMBER: _ClassVar[int]
     zone: str
     machine_type: str
     boot_disk_size_gb: int
-    boot_disk_type: str
-    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., boot_disk_type: _Optional[str] = ...) -> None: ...
+    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ...) -> None: ...
 
 class ManualVmConfig(_message.Message):
     __slots__ = ("host", "ssh_user", "ssh_key_file")
@@ -151,7 +149,7 @@ class CoreweaveSliceConfig(_message.Message):
     instance_type: str
     gpu_class: str
     infiniband: bool
-    def __init__(self, region: _Optional[str] = ..., instance_type: _Optional[str] = ..., gpu_class: _Optional[str] = ..., infiniband: _Optional[bool] = ...) -> None: ...
+    def __init__(self, region: _Optional[str] = ..., instance_type: _Optional[str] = ..., gpu_class: _Optional[str] = ..., infiniband: bool = ...) -> None: ...
 
 class ManualSliceConfig(_message.Message):
     __slots__ = ("hosts", "ssh_user", "ssh_key_file")
@@ -200,7 +198,7 @@ class SliceConfig(_message.Message):
     coreweave: CoreweaveSliceConfig
     manual: ManualSliceConfig
     local: LocalSliceConfig
-    def __init__(self, name_prefix: _Optional[str] = ..., num_vms: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: _Optional[bool] = ..., gpu_count: _Optional[int] = ..., disk_size_gb: _Optional[int] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ..., local: _Optional[_Union[LocalSliceConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, name_prefix: _Optional[str] = ..., num_vms: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: bool = ..., gpu_count: _Optional[int] = ..., disk_size_gb: _Optional[int] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ..., local: _Optional[_Union[LocalSliceConfig, _Mapping]] = ...) -> None: ...
 
 class ScaleGroupResources(_message.Message):
     __slots__ = ("cpu_millicores", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")
@@ -341,18 +339,16 @@ class StorageConfig(_message.Message):
     def __init__(self, bundle_prefix: _Optional[str] = ..., log_prefix: _Optional[str] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
-    __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "port", "boot_disk_type")
+    __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "port")
     ZONE_FIELD_NUMBER: _ClassVar[int]
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
-    BOOT_DISK_TYPE_FIELD_NUMBER: _ClassVar[int]
     zone: str
     machine_type: str
     boot_disk_size_gb: int
     port: int
-    boot_disk_type: str
-    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ..., boot_disk_type: _Optional[str] = ...) -> None: ...
+    def __init__(self, zone: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
 
 class ManualControllerConfig(_message.Message):
     __slots__ = ("host", "port")
