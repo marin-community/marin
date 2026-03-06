@@ -91,8 +91,10 @@ def main(config: EvalLmConfig):
 
         def eval_loss_fn(model: LmHeadModel, batch: LmExample) -> LossFnOutput:
             model = inference_mode(model, True)
-            model = mp.cast_to_compute(model)
-            per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
+            with hax.axis_mapping(compute_axis_mapping):
+                model = mp.cast_to_compute(model)
+                model = hax.shard_with_axis_mapping(model, compute_axis_mapping)
+                per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
             per_pos_weight = batch.loss_weight.array
             per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
             return per_pos_loss, per_pos_weight, per_pos_token_id
@@ -102,23 +104,28 @@ def main(config: EvalLmConfig):
             tagged_eval_sets=datasets,
             loss_fn=eval_loss_fn,
             tokenizer=tokenizer,
+            device_mesh=config.trainer.device_mesh,
             axis_mapping=compute_axis_mapping,
             max_examples_per_dataset=max_examples,
         )
 
         @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_loss(model: LmHeadModel, example: LmExample):
-            model = inference_mode(model, True)
-            model = mp.cast_to_compute(model)
-            return model.compute_next_token_loss(example, key=None)
+            with hax.axis_mapping(compute_axis_mapping):
+                model = inference_mode(model, True)
+                model = mp.cast_to_compute(model)
+                model = hax.shard_with_axis_mapping(model, compute_axis_mapping)
+                return model.compute_next_token_loss(example, key=None)
 
         @hax.named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
-            model = mp.cast_to_compute(model)
-            activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-            head = model.get_lm_head()
-            logits = hax.dot(activations, head, axis=model.Embed)
-            return logits
+            with hax.axis_mapping(compute_axis_mapping):
+                model = mp.cast_to_compute(model)
+                model = hax.shard_with_axis_mapping(model, compute_axis_mapping)
+                activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+                head = model.get_lm_head()
+                logits = hax.dot(activations, head, axis=model.Embed)
+                return logits
 
         # initialize the model
         if config.checkpoint_path is not None:
