@@ -10,7 +10,6 @@ import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
-from haliax import Axis, NamedArray
 from haliax.nn import cross_entropy_loss
 
 from levanter.layers.attention import AttentionMask
@@ -55,7 +54,7 @@ class AudioTextExample(eqx.Module):
 
 
 class ASRConfig(LmConfig):
-    def build_asr(self, Vocab: Axis, *, key: PRNGKeyArray) -> "ASRMixin":
+    def build_asr(self, Vocab: hax.Axis, *, key: PRNGKeyArray) -> "ASRMixin":
         return self.asr_model_type.init(Vocab, self, key=key)  # type: ignore
 
     @property
@@ -71,12 +70,12 @@ class ASRMixin(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         pass
 
     @property
     @abc.abstractmethod
-    def Pos(self) -> Axis:
+    def Pos(self) -> hax.Axis:
         pass
 
     @abc.abstractmethod
@@ -90,12 +89,12 @@ class ASRMixin(abc.ABC):
     @abc.abstractmethod
     def __call__(
         self,
-        mel: NamedArray,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        mel: hax.NamedArray,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[AttentionMask | hax.NamedArray] = None,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> hax.NamedArray:
         pass
 
     def compute_loss(
@@ -105,7 +104,7 @@ class ASRMixin(abc.ABC):
         key=None,
         reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
         reduction_axis: Optional[hax.AxisSelection] = None,
-    ) -> jnp.ndarray | NamedArray:
+    ) -> jnp.ndarray | hax.NamedArray:
         """
         Computes the cross-entropy loss for predicted ASR tokens. If reduction is not None, the loss is reduced
         across the reduction axis (with reduction_axis=None meaning all axes). If reduction is None, the loss is not
