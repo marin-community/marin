@@ -6,6 +6,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import jinja2
 import yaml
@@ -19,6 +20,10 @@ DOCKER_TAG_TESTING = "latest"
 DEFAULT_IMAGE_NAME = "marin_cluster"
 VLLM_IMAGE_NAME = "marin_vllm"
 DEFAULT_RAY_AUTH_SECRET = "RAY_AUTH_TOKEN"
+DEFAULT_GCP_PROJECT_ID = "hai-gcp-models"
+DEFAULT_CLUSTER_SSH_PUBLIC_KEY_SECRET = "RAY_CLUSTER_PUBLIC_KEY"
+DEFAULT_HF_TOKEN_SECRET = "HF_TOKEN"
+DEFAULT_OPENAI_API_KEY_SECRET = "OPENAI_API_KEY"
 
 
 @dataclass
@@ -95,8 +100,8 @@ def list_available_configs() -> list[str]:
 
     configs = []
     for yaml_file in infra_dir.glob("marin-*.yaml"):
-        # Skip template file
-        if yaml_file.name == "marin-cluster-template.yaml":
+        # Skip all templates (e.g. marin-cluster-template.yaml, marin-vllm-template.yaml)
+        if yaml_file.name.endswith("-template.yaml"):
             continue
         configs.append(str(yaml_file))
 
@@ -389,6 +394,31 @@ def make_tpu_worker_config(generation: str, count: int, min_workers: int = 4) ->
     return {"tpu_worker": config}
 
 
+def _build_gar_image(config: dict[str, Any]) -> str:
+    project_id = config.get("PROJECT_ID", DEFAULT_GCP_PROJECT_ID)
+    image_name = config.get("IMAGE_NAME", DEFAULT_IMAGE_NAME)
+    return f"{config['REGION']}-docker.pkg.dev/{project_id}/marin/{image_name}:{config['DOCKER_TAG']}"
+
+
+def _resolve_docker_image(config: dict[str, Any]) -> str:
+    docker_image = config.get("DOCKER_IMAGE")
+    if docker_image:
+        return docker_image
+
+    return _build_gar_image(config)
+
+
+def _resolve_docker_auth_registry(config: dict[str, Any], docker_image: str) -> str:
+    configured_registry = config.get("DOCKER_AUTH_REGISTRY")
+    if configured_registry is not None:
+        return configured_registry
+
+    registry = docker_image.split("/", 1)[0]
+    if registry.endswith(".pkg.dev"):
+        return registry
+    return ""
+
+
 def update_cluster_configs(infra_path: str = "infra") -> None:
     """Generate all cluster configuration files from templates."""
     for config_name, config in CONFIGS.items():
@@ -399,10 +429,17 @@ def update_cluster_configs(infra_path: str = "infra") -> None:
             with open(template_path) as f_template:
                 template = jinja2.Template(f_template.read())
 
+            docker_image = _resolve_docker_image(config)
             template_params = {
                 "IMAGE_NAME": DEFAULT_IMAGE_NAME,
+                "PROJECT_ID": DEFAULT_GCP_PROJECT_ID,
+                "DOCKER_IMAGE": docker_image,
+                "DOCKER_AUTH_REGISTRY": _resolve_docker_auth_registry(config, docker_image),
                 "RAY_AUTH_MODE": "token",
                 "RAY_AUTH_SECRET": DEFAULT_RAY_AUTH_SECRET,
+                "CLUSTER_SSH_PUBLIC_KEY_SECRET": DEFAULT_CLUSTER_SSH_PUBLIC_KEY_SECRET,
+                "HF_TOKEN_SECRET": DEFAULT_HF_TOKEN_SECRET,
+                "OPENAI_API_KEY_SECRET": DEFAULT_OPENAI_API_KEY_SECRET,
                 **config,
             }
             yaml_string = template.render(**template_params)
