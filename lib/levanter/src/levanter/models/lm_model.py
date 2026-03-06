@@ -12,7 +12,6 @@ import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
-from haliax import Axis, NamedOrNumeric
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.loss import maybe_fused_next_token_loss
@@ -58,7 +57,7 @@ class ArrayLmHarnessModel(ArrayLmHeadModel, Protocol):
     """Array-native model surface required by eval harness-style flows."""
 
     @property
-    def Pos(self) -> Axis: ...
+    def Pos(self) -> hax.Axis: ...
 
     @property
     def max_length(self) -> int: ...
@@ -132,7 +131,7 @@ class LmExample(eqx.Module):
     def from_prompt_and_completion(
         Pos,
         tokens: hax.NamedArray,
-        prompt_length: NamedOrNumeric,
+        prompt_length: hax.NamedOrNumeric,
         *,
         ignore_id: Optional[int] = None,
         all_causal: bool = True,
@@ -155,7 +154,7 @@ class LmExample(eqx.Module):
         return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     @staticmethod
-    def causal_loss_mask(Pos: Axis, prompt_length: Optional[int] = None) -> hax.NamedArray:
+    def causal_loss_mask(Pos: hax.Axis, prompt_length: Optional[int] = None) -> hax.NamedArray:
         loss_weight = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
 
         if prompt_length is not None:
@@ -177,16 +176,16 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
         pass
 
     @property
-    def KeyPos(self) -> Axis:
+    def KeyPos(self) -> hax.Axis:
         return self.max_Pos.alias("key_position")
 
     @property
-    def max_Pos(self) -> Axis:
+    def max_Pos(self) -> hax.Axis:
         return make_axis("position", self.max_seq_len)
 
     @property
     @abc.abstractmethod
-    def Embed(self) -> Axis:
+    def Embed(self) -> hax.Axis:
         pass
 
     def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
@@ -195,7 +194,7 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
     def total_trainable_params(self, vocab_size: int) -> Optional[float]:
         return None
 
-    def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "LmT":
+    def build(self, Vocab: hax.Axis, *, key: PRNGKeyArray) -> "LmT":
         return self.model_type.init(Vocab, self, key=key)  # type: ignore
 
 
@@ -211,15 +210,15 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
     @property
     @abc.abstractmethod
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         pass
 
     @property
-    def Pos(self) -> Axis:
+    def Pos(self) -> hax.Axis:
         return self.config.max_Pos
 
     @property
-    def KeyPos(self) -> Axis:
+    def KeyPos(self) -> hax.Axis:
         return self.config.KeyPos
 
     @property
@@ -228,12 +227,12 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         return self.config.max_seq_len
 
     @property
-    def Embed(self) -> Axis:
+    def Embed(self) -> hax.Axis:
         return self.config.Embed
 
     @classmethod
     @abc.abstractmethod
-    def init(cls, Vocab: Axis, config: LmConfigT, *, key: PRNGKeyArray) -> "LmHeadModel[LmConfigT]":
+    def init(cls, Vocab: hax.Axis, config: LmConfigT, *, key: PRNGKeyArray) -> "LmHeadModel[LmConfigT]":
         pass
 
     def __call__(
@@ -406,7 +405,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         return _to_plain_jax_array(loss)
 
 
-def _as_named_lm_example(example: Any, *, Pos: Axis, batch_axis: str | None = "batch") -> LmExample:
+def _as_named_lm_example(example: Any, *, Pos: hax.Axis, batch_axis: str | None = "batch") -> LmExample:
     if isinstance(example, LmExample):
         return example
 
