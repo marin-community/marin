@@ -184,12 +184,15 @@ def _default_lm_eval_loss_fn(
     *,
     EvalBatch: hax.Axis,
     mp: jmp.Policy | None,
+    axis_mapping: ResourceMapping | None,
 ) -> LossFnOutput:
     model = inference_mode(model, True)
     named_batch = _ensure_named_lm_example(batch, EvalBatch=EvalBatch, model_pos=model.Pos)
     if mp is not None:
         model = mp.cast_to_compute(model)
-    per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    per_pos_loss = model.compute_next_token_loss(
+        named_batch, reduction=None, reduction_axis=(), axis_mapping=axis_mapping
+    ).array
     per_pos_weight = named_batch.loss_weight.array
     per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
     return per_pos_loss, per_pos_weight, per_pos_token_id
@@ -238,7 +241,13 @@ def cb_tagged_lm_evaluate(
     if loss_fn is None:
 
         def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
-            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
+            return _default_lm_eval_loss_fn(
+                model,
+                batch,
+                EvalBatch=EvalBatch,
+                mp=mp,
+                axis_mapping=axis_mapping,
+            )
 
     evaluator = TaggedEvaluator(
         EvalBatch=EvalBatch,
