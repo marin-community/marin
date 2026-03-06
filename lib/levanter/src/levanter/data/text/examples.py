@@ -1,19 +1,27 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
 from jax.tree_util import register_dataclass
 
 import haliax as hax
-from haliax import Axis, AxisSelector, NamedArray, NamedOrNumeric
+from haliax import AxisSelector, NamedArray, NamedOrNumeric
 
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.utils.partitioning import axis, batch_axis as make_batch_axis
+
+if TYPE_CHECKING:
+    from haliax import Axis
+else:
+    Axis = Any
 
 
 @register_dataclass
@@ -133,7 +141,7 @@ def grug_attention_mask_from_named(mask: AttentionMask) -> GrugAttentionMask:
 def _resolve_batch_axis(batch_axis: AxisSelector | None, batch_size: int) -> Axis:
     if batch_axis is None:
         return make_batch_axis("batch", batch_size)
-    if isinstance(batch_axis, Axis):
+    if isinstance(batch_axis, hax.Axis):
         if batch_axis.size != batch_size:
             raise ValueError(f"Batch axis size ({batch_axis.size}) must match batched array size ({batch_size}).")
         return batch_axis
