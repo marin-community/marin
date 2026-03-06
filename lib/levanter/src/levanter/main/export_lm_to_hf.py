@@ -9,8 +9,6 @@ from typing import Optional
 import equinox as eqx
 import jax
 
-from haliax import Axis
-
 import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer, HFCompatConfig
@@ -18,6 +16,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import is_inexact_arrayish, local_cpu_mesh
+from levanter.utils.partitioning import vocab_axis
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +49,7 @@ def main(config: ConvertLmConfig):
         tokenizer = load_tokenizer(tokenizer_spec)
 
     vocab_size = config.override_vocab_size or len(tokenizer)
-    Vocab = Axis("vocab", vocab_size)
+    Vocab = vocab_axis(vocab_size)
 
     key = jax.random.PRNGKey(0)
 

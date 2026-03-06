@@ -24,6 +24,11 @@ def round_vocab_axis_for_partitioning(vocab_size: int, axis_mapping: ResourceMap
     return round_axis_for_partitioning(hax.Axis("vocab", vocab_size), axis_mapping)
 
 
+def vocab_axis(vocab_size: int):
+    """Create an unrounded vocab axis."""
+    return hax.Axis("vocab", vocab_size)
+
+
 def shard(tree, axis_mapping: ResourceMapping | None = None):
     """Shard a pytree using the provided axis mapping, or current defaults when omitted."""
     return hax.shard(tree, axis_mapping)
@@ -48,4 +53,5 @@ __all__ = [
     "shard_with_axis_mapping",
     "sharding_for_axis",
     "shard_map",
+    "vocab_axis",
 ]
