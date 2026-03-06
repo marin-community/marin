@@ -149,7 +149,7 @@ class CoreweaveSliceConfig(_message.Message):
     instance_type: str
     gpu_class: str
     infiniband: bool
-    def __init__(self, region: _Optional[str] = ..., instance_type: _Optional[str] = ..., gpu_class: _Optional[str] = ..., infiniband: bool = ...) -> None: ...
+    def __init__(self, region: _Optional[str] = ..., instance_type: _Optional[str] = ..., gpu_class: _Optional[str] = ..., infiniband: _Optional[bool] = ...) -> None: ...
 
 class ManualSliceConfig(_message.Message):
     __slots__ = ("hosts", "ssh_user", "ssh_key_file")
@@ -198,7 +198,7 @@ class SliceConfig(_message.Message):
     coreweave: CoreweaveSliceConfig
     manual: ManualSliceConfig
     local: LocalSliceConfig
-    def __init__(self, name_prefix: _Optional[str] = ..., num_vms: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: bool = ..., gpu_count: _Optional[int] = ..., disk_size_gb: _Optional[int] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ..., local: _Optional[_Union[LocalSliceConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, name_prefix: _Optional[str] = ..., num_vms: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., labels: _Optional[_Mapping[str, str]] = ..., preemptible: _Optional[bool] = ..., gpu_count: _Optional[int] = ..., disk_size_gb: _Optional[int] = ..., gcp: _Optional[_Union[GcpSliceConfig, _Mapping]] = ..., coreweave: _Optional[_Union[CoreweaveSliceConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualSliceConfig, _Mapping]] = ..., local: _Optional[_Union[LocalSliceConfig, _Mapping]] = ...) -> None: ...
 
 class ScaleGroupResources(_message.Message):
     __slots__ = ("cpu_millicores", "memory_bytes", "disk_bytes", "gpu_count", "tpu_count")
