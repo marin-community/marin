@@ -1427,3 +1427,32 @@ Notes:
   - add `huge-batch-small-h`: `b=1024,h=256,v=1024`
   - add `medium-batch-medium-h`: `b=1024,h=256,v=512`
   - kept `mid-h-large-vocab` and `large-batch-small-h` entries unchanged.
+
+### 2026-03-06: v4 robustness pass for Llama2/GPT-2/Llama3 vocab families
+- Goal:
+  - ensure v4 infer chooses robust tuned regimes for practical shapes when
+    `V` is Llama2-like (`32k`), GPT-2-like (`50,257`), or Llama3 (`128,256`).
+- Code change (`tuned_block_sizes.py`):
+  - added TPU v4 mid-vocab bucket extension logic:
+    - when the primary bucket lookup misses and `16,385 <= V <= 119,999`,
+      map shapes into existing tuned v4 regimes (`small-vocab`, `llama3-ish`,
+      `mid-h-large-vocab`, `large-batch-small-h`, `huge-batch-small-h`,
+      `medium-batch-medium-h`) instead of falling back to untuned defaults.
+  - this reuses already-proven v4 block-size entries and avoids introducing
+    a second independently tuned table for the same execution regimes.
+- Tests:
+  - added `test_infer_block_sizes_tpu_v4_mid_vocab_uses_tuned_buckets` covering
+    representative shapes for:
+    - Llama2 vocab (`32,000`)
+    - GPT-2 vocab (`50,257`)
+    - Llama3 vocab (`128,256`) sanity case
+  - assertions require both:
+    - `tuned_match=True`
+    - expected v4 block sizes for each regime.
+- Validation:
+  - `uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -q`
+    - `55 passed, 12 skipped`
+- Infra notes:
+  - attempted a broad live v4 Ray coverage sweep, but shared-cluster head-node
+    memory pressure and intermittent submission tunnel resets prevented collecting
+    a complete on-cluster matrix in this session.

@@ -447,6 +447,36 @@ def _shape_bucket(b: int, h: int, v: int, *, device_key: Optional[str]) -> Optio
     return None
 
 
+def _extend_tpu_v4_bucket_for_mid_vocab(
+    bucket: Optional[str], *, b: int, h: int, v: int, device_key: Optional[str]
+) -> Optional[str]:
+    """Map mid-vocab TPU v4 shapes into existing tuned buckets.
+
+    TPU v4 tuned data historically focused on small vocab and llama3-sized vocab.
+    For intermediate vocab sizes (for example GPT-2 and Llama2), route shapes to
+    the same regime buckets so infer chooses robust v4 block sizes instead of
+    falling back to defaults.
+    """
+    if bucket is not None or device_key != "TPU v4":
+        return bucket
+    if not (16_385 <= v <= 119_999):
+        return bucket
+
+    if 512 <= b <= 2_048 and 256 <= h <= 1_024:
+        return "small-vocab"
+    if 4_096 <= b <= 16_384 and h == 4_096:
+        return "llama3-ish"
+    if 4_096 <= b <= 32_768 and 768 <= h <= 1_536:
+        return "mid-h-large-vocab"
+    if 131_073 <= b <= 1_048_576 and 256 <= h <= 1_024:
+        return "huge-batch-small-h"
+    if 32_768 <= b <= 131_072 and 256 <= h <= 1_024:
+        return "large-batch-small-h"
+    if 8_192 <= b <= 32_768 and 1_536 <= h <= 3_072:
+        return "medium-batch-medium-h"
+    return bucket
+
+
 def _has_scoped_vmem_limit_override() -> bool:
     init_args = os.environ.get("LIBTPU_INIT_ARGS", "")
     return _SCOPED_VMEM_LIMIT_ARG in init_args
@@ -612,6 +642,7 @@ def infer_block_sizes_with_tuned_match(
     dtype_name = _dtype_name(dtype)
     device_key = _device_key(normalized_device_kind)
     bucket = _shape_bucket(b, h, v, device_key=device_key)
+    bucket = _extend_tpu_v4_bucket_for_mid_vocab(bucket, b=b, h=h, v=v, device_key=device_key)
 
     if dtype_name and bucket:
         for key in (device_key, DEFAULT_DEVICE_KEY):
