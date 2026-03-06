@@ -9,6 +9,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from fray.cluster import ResourceConfig
 import jax
 import jax.numpy as jnp
 import jmp
@@ -71,6 +72,7 @@ class GrugRunConfig:
 
     model: GrugModelConfig
     data: LmDataConfig
+    resources: ResourceConfig | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -152,7 +154,7 @@ def build_tagged_evaluator(
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
-        EvalBatch=eval_cfg.eval_batch_size,
+        eval_batch_size=eval_cfg.eval_batch_size,
         tagged_eval_sets=tagged_eval_sets,
         loss_fn=eval_loss_fn,
         tokenizer=tokenizer,
@@ -213,6 +215,22 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     ema_params: Transformer
+
+
+def initial_state(
+    model_config: GrugModelConfig,
+    *,
+    optimizer: optax.GradientTransformation,
+    mp: jmp.Policy,
+    key: PRNGKeyArray,
+) -> GrugTrainState:
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    return GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=params,
+    )
 
 
 def _make_train_step(
@@ -330,13 +348,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            params = trainer.mp.cast_to_param(Transformer.init(config.model, key=model_rng))
-            return GrugTrainState(
-                step=jnp.array(0, dtype=jnp.int32),
-                params=params,
-                opt_state=optimizer.init(params),
-                ema_params=params,
-            )
+            return initial_state(config.model, optimizer=optimizer, mp=trainer.mp, key=model_rng)
 
         state = _init_state(model_key)
 
@@ -466,5 +478,6 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "initial_state",
     "run_grug",
 ]
