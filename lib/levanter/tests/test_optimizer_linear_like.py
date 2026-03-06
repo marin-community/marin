@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import haliax as hax
 
 from levanter.models.linear import LinearLikeModule
+from levanter.optim.muon import MuonConfig
 from levanter.optim.util import (
     is_linear_like_module,
     label_linear_like_module,
@@ -63,3 +64,14 @@ def test_map_flattened_linear_layers_updates_eqx_linear_weight():
 
     updated = map_flattened_linear_layers(_set_unit_weight, module)
     assert jnp.all(updated.linear.weight == 1.0)
+
+
+def test_muon_mask_routes_eqx_linear_to_adamw_without_out_first():
+    class _Module(eqx.Module):
+        linear: eqx.nn.Linear
+
+    params = _Module(linear=eqx.nn.Linear(4, 3, key=jax.random.PRNGKey(5)))
+    mask = MuonConfig(use_kimi_scaling=False).create_mask(params, use_kimi_scaling=False)
+
+    assert mask.linear.weight == "adamw"
+    assert mask.linear.bias == "adamw"

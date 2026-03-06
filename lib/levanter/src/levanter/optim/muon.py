@@ -112,7 +112,10 @@ class MuonConfig(OptimizerConfig):
             if "Embedding" in path_str or "lm_head" in path_str:
                 return "adamw"
             elif is_linear_like_module(param):
-                # muon for linear layers
+                # Muon transform currently only supports Haliax linear modules.
+                # eqx/marker linears remain on adamw fallback until a transform path exists.
+                if not isinstance(param, haliax.nn.Linear):
+                    return label_linear_like_module(param, weight_label="adamw", bias_label="adamw")
                 assert (
                     param._out_first or use_kimi_scaling
                 )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
