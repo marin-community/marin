@@ -29,7 +29,6 @@ from typing import (
 )
 
 import equinox as eqx
-import haliax as hax
 from iris.marin_fs import open_url
 import jax
 import jax.numpy as jnp
@@ -66,7 +65,7 @@ from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils, fsspec_utils
-from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.jax_utils import ensure_scalar, is_named_array, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, activate_mesh, create_mesh_from_axis_specs
 from levanter.utils.partitioning import named_jit, shard, shard_with_axis_mapping
 from levanter.utils.tree_utils import inference_mode
@@ -1103,19 +1102,16 @@ def initialize(config: TrainerConfig | AllConfig):
     levanter.tracker.log_configuration(config)
 
 
-def _ensure_scalar(x: hax.types.Scalar | hax.NamedArray) -> hax.types.Scalar:
-    if isinstance(x, hax.NamedArray):
-        return x.scalar()
-    else:
-        return x
+def _ensure_scalar(x: Scalar):
+    return ensure_scalar(x)
 
 
 def _resolve_axis_in_tree(tree, axis):
     """
     Resolves an axis in a tree of NamedArrays. This is useful for finding the batch axis in a batch of data.
     """
-    for leaf in jax.tree_util.tree_leaves(tree, is_leaf=lambda x: isinstance(x, hax.NamedArray)):
-        if isinstance(leaf, hax.NamedArray):
+    for leaf in jax.tree_util.tree_leaves(tree, is_leaf=is_named_array):
+        if is_named_array(leaf):
             try:
                 return leaf.resolve_axis(axis)
             except ValueError:
