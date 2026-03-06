@@ -656,45 +656,6 @@ def preemptible_constraint(preemptible: bool = True) -> Constraint:
     return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
 
 
-def _find_closest(value: str, known: set[str], max_distance: int = 5) -> str | None:
-    """Return the closest match from *known* by edit distance, or None."""
-    best, best_dist = None, max_distance + 1
-    for candidate in sorted(known):
-        dist = _levenshtein(value, candidate)
-        if dist < best_dist:
-            best, best_dist = candidate, dist
-    return best if best_dist <= max_distance else None
-
-
-def _levenshtein(a: str, b: str) -> int:
-    if len(a) < len(b):
-        return _levenshtein(b, a)
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a):
-        curr = [i + 1] + [0] * len(b)
-        for j, cb in enumerate(b):
-            curr[j + 1] = min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (ca != cb))
-        prev = curr
-    return prev[-1]
-
-
-def known_regions_and_zones(config) -> tuple[set[str], set[str]]:
-    """Extract known regions and zones from an IrisClusterConfig proto.
-
-    Returns:
-        (regions, zones) sets derived from scale group worker attributes.
-    """
-    regions: set[str] = set()
-    zones: set[str] = set()
-    for sg in config.scale_groups.values():
-        attrs = sg.worker.attributes
-        if REGION_ATTRIBUTE_KEY in attrs:
-            regions.add(attrs[REGION_ATTRIBUTE_KEY])
-        if ZONE_ATTRIBUTE_KEY in attrs:
-            zones.add(attrs[ZONE_ATTRIBUTE_KEY])
-    return regions, zones
-
-
 def zone_constraint(zone: str) -> Constraint:
     """Constraint requiring workers to be in a given zone."""
     if not zone:
