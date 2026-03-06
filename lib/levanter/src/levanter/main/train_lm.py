@@ -137,7 +137,9 @@ def main(config: TrainLmConfig):
         parameter_axis_mapping = trainer.parameter_axis_mapping
 
         # some axes we need
-        batch_axis_resource = trainer.batch_axis_resource
+        batch_axis_resource = compute_axis_mapping.get(
+            config.trainer.batch_axis_name, config.trainer.batch_axis_resource
+        )
         model_max_seq_len = config.model.max_seq_len
         train_length = config.train_seq_len
         if train_length is None:
