@@ -1,8 +1,8 @@
 name: Marin - CoreWeave GPU Canary Ferry
 
 on:
-  # schedule:
-  #   - cron: '0 10 * * *'  # Daily at 10 AM UTC — disabled until worker overwhelm is fixed (#3062)
+  schedule:
+    - cron: '0 10 * * *'  # Daily at 10 AM UTC
   workflow_dispatch:
 
 permissions:
@@ -48,8 +48,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Start CoreWeave cluster
-        run: .venv/bin/iris --config=lib/iris/examples/coreweave.yaml cluster start
+        run: .venv/bin/iris -v --config=lib/iris/examples/coreweave.yaml cluster start
         env:
+          BUILDKIT_PROGRESS: plain
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
@@ -68,3 +69,16 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      # `cluster stop` only deletes Pods; NodePools survive and rely on the
+      # CW autoscaler to scale down. Delete them explicitly to avoid lingering
+      # H100 costs. We attempt both even if one fails — cost protection matters
+      # more than clean state.
+      # TODO(#3277): Move NodePool teardown into Iris (e.g. `iris cluster stop
+      # --delete-nodepools`) so CI doesn't leak the `iris-iris-managed` label.
+      - name: Tear down CoreWeave cluster
+        if: always()
+        run: |
+          .venv/bin/iris -v --config=lib/iris/examples/coreweave.yaml cluster stop || true
+          kubectl --kubeconfig ~/.kube/coreweave-iris \
+            delete nodepool -l iris-iris-managed=true

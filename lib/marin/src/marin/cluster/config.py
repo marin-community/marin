@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Configuration management for cluster operations."""
@@ -207,9 +207,7 @@ CONFIGS = {
         "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v6e",
         "min_workers": 0,
-        "worker_targets": {
-            "v6e-128": 8,
-        },
+        "worker_targets": {},
     },
     "marin-us-east5": {
         "NAME": "marin-us-east5",
@@ -220,9 +218,7 @@ CONFIGS = {
         "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v6e",
         "min_workers": 0,
-        "worker_targets": {
-            "v6e-128": 8,
-        },
+        "worker_targets": {},
     },
     "marin-us-east5-a": {
         "NAME": "marin-us-east5-a",
@@ -234,7 +230,8 @@ CONFIGS = {
         "tpu_generation": "v5p",
         "min_workers": 8,
         "worker_targets": {
-            "v5p-64": 4,
+            "v5p-8": 8,
+            "v5p-64": 0,
             "v5p-2048": 0,
         },
     },

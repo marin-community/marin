@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,11 +38,14 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
+from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.platform._worker_base import RemoteExecWorkerBase
@@ -94,6 +97,66 @@ _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
 _GCE_VM_SLICE_SSH_USER = "iris"
+
+# Default TTL for gcloud subprocess call cache. Concurrent callers with
+# identical args share a single subprocess invocation via per-key locking.
+_GCLOUD_CACHE_TTL_SECS = 5.0
+
+
+class _GcloudCache:
+    """Thread-safe TTL cache for gcloud subprocess calls.
+
+    Keyed by the full command-line tuple. Concurrent callers that request the
+    same command while a subprocess is already in-flight block on a per-key lock
+    and receive the same result, avoiding redundant gcloud invocations.
+    """
+
+    def __init__(self, ttl: float = _GCLOUD_CACHE_TTL_SECS):
+        self._ttl = ttl
+        self._lock = threading.Lock()
+        # key -> (result_json_str, returncode, stderr, timestamp)
+        self._cache: dict[tuple[str, ...], tuple[str, int, str, float]] = {}
+        # key -> lock for in-flight deduplication
+        self._key_locks: dict[tuple[str, ...], threading.Lock] = {}
+
+    def run(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        """Run a gcloud command, returning a cached result if available."""
+        key = tuple(cmd)
+        now = time.monotonic()
+
+        # Fast path: check cache under the global lock.
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                stdout, returncode, stderr, ts = cached
+                if now - ts < self._ttl:
+                    return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+            # Get or create a per-key lock so only one thread executes the subprocess.
+            if key not in self._key_locks:
+                self._key_locks[key] = threading.Lock()
+            key_lock = self._key_locks[key]
+
+        with key_lock:
+            # Double-check: another thread may have populated the cache while we waited.
+            with self._lock:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    stdout, returncode, stderr, ts = cached
+                    if time.monotonic() - ts < self._ttl:
+                        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            with self._lock:
+                self._cache[key] = (result.stdout, result.returncode, result.stderr, time.monotonic())
+
+            return result
+
+    def invalidate(self) -> None:
+        """Clear all cached entries (e.g. after a mutating operation)."""
+        with self._lock:
+            self._cache.clear()
 
 
 def _format_labels(labels: dict[str, str]) -> str:
@@ -379,6 +442,7 @@ class GcpSliceHandle:
         _ssh_config: config_pb2.SshConfig | None = None,
         _state: str = "READY",
         _bootstrapping: bool = False,
+        _gcloud_cache: _GcloudCache | None = None,
     ):
         self._slice_id = _slice_id
         self._zone = _zone
@@ -392,6 +456,7 @@ class GcpSliceHandle:
         self._state = _state
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
+        self._gcloud_cache = _gcloud_cache
 
     @property
     def slice_id(self) -> str:
@@ -516,6 +581,8 @@ class GcpSliceHandle:
             error = result.stderr.strip()
             if "not found" not in error.lower():
                 raise RuntimeError(f"Failed to delete TPU {self._slice_id}: {error}")
+        if self._gcloud_cache:
+            self._gcloud_cache.invalidate()
 
 
 class GcpVmSliceHandle:
@@ -533,6 +600,7 @@ class GcpVmSliceHandle:
         _label_prefix: str,
         _ssh_config: config_pb2.SshConfig | None = None,
         _bootstrapping: bool = False,
+        _gcloud_cache: _GcloudCache | None = None,
     ):
         self._slice_id = _slice_id
         self._vm_name = _vm_name
@@ -545,6 +613,7 @@ class GcpVmSliceHandle:
         self._ssh_config = _ssh_config
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
+        self._gcloud_cache = _gcloud_cache
 
     @property
     def slice_id(self) -> str:
@@ -649,6 +718,8 @@ class GcpVmSliceHandle:
             error = result.stderr.strip()
             if "not found" not in error.lower():
                 raise RuntimeError(f"Failed to delete VM {self._vm_name} for slice {self._slice_id}: {error}")
+        if self._gcloud_cache:
+            self._gcloud_cache.invalidate()
 
 
 # ============================================================================
@@ -678,6 +749,7 @@ class GcpPlatform:
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
+        self._gcloud_cache = _GcloudCache()
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
@@ -815,9 +887,21 @@ class GcpPlatform:
         config: config_pb2.SliceConfig,
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> GcpSliceHandle:
-        """Create a TPU slice via gcloud."""
+        """Create a TPU slice via gcloud.
+
+        When worker_config is provided the bootstrap script is passed as TPU
+        metadata (startup-script) so each worker VM self-bootstraps on first
+        boot, matching the pattern used for GCE VM slices. Bootstrap progress
+        is monitored via health endpoint polling rather than SSH.
+        """
         gcp = config.gcp
         slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+
+        # Pre-render bootstrap script for metadata embedding.
+        startup_script: str | None = None
+        if worker_config:
+            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
+            startup_script = build_worker_bootstrap_script(worker_config)
 
         cmd = [
             "gcloud",
@@ -838,9 +922,23 @@ class GcpPlatform:
         if config.preemptible:
             cmd.append("--preemptible")
 
+        # Write startup-script to a temp file and pass via --metadata-from-file
+        # to avoid shell-escaping issues with large inline scripts.
+        script_file_path: str | None = None
+        if startup_script:
+            f = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+            f.write(startup_script)
+            f.close()
+            script_file_path = f.name
+            cmd.append(f"--metadata-from-file=startup-script={script_file_path}")
+
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
         logger.info("gcloud command: %s", cmd)
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            if script_file_path:
+                os.unlink(script_file_path)
         if result.returncode != 0:
             # GCP may have partially created the resource before reporting failure.
             # Best-effort delete to avoid orphaned TPU VMs.
@@ -857,14 +955,14 @@ class GcpPlatform:
             _accelerator_variant=config.accelerator_variant,
             _ssh_config=self._ssh_config,
             _bootstrapping=worker_config is not None,
+            _gcloud_cache=self._gcloud_cache,
         )
 
         if worker_config:
-            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
 
             def _bootstrap_worker():
                 try:
-                    self._run_bootstrap(handle, worker_config)
+                    self._run_tpu_bootstrap(handle, worker_config)
                 except Exception as e:
                     logger.error("Bootstrap failed for slice %s: %s", handle.slice_id, e)
                     with handle._bootstrap_lock:
@@ -957,6 +1055,7 @@ class GcpPlatform:
             _label_prefix=self._label_prefix,
             _ssh_config=self._ssh_config,
             _bootstrapping=worker_config is not None,
+            _gcloud_cache=self._gcloud_cache,
         )
 
         if worker_config:
@@ -977,26 +1076,24 @@ class GcpPlatform:
 
         return handle
 
-    def _run_bootstrap(
+    def _run_tpu_bootstrap(
         self,
         handle: GcpSliceHandle,
         worker_config: config_pb2.WorkerConfig,
         poll_interval: float = 10.0,
         cloud_ready_timeout: float = 600.0,
+        bootstrap_timeout: float = 600.0,
     ) -> None:
-        """Wait for slice to reach cloud READY with all workers, then bootstrap in parallel.
+        """Monitor TPU startup-script bootstrap via health endpoint polling.
 
-        Phase 1: Polls _describe_cloud() until the TPU is READY and all workers
-        have IP addresses. GCP may report READY before all network endpoints are
-        populated, so we keep polling until every worker has an internal IP.
-
-        Phase 2: Bootstraps all workers in parallel threads. Each thread waits
-        for SSH connectivity then runs the bootstrap script. This mirrors the old
-        bootstrap_slice_vms() discovery-and-parallel-bootstrap pattern.
+        The bootstrap script was baked into TPU metadata at creation time.
+        Phase 1: Wait for cloud READY with all worker IPs.
+        Phase 2: Poll worker health endpoints until all respond healthy.
+        On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
         """
-        # Phase 1: Wait for cloud READY with all worker IPs populated
-        deadline = time.monotonic() + cloud_ready_timeout
-        while True:
+        # Phase 1: Wait for cloud READY with all worker IPs populated.
+        deadline = Deadline.from_now(Duration.from_seconds(cloud_ready_timeout))
+        while not deadline.expired():
             cloud_status = handle._describe_cloud()
             if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
                 raise PlatformError(
@@ -1012,48 +1109,87 @@ class GcpPlatform:
                     sum(1 for w in cloud_status.workers if w.internal_address),
                     cloud_status.worker_count,
                 )
-            if time.monotonic() > deadline:
-                raise PlatformError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
             time.sleep(poll_interval)
+        else:
+            raise PlatformError(f"Slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
 
-        # Phase 2: Bootstrap all workers in parallel.
+        # Phase 2: Poll health endpoints for all workers.
         workers = cloud_status.workers
-        logger.info("Bootstrapping %d workers for slice %s", len(workers), handle.slice_id)
-        errors: list[tuple[str, Exception]] = []
+        worker_addrs = [(w.worker_id, w.internal_address) for w in workers]
+        healthy_workers: set[str] = set()
+        health_deadline = Deadline.from_now(Duration.from_seconds(bootstrap_timeout))
 
-        def _bootstrap_one(worker: GcpWorkerHandle) -> None:
-            try:
-                if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
-                    raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-                script = build_worker_bootstrap_script(worker_config)
-                worker.bootstrap(script)
-            except Exception as e:
-                errors.append((worker.worker_id, e))
+        logger.info(
+            "Polling health endpoints for %d workers in slice %s",
+            len(worker_addrs),
+            handle.slice_id,
+        )
 
-        threads: list[threading.Thread] = []
-        for worker in workers:
-            t = threading.Thread(
-                target=_bootstrap_one,
-                args=(worker,),
-                name=f"bootstrap-{worker.worker_id}",
-                daemon=True,
-            )
-            threads.append(t)
-            t.start()
+        while not health_deadline.expired():
+            for worker_id, addr in worker_addrs:
+                if worker_id in healthy_workers:
+                    continue
+                try:
+                    resp = urllib.request.urlopen(
+                        f"http://{addr}:{worker_config.port}/health",
+                        timeout=5,
+                    )
+                    if resp.status == 200:
+                        healthy_workers.add(worker_id)
+                        logger.info("Worker %s is healthy", worker_id)
+                except Exception:
+                    pass  # not ready yet
 
-        for t in threads:
-            t.join()
-
-        if errors:
-            failed_ids = [wid for wid, _ in errors]
+            if len(healthy_workers) == len(worker_addrs):
+                break
+            time.sleep(poll_interval)
+        else:
+            self._fetch_bootstrap_logs(handle)
             raise PlatformError(
-                f"Bootstrap failed for {len(errors)}/{len(workers)} workers in slice {handle.slice_id}: "
-                f"{', '.join(failed_ids)}: {errors[0][1]}"
+                f"TPU slice {handle.slice_id} bootstrap timed out: "
+                f"{len(healthy_workers)}/{len(worker_addrs)} workers healthy"
             )
 
-        logger.info("Bootstrap completed for slice %s (%d workers)", handle.slice_id, len(workers))
+        logger.info("Bootstrap completed for TPU slice %s (%d workers)", handle.slice_id, len(workers))
         with handle._bootstrap_lock:
             handle._bootstrap_state = CloudSliceState.READY
+
+    def _fetch_bootstrap_logs(self, handle: GcpSliceHandle) -> None:
+        """Fetch [iris-init] log entries from Cloud Logging for diagnostics.
+
+        Called only on bootstrap failure/timeout. Queries the last 30 minutes
+        of logs for the TPU's VMs.
+        """
+        log_filter = (
+            f'resource.type="gce_instance" '
+            f'textPayload:"[iris-init]" '
+            f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}"'
+        )
+        cmd = [
+            "gcloud",
+            "logging",
+            "read",
+            log_filter,
+            f"--project={self._project_id}",
+            "--freshness=30m",
+            "--limit=200",
+            "--format=value(textPayload)",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            logger.warning("Cloud Logging query timed out for %s", handle.slice_id)
+            return
+
+        if result.returncode == 0 and result.stdout.strip():
+            logger.error("Bootstrap logs for %s:\n%s", handle.slice_id, result.stdout)
+        else:
+            logger.warning(
+                "Could not fetch Cloud Logging for %s (rc=%d): %s",
+                handle.slice_id,
+                result.returncode,
+                result.stderr.strip(),
+            )
 
     def _run_vm_slice_bootstrap(
         self,
@@ -1140,10 +1276,22 @@ class GcpPlatform:
         zones: list[str],
         labels: dict[str, str] | None = None,
     ) -> list[GcpSliceHandle | GcpVmSliceHandle]:
-        """List TPU and VM slices across zones, optionally filtered by labels."""
-        results: list[GcpSliceHandle | GcpVmSliceHandle] = []
-        for zone in zones:
-            for tpu_data in self._gcloud_list_tpus(zone, labels):
+        """List TPU and VM slices across zones, optionally filtered by labels.
+
+        Queries all zones in parallel (TPU + VM per zone) to avoid the latency
+        of sequential gcloud subprocess calls. Results are cached briefly via
+        ``_GcloudCache`` so back-to-back calls avoid redundant subprocesses.
+        """
+
+        def _query_zone(zone: str) -> list[GcpSliceHandle | GcpVmSliceHandle]:
+            zone_results: list[GcpSliceHandle | GcpVmSliceHandle] = []
+
+            # Run TPU and VM list queries concurrently within the zone.
+            with ThreadPoolExecutor(max_workers=2) as inner:
+                tpu_future = inner.submit(self._gcloud_list_tpus, zone, labels)
+                vm_future = inner.submit(self._gcloud_list_instances, zone, labels)
+
+            for tpu_data in tpu_future.result():
                 state = tpu_data.get("state", "UNKNOWN")
                 if state not in ("READY", "CREATING"):
                     logger.info("Skipping TPU %s in state %s", tpu_data["name"], state)
@@ -1156,7 +1304,7 @@ class GcpPlatform:
                 if "/" in accelerator_type:
                     accelerator_type = accelerator_type.split("/")[-1]
 
-                results.append(
+                zone_results.append(
                     GcpSliceHandle(
                         _slice_id=tpu_data["name"],
                         _zone=zone,
@@ -1167,10 +1315,11 @@ class GcpPlatform:
                         _accelerator_variant=accelerator_type,
                         _ssh_config=self._ssh_config,
                         _state=state,
+                        _gcloud_cache=self._gcloud_cache,
                     )
                 )
 
-            for vm_data in self._gcloud_list_instances(zone, labels):
+            for vm_data in vm_future.result():
                 vm_state = vm_data.get("status", "UNKNOWN")
                 if vm_state not in _ACTIVE_VM_SLICE_STATES:
                     logger.info("Skipping VM instance %s in state %s", vm_data.get("name", ""), vm_state)
@@ -1179,7 +1328,7 @@ class GcpPlatform:
                 slice_id = vm_labels.get(self._iris_labels.iris_slice_id, "")
                 if not slice_id:
                     continue
-                results.append(
+                zone_results.append(
                     GcpVmSliceHandle(
                         _slice_id=slice_id,
                         _vm_name=vm_data.get("name", ""),
@@ -1189,9 +1338,21 @@ class GcpPlatform:
                         _created_at=_parse_vm_created_at(vm_data),
                         _label_prefix=self._label_prefix,
                         _ssh_config=self._ssh_config,
+                        _gcloud_cache=self._gcloud_cache,
                     )
                 )
 
+            return zone_results
+
+        if len(zones) <= 1:
+            # Fast path: no thread overhead for single zone.
+            return _query_zone(zones[0]) if zones else []
+
+        results: list[GcpSliceHandle | GcpVmSliceHandle] = []
+        with ThreadPoolExecutor(max_workers=len(zones)) as executor:
+            futures = {executor.submit(_query_zone, z): z for z in zones}
+            for future in as_completed(futures):
+                results.extend(future.result())
         return results
 
     def list_all_slices(self, labels: dict[str, str] | None = None) -> list[GcpSliceHandle | GcpVmSliceHandle]:
@@ -1207,9 +1368,15 @@ class GcpPlatform:
         zones: list[str],
         labels: dict[str, str] | None = None,
     ) -> list[GcpStandaloneWorkerHandle]:
-        """List GCE instances across zones, optionally filtered by labels."""
-        results: list[GcpStandaloneWorkerHandle] = []
-        for zone in zones:
+        """List GCE instances across zones, optionally filtered by labels.
+
+        Queries all zones in parallel to avoid sequential gcloud subprocess latency.
+        Results are cached briefly via ``_GcloudCache`` so back-to-back calls
+        (e.g. from ``list_slices`` and ``list_vms``) share the same subprocess result.
+        """
+
+        def _query_zone(zone: str) -> list[GcpStandaloneWorkerHandle]:
+            zone_results: list[GcpStandaloneWorkerHandle] = []
             for instance in self._gcloud_list_instances(zone, labels):
                 name = instance.get("name", "")
                 network_interfaces = instance.get("networkInterfaces", [])
@@ -1226,7 +1393,7 @@ class GcpPlatform:
                     zone=zone,
                     vm_name=name,
                 )
-                results.append(
+                zone_results.append(
                     GcpStandaloneWorkerHandle(
                         _vm_id=name,
                         _internal_address=internal_ip,
@@ -1236,7 +1403,16 @@ class GcpPlatform:
                         _remote_exec=remote_exec,
                     )
                 )
+            return zone_results
 
+        if len(zones) <= 1:
+            return _query_zone(zones[0]) if zones else []
+
+        results: list[GcpStandaloneWorkerHandle] = []
+        with ThreadPoolExecutor(max_workers=len(zones)) as executor:
+            futures = {executor.submit(_query_zone, z): z for z in zones}
+            for future in as_completed(futures):
+                results.extend(future.result())
         return results
 
     def tunnel(
@@ -1273,6 +1449,11 @@ class GcpPlatform:
         address, _vm = vm_start_controller(self, config)
         return address
 
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller container in-place on existing GCP VM."""
+        address, _vm = vm_restart_controller(self, config)
+        return address
+
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller on GCP by terminating the controller VM."""
         vm_stop_controller(self, config)
@@ -1284,11 +1465,6 @@ class GcpPlatform:
         label_prefix: str | None = None,
     ) -> list[str]:
         return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        logger.info("Reload on GCP uses full teardown + restart")
-        self.stop_all(config)
-        return self.start_controller(config)
 
     # ========================================================================
     # Internal helpers
@@ -1340,7 +1516,7 @@ class GcpPlatform:
         if labels:
             cmd.append(f"--filter={_build_label_filter(labels)}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self._gcloud_cache.run(cmd)
         if result.returncode != 0:
             logger.warning("Failed to list TPUs in zone %s: %s", zone, result.stderr.strip())
             return []
@@ -1366,7 +1542,7 @@ class GcpPlatform:
         if labels:
             cmd.append(f"--filter={_build_label_filter(labels)}")
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self._gcloud_cache.run(cmd)
         if result.returncode != 0:
             logger.warning("Failed to list instances in zone %s: %s", zone, result.stderr.strip())
             return []
@@ -1395,7 +1571,7 @@ def _gcp_tunnel(
     Picks a free port automatically if none is specified.
     """
     if local_port is None:
-        local_port = find_free_port(start=10000)
+        local_port = find_free_port()
 
     labels = Labels(label_prefix)
     label_filter = f"labels.{labels.iris_controller}=true AND status=RUNNING"
@@ -1432,6 +1608,8 @@ def _gcp_tunnel(
             "-L",
             f"127.0.0.1:{local_port}:localhost:10000",
             "-N",
+            "-o",
+            "BatchMode=yes",
             "-o",
             "StrictHostKeyChecking=no",
             "-o",

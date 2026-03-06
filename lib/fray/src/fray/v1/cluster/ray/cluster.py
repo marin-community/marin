@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Ray-based cluster implementation."""
@@ -229,12 +229,16 @@ class RayCluster(Cluster):
         else:
             remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(callable_ep.callable)
 
+        # Only propagate env_vars to TPU workers. Other runtime_env keys (pip, py_modules,
+        # etc.) reference local temp files that don't exist on the run_on_pod_ray worker node.
+        tpu_runtime_env = {"env_vars": runtime_env["env_vars"]} if "env_vars" in runtime_env else {}
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.variant,
             num_slices=request.resources.replicas,
             max_retries_preemption=10000,
             max_retries_failure=1,
+            runtime_env=tpu_runtime_env,
         )
 
         job_id = JobId(str(id(object_ref)))

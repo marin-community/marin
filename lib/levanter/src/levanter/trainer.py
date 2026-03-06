@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import atexit
@@ -29,8 +29,8 @@ from typing import (
 )
 
 import equinox as eqx
-import fsspec
 import haliax as hax
+from iris.marin_fs import open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -516,6 +516,7 @@ class Trainer:
         Generator that yields training steps and runs hooks.
         """
         iter_data = iter(train_loader)
+        is_first_step = True
 
         while int(state.step) < self.num_train_steps:
             with capture_time() as loading_time:
@@ -524,8 +525,19 @@ class Trainer:
                 except StopIteration:
                     logger.info("Reached end of training data loader")
                     break
+
+            if is_first_step:
+                logger.info(
+                    "First batch loaded in %.1fs, starting first train step (includes JIT compilation)...",
+                    loading_time(),
+                )
+
             info = self.train_step(state, example)
             state = info.state
+
+            if is_first_step:
+                logger.info("First train step completed in %.1fs (step %d)", info.step_duration, info.step)
+                is_first_step = False
 
             levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
 
@@ -736,10 +748,10 @@ class Trainer:
         artifact_path = dir / name
 
         if isinstance(artifact, str):
-            with fsspec.open(str(artifact_path), "w", compression="infer") as f:
+            with open_url(str(artifact_path), "w", compression="infer") as f:
                 f.write(artifact)
         else:
-            with fsspec.open(str(artifact_path), "wb", compression="infer") as f:
+            with open_url(str(artifact_path), "wb", compression="infer") as f:
                 f.write(artifact)
 
         self.tracker.log_artifact(artifact_path, name=name, type=type)
@@ -747,13 +759,19 @@ class Trainer:
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
         logged = False
         if self.config.log_jaxprs and name not in self._logged_jaxprs:
-            jaxpr, _, _ = eqx.filter_make_jaxpr(fn)(*args, **kwargs)
+            logger.info("Tracing %s for jaxpr...", name)
+            with capture_time() as t:
+                jaxpr, _, _ = eqx.filter_make_jaxpr(fn)(*args, **kwargs)
+            logger.info("Traced %s in %.1fs", name, t())
             pretty = jaxpr.pretty_print(name_stack=True, use_color=False)
             self.write_artifact(f"{name}.jaxpr.txt.gz", pretty, type="jaxpr")
             logged = True
 
         if self.config.log_xla_hlo and name not in self._logged_jaxprs:
-            hlo = fn.lower(*args, **kwargs).as_text("stablehlo")
+            logger.info("Lowering %s to HLO...", name)
+            with capture_time() as t:
+                hlo = fn.lower(*args, **kwargs).as_text("stablehlo")
+            logger.info("Lowered %s in %.1fs", name, t())
             self.write_artifact(f"{name}.hlo.txt", hlo, type="hlo")
             logged = True
 

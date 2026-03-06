@@ -111,6 +111,10 @@ uv run python lib/marin/tools/profile_summary.py report \
   --output /tmp/profile_report.md
 ```
 
+Trace quality checks are surfaced in `trace_overview`:
+- `suspected_truncation`: `true` when event counts match a known export cap pattern.
+- `quality_warnings`: warnings to treat hotspot/gap attribution with extra caution.
+
 ## Agent Queries
 Top ops:
 
@@ -135,6 +139,12 @@ uv run python lib/marin/tools/profile_summary.py query \
   --summary /tmp/profile_summary.json \
   --question "gap before _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1"
 ```
+
+Pre-op gap attribution is marker-aware:
+- `gap_before_ops[].payload_op`: op where useful work starts after the idle period.
+- `gap_before_ops[].marker_op`: first op observed after the gap (often lightweight setup like `iota.*`).
+
+This avoids over-attributing stalls to tiny "first op" markers when the actual payload starts immediately after.
 
 Hierarchical semantic regions (derived from `tf_op` paths when available):
 

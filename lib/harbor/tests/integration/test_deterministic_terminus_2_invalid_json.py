@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Runtime test with a fake LLM server that returns invalid JSON responses for terminus_2.

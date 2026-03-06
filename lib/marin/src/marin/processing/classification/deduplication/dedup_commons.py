@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterator
@@ -23,6 +23,8 @@ from zephyr.expr import col
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_FILETYPES: list[str] = ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"]
 
 
 class DedupMode(StrEnum):
@@ -62,7 +64,7 @@ class DedupConfig:
     """
 
     input_paths: str | list[str]
-    filetypes: list[str] = field(default_factory=lambda: ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"])
+    filetypes: list[str] = field(default_factory=lambda: list(DEFAULT_FILETYPES))
     output_path: str = THIS_OUTPUT_PATH
     processes: int = 1
     mode: DedupMode = DedupMode.EXACT_PARAGRAPH
@@ -78,19 +80,38 @@ class DedupConfig:
 
 
 def deduplicate(config: DedupConfig):
-    """Main entry point for deduplication"""
+    """Main entry point for deduplication. Unpacks config and dispatches to mode-specific functions."""
     if config.mode == DedupMode.EXACT_PARAGRAPH:
         from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 
-        return dedup_exact_paragraph(config)
+        return dedup_exact_paragraph(
+            input_paths=config.input_paths,
+            output_path=config.output_path,
+            text_field=config.text_field,
+            filetypes=config.filetypes,
+        )
     elif config.mode == DedupMode.EXACT_DOCUMENT:
         from marin.processing.classification.deduplication.exact import dedup_exact_document
 
-        return dedup_exact_document(config)
+        return dedup_exact_document(
+            input_paths=config.input_paths,
+            output_path=config.output_path,
+            text_field=config.text_field,
+            filetypes=config.filetypes,
+        )
     elif config.mode == DedupMode.FUZZY_DOCUMENT:
         from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 
-        return dedup_fuzzy_document(config)
+        return dedup_fuzzy_document(
+            input_paths=config.input_paths,
+            output_path=config.output_path,
+            text_field=config.text_field,
+            filetypes=config.filetypes,
+            fuzzy_minhash_num_perms=config.fuzzy_minhash_num_perms,
+            fuzzy_minhash_num_bands=config.fuzzy_minhash_num_bands,
+            fuzzy_minhash_ngram_size=config.fuzzy_minhash_ngram_size,
+            fuzzy_minhash_seed=config.fuzzy_minhash_seed,
+        )
     else:
         raise ValueError(f"Unknown mode {config.mode}")
 
@@ -153,15 +174,15 @@ def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) 
     return all_files
 
 
-def _init_wandb(config: DedupConfig):
+def _init_wandb(*, mode: DedupMode, input_paths: str | list[str], processes: int = 1):
     """Initialize wandb for deduplication tracking."""
     init_wandb(
-        run_name=f"{config.mode}",
-        tags=[str(config.mode)],
+        run_name=f"{mode}",
+        tags=[str(mode)],
         config={
-            "mode": str(config.mode),
-            "input_path": config.input_paths,
-            "processes": config.processes,
+            "mode": str(mode),
+            "input_path": input_paths,
+            "processes": processes,
         },
     )
 

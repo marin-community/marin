@@ -40,6 +40,32 @@ uv run lib/marin/src/marin/run/ray_run.py \
   -- python experiments/grug/base/launch.py
 ```
 
+## Visual diff for template variants
+
+When template-copying `experiments/grug/base/` to a new variant, use the HTML diff tool to review changes:
+
+```bash
+uv run python scripts/grug_dir_diff.py \
+  experiments/grug/base \
+  experiments/grug/<variant> \
+  --out /tmp/grug-diff
+```
+
+What it does:
+
+- Recursively compares both directories (default extensions: `.py`, `.md`)
+- Builds one `/tmp/grug-diff/index.html` report with top-level summary + file table
+- Renders inline side-by-side diffs on that same page (changed/added/removed by default)
+- PRs that add a new `experiments/grug/<variant>/` also get this diff posted automatically by CI.
+
+Useful flags:
+
+- `--extensions .py,.md`: restrict file types
+- `--all-files`: include everything instead of extension filtering
+- `--show-unchanged`: generate pages for unchanged files too
+- `--context-lines 5`: tune context around edits
+- `--no-open`: generate the report without launching a browser
+
 ## Common edit points
 
 - Architecture changes: `experiments/grug/base/model.py`
@@ -105,6 +131,24 @@ uv run lib/marin/src/marin/run/ray_run.py \
 
 - Keep core training/eval metrics aligned with classic Levanter (`train/loss`, `throughput/*`, `eval/*`).
 - Prefer shared helpers only for generic infrastructure; keep variant behavior local to the template.
+
+## Variant contract (enforced by tests)
+
+`tests/test_grug_variant_contracts.py` treats each subdirectory under `experiments/grug/` as a variant and
+enforces these minimum interfaces:
+
+- If `<variant>/model.py` exists, it must define:
+  - `GrugModelConfig` constructable as `GrugModelConfig(vocab_size=...)`
+  - `Transformer` with `next_token_loss(...)`
+  - `debug_mesh_and_token_pspec(num_devices: int)`
+- If `<variant>/train.py` exists, it must define:
+  - `initial_state(model_config, *, optimizer, mp, key)` (all required)
+  - `_make_train_step(...)`
+  - `run_grug(...)`
+- If both `model.py` and `train.py` exist, the variant must lower a one-step train path under abstract mesh via
+  `eqx.filter_eval_shape`.
+- Escape hatch: add `# GRUG NOVERIFY` anywhere in `<variant>/train.py` to exclude that variant from these contract
+  checks.
 
 ## Further guidance
 

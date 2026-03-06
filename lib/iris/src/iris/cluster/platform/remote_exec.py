@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Remote execution utilities and connection implementations for worker management.
@@ -104,6 +104,7 @@ class GcloudRemoteExec:
             f"--project={self.project_id}",
             f"--worker={self.worker_index}",
             "--quiet",
+            "--ssh-flag=-oBatchMode=yes",
             "--command",
             command,
         ]
@@ -153,6 +154,7 @@ class GceRemoteExec:
             f"--zone={self.zone}",
             f"--project={self.project_id}",
             "--quiet",
+            "--ssh-flag=-oBatchMode=yes",
             "--command",
             command,
         ]

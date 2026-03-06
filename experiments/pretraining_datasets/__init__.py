@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -37,6 +37,7 @@ from experiments.pretraining_datasets.nemotron import (
     NEMOTRON_LLAMA3_OVERRIDES,
     NEMOTRON_WEIGHTS,
     downloads as nemotron_downloads,
+    nemotron_mix,
     tokenize_nemotron,
     tokenize_nemotron_subset,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "NEMOTRON_DATASETS",
     "NEMOTRON_LLAMA3_OVERRIDES",
     "NEMOTRON_WEIGHTS",
+    "nemotron_mix",
     "tokenize_dolma",
     "tokenize_dolmino",
     "tokenize_dolmino_math",

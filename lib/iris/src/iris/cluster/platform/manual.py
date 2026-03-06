@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 
+from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.platform._worker_base import RemoteExecWorkerBase
@@ -430,6 +431,11 @@ class ManualPlatform:
         address, _vm = vm_start_controller(self, config)
         return address
 
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller container in-place on the manual host."""
+        address, _vm = vm_restart_controller(self, config)
+        return address
+
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller on the manual host."""
         vm_stop_controller(self, config)
@@ -441,16 +447,6 @@ class ManualPlatform:
         label_prefix: str | None = None,
     ) -> list[str]:
         return default_stop_all(self, config, dry_run=dry_run, label_prefix=label_prefix)
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        label_prefix = config.platform.label_prefix or "iris"
-        labels = Labels(label_prefix)
-        all_slices = self.list_all_slices(labels={labels.iris_managed: "true"})
-        for s in all_slices:
-            logger.info("Terminating slice %s for reload", s.slice_id)
-            s.terminate()
-        self.stop_controller(config)
-        return self.start_controller(config)
 
     # ========================================================================
     # Internal helpers
