@@ -243,6 +243,9 @@ def cb_tagged_lm_evaluate(
         def loss_fn(model: ArrayLmHeadModel, batch: LmEvalExample) -> LossFnOutput:
             return _default_lm_eval_loss_fn(model, batch, batch_axis_name=batch_axis_name, mp=mp)
 
+    if device_mesh is None:
+        raise ValueError("cb_tagged_lm_evaluate requires an explicit device_mesh.")
+
     if batch_axis_resource is None:
         batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_mapping)
 
@@ -400,12 +403,15 @@ class TaggedEvaluator(Generic[Ex, M]):
         tagged_eval_sets: Sequence[tuple[AsyncDataset[Ex], Sequence[str]]],
         loss_fn: Callable[[M, Ex], LossFnOutput],
         tokenizer: Optional[HfTokenizer] = None,
-        device_mesh=None,
+        device_mesh: Mesh | None = None,
         compute_axis_mapping=None,
         batch_axis_resource=None,
         batch_axis_name: str = "batch",
         max_examples_per_dataset=None,
     ):
+        if device_mesh is None:
+            raise ValueError("TaggedEvaluator requires an explicit device_mesh.")
+
         if batch_axis_resource is None:
             batch_axis_resource = resolve_batch_axis_resource(batch_axis_name, compute_axis_mapping)
         loader_axis_resources = compute_axis_mapping
@@ -425,9 +431,8 @@ class TaggedEvaluator(Generic[Ex, M]):
         self.tokenizer = tokenizer
         self.compute_axis_mapping = compute_axis_mapping
         self.per_pos_out_sharding = None
-        if device_mesh is not None and batch_axis_resource is not None:
-            if axis_resource_is_explicit(device_mesh, batch_axis_resource):
-                self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
+        if batch_axis_resource is not None and axis_resource_is_explicit(device_mesh, batch_axis_resource):
+            self.per_pos_out_sharding = NamedSharding(device_mesh, P(batch_axis_resource, None))
 
         self.bytes_per_token = self._calculate_bytes_per_token_type(tokenizer)
         self.hierarchy = self._construct_tag_hierarchy()
@@ -436,7 +441,7 @@ class TaggedEvaluator(Generic[Ex, M]):
     def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
         log2e = jnp.log2(jnp.e)
-        per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
+        per_tag_out_sharding = NamedSharding(self.device_mesh, P(None))
         per_pos_out_sharding = self.per_pos_out_sharding
 
         @named_jit(axis_resources=self.compute_axis_mapping)
