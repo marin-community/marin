@@ -171,32 +171,6 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def build_markdown_digest(summary: ProfileSummary, *, top_k: int = 5, title: str = "Profile Digest") -> str:
-    """Build a compact markdown digest suitable for CI step summaries."""
-    metadata = summary.run_metadata
-    step = summary.step_time.steady_state_steps
-    breakdown = summary.time_breakdown
-
-    lines: list[str] = []
-    lines.append(f"## {title}")
-    lines.append("")
-    lines.append(f"- W&B run id: `{metadata.run_id or 'unknown'}`")
-    lines.append(f"- Steady-state step median: `{_fmt(step.median)}`")
-    lines.append(f"- Steady-state step p90: `{_fmt(step.p90)}`")
-    lines.append(
-        f"- Breakdown shares: compute `{_pct(breakdown.compute.share_of_total)}`, "
-        f"communication `{_pct(breakdown.communication.share_of_total)}`, "
-        f"stall `{_pct(breakdown.stall.share_of_total)}`"
-    )
-    lines.append("")
-    lines.append("| Op | Exclusive Duration | Count |")
-    lines.append("|---|---:|---:|")
-    for op in summary.hot_ops[:top_k]:
-        lines.append(f"| {_md_code(op.name)} | {_fmt(op.exclusive_duration)} | {op.count} |")
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
 def _fmt(value: float | None) -> str:
     if value is None:
         return "n/a"

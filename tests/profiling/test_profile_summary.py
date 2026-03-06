@@ -10,7 +10,7 @@ from pathlib import Path
 # Intentional private import: exercise the truncation-cap heuristic directly.
 from marin.profiling.ingest import _trace_quality_warnings, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
-from marin.profiling.report import build_markdown_digest, build_markdown_report
+from marin.profiling.report import build_markdown_report
 from marin.profiling.schema import PROFILE_SUMMARY_SCHEMA_VERSION, profile_summary_from_dict
 
 
@@ -79,20 +79,6 @@ def test_query_and_compare_helpers(tmp_path: Path) -> None:
     assert "Inclusive %" in report
     assert "Exclusive %" in report
     assert "## Optimization Candidates" in report
-
-
-def test_build_markdown_digest(tmp_path: Path) -> None:
-    trace_path = tmp_path / "digest_trace.json.gz"
-    _write_trace(trace_path, step_durations=[100, 110, 120, 130, 140, 150], softmax_duration=60)
-
-    summary = summarize_trace(trace_path, warmup_steps=2, hot_op_limit=10)
-    digest = build_markdown_digest(summary, top_k=1, title="TPU Canary Profile Digest")
-    assert "## TPU Canary Profile Digest" in digest
-    assert "- W&B run id: `unknown`" in digest
-    assert "- Breakdown shares: compute `" in digest
-    assert "| Op | Exclusive Duration | Count |" in digest
-    op_rows = [line for line in digest.splitlines() if line.startswith("| `")]
-    assert len(op_rows) == 1
 
 
 def test_semantic_family_share_is_bounded_with_global_breakdown(tmp_path: Path) -> None:

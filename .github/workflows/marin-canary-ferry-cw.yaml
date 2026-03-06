@@ -77,40 +77,15 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
-      # Keep these profiling post-run steps in sync with
-      # `.github/workflows/marin-canary-ferry.yaml`.
       - name: Summarize GPU canary profile
         shell: bash -l {0}
         run: |
           .venv/bin/python -m marin.profiling.cli summarize \
             --run-target "$RUN_ID" \
             --entity "$WANDB_ENTITY" \
-            --project "$WANDB_PROJECT" \
-            --output profile_summary.json
-          .venv/bin/python -m marin.profiling.cli report \
-            --summary profile_summary.json \
-            --output profile_report.md
+            --project "$WANDB_PROJECT"
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-
-      - name: Add profile digest to step summary
-        shell: bash -l {0}
-        run: |
-          .venv/bin/python -m marin.profiling.cli digest \
-            --summary profile_summary.json \
-            --title "CoreWeave GPU Canary Profile Digest" \
-            --top-k 5 \
-            --output profile_digest.md
-          cat profile_digest.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload GPU canary profile artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: gpu-canary-profile-${{ env.RUN_ID }}
-          path: |
-            profile_summary.json
-            profile_report.md
-            profile_digest.md
 
       # `cluster stop` only deletes Pods; NodePools survive and rely on the
       # CW autoscaler to scale down. Delete them explicitly to avoid lingering

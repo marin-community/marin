@@ -19,7 +19,7 @@ from marin.profiling.ingest import (
 from marin.profiling.compare_bundle import run_profile_comparison_bundle
 from marin.profiling.publish import publish_profile_summary_artifact
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
-from marin.profiling.report import build_markdown_digest, build_markdown_report
+from marin.profiling.report import build_markdown_report
 from marin.profiling.schema import profile_summary_from_dict
 from marin.profiling.tracking import (
     RegressionThresholds,
@@ -127,12 +127,6 @@ def parse_args() -> argparse.Namespace:
     report.add_argument("--summary", type=Path, required=True, help="Path to a profile summary JSON.")
     report.add_argument("--top-k", type=int, default=10, help="Maximum number of hot ops/collectives in the report.")
     report.add_argument("--output", type=Path, help="Optional markdown output path. Defaults to stdout.")
-
-    digest = subparsers.add_parser("digest", help="Render a compact markdown digest from a summary.")
-    digest.add_argument("--summary", type=Path, required=True, help="Path to a profile summary JSON.")
-    digest.add_argument("--top-k", type=int, default=5, help="Maximum number of top ops in the digest.")
-    digest.add_argument("--title", default="Profile Digest", help="Markdown heading used for the digest.")
-    digest.add_argument("--output", type=Path, help="Optional markdown output path. Defaults to stdout.")
 
     history = subparsers.add_parser("history", help="Summarize a regression tracking JSONL history file.")
     history.add_argument("--history", type=Path, required=True, help="Path to regression history JSONL.")
@@ -276,17 +270,6 @@ def main() -> None:
     if args.command == "report":
         summary = _load_summary(args.summary)
         markdown = build_markdown_report(summary, top_k=args.top_k)
-        if args.output:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(markdown, encoding="utf-8")
-            print(str(args.output))
-        else:
-            print(markdown)
-        return
-
-    if args.command == "digest":
-        summary = _load_summary(args.summary)
-        markdown = build_markdown_digest(summary, top_k=args.top_k, title=args.title)
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(markdown, encoding="utf-8")
