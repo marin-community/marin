@@ -55,7 +55,6 @@ import equinox as eqx
 import jax
 from jaxtyping import PyTree
 
-import haliax
 import haliax as hax
 import haliax.nn as hnn
 from haliax.state_dict import (
@@ -203,7 +202,7 @@ def filter_lora_params(params: M) -> M:
     Filters LoRA parameters from the given parameter tree.
     """
 
-    return eqx.filter(params, is_lora_param, is_leaf=lambda x: is_lora_param(x) or isinstance(x, haliax.NamedArray))
+    return eqx.filter(params, is_lora_param, is_leaf=lambda x: is_lora_param(x) or isinstance(x, hax.NamedArray))
 
 
 def partition_lora_params(params: M) -> Tuple[M, M]:
@@ -247,7 +246,7 @@ def lora_trainable_params_filter(model: M) -> M:
     # Equinox's primitives don't really have a "match all tree nodes matching a predicate" function (just
     # a "match all tree leaves matching a predicate" function), so we need to be just a bit careful.
     # Basically, we want to halt recursion in the tree whenever we hit a node that is a lora param.
-    return haliax.tree_util.tree_map(is_lora_param, model, is_leaf=is_lora_param)
+    return jax.tree_util.tree_map(is_lora_param, model, is_leaf=is_lora_param)
 
 
 def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str, batch_dims: Tuple[Axis, ...]) -> M:
