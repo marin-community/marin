@@ -240,6 +240,68 @@ def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
     assert pallas_tpu._infer_num_tensorcores() == 1
 
 
+def test_pallas_tpu_backward_uses_pallas_by_default(monkeypatch):
+    monkeypatch.delenv("LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH", raising=False)
+    captured: dict[str, bool] = {}
+
+    def fake_make_custom_vjp(
+        b_block_size,
+        h_block_size,
+        v_block_size,
+        dtype,
+        logit_soft_cap,
+        precision,
+        use_bwd_xla_streaming,
+    ):
+        del b_block_size, h_block_size, v_block_size, dtype, logit_soft_cap, precision
+        captured["use_bwd_xla_streaming"] = use_bwd_xla_streaming
+
+        def _fake_fn(x, labels, w):
+            del labels, w
+            zeros = jnp.zeros((x.shape[0],), dtype=x.dtype)
+            return zeros, zeros
+
+        return _fake_fn
+
+    monkeypatch.setattr(pallas_tpu, "_make_custom_vjp", fake_make_custom_vjp)
+    x = jnp.zeros((128, 128), dtype=jnp.float32)
+    w = jnp.zeros((128, 128), dtype=jnp.float32)
+    y = jnp.zeros((128,), dtype=jnp.int32)
+    pallas_tpu.linear_softmax_cross_entropy_loss_pallas(x, y, w, block_sizes=fused_api.BlockSizes.get_default())
+    assert captured["use_bwd_xla_streaming"] is False
+
+
+def test_pallas_tpu_backward_can_force_xla_streaming(monkeypatch):
+    monkeypatch.setenv("LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH", "1")
+    captured: dict[str, bool] = {}
+
+    def fake_make_custom_vjp(
+        b_block_size,
+        h_block_size,
+        v_block_size,
+        dtype,
+        logit_soft_cap,
+        precision,
+        use_bwd_xla_streaming,
+    ):
+        del b_block_size, h_block_size, v_block_size, dtype, logit_soft_cap, precision
+        captured["use_bwd_xla_streaming"] = use_bwd_xla_streaming
+
+        def _fake_fn(x, labels, w):
+            del labels, w
+            zeros = jnp.zeros((x.shape[0],), dtype=x.dtype)
+            return zeros, zeros
+
+        return _fake_fn
+
+    monkeypatch.setattr(pallas_tpu, "_make_custom_vjp", fake_make_custom_vjp)
+    x = jnp.zeros((128, 128), dtype=jnp.float32)
+    w = jnp.zeros((128, 128), dtype=jnp.float32)
+    y = jnp.zeros((128,), dtype=jnp.int32)
+    pallas_tpu.linear_softmax_cross_entropy_loss_pallas(x, y, w, block_sizes=fused_api.BlockSizes.get_default())
+    assert captured["use_bwd_xla_streaming"] is True
+
+
 def test_default_implementation_on_cpu_skips_expected_tpu_warning():
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
@@ -823,6 +885,19 @@ def test_infer_block_sizes_respects_local_batch_and_hidden_divisibility():
     assert block_sizes.h_block_size % 128 == 0
     assert 512 % block_sizes.b_block_size == 0
     assert 768 % block_sizes.h_block_size == 0
+
+
+def test_infer_block_sizes_tpu_v4_huge_batch_small_h_prefers_full_hidden_tile():
+    block_sizes = infer_block_sizes(
+        b=262_144,
+        h=1024,
+        v=128_256,
+        dtype=jnp.bfloat16,
+        device_kind="TPU v4",
+    )
+    assert block_sizes.b_block_size == 1024
+    assert block_sizes.h_block_size == 1024
+    assert block_sizes.v_block_size == 256
 
 
 def test_infer_block_sizes_tpu_v4_huge_batch_small_h_jits_with_pallas():
