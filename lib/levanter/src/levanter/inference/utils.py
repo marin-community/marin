@@ -4,7 +4,6 @@
 import haliax as hax
 import haliax.haxtyping as ht
 import jax.numpy as jnp
-from haliax import NamedArray
 
 INVALID = 2_000_000
 
@@ -29,7 +28,7 @@ def is_valid(x, invalid=INVALID):
     return (x >= 0) & (x != invalid)
 
 
-def masked_set(dest: NamedArray, axis, start, src, num_to_copy) -> NamedArray:
+def masked_set(dest: hax.NamedArray, axis, start, src, num_to_copy) -> hax.NamedArray:
     """
     jit-safe masked memcpy-like operation.
     Copy into dest[selector, axis, start:start+num_to_copy] the values from src[axis, :num_to_copy].
@@ -48,7 +47,11 @@ def masked_set(dest: NamedArray, axis, start, src, num_to_copy) -> NamedArray:
     return dest.at[{axis: dest_arange}].set(src[axis, src_arange], mode="drop")
 
 
-def is_stop_signal(tail_tokens: ht.i32[NamedArray, "position"], stop_sequences: ht.i32[NamedArray, "seq position"], invalid=INVALID) -> ht.bool_[NamedArray, ""]:  # type: ignore
+def is_stop_signal(
+    tail_tokens: ht.i32[hax.NamedArray, "position"],
+    stop_sequences: ht.i32[hax.NamedArray, "seq position"],
+    invalid=INVALID,
+) -> ht.bool_[hax.NamedArray, ""]:  # type: ignore
     """
     Check if tail_tokens ends with any of the stop sequences.
     Stop sequences are **left padded** to the tokens.
@@ -94,7 +97,7 @@ def purge_raw(array: jnp.array, mask, max_nnz=None, invalid=INVALID) -> jnp.ndar
     return new_values
 
 
-def purge(array: NamedArray, mask: NamedArray, invalid=INVALID) -> NamedArray:
+def purge(array: hax.NamedArray, mask: hax.NamedArray, invalid=INVALID) -> hax.NamedArray:
     """
     Set elements of the array to `invalid` where the `mask` is True and slides the rest to the front.
 
