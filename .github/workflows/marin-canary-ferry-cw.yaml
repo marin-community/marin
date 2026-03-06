@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 10 * * *'  # Daily at 10 AM UTC
   workflow_dispatch:
+    inputs:
+      keep_nodepool:
+        description: 'Keep CW node pool alive after the run (for faster re-runs)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read   # actions/checkout
@@ -97,5 +102,9 @@ jobs:
         if: always()
         run: |
           .venv/bin/iris -v --config=lib/iris/examples/coreweave.yaml cluster stop || true
-          kubectl --kubeconfig ~/.kube/coreweave-iris \
-            delete nodepool -l iris-iris-managed=true
+          if [ "${{ inputs.keep_nodepool }}" != "true" ]; then
+            kubectl --kubeconfig ~/.kube/coreweave-iris \
+              delete nodepool -l iris-iris-managed=true
+          else
+            echo "Keeping node pool alive (keep_nodepool=true)"
+          fi
