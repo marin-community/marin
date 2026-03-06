@@ -262,7 +262,7 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
     return d
 
 
-def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
+def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None, mesh=None):
     """Stream a safetensors shard from remote storage and return JAX arrays."""
     if fs is None:
         fs, stripped = url_to_fs(path, asynchronous=True)
@@ -273,7 +273,7 @@ def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
         except AttributeError:
             pass
 
-    mesh = get_active_mesh()
+    mesh = mesh or get_active_mesh()
 
     loop = get_loop()
     bes = functools.partial(best_effort_sharding, mesh=mesh)
@@ -594,7 +594,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         ref = _coerce_to_rr(ref)
         return ref.model_name_or_path, ref.revision
 
-    def load_state_dict(self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None) -> dict:
+    def load_state_dict(
+        self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None, mesh=None
+    ) -> dict:
         """Load a state dict from either HF Hub or a GCS path.
 
         HuggingFace model IDs are converted to hf:// URLs and streamed directly
@@ -610,17 +612,17 @@ class HFCheckpointConverter(Generic[LevConfig]):
         if "://" in id:
             if rev is not None:
                 raise ValueError("Revisions not supported for explicit URLs")
-            return self._load_from_remote(id, dtype)
+            return self._load_from_remote(id, dtype, mesh=mesh)
 
         # Convert HF model IDs to hf:// URLs and stream directly
         if _is_hf_model_id(id):
             hf_url = _convert_to_hf_url(id, rev)
             logger.info(f"Loading from HuggingFace Hub: {hf_url}")
-            return self._load_from_remote(hf_url, dtype)
+            return self._load_from_remote(hf_url, dtype, mesh=mesh)
 
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
             try:
-                return self._load_shards(id, index_file, rev, dtype)
+                return self._load_shards(id, index_file, rev, dtype, mesh=mesh)
             except EntryNotFoundError:
                 pass
             except HFValidationError:
@@ -629,20 +631,20 @@ class HFCheckpointConverter(Generic[LevConfig]):
         with _patch_hf_hub_download() as hf_hub_download:
             # TODO: load models from gcs etc.
             if os.path.exists(os.path.join(id, SAFE_TENSORS_MODEL)):
-                state_dict = _load_safe_tensors(os.path.join(id, SAFE_TENSORS_MODEL), dtype)
+                state_dict = _load_safe_tensors(os.path.join(id, SAFE_TENSORS_MODEL), dtype, mesh=mesh)
             elif os.path.exists(os.path.join(id, PYTORCH_MODEL)):
                 state_dict = _load_torch(os.path.join(id, PYTORCH_MODEL), dtype)
             else:
                 try:
                     model_path = hf_hub_download(id, SAFE_TENSORS_MODEL, revision=rev)
-                    state_dict = _load_safe_tensors(model_path, dtype)
+                    state_dict = _load_safe_tensors(model_path, dtype, mesh=mesh)
                 except (EntryNotFoundError, HFValidationError):
                     model_path = hf_hub_download(id, PYTORCH_MODEL, revision=rev)
                     state_dict = _load_torch(model_path, dtype)
 
             return state_dict
 
-    def _load_shards(self, id: str, index_file: str, rev: Optional[str], dtype) -> dict:
+    def _load_shards(self, id: str, index_file: str, rev: Optional[str], dtype, mesh=None) -> dict:
         """Load model from sharded files based on the provided index."""
         with _patch_hf_hub_download() as hf_hub_download:
             index_path = os.path.join(id, index_file)
@@ -669,12 +671,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     # Download the shard if not found locally
                     shard_path = hf_hub_download(id, shard_file, revision=rev)
 
-                shard_state_dict = loader(shard_path, dtype)
+                if loader is _load_safe_tensors:
+                    shard_state_dict = loader(shard_path, dtype, mesh=mesh)
+                else:
+                    shard_state_dict = loader(shard_path, dtype)
                 final_state_dict.update(shard_state_dict)
 
         return final_state_dict
 
-    def _load_from_remote(self, url: str, dtype: Optional[jnp.dtype] = None) -> dict:
+    def _load_from_remote(self, url: str, dtype: Optional[jnp.dtype] = None, mesh=None) -> dict:
         """Load a state dict from a remote URL understood by fsspec."""
 
         final_state_dict = {}
@@ -693,7 +698,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 raise FileNotFoundError(f"Shard file {shard_path} not found")
 
             if loader is _load_safe_tensors:
-                shard_state_dict = _load_safe_tensors(shard_path, dtype, fs=fs)
+                shard_state_dict = _load_safe_tensors(shard_path, dtype, fs=fs, mesh=mesh)
             else:
                 assert loader is not None
                 shard_state_dict = _load_torch(shard_path, dtype, fs=fs)
@@ -773,7 +778,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.
-        state_dict = self.load_state_dict(ref, dtype)
+        state_dict = self.load_state_dict(ref, dtype, mesh=get_active_mesh())
 
         ignore_prefix: Optional[str] = None
         if self.ignore_prefix:
