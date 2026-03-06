@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, Type,
 
 import draccus
 import equinox as eqx
-import haliax
 from iris.marin_fs import url_to_fs
 import huggingface_hub
 import humanfriendly
@@ -60,7 +59,7 @@ from levanter.utils.jax_utils import best_effort_sharding, is_jax_array_like, sy
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.mesh import get_active_mesh
-from levanter.utils.partitioning import named_jit, vocab_axis
+from levanter.utils.partitioning import named_jit, shard_with_axis_mapping, vocab_axis
 from levanter.utils.py_utils import dataclass_with_default_init
 from levanter.utils.types import ResourceMapping
 
@@ -805,7 +804,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 else:
                     logger.info("Leaving model vocab size unchanged.")
 
-            lev_model = haliax.shard_with_axis_mapping(lev_model, axis_mapping)
+            lev_model = shard_with_axis_mapping(lev_model, axis_mapping)
 
             return lev_model
 
