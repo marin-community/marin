@@ -59,7 +59,6 @@ import haliax
 import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis
-from haliax.jax_utils import shaped_rng_split
 from haliax.state_dict import (
     ModuleWithStateDictSerialization,
     StateDict,
@@ -70,7 +69,7 @@ from haliax.state_dict import (
 from levanter.callbacks import StepInfo
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, upload_to_hub
 from levanter.utils.cloud_utils import temp_dir_before_upload
-from levanter.utils.jax_utils import join_key, key_iterator, leaf_key_paths
+from levanter.utils.jax_utils import join_key, key_iterator, leaf_key_paths, shaped_rng_split
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.partitioning import named_jit
 

@@ -7,7 +7,7 @@ import json
 import warnings
 import zlib
 from dataclasses import fields
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import haliax as hax
@@ -312,6 +312,30 @@ def key_iterator(key: PRNGKeyArray | int):
     while True:
         key, subkey = jax.random.split(key)
         yield subkey
+
+
+def maybe_rng_split(key: PRNGKeyArray | None, num: int = 2):
+    """Split ``key`` into ``num`` keys, preserving ``None`` and the ``num == 1`` shape."""
+    if key is None:
+        return [None] * num
+    if num == 1:
+        return jnp.reshape(key, (1,) + key.shape)
+    return jax.random.split(key, num)
+
+
+def shaped_rng_split(key: PRNGKeyArray, split_shape: int | Sequence[int] = 2) -> PRNGKeyArray:
+    """Split ``key`` into a pytree-friendly key array with a leading ``split_shape``."""
+    if isinstance(split_shape, int):
+        num_splits = split_shape
+        output_shape = (num_splits,) + key.shape
+    else:
+        num_splits = int(np.prod(split_shape))
+        output_shape = tuple(split_shape) + key.shape
+
+    if num_splits == 1:
+        return jnp.reshape(key, output_shape)
+
+    return jnp.reshape(maybe_rng_split(key, num_splits), output_shape)
 
 
 def is_inexact_arrayish(x):
