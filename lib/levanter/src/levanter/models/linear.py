@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ class LinearLikeModule(eqx.Module):
     Subclasses should expose `weight` and optional `bias` leaves that optimizers
     and adapters can target without depending on concrete layer implementations.
     """
-
 
 
 def has_linear_like_marker(node: Any) -> bool:
