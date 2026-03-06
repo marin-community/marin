@@ -35,6 +35,7 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 from draccus import field
+import haliax as hax
 from haliax.quantization import QuantizationConfig
 from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh
@@ -185,7 +186,7 @@ class WrappedLossFunction:
     """
     Wrapper around a loss function that provides a uniform interface.
 
-    Handles model casting and metric normalization.
+    Handles model casting, axis-mapping context, and metric normalization.
 
     Always returns (loss, wrapped_metrics_dict). The user loss function
     may return `Metric` objects or floats. Floats are automatically coerced to Metrics
@@ -194,27 +195,32 @@ class WrappedLossFunction:
 
     _raw_fn: ComputeLossFunction
     _mp: jmp.Policy
+    _compute_axis_mapping: ResourceMapping
 
     def __init__(
         self,
         raw_fn: ComputeLossFunction,
         mp: jmp.Policy,
+        compute_axis_mapping: ResourceMapping,
     ):
         """
         Args:
             raw_fn: The underlying loss function
             mp: Mixed precision policy for casting
+            compute_axis_mapping: Axis mapping for compute
         """
         self._raw_fn = raw_fn
         self._mp = mp
+        self._compute_axis_mapping = compute_axis_mapping
 
     def __call__(self, model, *batch, **batch_kwargs) -> Tuple[Scalar, Dict[str, Metric]]:
         """
-        Call the loss function with model casting.
+        Call the loss function with model casting and axis mapping.
         Always returns (loss, wrapped_metrics) where metrics are Metric objects.
         """
-        model = self._mp.cast_to_compute(model)
-        result = self._raw_fn(model, *batch, **batch_kwargs)
+        with hax.axis_mapping(self._compute_axis_mapping):
+            model = self._mp.cast_to_compute(model)
+            result = self._raw_fn(model, *batch, **batch_kwargs)
 
         if isinstance(result, tuple) and len(result) == 2:
             loss, metrics = result
@@ -297,6 +303,7 @@ class Trainer:
         return WrappedLossFunction(
             self._raw_loss_function,
             self.mp,
+            self.compute_axis_mapping,
         )
 
     @property
@@ -811,7 +818,7 @@ class TrainerConfig:
 
     # config related to partitioning
     mesh: MeshConfig = MeshConfig()
-    use_explicit_mesh_axes: bool = True
+    use_explicit_mesh_axes: bool = False
     """If True, build the device mesh with `AxisType.Explicit` axes.
 
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
@@ -1114,5 +1121,32 @@ def _resolve_axis_in_tree(tree, axis):
                 return leaf.resolve_axis(axis)
             except ValueError:
                 pass
+
+    # Fallback for array-native batch structures (for example GrugLmExample),
+    # which do not carry NamedArray axes but do preserve leading batch shape.
+    candidate_sizes: list[int] = []
+    for leaf in jax.tree_util.tree_leaves(tree):
+        shape = getattr(leaf, "shape", None)
+        if shape is None:
+            continue
+        if len(shape) >= 2:
+            candidate_sizes.append(int(shape[0]))
+
+    if not candidate_sizes:
+        for leaf in jax.tree_util.tree_leaves(tree):
+            shape = getattr(leaf, "shape", None)
+            if shape is None or len(shape) == 0:
+                continue
+            # Skip PRNG keys and similar scalar-control vectors.
+            if len(shape) == 1 and tuple(shape) == (2,):
+                continue
+            candidate_sizes.append(int(shape[0]))
+
+    if candidate_sizes:
+        batch_size = candidate_sizes[0]
+        for size in candidate_sizes[1:]:
+            if size != batch_size:
+                raise ValueError(f"Inconsistent inferred batch sizes {candidate_sizes} in tree {tree}")
+        return hax.Axis(axis, batch_size)
 
     raise ValueError(f"Could not find axis {axis} in tree {tree}")

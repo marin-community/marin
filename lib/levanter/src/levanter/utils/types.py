@@ -31,9 +31,9 @@ M = TypeVar("M")  # Model
 M_con = TypeVar("M_con", contravariant=True)  # Model
 X = TypeVar("X", contravariant=True)  # Input
 
-if TYPE_CHECKING:
+try:
     from haliax.nn.scan import BlockFoldable, ScanCheckpointPolicy
-else:
+except ImportError:
 
     class BlockFoldable(Protocol[M]):  # type: ignore
         def fold(self, *args, **kwargs): ...
