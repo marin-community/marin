@@ -117,7 +117,8 @@ def cb_compute_entropies(
     batch_size: int,
     batch_axis_resource,
     batch_axis_name: str = "batch",
-    mesh=None,
+    *,
+    mesh,
     num_tokens: int = 10 * 1024 * 1024,
 ):
     """
@@ -138,8 +139,6 @@ def cb_compute_entropies(
     """
     if prefix is None:
         prefix = "analysis"
-    if mesh is None:
-        raise ValueError("cb_compute_entropies requires an explicit mesh.")
 
     def compute_entropy(step: StepInfo):
         loader_axis_resources = None
@@ -228,13 +227,12 @@ def cb_compute_top2_gap(
     batch_size: int,
     batch_axis_resource,
     batch_axis_name: str = "batch",
-    mesh=None,
+    *,
+    mesh,
     num_tokens: int = 10 * 1024 * 1024,
 ):
     if prefix is None:
         prefix = "analysis"
-    if mesh is None:
-        raise ValueError("cb_compute_top2_gap requires an explicit mesh.")
 
     def compute_top2_gap(step: StepInfo):
         loader_axis_resources = None
