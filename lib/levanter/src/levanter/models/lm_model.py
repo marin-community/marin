@@ -16,6 +16,8 @@ from haliax import Axis, NamedOrNumeric
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.loss import maybe_fused_next_token_loss
+from levanter.utils.partitioning import axis as make_axis
+from levanter.utils.partitioning import batch_axis as make_batch_axis
 
 
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
@@ -180,7 +182,7 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
 
     @property
     def max_Pos(self) -> Axis:
-        return Axis("position", self.max_seq_len)
+        return make_axis("position", self.max_seq_len)
 
     @property
     @abc.abstractmethod
@@ -278,9 +280,9 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             named_input_ids = hax.named(input_ids, Pos)
         elif input_ids.ndim == 2:
             if batch_axis is None:
-                Batch = Axis("batch", input_ids.shape[0])
+                Batch = make_batch_axis("batch", input_ids.shape[0])
             elif isinstance(batch_axis, str):
-                Batch = Axis(batch_axis, input_ids.shape[0])
+                Batch = make_axis(batch_axis, input_ids.shape[0])
             else:
                 Batch = batch_axis
                 if Batch.size != input_ids.shape[0]:
