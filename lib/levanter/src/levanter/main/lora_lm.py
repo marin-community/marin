@@ -68,7 +68,6 @@ def main(config: LoraLmConfig):
     data_key, model_key, lora_key, training_key = jrandom.split(jrandom.PRNGKey(seed), 4)
 
     # some axes we need
-    Batch = config.trainer.TrainBatch
     Pos = model_config.max_Pos.resize(config.train_seq_len)
 
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
@@ -89,7 +88,7 @@ def main(config: LoraLmConfig):
         if train_dataset is None:
             raise ValueError("No training set!")
 
-        train_loader = trainer.data_loader(train_dataset, Batch)
+        train_loader = trainer.data_loader(train_dataset)
 
         # load the underlying hf model
         logger.info(f"Loading pretrained model from {converter.reference_checkpoint}")

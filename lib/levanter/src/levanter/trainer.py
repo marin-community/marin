@@ -596,7 +596,11 @@ class Trainer:
     def add_eval_hook(self, eval_dataset, name: Optional[str] = None):
         from levanter import callbacks
 
-        eval_loader = self.data_loader(eval_dataset, self.EvalBatch)
+        eval_loader = self.data_loader(
+            eval_dataset,
+            batch_size=self.config.eval_batch_size,
+            batch_axis_name=self.config.batch_axis_name,
+        )
 
         if eval_loader and (self.config.max_eval_batches is None or self.config.max_eval_batches > 0):
 
@@ -614,31 +618,33 @@ class Trainer:
                 every=self.config.steps_per_eval,
             )
 
-    def data_loader(self, dataset: AsyncDataset[X], batch: Optional[hax.Axis | int] = None) -> DataLoader[X]:
+    def data_loader(
+        self,
+        dataset: AsyncDataset[X],
+        batch_size: Optional[int] = None,
+        *,
+        batch_axis_name: Optional[str] = None,
+    ) -> DataLoader[X]:
         """Creates a data loader for the given dataset and batch axis.
 
         Args:
             dataset (AsyncDataset): the dataset to load
-            batch: Optional batch axis or integer batch size. If None, uses the trainer batch axis
-                (and schedule, if applicable).
+            batch_size: Optional integer batch size. If None, uses the trainer batch schedule.
+            batch_axis_name: Optional batch axis name. If None, uses the trainer batch axis name.
 
         Returns:
             DataLoader: the data loader
         """
-        if isinstance(batch, int):
-            batch_name = self.config.batch_axis_name
-            batch_size = batch
-        elif batch is not None:
-            batch_name = batch.name
-            batch_size = batch.size
+        batch_name = batch_axis_name or self.config.batch_axis_name
+        if batch_size is None:
+            batch_size_or_schedule = self.config.train_batch_size
         else:
-            batch_name = self.config.batch_axis_name
-            batch_size = self.config.train_batch_size
+            batch_size_or_schedule = batch_size
 
         batch_axis_resource = self.compute_axis_mapping.get(batch_name, self.config.batch_axis_resource)
         return DataLoader(
             dataset,
-            batch_size=batch_size,
+            batch_size=batch_size_or_schedule,
             max_buffered_batches=128,
             mesh=self.device_mesh,
             axis_resources={batch_name: batch_axis_resource},

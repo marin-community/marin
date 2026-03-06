@@ -77,7 +77,7 @@ class DataLoader(Iterable[Ex]):
     def __init__(
         self,
         data: AsyncDataset[Ex],
-        batch_size: int | IntSchedule | hax.Axis,
+        batch_size: int | IntSchedule,
         *,
         batch_axis_name: str | None = None,
         max_buffered_batches: int | None = 64,
@@ -96,14 +96,14 @@ class DataLoader(Iterable[Ex]):
         but whole examples are handled correctly.)
 
         Args:
-            batch_size (int | IntSchedule | None): The size of the batch or a schedule for the size of the batch
+            batch_size (int | IntSchedule): The size of the batch or a schedule for the size of the batch
             data (AsyncDataset[Ex]): The dataset to load from
             max_buffered_batches (Optional[int]): The maximum number of batches to buffer. If None, the buffer is unbounded.
              If <0, the buffer is disabled and single threaded operation is used.
             axis_resources (Optional[ResourceMapping]): axis mapping
             prefetch_size (int): The number of batches to prefetch at once
             mesh (Mesh): The mesh to use
-            batch_axis_name (str | None): The name of the batch axis. If None, defaults to "batch" unless batch_size is an Axis.
+            batch_axis_name (str | None): The name of the batch axis. If None, defaults to "batch".
             pad_final_batch (bool): If True, the final batch will be padded to the size of the previous batch.
             allow_nondivisible_batch_size (bool): All the batch size to be non-divisible by the data axis size (typically the number of devices).
         """
@@ -116,13 +116,8 @@ class DataLoader(Iterable[Ex]):
             mesh = get_active_mesh()
         self.mesh = mesh
 
-        if isinstance(batch_size, hax.Axis):
-            assert batch_axis_name is None
-            self.batch_axis_name = batch_size.name
-            self.scheduler = BatchSchedule(batch_size.size)
-        else:
-            self.batch_axis_name = batch_axis_name or "batch"
-            self.scheduler = BatchSchedule(batch_size)
+        self.batch_axis_name = batch_axis_name or "batch"
+        self.scheduler = BatchSchedule(batch_size)
 
         if mesh is None:
             raise ValueError("DataLoader requires an explicit mesh or an active mesh context.")

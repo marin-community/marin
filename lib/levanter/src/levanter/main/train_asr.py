@@ -113,7 +113,6 @@ def main(config: TrainASRConfig):
         parameter_axis_mapping = trainer.parameter_axis_mapping
 
         # some axes we need
-        Batch = config.trainer.TrainBatch
         Pos = config.model.max_Pos
         KeyPos = config.model.KeyPos
 
@@ -198,7 +197,7 @@ def main(config: TrainASRConfig):
             # roll forward to get the loss for each predicted token
             return jnp.roll(logprobs, 1, axis=-1)
 
-        train_loader = trainer.data_loader(train_dataset, Batch).iter_from_step(state.step)
+        train_loader = trainer.data_loader(train_dataset).iter_from_step(state.step)
 
         ## OK, actually run training!
         trainer.train(state, train_loader)
