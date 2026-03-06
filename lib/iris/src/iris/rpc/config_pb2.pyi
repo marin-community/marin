@@ -265,7 +265,7 @@ class ScaleGroupConfig(_message.Message):
     def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., scale_up_rate_limit: _Optional[int] = ..., scale_down_rate_limit: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ...) -> None: ...
 
 class WorkerConfig(_message.Message):
-    __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "log_prefix", "default_task_image", "default_task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "worker_attributes", "poll_interval", "heartbeat_timeout", "platform")
+    __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "default_task_image", "default_task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "worker_attributes", "poll_interval", "heartbeat_timeout", "platform")
     class DefaultTaskEnvEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -287,7 +287,6 @@ class WorkerConfig(_message.Message):
     WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
     CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
-    LOG_PREFIX_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_TASK_IMAGE_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_TASK_ENV_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_FIELD_NUMBER: _ClassVar[int]
@@ -305,7 +304,6 @@ class WorkerConfig(_message.Message):
     worker_id: str
     controller_address: str
     cache_dir: str
-    log_prefix: str
     default_task_image: str
     default_task_env: _containers.ScalarMap[str, str]
     runtime: str
@@ -316,7 +314,7 @@ class WorkerConfig(_message.Message):
     poll_interval: _time_pb2.Duration
     heartbeat_timeout: _time_pb2.Duration
     platform: PlatformConfig
-    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., log_prefix: _Optional[str] = ..., default_task_image: _Optional[str] = ..., default_task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., default_task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ...) -> None: ...
 
 class SshConfig(_message.Message):
     __slots__ = ("user", "key_file", "port", "connect_timeout")
@@ -331,12 +329,10 @@ class SshConfig(_message.Message):
     def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class StorageConfig(_message.Message):
-    __slots__ = ("bundle_prefix", "log_prefix")
+    __slots__ = ("bundle_prefix",)
     BUNDLE_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    LOG_PREFIX_FIELD_NUMBER: _ClassVar[int]
     bundle_prefix: str
-    log_prefix: str
-    def __init__(self, bundle_prefix: _Optional[str] = ..., log_prefix: _Optional[str] = ...) -> None: ...
+    def __init__(self, bundle_prefix: _Optional[str] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
     __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "port")

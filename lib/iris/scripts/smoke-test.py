@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Literal, TextIO
 
 import click
-import fsspec
+
 from iris.client import IrisClient
 from iris.cluster.config import load_config
 from iris.cluster.types import (
@@ -82,32 +82,6 @@ DEFAULT_SCREENSHOT_DIR = Path("/tmp/iris-smoke-screenshots")
 
 DEFAULT_JOB_TIMEOUT = 600  # 10 minutes; all jobs launch in parallel, this is the global wait ceiling
 DEFAULT_BOOT_TIMEOUT = 300  # 5 minutes; cluster start + connection
-
-
-def _worker_process_log_path(log_prefix: str, worker_id: str) -> str:
-    return f"{log_prefix.rstrip('/')}/process/worker/{worker_id}/logs.jsonl"
-
-
-def _load_worker_process_logs(log_prefix: str, worker_id: str, limit: int = 200) -> list[dict]:
-    path = _worker_process_log_path(log_prefix, worker_id)
-    try:
-        with fsspec.open(path, "rb") as f:
-            data = f.read().decode("utf-8", errors="replace")
-    except FileNotFoundError:
-        return []
-    except Exception as e:
-        logger.warning("Failed to fetch worker process logs from %s: %s", path, e)
-        return []
-    lines = [line for line in data.splitlines() if line.strip()]
-    if limit > 0:
-        lines = lines[-limit:]
-    records: list[dict] = []
-    for line in lines:
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
 
 
 # =============================================================================
@@ -1202,48 +1176,9 @@ class SmokeTestRunner:
         self._dump_job_list()
 
     def _dump_worker_process_logs(self):
-        assert self._controller_url
-        log_prefix = self._cluster_config.storage.log_prefix
-        if not log_prefix:
-            logger.warning("Worker process logs unavailable: storage.log_prefix not configured")
-            return
-        try:
-            result = _run_iris_rpc(self._controller_url, "controller", "list-workers")
-            if result.returncode != 0:
-                logger.warning("Failed to list workers: %s", result.stderr)
-                return
-            workers = json.loads(result.stdout).get("workers", [])
-        except Exception as e:
-            logger.warning("Could not list workers: %s", e)
-            return
-        if not workers:
-            logger.warning("No workers reported by controller")
-            return
-
-        for worker in workers:
-            worker_id = worker.get("worker_id") or "unknown"
-            records = _load_worker_process_logs(log_prefix, worker_id, limit=500)
-            if not records:
-                logger.info("Worker %s: no process logs found", worker_id)
-                continue
-            warn_error = [r for r in records if r.get("level") in ("WARNING", "ERROR")]
-            if not warn_error:
-                logger.info("Worker %s: no WARNING/ERROR logs", worker_id)
-                continue
-            seen: dict[str, int] = {}
-            for r in warn_error:
-                msg = r.get("message", "")
-                core = msg.split("] ", 1)[-1] if "] " in msg else msg
-                seen[core] = seen.get(core, 0) + 1
-            logger.warning(
-                "Worker %s WARNING/ERROR logs (%d entries, %d unique):",
-                worker_id,
-                len(warn_error),
-                len(seen),
-            )
-            for msg, count in seen.items():
-                suffix = f" (x{count})" if count > 1 else ""
-                logger.warning("  %s%s", msg, suffix)
+        # Worker process logs are now stored in SQLite and served via the FetchLogs RPC.
+        # Remote log file scraping is no longer supported.
+        logger.info("Worker process logs are available via FetchLogs RPC (LogStore)")
 
     def _dump_process_logs(self):
         assert self._controller_url

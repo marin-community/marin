@@ -421,7 +421,7 @@ class CoreweavePlatform:
 
     def _uses_s3_storage(self, config: config_pb2.IrisClusterConfig) -> bool:
         """Check if any storage URI uses S3."""
-        return config.storage.bundle_prefix.startswith("s3://") or config.storage.log_prefix.startswith("s3://")
+        return config.storage.bundle_prefix.startswith("s3://")
 
     # -- S3 Credentials -------------------------------------------------------
 

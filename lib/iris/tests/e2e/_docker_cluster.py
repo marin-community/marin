@@ -165,7 +165,6 @@ class E2ECluster:
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),
                 default_task_image="iris-task:latest",
-                log_prefix=f"file://{(cache_path / 'iris-logs').as_posix()}",
             )
             env_provider = None
             if self._env_provider_factory:

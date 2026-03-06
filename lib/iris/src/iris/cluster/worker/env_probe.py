@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.types import get_tpu_topology, PREEMPTIBLE_ATTRIBUTE_KEY
-from iris.marin_fs import marin_temp_bucket
+
 from iris.rpc import cluster_pb2, config_pb2
 from iris.time_utils import Timestamp
 
@@ -393,7 +393,6 @@ class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
-    def log_prefix(self) -> str | None: ...
 
 
 class TPUSimEnvironmentProvider:
@@ -427,9 +426,6 @@ class TPUSimEnvironmentProvider:
         base.device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=self._tpu_variant, count=4))
         return base
 
-    def log_prefix(self) -> str | None:
-        return None
-
 
 class DefaultEnvironmentProvider:
     """Default implementation that probes real system resources."""
@@ -437,12 +433,6 @@ class DefaultEnvironmentProvider:
     def probe(self) -> cluster_pb2.WorkerMetadata:
         hardware = probe_hardware()
         return build_worker_metadata(hardware)
-
-    def log_prefix(self) -> str | None:
-        explicit = os.environ.get("IRIS_LOG_PREFIX")
-        if explicit:
-            return explicit
-        return marin_temp_bucket(ttl_days=30, prefix="iris-logs")
 
 
 def _read_net_dev_bytes() -> tuple[int, int]:
