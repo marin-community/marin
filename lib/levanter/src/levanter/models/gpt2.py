@@ -13,7 +13,6 @@ from jaxtyping import PRNGKeyArray
 import haliax as hax
 import haliax.jax_utils
 import haliax.nn as hnn
-from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call, shaped_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
@@ -65,13 +64,13 @@ class Gpt2Config(HFCompatConfig):
 
     # Axes
     @property
-    def Embed(self) -> Axis:
-        return Axis(name="embed", size=self.hidden_dim)
+    def Embed(self) -> hax.Axis:
+        return hax.Axis(name="embed", size=self.hidden_dim)
 
-    Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
-    Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
-    Mlp = property(lambda self: Axis(name="mlp", size=self.hidden_dim * self.mlp_scale))
-    HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
+    Heads = property(lambda self: hax.Axis(name="heads", size=self.num_heads))
+    Layers = property(lambda self: hax.Axis(name="layers", size=self.num_layers))
+    Mlp = property(lambda self: hax.Axis(name="mlp", size=self.hidden_dim * self.mlp_scale))
+    HeadSize = property(lambda self: hax.Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
     @property
     def model_type(self) -> Type["Gpt2LMHeadModel"]:
@@ -138,7 +137,12 @@ class Gpt2Mlp(eqx.Module):
 
     @staticmethod
     def init(
-        Embed: Axis, Mlp: Axis, activation_fn: Union[ActivationFunctionEnum, Callable], *, key, use_bias: bool = True
+        Embed: hax.Axis,
+        Mlp: hax.Axis,
+        activation_fn: Union[ActivationFunctionEnum, Callable],
+        *,
+        key,
+        use_bias: bool = True,
     ) -> "Gpt2Mlp":
         k_fc, k_proj = jrandom.split(key, 2)
         c_fc = hnn.Linear.init(Out=Mlp, In=Embed, key=k_fc, use_bias=use_bias, out_first=False)
@@ -149,7 +153,7 @@ class Gpt2Mlp(eqx.Module):
         return Gpt2Mlp(c_fc, c_proj, activation_fn)
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None):
+    def __call__(self, x: hax.NamedArray, *, key=None):
         k1, k2 = haliax.jax_utils.maybe_rng_split(key, 2)
         x = self.c_fc(x, key=k1)
         x = self.act(x)
@@ -166,7 +170,7 @@ class Gpt2Attention(eqx.Module):
 
     @staticmethod
     def init(config: Gpt2Config, *, key) -> "Gpt2Attention":
-        Qkv = Axis("qkv", size=3)
+        Qkv = hax.Axis("qkv", size=3)
         use_bias = config.use_bias
         Embed = config.Embed
 
@@ -181,7 +185,7 @@ class Gpt2Attention(eqx.Module):
         return Gpt2Attention(config, c_attn, c_proj, inference=False)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
+    def __call__(self, x: hax.NamedArray, mask: Optional[AttentionMask | hax.NamedArray], layer_idx, *, key):
         k_drop, k_attn, k_out = hax.jax_utils.maybe_rng_split(key, 3)
         qkv_out = self.c_attn(x, key=k_attn).rearrange((..., "qkv", "heads", "position", "head_size"))
         q, k, v = qkv_out.unbind("qkv")
@@ -236,7 +240,7 @@ class Gpt2Block(eqx.Module):
         return Gpt2Block(ln_1, attn, ln_2, mlp, resid_dropout)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
+    def __call__(self, x: hax.NamedArray, mask: Optional[AttentionMask | hax.NamedArray], layer_idx, *, key):
         k1, k2, k3, k4 = haliax.jax_utils.maybe_rng_split(key, 4)
 
         attn_output = self.attn(self.ln_1(x), mask=mask, layer_idx=layer_idx, key=k1)
@@ -270,9 +274,11 @@ class Gpt2Transformer(ModuleWithStateDictSerialization):
         return Gpt2Transformer(config, blocks, ln_f)
 
     @named_call
-    def __call__(self, x: NamedArray, attn_mask: Optional[AttentionMask | NamedArray], *, key=None) -> NamedArray:
+    def __call__(
+        self, x: hax.NamedArray, attn_mask: Optional[AttentionMask | hax.NamedArray], *, key=None
+    ) -> hax.NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), key=keys))
+        x = cast(hax.NamedArray, self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), key=keys))
         x = self.ln_f(x)
 
         return x
@@ -282,7 +288,7 @@ class Gpt2Transformer(ModuleWithStateDictSerialization):
 
 
 class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
-    Vocab: Axis = eqx.field(static=True)
+    Vocab: hax.Axis = eqx.field(static=True)
     config: Gpt2Config = eqx.field(static=True)
 
     token_embeddings: hnn.Embedding
@@ -290,7 +296,7 @@ class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
     dropout: hnn.Dropout
 
     @staticmethod
-    def init(Vocab: Axis, config: Gpt2Config, *, key) -> "Gpt2Embeddings":
+    def init(Vocab: hax.Axis, config: Gpt2Config, *, key) -> "Gpt2Embeddings":
         k_wte, k_wpe, k_out = jrandom.split(key, 3)
 
         token_embeddings = hnn.Embedding.init(Vocab, config.Embed, key=k_wte, init_scale=config.initializer_range)
@@ -302,7 +308,7 @@ class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
         return Gpt2Embeddings(Vocab, config, token_embeddings, position_embeddings, dropout)
 
     @named_call
-    def embed(self, input_ids, *, key, pos_ids: NamedArray):
+    def embed(self, input_ids, *, key, pos_ids: hax.NamedArray):
         input_embeds = self.token_embeddings(input_ids)
         position_embeds = self.position_embeddings.embed(pos_ids)
         x = input_embeds + position_embeds
@@ -310,7 +316,7 @@ class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
 
         return x
 
-    def unembed(self, x: NamedArray):
+    def unembed(self, x: hax.NamedArray):
         return hax.dot(x, self.token_embeddings.weight, axis="embed")
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
@@ -330,15 +336,15 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
         return self.transformer.config
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     @property
-    def Pos(self) -> Axis:
+    def Pos(self) -> hax.Axis:
         return self.config.max_Pos
 
     @classmethod
-    def init(cls, Vocab: Axis, config: Gpt2Config, *, key) -> "Gpt2LMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: Gpt2Config, *, key) -> "Gpt2LMHeadModel":
         k_t, k_embeddings = jrandom.split(key, 2)
         transformer = Gpt2Transformer.init(config, key=k_t)
         embeddings = Gpt2Embeddings.init(Vocab, config, key=k_embeddings)
@@ -347,12 +353,12 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[AttentionMask | hax.NamedArray] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
         if pos_ids is None:
             pos_ids = hax.arange(input_ids.resolve_axis("position"), dtype=jnp.int32)
