@@ -10,7 +10,6 @@ import haliax as hax
 import haliax.nn as hnn
 import jax.numpy as jnp
 import jax.random as jrandom
-from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.normalization import LayerNormBase
 from haliax.state_dict import ModuleWithStateDictSerialization
@@ -52,7 +51,7 @@ from transformers import PretrainedConfig as HfConfig  # noqa: E402
 class GemmaNormConfig(LayerNormConfigBase):
     """Configuration for Gemma's custom RMS normalization."""
 
-    def build(self, axis: AxisSpec) -> "GemmaRMSNorm":
+    def build(self, axis: hax.AxisSpec) -> "GemmaRMSNorm":
         return GemmaRMSNorm.init(axis, eps=self.eps, use_weight=self.use_weight, use_bias=self.use_bias)
 
 
@@ -105,16 +104,16 @@ class GemmaConfig(HFCompatConfig):
     gradient_checkpointing: bool = True
     scan_layers: bool = True
 
-    # Axis
+    # Axes
     @property
-    def Embed(self) -> Axis:
-        return Axis(name="embed", size=self.hidden_dim)
+    def Embed(self) -> hax.Axis:
+        return hax.Axis(name="embed", size=self.hidden_dim)
 
-    Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
-    KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
-    Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
-    Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
-    HeadSize = property(lambda self: Axis(name="head_size", size=self.head_dim))
+    Heads = property(lambda self: hax.Axis(name="heads", size=self.num_heads))
+    KVHeads = property(lambda self: hax.Axis(name="kv_heads", size=self.num_kv_heads))
+    Layers = property(lambda self: hax.Axis(name="layers", size=self.num_layers))
+    Mlp = property(lambda self: hax.Axis(name="mlp", size=self.intermediate_dim))
+    HeadSize = property(lambda self: hax.Axis(name="head_size", size=self.head_dim))
 
     def __post_init__(self):
         assert (
@@ -252,7 +251,7 @@ class GemmaConfig(HFCompatConfig):
             use_bias=False,  # GemmaRMSNorm doesn't support bias
         )
 
-    def mk_LayerNorm(self, axis: AxisSpec):
+    def mk_LayerNorm(self, axis: hax.AxisSpec):
         """Create a layer normalization module using the config."""
         return self.norm_config.build(axis)
 
@@ -268,7 +267,7 @@ class GemmaRMSNorm(LayerNormBase):
     """
 
     @classmethod
-    def init(cls, axis: AxisSpec, eps: float = 1e-6, use_weight: bool = True, use_bias: bool = False, dtype=None):
+    def init(cls, axis: hax.AxisSpec, eps: float = 1e-6, use_weight: bool = True, use_bias: bool = False, dtype=None):
         assert use_weight, "GemmaRMSNorm does not support use_weight=False"
         assert not use_bias, "GemmaRMSNorm does not support use_bias=True"
 
@@ -277,7 +276,7 @@ class GemmaRMSNorm(LayerNormBase):
 
         return GemmaRMSNorm(axis, weight, bias, eps, dtype=jnp.float32)
 
-    def __call__(self, x: NamedArray) -> NamedArray:
+    def __call__(self, x: hax.NamedArray) -> hax.NamedArray:
         # Gemma's norm is calculated in fp32 explicitly
         # See https://github.com/google/gemma_pytorch/blob/main/gemma/model.py#L173
         dtype = x.dtype
@@ -320,8 +319,13 @@ class GemmaDecoderLayer(ModuleWithStateDictSerialization):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        mask: hax.NamedArray | AttentionMask | None,
+        *,
+        key=None,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
@@ -358,10 +362,15 @@ class GemmaTransformer(ModuleWithStateDictSerialization):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        attn_mask: hax.NamedArray | AttentionMask | None,
+        *,
+        key,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
+        x = cast(hax.NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
 
         return x
@@ -385,7 +394,7 @@ class GemmaLMHeadModel(LmHeadModel[GemmaConfig], ModuleWithStateDictSerializatio
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     def get_lm_head(self) -> hax.NamedArray:
@@ -395,7 +404,7 @@ class GemmaLMHeadModel(LmHeadModel[GemmaConfig], ModuleWithStateDictSerializatio
             return self.lm_head.weight
 
     @classmethod
-    def init(cls, Vocab: Axis, config: GemmaConfig, *, key) -> "GemmaLMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: GemmaConfig, *, key) -> "GemmaLMHeadModel":
         k_t, k_emb = jrandom.split(key, 2)
         transformer = GemmaTransformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
@@ -407,19 +416,19 @@ class GemmaLMHeadModel(LmHeadModel[GemmaConfig], ModuleWithStateDictSerializatio
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: NamedArray | AttentionMask | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: hax.NamedArray | AttentionMask | None = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         """
         Args:
-            input_ids (NamedArray): [batch, position]
+            input_ids (hax.NamedArray): [batch, position]
                 Indices of input sequence tokens in the vocabulary.
-            attn_mask (Union[NamedArray, AttentionMask], optional): [batch, position]
+            attn_mask (Union[hax.NamedArray, AttentionMask], optional): [batch, position]
                 Mask to avoid performing attention on the padding token indices of the encoder input.
-                The attn_mask from training pipeline may be an AttentionMask object instead of NamedArray
+                The attn_mask from training pipeline may be an AttentionMask object instead of hax.NamedArray
         """
         x = self.embeddings.embed(input_ids)
         normalizer = jnp.sqrt(self.config.hidden_dim).astype(x.dtype)
@@ -649,8 +658,13 @@ class Gemma2DecoderLayer(ModuleWithStateDictSerialization):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        mask: hax.NamedArray | AttentionMask | None,
+        *,
+        key=None,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
         # Attention block
@@ -692,10 +706,15 @@ class Gemma2Transformer(ModuleWithStateDictSerialization):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        attn_mask: hax.NamedArray | AttentionMask | None,
+        *,
+        key,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
+        x = cast(hax.NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
@@ -721,7 +740,7 @@ class Gemma2LMHeadModel(LmHeadModel[Gemma2Config], ModuleWithStateDictSerializat
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     def get_lm_head(self) -> hax.NamedArray:
@@ -731,7 +750,7 @@ class Gemma2LMHeadModel(LmHeadModel[Gemma2Config], ModuleWithStateDictSerializat
             return self.lm_head.weight
 
     @classmethod
-    def init(cls, Vocab: Axis, config: GemmaConfig, *, key):
+    def init(cls, Vocab: hax.Axis, config: GemmaConfig, *, key):
         k_t, k_emb = jrandom.split(key, 2)
         transformer = Gemma2Transformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
@@ -743,12 +762,12 @@ class Gemma2LMHeadModel(LmHeadModel[Gemma2Config], ModuleWithStateDictSerializat
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: NamedArray | AttentionMask | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: hax.NamedArray | AttentionMask | None = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         x = self.embeddings.embed(input_ids)
         normalizer = jnp.sqrt(self.config.hidden_dim).astype(x.dtype)
         x = x * normalizer
@@ -943,7 +962,7 @@ class Gemma3LMHeadModel(LmHeadModel[Gemma3Config], ModuleWithStateDictSerializat
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     def get_lm_head(self) -> hax.NamedArray:
@@ -953,7 +972,7 @@ class Gemma3LMHeadModel(LmHeadModel[Gemma3Config], ModuleWithStateDictSerializat
             return self.lm_head.weight
 
     @classmethod
-    def init(cls, Vocab: Axis, config: Gemma3Config, *, key):
+    def init(cls, Vocab: hax.Axis, config: Gemma3Config, *, key):
         k_t, k_emb = jrandom.split(key, 2)
         transformer = Gemma2Transformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
@@ -965,12 +984,12 @@ class Gemma3LMHeadModel(LmHeadModel[Gemma3Config], ModuleWithStateDictSerializat
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: NamedArray | AttentionMask | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: hax.NamedArray | AttentionMask | None = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         x = self.embeddings.embed(input_ids)
         normalizer = jnp.sqrt(self.config.hidden_dim).astype(x.dtype)
         x = x * normalizer
