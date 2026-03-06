@@ -1,11 +1,11 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
 from typing import Any
 
-from haliax import Axis
+import haliax as hax
 
 
 def _scan_stack_cls(scan_layers: bool):
@@ -24,7 +24,7 @@ def is_scan_container(x: object) -> bool:
 
 
 def init_scan_foldable(
-    Layers: Axis,
+    Layers: hax.Axis,
     BlockType: Any,
     *init_args,
     scan_layers: bool,
@@ -53,7 +53,7 @@ def init_scan_foldable(
 
 def init_blockseq_from_blocks(
     blocks: list[Any],
-    Layers: Axis,
+    Layers: hax.Axis,
     *,
     gradient_checkpointing: bool | str,
 ):
