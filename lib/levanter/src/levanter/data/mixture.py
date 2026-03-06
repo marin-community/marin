@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import enum
 import functools
 import warnings
 from typing import List, Mapping, Sequence, Tuple, TypeVar
@@ -10,7 +11,6 @@ import jax
 import numpy as np
 from jaxtyping import PRNGKeyArray
 
-from haliax.util import StringHolderEnum
 from levanter.utils.jax_utils import local_cpu_mesh
 
 from levanter.data import AsyncDataset
@@ -22,7 +22,7 @@ from levanter.utils.thread_utils import blocking_wait, future_from_value
 T = TypeVar("T")
 
 
-class StopStrategy(metaclass=StringHolderEnum):
+class StopStrategy(str, enum.Enum):
     FIRST_STOP_STRATEGY = "first_exhausted"
     ALL_STOP_STRATEGY = "all_exhausted"
     RESTART_STRATEGY = "restart"
@@ -55,7 +55,7 @@ class MixtureDataset(AsyncDataset[T]):
         *,
         randomize_blocks: bool = True,
         key: PRNGKeyArray | int,
-        stop_strategy: str = StopStrategy.RESTART_STRATEGY,
+        stop_strategy: StopStrategy | str = StopStrategy.RESTART_STRATEGY,
     ):
         if isinstance(weights, dict):
             weight_stages = [(0, weights)]
@@ -100,9 +100,10 @@ class MixtureDataset(AsyncDataset[T]):
             else:
                 self.key = jax.device_put(jax.device_get(key))
 
-        if stop_strategy not in StopStrategy:  # type: ignore
-            raise ValueError(f"Stop strategy {stop_strategy} is not supported.")
-        self.stop_strategy = stop_strategy
+        try:
+            self.stop_strategy = StopStrategy(stop_strategy)
+        except ValueError as exc:
+            raise ValueError(f"Stop strategy {stop_strategy} is not supported.") from exc
 
         # Initialize stage-related counts and IDs
         (
