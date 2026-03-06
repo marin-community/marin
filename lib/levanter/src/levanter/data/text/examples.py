@@ -13,6 +13,7 @@ from haliax import Axis, AxisSelector, NamedArray, NamedOrNumeric
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
+from levanter.utils.partitioning import axis, batch_axis as make_batch_axis
 
 
 @register_dataclass
@@ -131,13 +132,13 @@ def grug_attention_mask_from_named(mask: AttentionMask) -> GrugAttentionMask:
 
 def _resolve_batch_axis(batch_axis: AxisSelector | None, batch_size: int) -> Axis:
     if batch_axis is None:
-        return Axis("batch", batch_size)
+        return make_batch_axis("batch", batch_size)
     if isinstance(batch_axis, Axis):
         if batch_axis.size != batch_size:
             raise ValueError(f"Batch axis size ({batch_axis.size}) must match batched array size ({batch_size}).")
         return batch_axis
     if isinstance(batch_axis, str):
-        return Axis(batch_axis, batch_size)
+        return axis(batch_axis, batch_size)
     raise TypeError(f"Unsupported batch axis selector: {batch_axis!r}")
 
 
