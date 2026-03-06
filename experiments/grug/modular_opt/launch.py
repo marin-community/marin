@@ -1,9 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """Template: grug-modular-opt trial run.
 
 This variant shows how to use optax.multi_transform to configure multiple
@@ -93,7 +90,7 @@ class GrugParamGroupAdamConfig(OptimizerConfig):
             def _label_for_path(_, path):
                 path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
                 path_lower = path_str.lower()
-                if path_lower.endswith("bias") or any(pattern in path_lower for pattern in no_decay_patterns):
+                if any(pattern in path_lower for pattern in no_decay_patterns):
                     return "no_decay"
                 if any(pattern in path_lower for pattern in special_patterns):
                     return "special"
