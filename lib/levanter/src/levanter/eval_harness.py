@@ -1234,11 +1234,6 @@ class EvalHarnessMainConfig:
     trainer: TrainerConfig = dataclasses.field(default_factory=TrainerConfig)
     model: LmConfig = dataclasses.field(default_factory=Gpt2Config)
 
-    @property
-    def EvalBatch(self):
-        """Get the evaluation batch axis from the trainer configuration."""
-        return self.trainer.EvalBatch
-
     @cached_property
     def the_tokenizer(self):
         """Load and return the tokenizer from the specified path."""
@@ -1527,11 +1522,11 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             config.eval_harness,
             model,
             tokenizer,
-            config.EvalBatch.size,
+            config.trainer.eval_batch_size,
             compute_axis_resources=compute_axis_mapping,
             mp=config.trainer.mp,
             batch_axis_resource=config.trainer.batch_axis_resource,
-            batch_axis_name=config.EvalBatch.name,
+            batch_axis_name=config.trainer.batch_axis_name,
             profiler_config=profiler_config,
         )
 
