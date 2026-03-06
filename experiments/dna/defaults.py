@@ -21,7 +21,6 @@ from marin.execution.executor import ExecutorStep
 
 DNA_RESOURCES_V1 = ResourceConfig.with_tpu("v5p-8")
 DNA_TOKENIZER_V1 = "songlab/tokenizer-dna-clm"
-DNA_WINDOW_SIZE_BYTES_V1 = 50_000_000
 
 # =============================================================================
 # Dataset paths (V1)

@@ -50,7 +50,9 @@ DATASETS = {
 # =============================================================================
 # Model configs
 #
-# Approximate param counts with vocab_size=8 (DNA char tokenizer):
+# Model size labels (6m, 60m, 600m) follow the Qwen3 naming convention for
+# standard NLP vocab sizes. Actual param counts are lower with the small
+# DNA character tokenizer vocab:
 #   6m:   ~8M   (hidden=256,  inter=896,  layers=8)
 #   60m:  ~61M  (hidden=512,  inter=1792, layers=16)
 #   600m: ~440M (qwen3_0_6b_hd128 architecture)
