@@ -9,7 +9,6 @@ import jax.random as jrandom
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
@@ -68,16 +67,16 @@ class MistralConfig(LlamaConfig):
     use_bias: bool = False
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
-    # Axis
+    # Axes
     @property
-    def Embed(self) -> Axis:
-        return Axis(name="embed", size=self.hidden_dim)
+    def Embed(self) -> hax.Axis:
+        return hax.Axis(name="embed", size=self.hidden_dim)
 
-    Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
-    KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
-    Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
-    Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
-    HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
+    Heads = property(lambda self: hax.Axis(name="heads", size=self.num_heads))
+    KVHeads = property(lambda self: hax.Axis(name="kv_heads", size=self.num_kv_heads))
+    Layers = property(lambda self: hax.Axis(name="layers", size=self.num_layers))
+    Mlp = property(lambda self: hax.Axis(name="mlp", size=self.intermediate_dim))
+    HeadSize = property(lambda self: hax.Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
     def hf_checkpoint_converter(
         self, ref_checkpoint: Optional[str] = None
@@ -187,11 +186,11 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     @classmethod
-    def init(cls, Vocab: Axis, config: MistralConfig, *, key) -> "MistralLMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: MistralConfig, *, key) -> "MistralLMHeadModel":
         k_t, k_emb = jrandom.split(key, 2)
         transformer = LlamaTransformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
@@ -204,19 +203,19 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[Union[hax.NamedArray, AttentionMask]] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         """
         Args:
-            input_ids (NamedArray): [batch, position]
+            input_ids (hax.NamedArray): [batch, position]
                 Indices of input sequence tokens in the vocabulary.
-            attn_mask (Union[NamedArray, AttentionMask], optional): [batch, position]
+            attn_mask (Union[hax.NamedArray, AttentionMask], optional): [batch, position]
                 Mask to avoid performing attention on the padding token indices of the encoder input.
-                The attn_mask from training pipeline may be an AttentionMask object instead of NamedArray
+                The attn_mask from training pipeline may be an AttentionMask object instead of hax.NamedArray
         """
         k_t, k_head = maybe_rng_split(key, 2)
         x = self.embeddings.embed(input_ids)
