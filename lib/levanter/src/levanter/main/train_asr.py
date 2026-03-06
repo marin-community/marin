@@ -5,13 +5,10 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Union, cast
+from typing import Optional, Union
 
-import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-
-import haliax as hax
 
 import levanter
 from levanter import callbacks
@@ -87,15 +84,8 @@ def main(config: TrainASRConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def compute_loss(
-        m,
-        example: AudioTextExample,
-        *,
-        key=None,
-        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
-        reduction_axis: Optional[hax.AxisSelection] = None,
-    ) -> jax.numpy.ndarray | hax.NamedArray:
-        return m.compute_loss(example, key=key, reduction=reduction, reduction_axis=reduction_axis)
+    def compute_loss(m, example: AudioTextExample, *, key=None):
+        return m.compute_loss_array(example, key=key)
 
     # Using the trainer as a context manager does 2 things:
     # 1. Sets the device mesh
