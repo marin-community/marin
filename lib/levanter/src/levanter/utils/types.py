@@ -22,8 +22,9 @@ from jaxtyping import PyTree
 
 if TYPE_CHECKING:
     import haliax as hax
-    from haliax.types import Scalar
+    from haliax.types import IntScalar, Scalar
 else:
+    IntScalar = Any
     Scalar = Any
 
 

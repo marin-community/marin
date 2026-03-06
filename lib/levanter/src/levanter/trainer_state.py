@@ -10,7 +10,6 @@ import jax
 import jmp
 
 from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
-from haliax.types import IntScalar, Scalar
 from jax import numpy as jnp
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation, OptState
@@ -18,7 +17,7 @@ from optax import GradientTransformation, OptState
 from levanter.optim.model_averaging import ModelAveraging, ModelAveragingConfig
 from levanter.utils.jax_utils import is_inexact_arrayish, is_named_array
 from levanter.utils.tree_utils import inference_mode
-from levanter.utils.types import FilterTree
+from levanter.utils.types import FilterTree, IntScalar, Scalar
 
 M = TypeVar("M", bound=PyTree)
 S = TypeVar("S")
