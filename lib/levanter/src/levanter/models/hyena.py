@@ -27,8 +27,6 @@ from jaxtyping import PRNGKeyArray
 import haliax
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis
-from haliax.axis import AxisSpec
 from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.nn.mlp import DEFAULT_WIDTH_NAME
 from haliax.quantization import DotGeneralOp
@@ -66,22 +64,28 @@ class HyenaConfig:
     use_bias: bool = True  # Whether to use bias in linear layers
 
     # Axes
-    Pos = property(lambda self: Axis(name="position", size=self.max_seq_len))
+    Pos = property(lambda self: hax.Axis(name="position", size=self.max_seq_len))
     KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
-    Block = property(lambda self: Axis(name="blocks", size=self.num_blocks))
-    PosPerBlock = property(lambda self: Axis(name="pos_per_block", size=self.max_seq_len // self.num_blocks))
-    FilterOrder = property(lambda self: Axis(name="hyena_filter_order", size=self.filter_order))
-    FilterEmbed = property(lambda self: Axis(name="hyena_filter_embed", size=self.filter_emb_dim))
+    Embed = property(lambda self: hax.Axis(name="embed", size=self.hidden_dim))
+    Block = property(lambda self: hax.Axis(name="blocks", size=self.num_blocks))
+    PosPerBlock = property(lambda self: hax.Axis(name="pos_per_block", size=self.max_seq_len // self.num_blocks))
+    FilterOrder = property(lambda self: hax.Axis(name="hyena_filter_order", size=self.filter_order))
+    FilterEmbed = property(lambda self: hax.Axis(name="hyena_filter_embed", size=self.filter_emb_dim))
     HeadSizeOrderMinus1 = property(
-        lambda self: Axis(name="head_size_order_minus_1", size=(self.hidden_dim // self.num_heads) * (self.order - 1))
+        lambda self: hax.Axis(
+            name="head_size_order_minus_1", size=(self.hidden_dim // self.num_heads) * (self.order - 1)
+        )
     )
-    EmbedOrderPlus1 = property(lambda self: Axis(name="embed_order_plus_1", size=self.hidden_dim * (self.order + 1)))
-    OrderMinus1 = property(lambda self: Axis(name="order_minus_1", size=self.order - 1))
-    Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
-    HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
+    EmbedOrderPlus1 = property(
+        lambda self: hax.Axis(name="embed_order_plus_1", size=self.hidden_dim * (self.order + 1))
+    )
+    OrderMinus1 = property(lambda self: hax.Axis(name="order_minus_1", size=self.order - 1))
+    Heads = property(lambda self: hax.Axis(name="heads", size=self.num_heads))
+    HeadSize = property(lambda self: hax.Axis(name="head_size", size=self.hidden_dim // self.num_heads))
     HeadSizeOrderPlus1 = property(
-        lambda self: Axis(name="head_size_order_plus_1", size=(self.hidden_dim * (self.order + 1)) // self.num_heads)
+        lambda self: hax.Axis(
+            name="head_size_order_plus_1", size=(self.hidden_dim * (self.order + 1)) // self.num_heads
+        )
     )
 
     def __post_init__(self):
@@ -96,15 +100,15 @@ class PositionalEmbedding(eqx.Module):
 
     z: hax.NamedArray  # [Pos, Embed]
     t: hax.NamedArray  # [Pos]
-    PosPerBlock: Axis = eqx.field(static=True)
+    PosPerBlock: hax.Axis = eqx.field(static=True)
 
     @staticmethod
-    def init(PosPerBlock: Axis, Embed: Axis, *, key=None):
+    def init(PosPerBlock: hax.Axis, Embed: hax.Axis, *, key=None):
         """Initialize positional embeddings for Hyena filters.
 
         Args:
             PosPerBlock: Position axis, will be in the outputs of __call__.
-            Embed: Axis of positional embedding
+            Embed: hax.Axis of positional embedding
             key: Optional random key (not used)
         """
         seq_len = PosPerBlock.size
@@ -118,7 +122,7 @@ class PositionalEmbedding(eqx.Module):
 
         # Calculate number of frequency bands
         bands = (Embed.size - 1) // 2
-        Band = Axis("band", bands)
+        Band = hax.Axis("band", bands)
 
         # To compute the right embeddings we use the "proper" linspace
         t_rescaled = hax.linspace(PosPerBlock, start=0, stop=seq_len - 1)
@@ -159,12 +163,12 @@ class ExponentialModulation(eqx.Module):
     deltas_abs: hax.NamedArray
     modulate: bool
     shift: float
-    PosPerBlock: Axis = eqx.field(static=True)
+    PosPerBlock: hax.Axis = eqx.field(static=True)
 
     @staticmethod
     def init(
-        HeadSizeOrderMinus1: Axis,
-        PosPerBlock: Axis,
+        HeadSizeOrderMinus1: hax.Axis,
+        PosPerBlock: hax.Axis,
         fast_decay_pct: float,
         slow_decay_pct: float,
         target: float,
@@ -218,14 +222,14 @@ class MLPTrainableActivation(eqx.Module):
 
     activation: Callable = eqx.field(static=False)  # this is the main difference from hax.nn.MLP
     layers: Sequence[hax.nn.Linear]
-    Width: Axis = eqx.field(static=True)
-    Width2: Axis = eqx.field(static=True)
+    Width: hax.Axis = eqx.field(static=True)
+    Width2: hax.Axis = eqx.field(static=True)
 
     @staticmethod
     def init(
-        Input: AxisSpec,
-        Output: AxisSpec,
-        width: int | Axis,
+        Input: hax.AxisSpec,
+        Output: hax.AxisSpec,
+        width: int | hax.Axis,
         depth: int,
         activation: Callable = hnn.relu,
         *,
@@ -280,11 +284,11 @@ class MLPTrainableActivation(eqx.Module):
         )
 
     @property
-    def In(self) -> AxisSpec:
+    def In(self) -> hax.AxisSpec:
         return self.layers[0].In
 
     @property
-    def Out(self) -> AxisSpec:
+    def Out(self) -> hax.AxisSpec:
         return self.layers[-1].Out
 
     def __call__(self, x: hax.NamedArray, *, key=None) -> hax.NamedArray:
@@ -303,9 +307,9 @@ class MLPTrainableActivation(eqx.Module):
         return self.layers[-1](x, key=keys[-1])
 
 
-def _get_width(Width: int | Axis) -> Axis:
+def _get_width(Width: int | hax.Axis) -> hax.Axis:
     if isinstance(Width, int):
-        return Axis(DEFAULT_WIDTH_NAME, Width)
+        return hax.Axis(DEFAULT_WIDTH_NAME, Width)
     else:
         return Width
 
@@ -316,7 +320,7 @@ class Sin(eqx.Module):
     freq: hax.NamedArray
 
     @staticmethod
-    def init(Order: Axis, w: float = 10, *, key=None):
+    def init(Order: hax.Axis, w: float = 10, *, key=None):
         return Sin(w * hax.ones((Order,)))
 
     def __call__(self, x: hax.NamedArray) -> hax.NamedArray:
