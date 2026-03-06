@@ -17,7 +17,6 @@ import haliax.haxtyping as ht
 import jax
 import jax.numpy as jnp
 import numpy as np
-from haliax import NamedArray
 
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
@@ -369,10 +368,10 @@ class PrefillWork(eqx.Module):
 
     queue: TokenQueue
     new_num_seqs: jnp.ndarray
-    new_slot_ids: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
-    clone_targets: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
-    prompt_tokens: ht.i32[NamedArray, "seq position"]  # type: ignore[name-defined]
-    prompt_lengths: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
+    new_slot_ids: ht.i32[hax.NamedArray, "seq"]  # type: ignore[name-defined]
+    clone_targets: ht.i32[hax.NamedArray, "seq"]  # type: ignore[name-defined]
+    prompt_tokens: ht.i32[hax.NamedArray, "seq position"]  # type: ignore[name-defined]
+    prompt_lengths: ht.i32[hax.NamedArray, "seq"]  # type: ignore[name-defined]
     seq_params: SeqDecodingParams
 
 
@@ -479,7 +478,7 @@ def _prefill_kernel(
 
 def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
     def select(x):
-        if isinstance(x, NamedArray):
+        if isinstance(x, hax.NamedArray):
             return x["seq", idx]
         elif is_jax_array_like(x):
             return x[idx]
@@ -545,9 +544,9 @@ def _run_prefill(
 
 def _handle_clones(
     gen_state: GenState,
-    logits: ht.Float[NamedArray, " position vocab"],  # type: ignore
-    slot_ids: ht.Int[NamedArray, " position"],  # type: ignore
-    pos_ids: ht.Int[NamedArray, " position"],  # type: ignore
+    logits: ht.Float[hax.NamedArray, " position vocab"],  # type: ignore
+    slot_ids: ht.Int[hax.NamedArray, " position"],  # type: ignore
+    pos_ids: ht.Int[hax.NamedArray, " position"],  # type: ignore
     sampler: Sampler,
     outputs: _DecodeOutputs,
 ) -> tuple[GenState, _DecodeOutputs]:  # type: ignore
