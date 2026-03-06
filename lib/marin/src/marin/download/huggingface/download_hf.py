@@ -21,6 +21,7 @@ from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,8 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
 
 
 def download_hf(cfg: DownloadConfig) -> None:
-    logging.basicConfig(level=logging.INFO)
+
+    configure_logging(level=logging.INFO)
 
     # Set cfg.append_sha_to_path=True to mimic the older behavior of writing to gcs_output_path/<revision>.
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.

@@ -936,6 +936,7 @@ class ControllerServiceImpl:
                     regex_filter=compiled_regex,
                     max_lines=remaining,
                     tail=True,
+                    min_level=request.min_level,
                 )
 
                 resume_offsets[offset_key] = log_result.lines_read

@@ -15,7 +15,7 @@ from marin.execution.executor import executor_main
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 moe_300m = MixtralConfig(
     max_seq_len=1024,

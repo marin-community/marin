@@ -68,7 +68,7 @@ from marin.training.training import (
     run_levanter_train_lm,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _truncate_wandb_name(name: str) -> str:

@@ -29,6 +29,7 @@ from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -405,7 +406,8 @@ def decontaminate(config: DeconConfig):
 
 @draccus.wrap()
 def main(config: DeconConfig):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
 
     result = decontaminate(config)
     print(f"Decontamination completed: {result}")

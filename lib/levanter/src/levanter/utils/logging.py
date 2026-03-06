@@ -5,10 +5,10 @@ import logging as pylogging
 import os
 import time
 from pathlib import Path
-from typing import Iterable, Iterator, List, TypeVar, Union
+from typing import Iterable, Iterator, TypeVar, Union
 
+import iris.logging as iris_logging
 import jax
-
 
 pylogger = pylogging.getLogger(__name__)
 
@@ -17,28 +17,36 @@ T = TypeVar("T")
 
 def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.INFO) -> None:
     """
-    Initialize logging.Logger with the appropriate name, console, and file handlers.
+    Initialize logging with iris (stderr + ring buffer) plus a levanter-format file log.
 
-    :param path: Path for writing log file
+    The file log uses a verbose format that includes process index, filename, and line number,
+    which is useful for post-hoc debugging of distributed runs.
+
+    :param log_dir: Directory for writing the log file
+    :param run_id: Used as the log file basename
     :param level: Default logging level
     """
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"{run_id}.log"
 
+    # Set up iris logging (stderr handler + ring buffer).
+    iris_logging.configure_logging(level)
+
+    # Add a file handler with levanter's verbose format, which includes process index,
+    # source location, and level — useful when aggregating logs from multiple processes.
     process_index = jax.process_index()
     log_format = f"%(asctime)s - {process_index} - %(name)s - %(filename)s:%(lineno)d - %(levelname)s :: %(message)s"
-    # use ISO 8601 format for timestamps, except no TZ, because who cares
     date_format = "%Y-%m-%dT%H:%M:%S"
 
-    handlers: List[pylogging.Handler] = [pylogging.FileHandler(path, mode="a"), pylogging.StreamHandler()]
+    file_handler = pylogging.FileHandler(path, mode="a")
+    file_handler.setLevel(level)
+    file_handler.setFormatter(pylogging.Formatter(fmt=log_format, datefmt=date_format))
+    pylogging.getLogger().addHandler(file_handler)
 
-    # Create Root Logger w/ Base Formatting
-    pylogging.basicConfig(format=log_format, datefmt=date_format, handlers=handlers, force=True)
     pylogging.getLogger("levanter").setLevel(level)
     pylogging.getLogger("tqdm_loggable").setLevel(level)
 
-    # Silence Transformers' "None of PyTorch, TensorFlow 2.0 or Flax have been found..." thing
     silence_transformer_nag()
 
 

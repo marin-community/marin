@@ -42,7 +42,7 @@ class FilterType(StrEnum):
     REMOVE_DOC = "remove_docs"
 
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
