@@ -37,7 +37,6 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
 import numpy as np
-from haliax import NamedArray
 from jax.sharding import PartitionSpec
 
 import levanter.tracker
@@ -259,7 +258,7 @@ class _LmEvalHarnessWorker:
 
         def _eval_loglikelihood(
             model: ArrayLmHarnessModel, packed_example: LmExample
-        ) -> tuple[NamedArray, NamedArray, NamedArray]:
+        ) -> tuple[jax.Array, jax.Array, jax.Array]:
             """
             Returns:
                 - segments: The segment IDs of the completions. (shape: (Segments,))
@@ -306,7 +305,7 @@ class _LmEvalHarnessWorker:
             losses = hax.flatten(batched_per_segment_losses, "segment")
             correct = hax.flatten(batched_per_segment_correct, "segment")
 
-            return segments, -losses, correct
+            return segments.array, (-losses).array, correct.array
 
         # no sharded outputs
         self._jit_loglikelihood = named_jit(
@@ -630,16 +629,14 @@ class LevanterHarnessLM(TemplateLM):
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
             batch = jax.device_put(batch)
 
-            batch = jax.device_put(batch)
-
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
             # Increment step after processing batch
             self._current_step += 1
 
-            out_ids = jax.device_get(out_ids.array)
-            out_lls = jax.device_get(out_lls.array)
-            out_correct = jax.device_get(out_correct.array)
+            out_ids = jax.device_get(out_ids)
+            out_lls = jax.device_get(out_lls)
+            out_correct = jax.device_get(out_correct)
             # -1's are going to be where we had too few sequences to fill a batch
             valid_indices = out_ids != -1
 
@@ -711,7 +708,9 @@ class LevanterHarnessLM(TemplateLM):
 
         return encoding
 
-    def _process_and_tokenize_stop_sequences(self, until: Optional[List[str]], eos: str) -> Optional[NamedArray]:
+    def _process_and_tokenize_stop_sequences(
+        self, until: Optional[List[str]], eos: str
+    ) -> Optional[haliax.NamedArray]:
         """
         Process and tokenize stop sequences for generation.
 
