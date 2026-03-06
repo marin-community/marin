@@ -43,6 +43,29 @@ def label_linear_like_module(module: Any, *, weight_label: str, bias_label: str)
     return dataclasses.replace(module, weight=weight_label, bias=masked_bias)
 
 
+def linear_like_weight_array(module: Any) -> jax.Array:
+    """Extract the underlying weight array from a linear-like module."""
+    if isinstance(module, hax.nn.Linear):
+        return module.weight.array
+    weight = getattr(module, "weight", None)
+    if isinstance(weight, hax.NamedArray):
+        return weight.array
+    if isinstance(weight, jax.Array):
+        return weight
+    raise TypeError(f"Expected linear-like module with array weight, got {type(module)}")
+
+
+def replace_linear_like_weight_array(module: Any, new_weight: jax.Array) -> Any:
+    """Return a copy of a linear-like module with an updated weight array."""
+    if isinstance(module, hax.nn.Linear):
+        return dataclasses.replace(module, weight=dataclasses.replace(module.weight, array=new_weight))
+    if isinstance(module, eqx.nn.Linear):
+        return eqx.tree_at(lambda m: m.weight, module, new_weight)
+    if not dataclasses.is_dataclass(module):
+        raise TypeError(f"Expected dataclass module for weight replacement, got {type(module)}")
+    return dataclasses.replace(module, weight=new_weight)
+
+
 def hvp(f, x, v):
     """Compute the Hessian-vector product of a function."""
     return eqx.filter_jvp(eqx.filter_grad(f), (x,), (v,))[1]
@@ -181,7 +204,7 @@ def unflatten_linear_layers(template: T, tree_with_flattened_linears: T) -> T:
 
 
 def map_flattened_linear_layers(
-    f: Callable[[hax.nn.Linear], hax.nn.Linear],
+    f: Callable[[Any], Any],
     params: PyTree,
     *,
     or_else: Callable | None = None,
@@ -211,13 +234,13 @@ def map_flattened_linear_layers(
     orig_is_leaf = is_leaf
 
     if is_leaf is None:
-        is_leaf = lambda x: isinstance(x, hax.nn.Linear) or x is None
+        is_leaf = lambda x: is_linear_like_module(x) or x is None
     else:
-        is_leaf = lambda x: isinstance(x, hax.nn.Linear) or orig_is_leaf(x) or x is None  # type: ignore
+        is_leaf = lambda x: is_linear_like_module(x) or orig_is_leaf(x) or x is None  # type: ignore
 
     def map_fn(p):
-        if isinstance(p, hax.nn.Linear):
-            if p.weight is None:
+        if is_linear_like_module(p):
+            if getattr(p, "weight", None) is None:
                 return p
             return f(p)
         elif or_else is not None:

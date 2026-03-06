@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -17,7 +16,9 @@ from levanter.optim.util import (
     CoefficientType,
     is_linear_like_module,
     label_linear_like_module,
+    linear_like_weight_array,
     map_flattened_linear_layers,
+    replace_linear_like_weight_array,
     zeropower_via_newtonschulz5,
 )
 from levanter.utils.jax_utils import leaf_key_paths
@@ -144,19 +145,18 @@ def scale_with_scion(momentum=0.95, steps=5, scion_eps=1e-8, coefficient_type="q
         )
         updates = buf
 
-        def transform_linear_layer(layer: haliax.nn.Linear):
-            assert layer.weight.ndim == 2
+        def transform_linear_layer(layer):
+            weight = linear_like_weight_array(layer)
+            assert weight.ndim == 2
 
             updated_weight_array = zeropower_via_newtonschulz5(
-                layer.weight.array, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
+                weight, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
             )
 
             scale = jnp.sqrt(jnp.maximum(1, updated_weight_array.shape[0] / updated_weight_array.shape[1]))
             updated_weight_array *= scale
 
-            updated_weight = dataclasses.replace(layer.weight, array=updated_weight_array)
-
-            return dataclasses.replace(layer, weight=updated_weight)  # type: ignore
+            return replace_linear_like_weight_array(layer, updated_weight_array)
 
         updates = map_flattened_linear_layers(transform_linear_layer, updates)
 

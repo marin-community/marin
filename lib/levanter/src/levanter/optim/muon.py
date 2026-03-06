@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 from dataclasses import dataclass
 from functools import partial
 from typing import NamedTuple, Optional
@@ -18,7 +17,9 @@ from levanter.optim.util import (
     CoefficientType,
     is_linear_like_module,
     label_linear_like_module,
+    linear_like_weight_array,
     map_flattened_linear_layers,
+    replace_linear_like_weight_array,
     zeropower_via_newtonschulz5,
 )
 from levanter.utils.jax_utils import leaf_key_paths
@@ -111,7 +112,10 @@ class MuonConfig(OptimizerConfig):
             if "Embedding" in path_str or "lm_head" in path_str:
                 return "adamw"
             elif is_linear_like_module(param):
-                # muon for linear layers
+                # Muon transform currently only supports Haliax linear modules.
+                # eqx/marker linears remain on adamw fallback until a transform path exists.
+                if not isinstance(param, haliax.nn.Linear):
+                    return label_linear_like_module(param, weight_label="adamw", bias_label="adamw")
                 assert (
                     param._out_first or use_kimi_scaling
                 )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
@@ -156,10 +160,10 @@ def scale_with_muon(
         else:
             updates = buf
 
-        def transform_linear_layer(layer: haliax.nn.Linear):
-            assert layer.weight.ndim == 2
+        def transform_linear_layer(layer):
+            array = linear_like_weight_array(layer)
+            assert array.ndim == 2
             # steps is now a concrete int
-            array = layer.weight.array
             updated_weight_array = zeropower_via_newtonschulz5(
                 array, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
             )
@@ -172,9 +176,7 @@ def scale_with_muon(
                 scale = 0.2 * jnp.sqrt(jnp.maximum(updated_weight_array.shape[0], updated_weight_array.shape[1]))
             updated_weight_array *= scale
 
-            updated_weight = dataclasses.replace(layer.weight, array=updated_weight_array)
-
-            return dataclasses.replace(layer, weight=updated_weight)  # type: ignore
+            return replace_linear_like_weight_array(layer, updated_weight_array)
 
         updates = map_flattened_linear_layers(transform_linear_layer, updates)
 
