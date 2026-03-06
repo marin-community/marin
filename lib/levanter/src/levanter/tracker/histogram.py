@@ -10,7 +10,6 @@ from jax.experimental.pallas import tpu as pltpu
 from jaxtyping import ArrayLike, Scalar
 
 import haliax as hax
-from haliax import NamedArray
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 from levanter.utils.partitioning import pspec_for_axis, shard_map
 
@@ -70,7 +69,7 @@ class Histogram(equinox.Module):
         return variance
 
 
-def sharded_histogram(a: NamedArray, bins: int | ArrayLike = 10) -> tuple[jnp.ndarray, jnp.ndarray]:
+def sharded_histogram(a: hax.NamedArray, bins: int | ArrayLike = 10) -> tuple[jnp.ndarray, jnp.ndarray]:
     """
     As [jax.numpy.histogram](https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.histogram.html#jax.numpy.histogram),
     except:
@@ -85,7 +84,7 @@ def sharded_histogram(a: NamedArray, bins: int | ArrayLike = 10) -> tuple[jnp.nd
     return _shardmap_histogram(a, edges), edges
 
 
-def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
+def _single_shard_histogram(a: hax.NamedArray, bin_edges, reduce_mesh):
     """Modified version of jax.numpy.histogram that returns integer counts instead of using the datatype of the input.
     Also avoids searchsorted, which is slow on TPUs.
     Args:
@@ -118,7 +117,7 @@ def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
     return counts
 
 
-def _shardmap_histogram(a: NamedArray, bins):
+def _shardmap_histogram(a: hax.NamedArray, bins):
     spec = pspec_for_axis(a.axes)
     flattened_spec = _flattened_spec(spec)
 
