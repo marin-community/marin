@@ -14,7 +14,6 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import AxisSelection, AxisSpec, ds
 from haliax.jax_utils import named_call
 from haliax.types import PrecisionLike
 
@@ -197,10 +196,10 @@ def _flash_attention_forward(
         i, o, ell = state
 
         # Step 1: Divide Q into 𝑇𝑟 = \ceil(𝑁/Br) blocks of size Br x d each,
-        q_i = q[QPos, ds.block(i, block_size)]
+        q_i = q[QPos, hax.ds.block(i, block_size)]
 
         # Step 2: init O_i = 0, sumexp_i = 0, max_i = -inf
-        o_i = o[QPos, ds.block(i, block_size)]
+        o_i = o[QPos, hax.ds.block(i, block_size)]
 
         QPosBlock = QPos.resize(block_size)
         row_axes_block: Tuple[hax.Axis, ...] = q_batch_axes + (QPosBlock,)
@@ -224,20 +223,20 @@ def _flash_attention_forward(
             # Step 1: Divide Q into 𝑇𝑟 = \ceil(𝑁/Br) blocks of size Br x d each,
             #         K and V into 𝑇𝑐 = \ceil(𝑁/Bc) blocks of size Bc x d each.
             i, j, o_i, q_i, sumexp_i, old_max_i = state
-            k_j = k[KPos, ds.block(j, block_size)]
-            v_j = v[KPos, ds.block(j, block_size)]
+            k_j = k[KPos, hax.ds.block(j, block_size)]
+            v_j = v[KPos, hax.ds.block(j, block_size)]
 
             # Step 8: compute Sij = QiKj^T
             attn_ij = hax.dot(q_i, k_j, precision=precision, axis=Key)
 
             if bias is not None:
                 if bias.has_axis(QPos.name):
-                    bias_i = bias[QPos, ds.block(i, block_size)]
+                    bias_i = bias[QPos, hax.ds.block(i, block_size)]
                 else:
                     bias_i = bias
 
                 if bias.has_axis(KPos.name):
-                    bias_ij = bias_i[KPos, ds.block(j, block_size)]
+                    bias_ij = bias_i[KPos, hax.ds.block(j, block_size)]
                 else:
                     bias_ij = bias_i
 
@@ -341,21 +340,21 @@ def _flash_attention_backward(
     @named_call
     def do_kv_block(state):
         j, dQ, dK, dV = state
-        k_j = k[KPos, ds.block(j, block_size)]
-        v_j = v[KPos, ds.block(j, block_size)]
+        k_j = k[KPos, hax.ds.block(j, block_size)]
+        v_j = v[KPos, hax.ds.block(j, block_size)]
 
-        dK_j = dK[KPos, ds.block(j, block_size)]
-        dV_j = dV[KPos, ds.block(j, block_size)]
+        dK_j = dK[KPos, hax.ds.block(j, block_size)]
+        dV_j = dV[KPos, hax.ds.block(j, block_size)]
 
         @named_call
         def do_inner_block(state):
             i, j, dQ, dK_j, dV_j = state
-            q_i = q[QPos, ds.block(i, block_size)]
+            q_i = q[QPos, hax.ds.block(i, block_size)]
 
-            dQ_i = dQ[QPos, ds.block(i, block_size)]
-            dO_i = dO[QPos, ds.block(i, block_size)]
-            L_i = L[QPos, ds.block(i, block_size)]
-            D_i = D[QPos, ds.block(i, block_size)]
+            dQ_i = dQ[QPos, hax.ds.block(i, block_size)]
+            dO_i = dO[QPos, hax.ds.block(i, block_size)]
+            L_i = L[QPos, hax.ds.block(i, block_size)]
+            D_i = D[QPos, hax.ds.block(i, block_size)]
 
             attn_ij = hax.dot(q_i, k_j, precision=precision, axis=Key)
 
@@ -368,7 +367,7 @@ def _flash_attention_backward(
                 )
 
             if bias is not None:
-                bias_ij = bias[QPos, ds.block(i, block_size), KPos, ds.block(j, block_size)]
+                bias_ij = bias[QPos, hax.ds.block(i, block_size), KPos, hax.ds.block(j, block_size)]
                 attn_ij = attn_ij + bias_ij
 
             if logits_soft_cap is not None:
@@ -459,7 +458,7 @@ def _materialize_mask_slice(mask, i, j, QPos, KPos, block_size):
     )
 
 
-def _strip_sizes(axes: AxisSpec) -> AxisSelection:
+def _strip_sizes(axes: hax.AxisSpec) -> hax.AxisSelection:
     """Strip sizes from axes, returning only the names."""
     if isinstance(axes, hax.Axis):
         return axes.name
