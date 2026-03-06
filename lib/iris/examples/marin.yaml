@@ -24,6 +24,7 @@ controller:
   gcp:
     zone: us-central1-a
     machine_type: e2-standard-4
+    boot_disk_size_gb: 100
     port: 10000
 
 scale_groups:
