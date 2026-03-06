@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -28,6 +28,22 @@ T = TypeVar("T")
 def is_linear_like_module(node: Any) -> bool:
     """Return True for linear-like modules used by optimizer mask routing."""
     return isinstance(node, (hax.nn.Linear, eqx.nn.Linear)) or has_linear_like_marker(node)
+
+
+def is_haliax_linear_module(node: Any) -> bool:
+    """Return True iff a node is Levanter's legacy haliax linear module."""
+    return isinstance(node, hax.nn.Linear)
+
+
+def linear_like_out_first(module: Any) -> bool:
+    """
+    Return the linear output/input orientation expected by Muon scaling checks.
+
+    Non-haliax linear-like modules are treated as out-first.
+    """
+    if isinstance(module, hax.nn.Linear):
+        return bool(module._out_first)
+    return True
 
 
 def label_linear_like_module(module: Any, *, weight_label: str, bias_label: str) -> Any:

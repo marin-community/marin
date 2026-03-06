@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -8,8 +8,6 @@ import jax
 import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
-
-import haliax
 
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.util import (
@@ -100,7 +98,7 @@ class ScionConfig(OptimizerConfig):
             else:
                 return "signum"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
+        return jax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
 
 
 class ScaleByScionState(NamedTuple):

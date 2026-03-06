@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -10,13 +10,13 @@ import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
 
-import haliax
-
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.util import (
     CoefficientType,
+    is_haliax_linear_module,
     is_linear_like_module,
     label_linear_like_module,
+    linear_like_out_first,
     linear_like_weight_array,
     map_flattened_linear_layers,
     replace_linear_like_weight_array,
@@ -113,15 +113,15 @@ class MuonConfig(OptimizerConfig):
                 return "adamw"
             elif is_linear_like_module(param):
                 # muon for linear layers
-                if isinstance(param, haliax.nn.Linear):
+                if is_haliax_linear_module(param):
                     assert (
-                        param._out_first or use_kimi_scaling
+                        linear_like_out_first(param) or use_kimi_scaling
                     )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
                 return label_linear_like_module(param, weight_label="muon", bias_label="adamw")
             else:
                 return "adamw"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
+        return jax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
 
 
 class ScaleByMuonState(NamedTuple):
