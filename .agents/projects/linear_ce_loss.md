@@ -1398,3 +1398,32 @@ Notes:
     - keep `large-batch-small-h` at `b=1024,h=512,v=2048`
   - device-key normalization update:
     - map both `TPU v5e` and `TPU v5 lite` / `TPU v5litepod` strings to `TPU v5e` so v5litepod-8 uses the v5e table directly.
+
+### 2026-03-06: full v6e sweep (`v6e-4`, us-east1) + TPU v6 tuned-table updates
+- Setup:
+  - `dev_tpu.py allocate` remained blocked by Ray client timeout in this session, so the sweep ran as a Ray submission job pinned to `TPU-v6e-4-head` resources.
+  - job id: `raysubmit_HkNExTDUP22WCKkJ` (`infra/marin-us-east1.yaml`)
+  - artifacts on TPU: `/tmp/ce_sweep_v6e_20260306/*.stdout.log`
+- Sweep buckets run:
+  - `small_vocab`, `mid_h_large_vocab`, `large_batch_small_h`, `huge_batch_small_h`, `llama3_ish`, `medium_batch_mid_h`
+  - each with `b_block_size=1024`, explicit `h/v` grids, and `--include-infer`.
+- Best observed configs from this sweep:
+  - `small_vocab`: `b1024_h512_v2048` (`~2.399M tok/s`)
+  - `mid_h_large_vocab`: `b1024_h1024_v1024` (`~410.9k tok/s`)
+  - `large_batch_small_h`: `b1024_h256_v2048` (`~522.2k tok/s`)
+  - `huge_batch_small_h`: `b1024_h512_v1024` (`~318.3k tok/s`; `h=256/512/1024` near tie)
+  - `llama3_ish`: `b1024_h1024_v512` (`~70.6k tok/s`; `h=256/512/1024` near tie at `v=512`)
+  - `medium_batch_mid_h`: `b1024_h2048_v512` (`~155.2k tok/s`; `h=256/512/1024/2048` near tie at `v=512`)
+- Failure attribution:
+  - aggregate failed classifications across all six buckets:
+    - `forward`: `22`
+    - `backward`: `0`
+    - `unsupported (shape-divisibility)`: `8`
+    - `other`: `0`
+  - all VMEM OOM failures observed in this run were forward/JVP-path failures.
+- Tuned table updates applied (`tuned_block_sizes.py`, `TPU v6`, bf16 + float32):
+  - `small-vocab`: `v_block_size 512 -> 2048`
+  - `llama3-ish`: `v_block_size 1024 -> 512`
+  - add `huge-batch-small-h`: `b=1024,h=256,v=1024`
+  - add `medium-batch-medium-h`: `b=1024,h=256,v=512`
+  - kept `mid-h-large-vocab` and `large-batch-small-h` entries unchanged.

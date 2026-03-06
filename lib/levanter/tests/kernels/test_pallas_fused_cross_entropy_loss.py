@@ -944,6 +944,33 @@ def test_infer_block_sizes_tpu_v5e_updated_tuning(
     assert block_sizes == expected
 
 
+@pytest.mark.parametrize(
+    ("b", "h", "v", "expected"),
+    [
+        (1024, 512, 16_384, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048)),
+        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=1024)),
+        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048)),
+        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
+        (8_192, 4_096, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
+        (16_384, 2_048, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
+    ],
+)
+def test_infer_block_sizes_tpu_v6_updated_tuning(
+    b: int,
+    h: int,
+    v: int,
+    expected: fused_api.BlockSizes,
+):
+    block_sizes = infer_block_sizes(
+        b=b,
+        h=h,
+        v=v,
+        dtype=jnp.bfloat16,
+        device_kind="TPU v6e",
+    )
+    assert block_sizes == expected
+
+
 def test_infer_block_sizes_tpu_v4_huge_batch_small_h_prefers_full_hidden_tile():
     block_sizes = infer_block_sizes(
         b=262_144,
