@@ -489,7 +489,7 @@ class LocalPlatform:
             )
             metadata.vm_address = f"127.0.0.1:{worker_port}"
 
-            env_provider = FixedEnvironmentProvider(metadata, log_prefix_value=log_prefix)
+            env_provider = FixedEnvironmentProvider(metadata)
 
             wc = WorkerConfig(
                 host="127.0.0.1",

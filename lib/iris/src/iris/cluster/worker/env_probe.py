@@ -404,9 +404,8 @@ class EnvironmentProvider(Protocol):
 class FixedEnvironmentProvider:
     """Returns pre-built worker metadata. Used by LocalPlatform and tests."""
 
-    def __init__(self, metadata: cluster_pb2.WorkerMetadata, log_prefix_value: str | None = None):
+    def __init__(self, metadata: cluster_pb2.WorkerMetadata):
         self._metadata = metadata
-        self._log_prefix_value = log_prefix_value
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
         return self._metadata
