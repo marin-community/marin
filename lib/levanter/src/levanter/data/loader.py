@@ -35,6 +35,7 @@ from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import is_named_array, local_cpu_mesh
 from levanter.utils.mesh import activate_mesh, get_active_mesh
 from levanter.utils.partitioning import (
+    batch_axis,
     current_thread_local_mapping,
     physical_axis_name,
     physical_axis_size,
@@ -187,7 +188,7 @@ class DataLoader(Iterable[Ex]):
     def batch_axis_at_step(self, step: int):
         size = self.rounded_batch_size_at_step(step)
 
-        return hax.Axis(self.batch_axis_name, size)
+        return batch_axis(self.batch_axis_name, size)
 
     def _round_batch_size(self, size: int) -> int:
         if self._data_axis_size is None:
@@ -360,7 +361,7 @@ class DataLoaderIterator(Iterator[Ex]):
         """
         cache: dict[tuple[int, int], list[Array | hax.NamedArray]] = {}
         padded_batch_size = self.dl.rounded_batch_size_at_step(batch.index)
-        Batch = hax.Axis(self.dl.batch_axis_name, padded_batch_size)
+        Batch = batch_axis(self.dl.batch_axis_name, padded_batch_size)
 
         def get_local_batch(begin: int, end: int) -> list:
             if (begin, end) in cache:
