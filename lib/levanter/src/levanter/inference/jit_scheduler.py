@@ -7,7 +7,6 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jaxtyping
-from haliax import NamedArray
 from haliax import haxtyping as ht
 from jax import numpy as jnp
 
@@ -32,12 +31,12 @@ class PackedSequence(eqx.Module):
     Boundaries for sampling are now computed using PageBatchInfo.seq_lens and these pos_ids in the generation loop.
     """
 
-    tokens: ht.i32[NamedArray, "position"]  # packed tokens
-    slot_ids: ht.i32[NamedArray, "position"]  # local slot ids for each token
-    pos_ids: ht.i32[NamedArray, "position"]  # position ids for each token
+    tokens: ht.i32[hax.NamedArray, "position"]  # packed tokens
+    slot_ids: ht.i32[hax.NamedArray, "position"]  # local slot ids for each token
+    pos_ids: ht.i32[hax.NamedArray, "position"]  # position ids for each token
     num_tokens: jax.Array  # number of tokens in the packed sequence
 
-    def token_counts_per_slot(self, max_slots: int) -> ht.i32[NamedArray, "seq"]:  # type: ignore[name-defined]
+    def token_counts_per_slot(self, max_slots: int) -> ht.i32[hax.NamedArray, "seq"]:  # type: ignore[name-defined]
         """
         Returns the number of tokens per slot in the packed sequence.
         The result is a vector of size `max_slots`, where each entry corresponds to a slot ID.
@@ -53,7 +52,7 @@ class SeqDecodingParams(eqx.Module):
     """Per-sequence decoding parameters."""
 
     max_num_tokens: jnp.ndarray
-    stop_tokens: ht.i32[NamedArray, "stop_seq position"] | None
+    stop_tokens: ht.i32[hax.NamedArray, "stop_seq position"] | None
     temperature: jnp.ndarray
     key: jaxtyping.PRNGKeyArray
 
@@ -74,11 +73,11 @@ class SeqDecodingParams(eqx.Module):
 class SequenceTable(eqx.Module):
     """Compact view over per-sequence metadata tracked by :class:`DecodeState`."""
 
-    seq_lens: ht.i32[NamedArray, "seq"]
-    clone_sources: ht.i32[NamedArray, "seq"]
-    kv_pages: ht.i32[NamedArray, "seq page"]
-    page_indices: ht.i32[NamedArray, "seq page"]
-    used_mask: ht.bool_[NamedArray, "seq"]
+    seq_lens: ht.i32[hax.NamedArray, "seq"]
+    clone_sources: ht.i32[hax.NamedArray, "seq"]
+    kv_pages: ht.i32[hax.NamedArray, "seq page"]
+    page_indices: ht.i32[hax.NamedArray, "seq page"]
+    used_mask: ht.bool_[hax.NamedArray, "seq"]
     page_size: int = eqx.field(static=True)
 
     @staticmethod
@@ -162,8 +161,8 @@ class SequenceTable(eqx.Module):
         slot_id: int,
         *,
         seq_len: jnp.ndarray,
-        kv_pages: ht.i32[NamedArray, "page"],  # type: ignore[name-defined]
-        page_indices: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
+        kv_pages: ht.i32[hax.NamedArray, "page"],  # type: ignore[name-defined]
+        page_indices: ht.i32[hax.NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         clone_source: jnp.ndarray | int = INVALID,
     ) -> "SequenceTable":
         seq_lens = self.seq_lens.at["seq", slot_id].set(seq_len)
@@ -187,7 +186,7 @@ class SequenceTable(eqx.Module):
         clone_sources = self.clone_sources.at["seq", slot_id].set(clone_source)
         return dataclasses.replace(self, clone_sources=clone_sources)
 
-    def clear_slots(self, mask: ht.bool_[NamedArray, "seq"]) -> "SequenceTable":  # type: ignore[name-defined]
+    def clear_slots(self, mask: ht.bool_[hax.NamedArray, "seq"]) -> "SequenceTable":  # type: ignore[name-defined]
         new_seq_lens = hax.where(mask, INVALID, self.seq_lens)
         new_clone_sources = hax.where(mask, INVALID, self.clone_sources)
         new_kv_pages = hax.where(mask, INVALID, self.kv_pages)
@@ -211,8 +210,8 @@ class SequenceTable(eqx.Module):
     def allocate_for_seq(
         self,
         page_table: "PageTable",
-        token_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
-        token_pos_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        token_slot_ids: ht.i32[hax.NamedArray, " position"],  # type: ignore[name-defined]
+        token_pos_ids: ht.i32[hax.NamedArray, " position"],  # type: ignore[name-defined]
     ) -> tuple["SequenceTable", "PageTable", "PageBatchInfo"]:
         """
         Allocate pages from PageTable for new sequences and update ``seq_lens``.
@@ -554,9 +553,9 @@ class DecodeState(eqx.Module):
        those positions.
     """
 
-    tokens: ht.i32[NamedArray, "seq position"]
+    tokens: ht.i32[hax.NamedArray, "seq position"]
     """ most recent tokens generated for each sequence. Should always start at a page boundary. """
-    logprobs: ht.Float[NamedArray, "seq position"] | None  # log probabilities of the tokens
+    logprobs: ht.Float[hax.NamedArray, "seq position"] | None  # log probabilities of the tokens
     sequences: SequenceTable
     """Aggregated per-sequence state such as lengths, clone metadata, and KV page assignments."""
     page_size: int = eqx.field(static=True)
@@ -567,14 +566,14 @@ class DecodeState(eqx.Module):
     pad_token_id: int
 
     # Per sequence sampling parameters
-    max_num_tokens: ht.i32[NamedArray, "seq"]
+    max_num_tokens: ht.i32[hax.NamedArray, "seq"]
     """
     Maximum number of tokens for each sequence. This is used to limit the number of tokens generated.
     This is inclusive of the prefix length, i.e. the total number of tokens that can be generated for each sequence.
     """
-    stop_tokens: ht.i32[NamedArray, "seq stop_seq position"] | None
+    stop_tokens: ht.i32[hax.NamedArray, "seq stop_seq position"] | None
     """Stop sequences for each sequence. If None, no stop sequences are used. **Left padded** with pad_token_id."""
-    temperature: ht.Float[NamedArray, "seq"]
+    temperature: ht.Float[hax.NamedArray, "seq"]
     """temperature for sampling. 0 means greedy sampling"""
     prng_keys: jaxtyping.PRNGKeyArray
     """one per sequence, used for sampling. This is a JAX PRNG key, so it can be split to get new keys."""
@@ -583,7 +582,7 @@ class DecodeState(eqx.Module):
     """token queue for pending decode work"""
 
     # Cached finished flags per sequence (updated when tokens are enqueued)
-    finished: ht.bool_[NamedArray, "seq"]
+    finished: ht.bool_[hax.NamedArray, "seq"]
 
     def reset(self):
         return DecodeState.init(
@@ -636,17 +635,17 @@ class DecodeState(eqx.Module):
         )
 
     @property
-    def seq_lens(self) -> ht.i32[NamedArray, "seq"]:  # type: ignore[name-defined]
+    def seq_lens(self) -> ht.i32[hax.NamedArray, "seq"]:  # type: ignore[name-defined]
         """Current logical length for each active sequence."""
         return self.sequences.seq_lens
 
     @property
-    def clone_sources(self) -> ht.i32[NamedArray, "seq"]:  # type: ignore[name-defined]
+    def clone_sources(self) -> ht.i32[hax.NamedArray, "seq"]:  # type: ignore[name-defined]
         """Mapping from clone targets to their parent sequences."""
         return self.sequences.clone_sources
 
     @property
-    def kv_pages(self) -> ht.i32[NamedArray, "seq page"]:  # type: ignore[name-defined]
+    def kv_pages(self) -> ht.i32[hax.NamedArray, "seq page"]:  # type: ignore[name-defined]
         """KV page assignments per sequence."""
         return self.sequences.kv_pages
 
@@ -681,8 +680,8 @@ class DecodeState(eqx.Module):
 
     def allocate_for_seq(
         self,
-        token_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
-        token_pos_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        token_slot_ids: ht.i32[hax.NamedArray, " position"],  # type: ignore[name-defined]
+        token_pos_ids: ht.i32[hax.NamedArray, " position"],  # type: ignore[name-defined]
     ) -> tuple["DecodeState", PageBatchInfo]:
         sequences, page_table, batch_info = self.sequences.allocate_for_seq(
             self.page_table, token_slot_ids, token_pos_ids
@@ -701,7 +700,7 @@ class DecodeState(eqx.Module):
         sequences = self.sequences.bump_seq_len_to_next_page(seq_id)
         return dataclasses.replace(self, sequences=sequences)
 
-    def prng_keys_for(self, slot_ids: ht.i32[NamedArray, "position"], pos_ids: ht.i32[NamedArray, "position"]) -> jaxtyping.PRNGKeyArray:  # type: ignore[name-defined]
+    def prng_keys_for(self, slot_ids: ht.i32[hax.NamedArray, "position"], pos_ids: ht.i32[hax.NamedArray, "position"]) -> jaxtyping.PRNGKeyArray:  # type: ignore[name-defined]
         """
         Get the PRNG keys for the given slot IDs and positions.
         This is used to sample new tokens for the given slot IDs and positions.
@@ -712,9 +711,9 @@ class DecodeState(eqx.Module):
 
     def enqueue_tokens(
         self,
-        new_tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
-        new_slot_ids: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
-        new_pos_ids: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
+        new_tokens: ht.i32[hax.NamedArray, "position"],  # type: ignore[name-defined]
+        new_slot_ids: ht.i32[hax.NamedArray, "position"],  # type: ignore[name-defined]
+        new_pos_ids: ht.i32[hax.NamedArray, "position"],  # type: ignore[name-defined]
         num_new_tokens: int,
     ) -> "DecodeState":
         """Forward ``enqueue_tokens`` to the underlying ``TokenQueue`` and return an updated ``DecodeState``."""
@@ -734,7 +733,7 @@ class DecodeState(eqx.Module):
     @eqx.filter_jit
     def discharge_clone(
         self,
-        target_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
+        target_slot_ids: ht.i32[hax.NamedArray, " position"],  # type: ignore[name-defined]
         num_targets: jnp.ndarray | int,
     ) -> "DecodeState":
         """
@@ -801,10 +800,10 @@ class DecodeState(eqx.Module):
     def assign_seq(
         self,
         local_slot_id: int,
-        tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
+        tokens: ht.i32[hax.NamedArray, "position"],  # type: ignore[name-defined]
         seq_len: jnp.ndarray | int = 0,
-        kv_pages: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
-        page_indices: ht.i32[NamedArray, "page"] | None = None,  # type: ignore[name-defined]
+        kv_pages: ht.i32[hax.NamedArray, "page"] | None = None,  # type: ignore[name-defined]
+        page_indices: ht.i32[hax.NamedArray, "page"] | None = None,  # type: ignore[name-defined]
         seq_params: SeqDecodingParams | None = None,
     ) -> "DecodeState":
         """Assign a new sequence to the given local slot."""
@@ -870,9 +869,9 @@ class DecodeState(eqx.Module):
 
     def update_tokens(
         self,
-        new_tokens: ht.i32[NamedArray, " position"],  # type: ignore
-        local_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore
-        new_log_probs: ht.Float[NamedArray, " position"],  # type: ignore
+        new_tokens: ht.i32[hax.NamedArray, " position"],  # type: ignore
+        local_slot_ids: ht.i32[hax.NamedArray, " position"],  # type: ignore
+        new_log_probs: ht.Float[hax.NamedArray, " position"],  # type: ignore
         num_new_tokens: jnp.ndarray | int,
     ) -> "DecodeState":  # type: ignore
         """
@@ -985,9 +984,9 @@ class TokenQueue(eqx.Module):
 
     # Notes:
     # - ``queued_tokens`` are stored "flat" with accompanying ``queued_slot_ids``
-    queued_tokens: ht.i32[NamedArray, "position"]  # tokens queued for decoding
-    queued_slot_ids: ht.i32[NamedArray, "position"]
-    queued_pos_ids: ht.i32[NamedArray, "position"]  # absolute position id for each queued token
+    queued_tokens: ht.i32[hax.NamedArray, "position"]  # tokens queued for decoding
+    queued_slot_ids: ht.i32[hax.NamedArray, "position"]
+    queued_pos_ids: ht.i32[hax.NamedArray, "position"]  # absolute position id for each queued token
     num_queued_tokens: jax.Array
 
     @property
@@ -1012,9 +1011,9 @@ class TokenQueue(eqx.Module):
 
     def enqueue_tokens(
         self,
-        new_tokens: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
-        new_slot_ids: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
-        new_pos_ids: ht.i32[NamedArray, "position"],  # type: ignore[name-defined]
+        new_tokens: ht.i32[hax.NamedArray, "position"],  # type: ignore[name-defined]
+        new_slot_ids: ht.i32[hax.NamedArray, "position"],  # type: ignore[name-defined]
+        new_pos_ids: ht.i32[hax.NamedArray, "position"],  # type: ignore[name-defined]
         num_new_tokens: int,
     ) -> "TokenQueue":
         """Append ``new_tokens`` and ``new_slot_ids`` to the queue."""
@@ -1162,11 +1161,11 @@ class _DecodeOutputs(eqx.Module):
     feeding work to the device.
     """
 
-    tokens: ht.i32[NamedArray, "position"]
-    slot_ids: ht.i32[NamedArray, "position"]
-    logprobs: ht.Float[NamedArray, "position"] | None
+    tokens: ht.i32[hax.NamedArray, "position"]
+    slot_ids: ht.i32[hax.NamedArray, "position"]
+    logprobs: ht.Float[hax.NamedArray, "position"] | None
     num_tokens: jax.Array
-    finished: ht.bool_[NamedArray, "seq"]
+    finished: ht.bool_[hax.NamedArray, "seq"]
 
     @property
     def max_queued_tokens(self) -> int:
@@ -1188,11 +1187,11 @@ class _DecodeOutputs(eqx.Module):
 
     def append(
         self,
-        new_tokens: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
-        new_slot_ids: ht.i32[NamedArray, " position"],  # type: ignore[name-defined]
-        new_logprobs: ht.Float[NamedArray, " position"],  # type: ignore[name-defined]
+        new_tokens: ht.i32[hax.NamedArray, " position"],  # type: ignore[name-defined]
+        new_slot_ids: ht.i32[hax.NamedArray, " position"],  # type: ignore[name-defined]
+        new_logprobs: ht.Float[hax.NamedArray, " position"],  # type: ignore[name-defined]
         num_new_tokens: int,
-        finished_snapshot: ht.bool_[NamedArray, "seq"],  # type: ignore[name-defined]
+        finished_snapshot: ht.bool_[hax.NamedArray, "seq"],  # type: ignore[name-defined]
     ) -> "_DecodeOutputs":
         """Append a batch of outputs and update the finished flags snapshot."""
 
