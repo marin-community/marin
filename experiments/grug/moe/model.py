@@ -194,11 +194,14 @@ def _routing_stats(
     router_logits_f = router_logits.astype(jnp.float32)
     expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
     total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
-    expert_loads = expert_counts / total_assignments
-    routing_entropy = -jnp.sum(expert_loads * jnp.log(expert_loads + 1e-6))
-    f = expert_loads * (num_experts / num_experts_per_token)
+    assignment_fraction = expert_counts / total_assignments
+    routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
+    # Match the Switch/OLMoE-style scaling: E * sum_i(f_i * p_i), where
+    # f_i is token fraction for expert i (counts per token, not per assignment).
+    # assignment_fraction sums to 1 over assignments, so convert with top-k.
+    token_fraction = assignment_fraction * num_experts_per_token
     p = jnp.mean(router_probs_f, axis=0)
-    load_balancing_loss = jnp.sum(f * p)
+    load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
     z = jsp.special.logsumexp(router_logits_f, axis=-1)
     router_z_loss = jnp.mean(z**2)
 
