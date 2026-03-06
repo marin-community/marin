@@ -7,7 +7,6 @@ import equinox as eqx
 import haliax as hax
 import haliax.haxtyping as ht
 import jax.numpy as jnp
-from haliax import NamedArray
 
 from levanter.inference.utils import INVALID, is_valid
 
@@ -25,7 +24,7 @@ class PageTableSpec:
 class PageTable(eqx.Module):
     """Global KV page allocator tracking only per-page reference counts."""
 
-    page_ref_counts: NamedArray  # i32[Page]
+    page_ref_counts: hax.NamedArray  # i32[Page]
     page_size: int = eqx.field(static=True)
     _max_seqs: int = eqx.field(static=True)
     _pages_per_seq: int = eqx.field(static=True)
@@ -70,12 +69,12 @@ class PageBatchInfo(eqx.Module):
     To recover the mapping, use slot_ids to map from batch sequence index to DecodeState sequence index.
     """
 
-    slot_ids: ht.i32[NamedArray, " seq"]  # type: ignore[name-defined]
-    page_indices: ht.i32[NamedArray, " seq page"]  # type: ignore[name-defined]
-    seq_lens: ht.i32[NamedArray, " seq"]  # type: ignore[name-defined]
-    cu_q_lens: ht.i32[NamedArray, " seq"]  # type: ignore[name-defined]
+    slot_ids: ht.i32[hax.NamedArray, " seq"]  # type: ignore[name-defined]
+    page_indices: ht.i32[hax.NamedArray, " seq page"]  # type: ignore[name-defined]
+    seq_lens: ht.i32[hax.NamedArray, " seq"]  # type: ignore[name-defined]
+    cu_q_lens: ht.i32[hax.NamedArray, " seq"]  # type: ignore[name-defined]
     num_seqs: ht.i32[jnp.ndarray, ""]
-    new_token_dests: ht.i32[NamedArray, "position"]  # type: ignore[name-defined]
+    new_token_dests: ht.i32[hax.NamedArray, "position"]  # type: ignore[name-defined]
     page_size: int = eqx.field(static=True)
 
     @property
