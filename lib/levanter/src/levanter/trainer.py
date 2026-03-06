@@ -35,7 +35,6 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 from draccus import field
-from haliax import Axis
 from haliax.quantization import QuantizationConfig
 from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh
@@ -66,7 +65,7 @@ from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_trainin
 from levanter.utils import cloud_utils, fsspec_utils
 from levanter.utils.jax_utils import ensure_scalar, is_named_array, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, activate_mesh, create_mesh_from_axis_specs
-from levanter.utils.partitioning import named_jit, shard, shard_with_axis_mapping
+from levanter.utils.partitioning import batch_axis, named_jit, shard, shard_with_axis_mapping
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec, ResourceMapping, Scalar
 
@@ -873,19 +872,19 @@ class TrainerConfig:
     def TrainBatch(self):
         if not isinstance(self.train_batch_size, int):
             raise ValueError("TrainBatch is only valid for a single batch size. Use batch_axis_at_step instead")
-        return Axis(self.batch_axis_name, self.train_batch_size)
+        return batch_axis(self.batch_axis_name, self.train_batch_size)
 
     @cached_property
     def batch_schedule(self):
         return BatchSchedule(self.train_batch_size)
 
-    def batch_axis_at_step(self, step: int) -> Axis:
+    def batch_axis_at_step(self, step: int):
         bs = value_at_step(self.train_batch_size, step)
-        return Axis(self.batch_axis_name, bs)
+        return batch_axis(self.batch_axis_name, bs)
 
     @property
     def EvalBatch(self):
-        return Axis(self.batch_axis_name, self.eval_batch_size)
+        return batch_axis(self.batch_axis_name, self.eval_batch_size)
 
     @property
     def microbatch_size(self) -> int | None:

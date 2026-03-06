@@ -29,6 +29,11 @@ def vocab_axis(vocab_size: int):
     return hax.Axis("vocab", vocab_size)
 
 
+def batch_axis(batch_axis_name: str, batch_size: int):
+    """Create a batch axis with the configured name and size."""
+    return hax.Axis(batch_axis_name, batch_size)
+
+
 def shard(tree, axis_mapping: ResourceMapping | None = None):
     """Shard a pytree using the provided axis mapping, or current defaults when omitted."""
     return hax.shard(tree, axis_mapping)
@@ -42,6 +47,7 @@ def shard_with_axis_mapping(tree, axis_mapping: ResourceMapping | None = None):
 __all__ = [
     "current_thread_local_mapping",
     "infer_resource_partitions",
+    "batch_axis",
     "named_jit",
     "physical_axis_name",
     "physical_axis_size",
