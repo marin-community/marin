@@ -71,7 +71,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, uploa
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.jax_utils import join_key, key_iterator, leaf_key_paths, shaped_rng_split
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.partitioning import named_jit
+from levanter.utils.partitioning import axis, named_jit
 
 
 silence_transformer_nag()
@@ -144,7 +144,7 @@ class LowRankLinear(eqx.Module):
         """
         Initializes a LoraLinear module.
         """
-        _R = hax.Axis(LORA_R, r)
+        _R = axis(LORA_R, r)
         key_A, key_B = jax.random.split(key)
         # Peft always uses out_first=True (i.e. normal Torch convention) for linear, even for gpt2-style Conv1d
         lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
