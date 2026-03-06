@@ -81,7 +81,13 @@ from levanter.eval import resolve_batch_axis_resource
 from levanter.models.lm_model import ArrayLmHarnessModel, LmConfig, LmExample
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
-from levanter.utils.partitioning import infer_resource_partitions, named_jit, round_axis_for_partitioning
+from levanter.utils.partitioning import (
+    axis,
+    batch_axis,
+    infer_resource_partitions,
+    named_jit,
+    round_vocab_axis_for_partitioning,
+)
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ResourceMapping
@@ -285,7 +291,7 @@ class _LmEvalHarnessWorker:
             is_correct = target_y == pred_targets
 
             # we need + 1 because we use -1 as a padding value for segments
-            max_Segments = hax.Axis("Segments", size=self.max_packed_segments + 1)
+            max_Segments = axis("Segments", self.max_packed_segments + 1)
 
             batched_segment_ids, batched_per_segment_losses = hax.vmap(per_segment_loss, self.EvalBatch)(
                 packed_example, loss, max_Segments
@@ -1310,7 +1316,7 @@ def _actually_run_eval_harness(
 
     """
     if isinstance(EvalBatch, int):
-        EvalBatch = hax.Axis("batch", EvalBatch)
+        EvalBatch = batch_axis("batch", EvalBatch)
 
     max_examples = config.max_examples
     max_length = config.max_length
@@ -1461,7 +1467,7 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(hax.Axis("vocab", vocab_size), compute_axis_mapping)
+        Vocab = round_vocab_axis_for_partitioning(vocab_size, compute_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
