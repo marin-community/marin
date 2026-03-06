@@ -15,7 +15,6 @@ import dataclasses
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.dna.defaults import (
-    DNA_WINDOW_SIZE_BYTES_V1,
     SHORT_RUN_CONFIG_V1,
     dna_effective_seq_len,
 )
@@ -44,7 +43,6 @@ tokenized = default_tokenize(
     dataset=DATASET,
     tokenizer=TOKENIZER,
     format=DNALmDatasetFormat(soft_mask_weight=0.01),
-    window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
 )
 
 # =============================================================================
