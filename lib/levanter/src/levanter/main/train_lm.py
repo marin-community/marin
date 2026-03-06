@@ -308,6 +308,7 @@ def main(config: TrainLmConfig):
                         batch_size=config.trainer.eval_batch_size,
                         batch_axis_resource=batch_axis_resource,
                         batch_axis_name=config.trainer.batch_axis_name,
+                        mesh=config.trainer.device_mesh,
                     ),
                     every=config.trainer.steps_per_eval,
                 )

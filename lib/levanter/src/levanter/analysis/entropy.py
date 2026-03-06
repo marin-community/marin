@@ -117,6 +117,7 @@ def cb_compute_entropies(
     batch_size: int,
     batch_axis_resource,
     batch_axis_name: str = "batch",
+    mesh=None,
     num_tokens: int = 10 * 1024 * 1024,
 ):
     """
@@ -147,6 +148,7 @@ def cb_compute_entropies(
             batch_size=batch_size,
             batch_axis_name=batch_axis_name,
             pad_final_batch=False,
+            mesh=mesh,
             axis_resources=loader_axis_resources,
         )
         model = step.eval_model
@@ -224,6 +226,7 @@ def cb_compute_top2_gap(
     batch_size: int,
     batch_axis_resource,
     batch_axis_name: str = "batch",
+    mesh=None,
     num_tokens: int = 10 * 1024 * 1024,
 ):
     if prefix is None:
@@ -238,6 +241,7 @@ def cb_compute_top2_gap(
             batch_size=batch_size,
             batch_axis_name=batch_axis_name,
             pad_final_batch=False,
+            mesh=mesh,
             axis_resources=loader_axis_resources,
         )
         model = step.eval_model
