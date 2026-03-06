@@ -168,6 +168,7 @@ def main(config: EvalLmConfig):
                     dataset,
                     batch_size=config.trainer.eval_batch_size,
                     batch_axis_name=batch_axis_name,
+                    mesh=config.trainer.device_mesh,
                     axis_resources=loader_axis_resources,
                 )
                 entropy_hist = levanter.analysis.compute_entropy_histogram(
@@ -193,6 +194,7 @@ def main(config: EvalLmConfig):
                     dataset,
                     batch_size=config.trainer.eval_batch_size,
                     batch_axis_name=batch_axis_name,
+                    mesh=config.trainer.device_mesh,
                     axis_resources=loader_axis_resources,
                 )
                 top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
