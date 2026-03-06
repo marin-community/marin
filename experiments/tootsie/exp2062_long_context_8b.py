@@ -25,7 +25,7 @@ from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_8b
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
-from experiments.posttrain.long_context_datasets import (
+from experiments.long_context_datasets import (
     finepdfs_edu_by_language,
     finepdfs_edu_token_counts,
     finepdfs_validation_by_language,

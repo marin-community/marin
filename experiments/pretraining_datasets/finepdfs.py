@@ -68,10 +68,7 @@ def _tokenize_language(
 
 def tokenize_finepdfs(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all configured FinePDFs language subsets."""
-    return {
-        f"finepdfs/{lang}": _tokenize_language(lang, tokenizer=tokenizer)
-        for lang in FINEPDFS_LANGUAGES
-    }
+    return {f"finepdfs/{lang}": _tokenize_language(lang, tokenizer=tokenizer) for lang in FINEPDFS_LANGUAGES}
 
 
 tokenized = {lang: _tokenize_language(lang) for lang in FINEPDFS_LANGUAGES}
