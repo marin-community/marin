@@ -271,7 +271,7 @@ class _LmEvalHarnessWorker:
 
             logits = model.logits_from_token_ids_array(
                 packed_example.tokens.array,
-                batch_axis=self.EvalBatch,
+                batch_axis=self.EvalBatch.name,
             ).astype(jnp.float32)
             Pos = packed_example.tokens.resolve_axis(self.EvalPos.name)
 

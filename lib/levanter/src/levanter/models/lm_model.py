@@ -17,7 +17,6 @@ from haliax import Axis, NamedOrNumeric
 from levanter.layers.attention import AttentionMask
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.utils.partitioning import axis as make_axis
-from levanter.utils.partitioning import batch_axis as make_batch_axis
 
 
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
@@ -37,7 +36,7 @@ class ArrayLmHeadModel(Protocol):
         self,
         example: Any,
         *,
-        batch_axis: Axis | str | None = "batch",
+        batch_axis: str | None = "batch",
         key=None,
         reduction: ReductionSpec = "mean",
         reduction_axis: Optional[Any] = None,
@@ -50,7 +49,7 @@ class ArrayLmHeadModel(Protocol):
         self,
         input_ids: jax.Array,
         *,
-        batch_axis: Axis | str | None = "batch",
+        batch_axis: str | None = "batch",
         key=None,
     ) -> jax.Array: ...
 
@@ -267,7 +266,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         self,
         input_ids: jax.Array,
         *,
-        batch_axis: Axis | str | None = "batch",
+        batch_axis: str | None = "batch",
         key=None,
     ) -> jax.Array:
         """
@@ -280,16 +279,8 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             Pos = self.Pos.resize(input_ids.shape[0])
             named_input_ids = hax.named(input_ids, Pos)
         elif input_ids.ndim == 2:
-            if batch_axis is None:
-                Batch = make_batch_axis("batch", input_ids.shape[0])
-            elif isinstance(batch_axis, str):
-                Batch = make_axis(batch_axis, input_ids.shape[0])
-            else:
-                Batch = batch_axis
-                if Batch.size != input_ids.shape[0]:
-                    raise ValueError(
-                        f"Batch axis size ({Batch.size}) must match input batch size ({input_ids.shape[0]})."
-                    )
+            batch_axis_name = batch_axis or "batch"
+            Batch = make_axis(batch_axis_name, input_ids.shape[0])
 
             Pos = self.Pos.resize(input_ids.shape[1])
             named_input_ids = hax.named(input_ids, (Batch, Pos))
@@ -387,7 +378,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         self,
         example: Any,
         *,
-        batch_axis: Axis | str | None = "batch",
+        batch_axis: str | None = "batch",
         key=None,
         reduction: ReductionSpec = "mean",
         reduction_axis: Optional[Any] = None,
@@ -415,7 +406,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         return _to_plain_jax_array(loss)
 
 
-def _as_named_lm_example(example: Any, *, Pos: Axis, batch_axis: Axis | str | None = "batch") -> LmExample:
+def _as_named_lm_example(example: Any, *, Pos: Axis, batch_axis: str | None = "batch") -> LmExample:
     if isinstance(example, LmExample):
         return example
 
