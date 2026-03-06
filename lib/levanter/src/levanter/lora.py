@@ -58,7 +58,6 @@ from jaxtyping import PyTree
 import haliax
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis
 from haliax.jax_utils import shaped_rng_split
 from haliax.state_dict import (
     ModuleWithStateDictSerialization,
@@ -83,6 +82,7 @@ logger = logging.getLogger(__name__)
 
 M = TypeVar("M", bound=PyTree)
 
+Axis = hax.Axis
 # Remaining Tasks
 # - bias
 

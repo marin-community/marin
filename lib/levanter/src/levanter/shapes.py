@@ -5,13 +5,14 @@ from dataclasses import dataclass
 from math import prod
 from typing import Optional, Tuple, Type, TypeAlias, Union
 
+import haliax as hax
 import jax
 import numpy as np
-from haliax import Axis
 from haliax.util import is_named_array
 from jax import ShapeDtypeStruct
 from jaxtyping import PyTree
 
+Axis = hax.Axis
 DType = Union[np.dtype, Type[int], Type[float], Type[bool]]
 
 ShapeSpec: TypeAlias = ShapeDtypeStruct
