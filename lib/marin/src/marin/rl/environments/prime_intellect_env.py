@@ -20,7 +20,7 @@ from marin.rl.types import Rollout, RolloutGroup
 if TYPE_CHECKING:
     pass
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 class PrimeIntellectEnv(MarinEnv):

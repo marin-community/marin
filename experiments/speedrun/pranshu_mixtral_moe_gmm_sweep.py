@@ -14,7 +14,7 @@ from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(name="Pranshu Chaturvedi", affiliation="Stanford University", url="https://stanford.edu/~pranshu")
-LOGGER = logging.getLogger("ray")
+LOGGER = logging.getLogger(__name__)
 
 VOCAB_SIZE = 32_000
 SEQ_LEN = 1024

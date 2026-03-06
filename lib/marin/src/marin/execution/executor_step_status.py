@@ -27,7 +27,7 @@ from iris.distributed_lock import (
 )
 from iris.marin_fs import url_to_fs
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 

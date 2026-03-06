@@ -43,6 +43,7 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -774,8 +775,7 @@ def run_stage(
         ChunkHeader followed by list of items for each chunk produced
     """
 
-    # TODO(rav): this should live in a common logging configuration module?
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(filename)s:%(lineno)d %(message)s")
+    configure_logging(level=logging.INFO)
 
     from zephyr.writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
