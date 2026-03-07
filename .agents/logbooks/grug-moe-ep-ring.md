@@ -1117,3 +1117,105 @@
 - Next action:
   - Seal this branch snapshot.
   - If work resumes, prioritize either lower-level kernel/codegen work around the `scatter-add` hotspots or a materially different dispatch/return architecture.
+
+### 2026-03-07 11:10 - MaxText v5p flag shortlist for Grug MoE
+- Hypothesis: MaxText's TPU/XLA flag bundles for v5p MoE workloads may transfer to the Grug MoE harness on `v5p-8`, especially the async all-gather and reduce-scatter layout knobs.
+- Command:
+  - Inspected MaxText at commit `44039d8248696afc8fc59fd39f29055e41682c57`:
+    - `benchmarks/xla_flags_library.py`
+    - `benchmarks/maxtext_v5p_model_configs.py`
+  - Pulled the MoE-relevant v5p flag groups into a local shortlist:
+    - `MOE_VMEM_LIMIT_FLAG` (`--xla_tpu_scoped_vmem_limit_kib=81920`)
+    - `CF_FOR_ALL_GATHER`
+    - `DATA_PARALLEL_OVERLAP`
+    - `LAYOUT_FOR_ALL_REDUCE_SCATTER`
+- Result:
+  - The MaxText MoE v5p recipe for `deepseek_v3_ep_256_v5p_512` is:
+    - `MOE_VMEM_LIMIT_FLAG + CF_FOR_ALL_GATHER + DATA_PARALLEL_OVERLAP`
+  - Larger dropless v5p configs also add:
+    - `LAYOUT_FOR_ALL_REDUCE_SCATTER`
+- Interpretation:
+  - These are the only MaxText flag families that looked plausibly relevant to the current Grug MoE ring path on `v5p-8`.
+  - Host-offload and SparseCore-offload flags do not match this harness.
+- Next action: benchmark these flags on the current production Grug MoE path on a healthy `v5p-8`.
+
+### 2026-03-07 11:20 - `v5p-8` EP=4 MaxText flag sweep (shared path)
+- Hypothesis: if MaxText's TPU/XLA flags help the current Grug MoE ring path, the most likely wins will come from async all-gather overlap or reduce-scatter layout tuning on the target shared-expert workload.
+- Command:
+  - Allocated healthy `v5p-8` dev TPU `codex-maxtext-flags-v5p8` on `infra/marin-us-central1.yaml`.
+  - Ran the canonical production `current` kernel with:
+    - `tokens=32768 hidden=2048 mlp_dim=768 experts=128 topk=8 shared_expert_dim=2048`
+    - `EP=4`
+    - `bench_pass=forward_backward`
+    - `distribution=random`
+    - `iters=3`, `warmup=1`
+  - Swept:
+    - baseline: `--xla_tpu_scoped_vmem_limit_kib=50000`
+    - `vmem81920`
+    - `cf_ag`
+    - `dp_overlap`
+    - `maxtext_moe`
+    - `maxtext_moe_layout`
+    - repeated baseline
+- Result:
+  - `baseline`: `29.268 ms`
+  - `vmem81920`: `29.948 ms`
+  - `cf_ag`: `29.208 ms`
+  - `dp_overlap`: `29.218 ms`
+  - `maxtext_moe`: `29.976 ms`
+  - `maxtext_moe_layout`: `29.705 ms`
+  - `baseline_repeat`: `29.264 ms`
+  - Follow-up checks:
+    - shared `runs`, baseline vs `cf_ag`: `29.289 ms` vs `29.235 ms`
+    - routed-only (`shared_expert_dim=0`) `random`, baseline vs `cf_ag`: `27.760 ms` vs `27.747 ms`
+- Interpretation:
+  - On `v5p-8` at `EP=4`, the MaxText MoE bundle regresses by about `2.4%`.
+  - The `81920` vmem limit is the clearest losing component.
+  - `CF_FOR_ALL_GATHER` is at most noise-level on both shared and routed-only `EP=4`.
+  - `DATA_PARALLEL_OVERLAP` is not meaningful at `EP=4` on `v5p-8` because `DP=1` for this harness split, so its near-neutral result is expected.
+- Next action: re-run the relevant flags at `EP=2`, where `DP=2` and the MaxText data-parallel overlap flags can actually matter.
+
+### 2026-03-07 11:45 - `v5p-8` EP=2 follow-up and reduce-scatter layout confirmation
+- Hypothesis: the only MaxText flag family likely to survive on this harness is the reduce-scatter layout tuning, and any `DATA_PARALLEL_OVERLAP` benefit should show up only once `DP>1` (`EP=2` on `v5p-8`).
+- Command:
+  - Re-ran the same shared workload on healthy `codex-maxtext-flags-v5p8` with:
+    - `EP=2`
+    - `distribution=random`
+    - `iters=3`, `warmup=1`
+  - Swept:
+    - baseline
+    - `cf_ag`
+    - `dp_overlap`
+    - `maxtext_moe`
+    - `maxtext_moe_layout`
+    - repeated baseline
+  - Ran a follow-up attribution sweep with:
+    - `layout_only`
+    - `cf_dp_layout`
+  - Confirmed the best candidate with a higher-iteration paired check:
+    - baseline/layout repeated with `iters=5`, `warmup=2`
+- Result:
+  - `EP=2` main sweep:
+    - `baseline`: `36.752 ms`
+    - `cf_ag`: `36.730 ms`
+    - `dp_overlap`: `36.721 ms`
+    - `maxtext_moe`: `36.581 ms`
+    - `maxtext_moe_layout`: `36.395 ms`
+    - `baseline_repeat`: `36.764 ms`
+  - `EP=2` attribution sweep:
+    - `layout_only`: `36.524 ms`
+    - `cf_dp_layout`: `36.551 ms`
+  - Higher-iteration confirmation:
+    - `baseline_a`: `36.672 ms`
+    - `layout_a`: `36.405 ms`
+    - `baseline_b`: `36.714 ms`
+    - `layout_b`: `36.495 ms`
+- Interpretation:
+  - `CF_FOR_ALL_GATHER` and `DATA_PARALLEL_OVERLAP` are individually noise-level on this workload.
+  - The only reproducible positive result is `LAYOUT_FOR_ALL_REDUCE_SCATTER`, which improves `EP=2` by about `0.6-0.7%`.
+  - Avoiding the MaxText `81920` vmem bump matters; it still drags the bundle down at `EP=4` and is not needed for the small `EP=2` layout win.
+  - This is a real but small effect, well below the earlier algorithmic wins in the ring path itself.
+- Next action:
+  - Keep the current production recommendation unchanged:
+    - no MaxText-derived flag change for the `v5p-8` `EP=4` fast path
+  - If we want a TPU-runtime tweak later, the only candidate worth considering is an opt-in `LAYOUT_FOR_ALL_REDUCE_SCATTER` flag for `EP=2`; validate it on a fuller train-step path before promoting it.
