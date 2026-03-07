@@ -1117,6 +1117,9 @@ class ZephyrContext:
         # NOTE: pipeline ID incremented on clean completion only
         self._pipeline_id += 1
         last_exception: Exception | None = None
+        # Backoff between retries to avoid hammering an overloaded controller.
+        # Starts at 2s, caps at 60s. Resets on successful pipeline startup.
+        backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
         for attempt in range(self.max_execution_retries + 1):
             execution_id = _generate_execution_id()
             logger.info(
@@ -1127,6 +1130,10 @@ class ZephyrContext:
                 self._upload_shared_data(execution_id)
                 self._create_coordinator(attempt)
                 self._create_workers(plan.num_shards, attempt)
+
+                # Actor creation succeeded — reset backoff so that a later
+                # mid-pipeline failure doesn't start with a long delay.
+                backoff.reset()
 
                 # Run pipeline on coordinator (blocking call).
                 # run_pipeline() calls coordinator.shutdown() at the end,
@@ -1144,12 +1151,15 @@ class ZephyrContext:
                 if attempt >= self.max_execution_retries:
                     raise
 
+                delay = backoff.next_interval()
                 logger.warning(
-                    "Pipeline attempt %d failed (%d retries left), retrying: %s",
+                    "Pipeline attempt %d failed (%d retries left), retrying in %.1fs: %s",
                     attempt,
                     self.max_execution_retries - attempt,
+                    delay,
                     e,
                 )
+                time.sleep(delay)
 
             finally:
                 # Tear down coordinator and workers for this pipeline
