@@ -75,8 +75,7 @@ def test_task_logs_have_level_field(cluster):
                 markers_found[marker] = entry.level
 
     assert "info-marker" in markers_found, (
-        f"info-marker not found in logs after 30s polling. "
-        f"Got {len(entries)} entries: {[e.data for e in entries]}"
+        f"info-marker not found in logs after 30s polling. " f"Got {len(entries)} entries: {[e.data for e in entries]}"
     )
     assert markers_found["info-marker"] == logging_pb2.LOG_LEVEL_INFO
     assert markers_found.get("warning-marker") == logging_pb2.LOG_LEVEL_WARNING
