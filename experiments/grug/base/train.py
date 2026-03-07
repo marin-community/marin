@@ -155,7 +155,7 @@ def build_tagged_evaluator(
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
-        eval_batch_size=eval_cfg.eval_batch_size,
+        EvalBatch=eval_cfg.eval_batch_size,
         tagged_eval_sets=tagged_eval_sets,
         loss_fn=eval_loss_fn,
         tokenizer=tokenizer,
