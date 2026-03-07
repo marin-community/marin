@@ -98,7 +98,11 @@ class RemoteClusterClient:
             request.coscheduling.CopyFrom(coscheduling)
         if reservation is not None:
             request.reservation.CopyFrom(reservation)
-        self._client.launch_job(request)
+
+        def _call():
+            self._client.launch_job(request)
+
+        call_with_retry(f"launch_job({job_id})", _call)
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         def _call():
