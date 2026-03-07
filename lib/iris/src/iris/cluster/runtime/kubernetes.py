@@ -641,6 +641,19 @@ class KubernetesRuntime:
         """No-op: Kubernetes task Pods materialize bundle/workdir in-pod."""
         del bundle_id, workdir, workdir_files, bundle_store
 
+    def prepare_workdir(
+        self,
+        *,
+        workdir: Path,
+        resources: cluster_pb2.ResourceSpecProto | None,
+    ) -> None:
+        """Kubernetes workdirs are provisioned by the task Pod."""
+        del workdir, resources
+
+    def cleanup_workdir(self, workdir: Path) -> None:
+        """Kubernetes runtime does not create worker-local workdir mounts."""
+        del workdir
+
     def list_containers(self) -> list[KubernetesContainerHandle]:
         return list(self._handles)
 

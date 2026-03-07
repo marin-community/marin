@@ -294,6 +294,7 @@ class TaskAttempt:
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
         self._storage_prefix: str = config.storage_prefix
+        self._fast_io_dir: Path = self._cache_dir
         # Task state
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
@@ -468,6 +469,8 @@ class TaskAttempt:
         safe_task_id = self.task_id.to_safe_token()
         self.workdir = self._fast_io_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
+        resources = self.request.resources if self.request.HasField("resources") else None
+        self._runtime.prepare_workdir(workdir=self.workdir, resources=resources)
 
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
@@ -843,6 +846,12 @@ class TaskAttempt:
             logger.warning("Failed to release ports for task %s: %s", self.task_id, e)
 
         # Remove working directory
+        if self.workdir:
+            try:
+                self._runtime.cleanup_workdir(self.workdir)
+            except Exception as e:
+                logger.warning("Failed to cleanup runtime workdir for task %s at %s: %s", self.task_id, self.workdir, e)
+
         if self.workdir and self.workdir.exists():
             try:
                 shutil.rmtree(self.workdir)

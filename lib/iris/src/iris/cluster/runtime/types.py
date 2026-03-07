@@ -259,6 +259,23 @@ class ContainerRuntime(Protocol):
         """
         ...
 
+    def prepare_workdir(
+        self,
+        *,
+        workdir: Path,
+        resources: cluster_pb2.ResourceSpecProto | None,
+    ) -> None:
+        """Prepare runtime-specific backing storage for ``workdir`` before staging.
+
+        Docker uses this hook to mount a bounded tmpfs for ``/app`` when a task
+        requests disk. Runtimes that do not need special setup can no-op.
+        """
+        ...
+
+    def cleanup_workdir(self, workdir: Path) -> None:
+        """Undo any runtime-specific workdir setup performed by ``prepare_workdir``."""
+        ...
+
     def list_containers(self) -> list[ContainerHandle]:
         """List all managed containers."""
         ...

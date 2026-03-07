@@ -152,6 +152,8 @@ def mock_runtime():
     mock_handle = create_mock_container_handle()
     runtime.create_container = Mock(return_value=mock_handle)
     runtime.stage_bundle = Mock()
+    runtime.prepare_workdir = Mock()
+    runtime.cleanup_workdir = Mock()
 
     runtime.list_iris_containers = Mock(return_value=[])
     runtime.remove_all_iris_containers = Mock(return_value=0)
@@ -260,6 +262,21 @@ def test_runtime_stage_bundle_receives_workdir_files(worker, mock_runtime):
     kwargs = mock_runtime.stage_bundle.call_args.kwargs
     assert kwargs["bundle_id"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert kwargs["workdir_files"]["extra.txt"] == b"extra"
+
+
+def test_task_prepares_and_cleans_up_runtime_workdir(worker, mock_runtime):
+    """Docker-style runtimes can provision bounded workdirs around the task lifecycle."""
+    request = create_run_task_request()
+    request.resources.disk_bytes = 8 * 1024**3
+
+    task_id = worker.submit_task(request)
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert task.workdir is not None
+    mock_runtime.prepare_workdir.assert_called_once_with(workdir=task.workdir, resources=request.resources)
+    mock_runtime.cleanup_workdir.assert_called_once_with(task.workdir)
+
 
 
 def test_task_with_ports(worker):
