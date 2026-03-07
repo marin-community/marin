@@ -94,6 +94,7 @@ beginning work. Your tests will be minimal and refrain from using mocks.
 * You use an existing test file in @tests/ if appropriate.
 * You never use mocks when testing.
 * You keep tests simple and minimal. You do not test obvious behavior like "object has an attr".
+* You run `./infra/pre-commit.py --all-files --fix` and resolve all reported issues before uploading.
 * You will test using `uv run pytest -m 'not slow'` before uploading
 * You will ensure _all_ tests pass.
 
@@ -129,6 +130,7 @@ The tasks for this recipe:
 - [ ] Create branch for the changes
 - [ ] Write a test case as needed for changes
 - [ ] Implement changes until all tests pass
+- [ ] Run `./infra/pre-commit.py --all-files --fix` and resolve all issues
 - [ ] Upload branch to github
 - [ ] Open pull request
 - [ ] Verify CI checks pass and address any failures (by polling gh pr view)
