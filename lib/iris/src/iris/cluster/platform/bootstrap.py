@@ -182,6 +182,7 @@ fi
 # Start worker container without restart policy first (fail fast during bootstrap)
 sudo docker run -d --name iris-worker \\
     --network=host \\
+    --ulimit core=0:0 \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /dev/shm/iris:/dev/shm/iris \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
@@ -325,10 +326,14 @@ fi
 # Create cache directory
 sudo mkdir -p /var/cache/iris
 
-# Start controller container with restart policy
+# Start controller container with restart policy.
+# Raise the open-file soft limit so the controller can handle many concurrent
+# worker connections (endpoint RPCs, heartbeats, gcloud subprocesses, etc.).
 sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
+    --ulimit nofile=65536:524288 \\
+    --ulimit core=0:0 \\
     -v /var/cache/iris:/var/cache/iris \\
     {{ config_volume }} \\
     {{ docker_image }} \\

@@ -498,6 +498,8 @@ exec {quoted_cmd}
             "create",
             "--security-opt",
             "no-new-privileges",
+            "--ulimit",
+            "core=0:0",
             "-w",
             config.workdir,
         ]
