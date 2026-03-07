@@ -1484,13 +1484,12 @@ def test_holder_task_removed_from_worker_when_parent_succeeds():
     holder_task = state.get_task(holder_task.task_id)
     assert holder_task is not None
     assert holder_task.state == cluster_pb2.TASK_STATE_KILLED, (
-        f"expected holder task KILLED after parent success, "
-        f"got {cluster_pb2.TaskState.Name(holder_task.state)}"
+        f"expected holder task KILLED after parent success, " f"got {cluster_pb2.TaskState.Name(holder_task.state)}"
     )
     worker_holder = state.get_worker(wid_holder)
-    assert holder_task.task_id not in worker_holder.running_tasks, (
-        "holder task must be removed from worker.running_tasks when parent succeeds"
-    )
+    assert (
+        holder_task.task_id not in worker_holder.running_tasks
+    ), "holder task must be removed from worker.running_tasks when parent succeeds"
 
 
 def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already_terminal():
@@ -1536,11 +1535,10 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
 
     holder_task = state.get_task(holder_task.task_id)
     assert holder_task is not None
-    assert holder_task.state == cluster_pb2.TASK_STATE_KILLED, (
-        f"expected holder task KILLED, got {cluster_pb2.TaskState.Name(holder_task.state)}"
-    )
+    assert (
+        holder_task.state == cluster_pb2.TASK_STATE_KILLED
+    ), f"expected holder task KILLED, got {cluster_pb2.TaskState.Name(holder_task.state)}"
     worker = state.get_worker(wid)
     assert holder_task.task_id not in worker.running_tasks, (
-        "holder task must be removed from worker.running_tasks; "
-        "stale entry would block scale-down idle detection"
+        "holder task must be removed from worker.running_tasks; " "stale entry would block scale-down idle detection"
     )
