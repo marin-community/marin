@@ -39,6 +39,14 @@ CREATE INDEX IF NOT EXISTS idx_key ON logs(key, id);
 
 _MAX_RECORDS = 5_000_000
 
+_LIKE_ESCAPE_TABLE = str.maketrans({"%": "\\%", "_": "\\_", "\\": "\\\\"})
+
+
+def _escape_like(s: str) -> str:
+    """Escape SQL LIKE wildcards so the string matches literally."""
+    return s.translate(_LIKE_ESCAPE_TABLE)
+
+
 PROCESS_LOG_KEY = "/process"
 
 
@@ -158,8 +166,8 @@ class LogStore:
             where_extra += " AND epoch_ms > ?"
             params.append(since_ms)
         if substring_filter:
-            where_extra += " AND data LIKE ?"
-            params.append(f"%{substring_filter}%")
+            where_extra += " AND data LIKE ? ESCAPE '\\'"
+            params.append(f"%{_escape_like(substring_filter)}%")
         if min_level_enum > 0:
             where_extra += " AND (level = 0 OR level >= ?)"
             params.append(min_level_enum)
@@ -220,8 +228,8 @@ class LogStore:
             where += " AND epoch_ms > ?"
             params.append(since_ms)
         if substring_filter:
-            where += " AND data LIKE ?"
-            params.append(f"%{substring_filter}%")
+            where += " AND data LIKE ? ESCAPE '\\'"
+            params.append(f"%{_escape_like(substring_filter)}%")
         if min_level_enum > 0:
             where += " AND (level = 0 OR level >= ?)"
             params.append(min_level_enum)

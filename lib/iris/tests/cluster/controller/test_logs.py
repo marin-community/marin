@@ -253,6 +253,27 @@ def test_get_logs_by_prefix_shallow_excludes_children(log_store: LogStore):
     assert result_shallow.entries[0].data == "parent-line"
 
 
+def test_substring_filter_escapes_like_wildcards(log_store: LogStore):
+    """Percent and underscore in substring_filter match literally, not as SQL wildcards."""
+    log_store.append(
+        KEY,
+        [
+            _make_entry("100% done", epoch_ms=1),
+            _make_entry("a_b_c", epoch_ms=2),
+            _make_entry("no match", epoch_ms=3),
+        ],
+    )
+
+    result_pct = log_store.get_logs(KEY, substring_filter="100%")
+    assert [e.data for e in result_pct.entries] == ["100% done"]
+
+    result_us = log_store.get_logs(KEY, substring_filter="a_b")
+    assert [e.data for e in result_us.entries] == ["a_b_c"]
+
+    result_prefix = log_store.get_logs_by_prefix("/job/test/", substring_filter="100%")
+    assert [e.data for e in result_prefix.entries] == ["100% done"]
+
+
 def test_cursor_with_since_ms(log_store: LogStore):
     """Combined cursor + since_ms filters correctly."""
     log_store.append(KEY, [_make_entry(f"line-{i}", epoch_ms=i * 10) for i in range(10)])
