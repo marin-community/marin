@@ -1,6 +1,5 @@
-# Iris demo configuration
+# Iris test configuration
 # Multiple scale groups for realistic testing with diverse scenarios
-# Uses env var for controller address (external controller)
 
 platform:
   label_prefix: iris
