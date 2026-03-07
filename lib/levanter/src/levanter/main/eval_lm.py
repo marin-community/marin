@@ -56,7 +56,8 @@ def main(config: EvalLmConfig):
     tokenizer = config.data.the_tokenizer
 
     Batch = config.trainer.EvalBatch
-    Pos = config.model.max_Pos.resize(config.max_eval_length)
+    eval_length = min(config.max_eval_length, config.model.max_seq_len)
+    Pos = config.model.max_Pos.resize(eval_length)
 
     if config.eval_on_train:
         datasets_dict = config.data.train_grug_sets(seq_len=Pos.size, key=jax.random.PRNGKey(0))

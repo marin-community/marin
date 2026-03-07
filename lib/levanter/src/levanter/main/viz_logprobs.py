@@ -58,14 +58,14 @@ def main(config: VizLmConfig):
 
     # some axes we use outside the model proper
     EvalBatch = config.trainer.EvalBatch
-    Pos = config.model.max_Pos.resize(config.max_eval_length)
+    eval_length = min(config.max_eval_length, config.model.max_seq_len)
+    Pos = config.model.max_Pos.resize(eval_length)
 
     validation_sets = config.data.validation_grug_sets(seq_len=Pos.size)
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
-    batch_axis_resource = config.trainer.batch_axis_resource
-    loader_axis_resources = {EvalBatch.name: batch_axis_resource} if batch_axis_resource is not None else None
+    loader_axis_resources = compute_axis_mapping or None
 
     with config.trainer.use_device_mesh():
         key = jax.random.PRNGKey(0)

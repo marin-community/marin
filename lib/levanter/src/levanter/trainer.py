@@ -1124,4 +1124,28 @@ def _resolve_axis_in_tree(tree, axis):
             except ValueError:
                 pass
 
+    candidate_sizes: list[int] = []
+    for leaf in jax.tree_util.tree_leaves(tree):
+        shape = getattr(leaf, "shape", None)
+        if shape is None:
+            continue
+        if len(shape) >= 2:
+            candidate_sizes.append(int(shape[0]))
+
+    if not candidate_sizes:
+        for leaf in jax.tree_util.tree_leaves(tree):
+            shape = getattr(leaf, "shape", None)
+            if shape is None or len(shape) == 0:
+                continue
+            if len(shape) == 1 and tuple(shape) == (2,):
+                continue
+            candidate_sizes.append(int(shape[0]))
+
+    if candidate_sizes:
+        batch_size = candidate_sizes[0]
+        for size in candidate_sizes[1:]:
+            if size != batch_size:
+                raise ValueError(f"Inconsistent inferred batch sizes {candidate_sizes} in tree {tree}")
+        return hax.Axis(axis, batch_size)
+
     raise ValueError(f"Could not find axis {axis} in tree {tree}")
