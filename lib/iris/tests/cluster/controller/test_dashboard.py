@@ -749,33 +749,18 @@ def test_health_endpoint_returns_ok(client):
 # =============================================================================
 
 
-def test_get_task_logs_for_missing_task_returns_empty(client):
-    """GetTaskLogs returns empty batch when the task doesn't exist."""
+def test_get_task_logs_for_missing_task_returns_empty_batch(client):
+    """GetTaskLogs returns a single batch with no logs for a nonexistent task."""
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
         json={"id": JobName.root("test-user", "nonexistent").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
-    # With batch API, nonexistent task returns empty task_logs, not an error
     assert resp.status_code == 200
     data = resp.json()
-    assert data.get("taskLogs", []) == []
-
-
-def test_get_task_logs_error_for_unassigned_task(client, state, job_request):
-    """GetTaskLogs returns batch with error when the task has no worker assigned."""
-    submit_job(state, "pending-job", job_request)
-
-    resp = client.post(
-        "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"id": JobName.root("test-user", "pending-job").task(0).to_wire()},
-        headers={"Content-Type": "application/json"},
-    )
-    # Batch API returns 200 with error in batch
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data.get("taskLogs", [])) == 1
-    assert "not found" in data["taskLogs"][0].get("error", "").lower()
+    batches = data.get("taskLogs", [])
+    assert len(batches) == 1
+    assert batches[0].get("logs", []) == []
 
 
 # =============================================================================

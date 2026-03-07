@@ -166,15 +166,13 @@ class RemoteClusterClient:
                 state transitions (started / finished).
         """
         deadline = Deadline.from_seconds(timeout)
-        last_timestamp_ms = since_ms
         terminal_status: cluster_pb2.JobStatus | None = None
         log_fetch_backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
         consecutive_log_failures = 0
         max_log_failures = 5
         # Track child job states so we fire callbacks once per transition.
         child_job_states: dict[str, int] = {}
-        # Per-attempt line offset cursors for efficient incremental polling.
-        resume_offsets: dict[str, int] = {}
+        cursor: int = 0
 
         while True:
             status = self.get_job_status(job_id)
@@ -184,8 +182,8 @@ class RemoteClusterClient:
                 log_response = self.fetch_task_logs(
                     job_id,
                     include_children=include_children,
-                    since_ms=last_timestamp_ms,
-                    resume_offsets=resume_offsets,
+                    since_ms=since_ms,
+                    cursor=cursor,
                     min_level=min_level,
                 )
                 consecutive_log_failures = 0
@@ -204,9 +202,8 @@ class RemoteClusterClient:
                 log_response = None
 
             if log_response is not None:
-                if log_response.last_timestamp_ms > last_timestamp_ms:
-                    last_timestamp_ms = log_response.last_timestamp_ms
-                resume_offsets.update(log_response.resume_offsets)
+                if log_response.cursor > cursor:
+                    cursor = log_response.cursor
 
                 if state_logger is not None:
                     state_logger.task_logging(log_response)
@@ -339,13 +336,10 @@ class RemoteClusterClient:
         max_total_lines: int = 0,
         regex: str | None = None,
         attempt_id: int = -1,
-        resume_offsets: dict[str, int] | None = None,
+        cursor: int = 0,
         min_level: str = "",
     ) -> cluster_pb2.Controller.GetTaskLogsResponse:
         """Fetch logs for a task or job via the controller RPC.
-
-        The controller reads from storage with the correct credentials and
-        endpoint configuration.
 
         Args:
             target: Task ID or Job ID
@@ -354,7 +348,7 @@ class RemoteClusterClient:
             max_total_lines: Maximum total lines (0 = default 10000)
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
-            resume_offsets: Per-attempt line offset cursors from previous response
+            cursor: Autoincrement id cursor for incremental polling
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
         """
         request = cluster_pb2.Controller.GetTaskLogsRequest(
@@ -364,7 +358,7 @@ class RemoteClusterClient:
             max_total_lines=max_total_lines,
             regex=regex or "",
             attempt_id=attempt_id,
-            resume_offsets=resume_offsets or {},
+            cursor=cursor,
             min_level=min_level,
         )
 

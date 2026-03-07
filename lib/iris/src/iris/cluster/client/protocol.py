@@ -106,6 +106,7 @@ class ClusterClient(Protocol):
         max_total_lines: int = 0,
         regex: str | None = None,
         attempt_id: int = -1,
+        cursor: int = 0,
         min_level: str = "",
     ) -> cluster_pb2.Controller.GetTaskLogsResponse: ...
 

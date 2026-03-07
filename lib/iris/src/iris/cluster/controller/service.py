@@ -873,31 +873,22 @@ class ControllerServiceImpl:
         requested_attempt_id = request.attempt_id
         log_store = self._state.log_store
 
-        # Detect if this is a task ID (ends in /N) or job ID and collect tasks.
+        # Collect child job statuses when requested (for streaming UI).
         child_job_statuses: list[cluster_pb2.JobStatus] = []
-        if job_name.is_task:
-            task = self._state.get_task(job_name)
-            tasks = [task] if task else []
-        else:
-            tasks: list[ControllerTask] = []
+        if not job_name.is_task and request.include_children:
             prefix = job_name.to_wire()
-            if request.include_children:
-                for job in self._state.list_all_jobs():
-                    job_wire = job.job_id.to_wire()
-                    if job_wire == prefix or job_wire.startswith(prefix + "/"):
-                        tasks.extend(self._state.get_job_tasks(job.job_id))
-                        if job_wire != prefix:
-                            child_status = cluster_pb2.JobStatus(
-                                job_id=job_wire,
-                                state=job.state,
-                                exit_code=job.exit_code or 0,
-                                error=job.error or "",
-                            )
-                            if job.finished_at:
-                                child_status.finished_at.CopyFrom(job.finished_at.to_proto())
-                            child_job_statuses.append(child_status)
-            else:
-                tasks.extend(self._state.get_job_tasks(job_name))
+            for job in self._state.list_all_jobs():
+                job_wire = job.job_id.to_wire()
+                if job_wire != prefix and job_wire.startswith(prefix + "/"):
+                    child_status = cluster_pb2.JobStatus(
+                        job_id=job_wire,
+                        state=job.state,
+                        exit_code=job.exit_code or 0,
+                        error=job.error or "",
+                    )
+                    if job.finished_at:
+                        child_status.finished_at.CopyFrom(job.finished_at.to_proto())
+                    child_job_statuses.append(child_status)
 
         # Pre-compile regex filter so invalid patterns produce a clear error
         # rather than an internal failure during iteration.
@@ -914,71 +905,55 @@ class ControllerServiceImpl:
                     ],
                 )
 
-        task_logs: list[cluster_pb2.Controller.TaskLogBatch] = []
-        total_lines = 0
-        truncated = False
-        last_timestamp_ms = request.since_ms
-        resume_offsets: dict[str, int] = {}
+        # Build the log key or prefix for the query.
+        job_wire = job_name.to_wire()
+        cursor = request.cursor
 
-        for task in tasks:
-            task_id_wire = task.task_id.to_wire()
+        if job_name.is_task and requested_attempt_id >= 0:
+            # Exact key: single task + single attempt
+            log_result = log_store.get_logs(
+                task_log_key(job_name, requested_attempt_id),
+                since_ms=request.since_ms,
+                cursor=cursor,
+                regex_filter=compiled_regex,
+                max_lines=max_lines,
+                min_level=request.min_level,
+            )
+            for entry in log_result.entries:
+                entry.attempt_id = requested_attempt_id
+        elif job_name.is_task:
+            # All attempts of a single task: prefix "task_wire:"
+            log_result = log_store.get_logs_by_prefix(
+                job_wire + ":",
+                cursor=cursor,
+                since_ms=request.since_ms,
+                regex_filter=compiled_regex,
+                max_lines=max_lines,
+                min_level=request.min_level,
+            )
+        else:
+            # All tasks in a job (with or without children): prefix "job_wire/"
+            log_result = log_store.get_logs_by_prefix(
+                job_wire + "/",
+                cursor=cursor,
+                since_ms=request.since_ms,
+                regex_filter=compiled_regex,
+                max_lines=max_lines,
+                min_level=request.min_level,
+            )
 
-            attempts_to_fetch = []
-            if requested_attempt_id >= 0:
-                if requested_attempt_id >= len(task.attempts):
-                    task_logs.append(
-                        cluster_pb2.Controller.TaskLogBatch(
-                            task_id=task_id_wire,
-                            error=f"Attempt {requested_attempt_id} not found (task has {len(task.attempts)} attempts)",
-                        )
-                    )
-                    continue
-                attempts_to_fetch = [task.attempts[requested_attempt_id]]
-            else:
-                attempts_to_fetch = task.attempts
+        truncated = max_lines > 0 and len(log_result.entries) >= max_lines
 
-            for attempt in attempts_to_fetch:
-                remaining = max(0, max_lines - total_lines) if max_lines > 0 else 0
-                offset_key = f"{task_id_wire}/{attempt.attempt_id}"
-                skip_lines = int(request.resume_offsets.get(offset_key, 0))
-                log_result = log_store.get_logs(
-                    task_log_key(task.task_id, attempt.attempt_id),
-                    since_ms=request.since_ms,
-                    skip_lines=skip_lines,
-                    regex_filter=compiled_regex,
-                    max_lines=remaining,
-                    tail=True,
-                    min_level=request.min_level,
-                )
-
-                resume_offsets[offset_key] = log_result.lines_read
-
-                for entry in log_result.entries:
-                    entry.attempt_id = attempt.attempt_id
-                    if entry.timestamp.epoch_ms > last_timestamp_ms:
-                        last_timestamp_ms = entry.timestamp.epoch_ms
-
-                batch = cluster_pb2.Controller.TaskLogBatch(
-                    task_id=task_id_wire,
-                    worker_id=str(attempt.worker_id) if attempt.worker_id else "",
-                    logs=log_result.entries,
-                )
-                task_logs.append(batch)
-
-                total_lines += len(log_result.entries)
-                if max_lines > 0 and total_lines >= max_lines:
-                    truncated = True
-                    break
-
-            if truncated:
-                break
+        batch = cluster_pb2.Controller.TaskLogBatch(
+            task_id=request.id,
+            logs=log_result.entries,
+        )
 
         return cluster_pb2.Controller.GetTaskLogsResponse(
-            task_logs=task_logs,
-            last_timestamp_ms=last_timestamp_ms,
+            task_logs=[batch],
             truncated=truncated,
             child_job_statuses=child_job_statuses,
-            resume_offsets=resume_offsets,
+            cursor=log_result.cursor,
         )
 
     # --- Profiling ---
@@ -1107,13 +1082,13 @@ class ControllerServiceImpl:
         result = self._state.log_store.get_logs(
             request.source,
             since_ms=request.since_ms,
-            skip_lines=request.skip_lines,
+            cursor=request.cursor,
             regex_filter=compiled_regex,
             max_lines=max_lines,
             tail=request.tail,
             min_level=request.min_level,
         )
-        return cluster_pb2.FetchLogsResponse(entries=result.entries, lines_read=result.lines_read)
+        return cluster_pb2.FetchLogsResponse(entries=result.entries, cursor=result.cursor)
 
     # --- Worker Detail ---
 

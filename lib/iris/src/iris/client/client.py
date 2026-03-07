@@ -318,7 +318,7 @@ class Job:
         """Wait while streaming logs from all tasks using batch log fetching.
 
         Uses a single batch RPC call per poll interval to fetch logs from all tasks,
-        rather than N individual calls. The batch API uses a global since_ms cursor
+        rather than N individual calls. The batch API uses an autoincrement id cursor
         for efficient incremental fetching.
         """
         return self._client._cluster_client.wait_for_job_with_streaming(
