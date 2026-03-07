@@ -333,6 +333,7 @@ sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
     --ulimit nofile=65536:524288 \\
+    --ulimit core=0:0 \\
     -v /var/cache/iris:/var/cache/iris \\
     {{ config_volume }} \\
     {{ docker_image }} \\
