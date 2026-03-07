@@ -25,7 +25,7 @@ from enum import Enum
 from threading import RLock
 from typing import NamedTuple
 
-from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.constraints import Constraint, WellKnownAttribute, constraints_from_resources, merge_constraints
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.controller.events import (
     Event,
@@ -1264,7 +1264,13 @@ class ControllerState:
                 replicas=len(entries),
                 max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
             )
-            holder_request.constraints.extend(first_entry.constraints or job.request.constraints)
+            # Auto-inject device constraints from the entry's resource spec,
+            # same as _worker_matches_reservation_entry does for claim matching.
+            auto = constraints_from_resources(first_entry.resources)
+            explicit = [Constraint.from_proto(c) for c in first_entry.constraints or job.request.constraints]
+            merged = merge_constraints(auto, explicit)
+            for c in merged:
+                holder_request.constraints.append(c.to_proto())
             holder_event = JobSubmittedEvent(
                 job_id=holder_job_id,
                 request=holder_request,

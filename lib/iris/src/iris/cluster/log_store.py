@@ -15,7 +15,6 @@ queryable through the same FetchLogs RPC as task logs.
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 import tempfile
 from dataclasses import dataclass
@@ -38,9 +37,17 @@ CREATE TABLE IF NOT EXISTS logs (
 CREATE INDEX IF NOT EXISTS idx_key ON logs(key, id);
 """
 
-_MAX_RECORDS = 100_000_000
+_MAX_RECORDS = 5_000_000
 
-PROCESS_LOG_KEY = "/process"
+_LIKE_ESCAPE_TABLE = str.maketrans({"%": "\\%", "_": "\\_", "\\": "\\\\"})
+
+
+def _escape_like(s: str) -> str:
+    """Escape SQL LIKE wildcards so the string matches literally."""
+    return s.translate(_LIKE_ESCAPE_TABLE)
+
+
+PROCESS_LOG_KEY = "/system/process"
 
 
 def task_log_key(task_id: JobName, attempt_id: int) -> str:
@@ -80,7 +87,8 @@ class LogStore:
 
         self._write_lock = Lock()
         self._max_records = max_records
-        self._append_count = 0
+        self._rows_since_eviction_check = 0
+        self._eviction_check_interval = max_records // 10
 
     @staticmethod
     def _make_conn(db_path: str) -> sqlite3.Connection:
@@ -101,9 +109,7 @@ class LogStore:
                 rows,
             )
             self._write_conn.commit()
-            self._append_count += len(entries)
-            if self._append_count >= self._max_records:
-                self._evict_if_needed()
+            self._post_write_maintenance(len(rows))
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
         """Write log entries from multiple keys in a single transaction.
@@ -123,9 +129,14 @@ class LogStore:
                 all_rows,
             )
             self._write_conn.commit()
-            self._append_count += len(all_rows)
-            if self._append_count >= self._max_records:
-                self._evict_if_needed()
+            self._post_write_maintenance(len(all_rows))
+
+    def _post_write_maintenance(self, rows_written: int) -> None:
+        """Run eviction as needed. Must hold self._write_lock."""
+        self._rows_since_eviction_check += rows_written
+        if self._rows_since_eviction_check >= self._eviction_check_interval:
+            self._evict_if_needed()
+            self._rows_since_eviction_check = 0
 
     def get_logs(
         self,
@@ -133,61 +144,48 @@ class LogStore:
         *,
         since_ms: int = 0,
         cursor: int = 0,
-        regex_filter: re.Pattern[str] | None = None,
+        substring_filter: str = "",
         max_lines: int = 0,
         tail: bool = False,
         min_level: str = "",
     ) -> LogReadResult:
+        """Fetch logs for a single key.
+
+        All filtering (substring, min_level, since_ms) is pushed into SQL so
+        that LIMIT works correctly and we never fetch millions of rows into Python.
+        """
         min_level_enum = str_to_log_level(min_level) if min_level else 0
 
-        has_filter = regex_filter is not None or since_ms > 0 or min_level_enum > 0
+        params: list = [key, cursor]
+        where_extra = ""
+        if since_ms > 0:
+            where_extra += " AND epoch_ms > ?"
+            params.append(since_ms)
+        if substring_filter:
+            where_extra += " AND data LIKE ? ESCAPE '\\'"
+            params.append(f"%{_escape_like(substring_filter)}%")
+        if min_level_enum > 0:
+            where_extra += " AND (level = 0 OR level >= ?)"
+            params.append(min_level_enum)
 
-        if tail and max_lines > 0 and not has_filter:
-            # Fetch all rows past the cursor, then take the last N.
+        if tail and max_lines > 0:
+            params.append(max_lines)
             rows = self._read_conn.execute(
-                "SELECT id, source, data, epoch_ms, level FROM logs WHERE key = ? AND id > ? ORDER BY id",
-                (key, cursor),
-            ).fetchall()
-            rows = rows[-max_lines:]
-        elif tail and max_lines > 0 and has_filter:
-            params: list = [key, cursor]
-            where_extra = ""
-            if since_ms > 0:
-                where_extra += " AND epoch_ms > ?"
-                params.append(since_ms)
-            rows = self._read_conn.execute(
-                f"SELECT id, source, data, epoch_ms, level FROM logs WHERE key = ? AND id > ?{where_extra} ORDER BY id",
+                f"SELECT id, source, data, epoch_ms, level FROM logs "
+                f"WHERE key = ? AND id > ?{where_extra} ORDER BY id DESC LIMIT ?",
                 params,
             ).fetchall()
-            if regex_filter:
-                rows = [r for r in rows if regex_filter.search(r[2])]
-            if min_level_enum > 0:
-                # level=0 (UNKNOWN) is always included so untagged output is never hidden.
-                rows = [r for r in rows if r[4] == 0 or r[4] >= min_level_enum]
-            rows = rows[-max_lines:]
+            rows.reverse()
         else:
-            # Forward mode
-            params = [key, cursor]
-            where_extra = ""
-            if since_ms > 0:
-                where_extra += " AND epoch_ms > ?"
-                params.append(since_ms)
-
-            query = (
-                f"SELECT id, source, data, epoch_ms, level FROM logs "
-                f"WHERE key = ? AND id > ?{where_extra} "
-                "ORDER BY id"
-            )
-            rows = self._read_conn.execute(query, params).fetchall()
-
-            if regex_filter:
-                rows = [r for r in rows if regex_filter.search(r[2])]
-            if min_level_enum > 0:
-                # level=0 (UNKNOWN) is always included so untagged output is never hidden.
-                rows = [r for r in rows if r[4] == 0 or r[4] >= min_level_enum]
-
+            limit_clause = ""
             if max_lines > 0:
-                rows = rows[:max_lines]
+                limit_clause = " LIMIT ?"
+                params.append(max_lines)
+            rows = self._read_conn.execute(
+                f"SELECT id, source, data, epoch_ms, level FROM logs "
+                f"WHERE key = ? AND id > ?{where_extra} ORDER BY id{limit_clause}",
+                params,
+            ).fetchall()
 
         if not rows:
             return LogReadResult(entries=[], cursor=cursor)
@@ -202,30 +200,45 @@ class LogStore:
         *,
         cursor: int = 0,
         since_ms: int = 0,
-        regex_filter: re.Pattern[str] | None = None,
+        substring_filter: str = "",
         max_lines: int = 0,
         min_level: str = "",
+        shallow: bool = False,
     ) -> LogReadResult:
-        """Fetch logs for all keys matching prefix, ordered by autoincrement id."""
+        """Fetch logs for all keys matching prefix, ordered by autoincrement id.
+
+        All filtering is pushed into SQL so LIMIT works correctly.
+
+        Args:
+            shallow: If True, only match keys one level deep (no nested '/' after prefix).
+                     This excludes child job logs when fetching by job prefix.
+        """
         min_level_enum = str_to_log_level(min_level) if min_level else 0
 
         params: list = [prefix + "%", cursor]
         where = "WHERE key LIKE ? AND id > ?"
+        if shallow:
+            where += " AND key NOT LIKE ?"
+            params.append(prefix + "%/%")
         if since_ms > 0:
             where += " AND epoch_ms > ?"
             params.append(since_ms)
+        if substring_filter:
+            where += " AND data LIKE ? ESCAPE '\\'"
+            params.append(f"%{_escape_like(substring_filter)}%")
+        if min_level_enum > 0:
+            where += " AND (level = 0 OR level >= ?)"
+            params.append(min_level_enum)
+
+        limit_clause = ""
+        if max_lines > 0:
+            limit_clause = " LIMIT ?"
+            params.append(max_lines)
 
         rows = self._read_conn.execute(
-            f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id",
+            f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
             params,
         ).fetchall()
-
-        if regex_filter:
-            rows = [r for r in rows if regex_filter.search(r[3])]
-        if min_level_enum > 0:
-            rows = [r for r in rows if r[5] == 0 or r[5] >= min_level_enum]
-        if max_lines > 0:
-            rows = rows[:max_lines]
 
         max_id = max((r[0] for r in rows), default=cursor)
         entries = []
@@ -274,19 +287,21 @@ class LogStore:
     def _evict_if_needed(self) -> None:
         """Delete oldest rows when the total count exceeds the cap. Must hold self._write_lock.
 
-        Evicts down to max_records // 2 so we don't pay eviction cost on every
-        subsequent append.
+        Uses MAX(id) - MIN(id) as a cheap approximation of row count (autoincrement
+        IDs are nearly contiguous since we only delete from the bottom). Evicts down
+        to max_records // 2 so we don't pay eviction cost on every subsequent append.
         """
-        count = self._write_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        target = self._max_records // 2
-        if count > self._max_records:
-            excess = count - target
-            self._write_conn.execute(
-                "DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id LIMIT ?)",
-                (excess,),
-            )
-            self._write_conn.commit()
-        self._append_count = 0
+        row = self._write_conn.execute("SELECT MIN(id), MAX(id) FROM logs").fetchone()
+        min_id, max_id = row
+        if min_id is None:
+            return
+        approx_count = max_id - min_id + 1
+        if approx_count <= self._max_records:
+            return
+        # Keep the most recent max_records // 2 rows.
+        cutoff = max_id - (self._max_records // 2)
+        self._write_conn.execute("DELETE FROM logs WHERE id <= ?", (cutoff,))
+        self._write_conn.commit()
 
 
 class LogCursor:

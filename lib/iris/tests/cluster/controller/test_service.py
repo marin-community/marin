@@ -559,26 +559,6 @@ def test_list_workers_returns_all(service, worker_metadata):
 
 
 # =============================================================================
-# GetTaskLogs Tests
-# =============================================================================
-
-
-def test_get_task_logs_invalid_regex_returns_error(service, job_request):
-    """Invalid regex filter returns a structured error instead of raising."""
-    launch_resp = service.launch_job(job_request("regex-test"), None)
-
-    response = service.get_task_logs(
-        cluster_pb2.Controller.GetTaskLogsRequest(
-            id=launch_resp.job_id,
-            regex="(unclosed",
-        ),
-        None,
-    )
-    assert len(response.task_logs) == 1
-    assert "Invalid regex filter" in response.task_logs[0].error
-
-
-# =============================================================================
 # Constraint Injection Tests
 # =============================================================================
 

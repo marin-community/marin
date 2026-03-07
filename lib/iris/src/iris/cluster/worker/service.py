@@ -4,7 +4,6 @@
 """WorkerService RPC implementation using Connect RPC."""
 
 import logging
-import re
 import time
 from typing import Protocol
 
@@ -96,19 +95,12 @@ class WorkerServiceImpl:
         if not self._log_store:
             return cluster_pb2.FetchLogsResponse(entries=[], cursor=0)
 
-        compiled_regex = None
-        if request.regex:
-            try:
-                compiled_regex = re.compile(request.regex)
-            except re.error as e:
-                raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid regex: {e}") from e
-
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._log_store.get_logs(
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
-            regex_filter=compiled_regex,
+            substring_filter=request.substring,
             max_lines=max_lines,
             tail=request.tail,
             min_level=request.min_level,

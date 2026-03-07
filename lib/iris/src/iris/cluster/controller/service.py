@@ -10,7 +10,6 @@ aggregated from task states.
 
 import json
 import logging
-import re
 import uuid
 from typing import Any, Protocol
 
@@ -18,8 +17,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
+from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.bundle_store import BundleStore
-from iris.cluster.log_store import task_log_key
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -35,8 +34,7 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
 )
-from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.log_store import PROCESS_LOG_KEY
+from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -894,24 +892,10 @@ class ControllerServiceImpl:
                         child_status.finished_at.CopyFrom(job.finished_at.to_proto())
                     child_job_statuses.append(child_status)
 
-        # Pre-compile regex filter so invalid patterns produce a clear error
-        # rather than an internal failure during iteration.
-        compiled_regex: re.Pattern[str] | None = None
-        if request.regex:
-            try:
-                compiled_regex = re.compile(request.regex)
-            except re.error as e:
-                return cluster_pb2.Controller.GetTaskLogsResponse(
-                    task_logs=[
-                        cluster_pb2.Controller.TaskLogBatch(
-                            error=f"Invalid regex filter: {e}",
-                        )
-                    ],
-                )
-
         # Build the log key or prefix for the query.
         job_wire = job_name.to_wire()
         cursor = request.cursor
+        substring_filter = request.substring
 
         if job_name.is_task and requested_attempt_id >= 0:
             # Exact key: single task + single attempt
@@ -919,7 +903,7 @@ class ControllerServiceImpl:
                 task_log_key(job_name, requested_attempt_id),
                 since_ms=request.since_ms,
                 cursor=cursor,
-                regex_filter=compiled_regex,
+                substring_filter=substring_filter,
                 max_lines=max_lines,
                 min_level=request.min_level,
             )
@@ -931,19 +915,22 @@ class ControllerServiceImpl:
                 job_wire + ":",
                 cursor=cursor,
                 since_ms=request.since_ms,
-                regex_filter=compiled_regex,
+                substring_filter=substring_filter,
                 max_lines=max_lines,
                 min_level=request.min_level,
             )
         else:
-            # All tasks in a job (with or without children): prefix "job_wire/"
+            # All tasks in a job: prefix "job_wire/"
+            # When include_children is False, use shallow=True to exclude
+            # descendant job logs (only match direct task keys).
             log_result = log_store.get_logs_by_prefix(
                 job_wire + "/",
                 cursor=cursor,
                 since_ms=request.since_ms,
-                regex_filter=compiled_regex,
+                substring_filter=substring_filter,
                 max_lines=max_lines,
                 min_level=request.min_level,
+                shallow=not request.include_children,
             )
 
         truncated = max_lines > 0 and len(log_result.entries) >= max_lines
@@ -1074,19 +1061,12 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.FetchLogsResponse:
         """Fetch logs from the LogStore by key with filtering and pagination."""
-        compiled_regex = None
-        if request.regex:
-            try:
-                compiled_regex = re.compile(request.regex)
-            except re.error as e:
-                raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid regex: {e}") from e
-
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._state.log_store.get_logs(
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
-            regex_filter=compiled_regex,
+            substring_filter=request.substring,
             max_lines=max_lines,
             tail=request.tail,
             min_level=request.min_level,
@@ -1124,7 +1104,7 @@ class ControllerServiceImpl:
             status_message=worker_status_message(worker),
         )
 
-        # Fetch worker daemon logs via FetchLogs(/process) if worker is healthy
+        # Fetch worker daemon logs via FetchLogs(/system/process) if worker is healthy
         worker_log_entries: list[cluster_pb2.FetchLogsResponse] = []
         if worker.healthy:
             try:
