@@ -14,7 +14,7 @@ from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
-    collect_thread_dump,
+    build_pyspy_dump_cmd,
     is_system_target,
     resolve_cpu_spec,
     resolve_memory_spec,
@@ -139,23 +139,20 @@ def test_memray_transform_stats_includes_json_flag():
 
 
 # ---------------------------------------------------------------------------
-# collect_thread_dump: captures thread stacks from the current process
+# build_pyspy_dump_cmd: verify CLI flag structure
 # ---------------------------------------------------------------------------
 
 
-def test_collect_thread_dump_returns_bytes_with_thread_info():
-    data = collect_thread_dump()
-    text = data.decode("utf-8")
-    # Should include at least the MainThread
-    assert "Thread" in text
-    assert "MainThread" in text
+def test_build_pyspy_dump_cmd_structure():
+    cmd = build_pyspy_dump_cmd(pid="42", py_spy_bin="py-spy")
+    assert cmd == ["py-spy", "dump", "--pid", "42"]
 
 
-def test_collect_thread_dump_includes_stack_frames():
-    data = collect_thread_dump()
-    text = data.decode("utf-8")
-    # Should contain stack frame info (file paths with .py)
-    assert ".py" in text
+def test_build_pyspy_dump_cmd_custom_binary():
+    cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="/app/.venv/bin/py-spy")
+    assert cmd[0] == "/app/.venv/bin/py-spy"
+    assert "--pid" in cmd
+    assert "1" in cmd
 
 
 # ---------------------------------------------------------------------------

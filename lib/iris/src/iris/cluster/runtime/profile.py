@@ -3,19 +3,26 @@
 
 """Shared profiling command construction for CPU (py-spy), memory (memray), and threads.
 
-Pure functions — no I/O, no subprocess calls. Both the Docker and process
-runtimes build their profiler commands through this module, eliminating
-duplicated format maps and fragile index-based command construction.
+Both the Docker and process runtimes build their profiler commands through
+this module, eliminating duplicated format maps and fragile index-based
+command construction.
+
+The module also provides `profile_local_process` for profiling the current
+interpreter process (used by the controller and worker for /system/process).
 """
 
 from __future__ import annotations
 
-import sys
-import threading
-import traceback
+import logging
+import os
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from iris.rpc import cluster_pb2
+
+logger = logging.getLogger(__name__)
 
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
@@ -123,28 +130,90 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
         raise RuntimeError(f"Unknown memray reporter: {spec.reporter}")
 
 
-def collect_thread_dump() -> bytes:
-    """Collect a thread dump of the current process.
+def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy") -> list[str]:
+    """Build a py-spy dump command for thread-level stack traces."""
+    return [py_spy_bin, "dump", "--pid", pid]
 
-    Returns a text dump with each thread's name, id, daemon status, and stack trace.
+
+def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+    """Profile the current interpreter process using py-spy or memray.
+
+    Used by the controller and worker to handle /system/process targets.
+    All tools (py-spy, memray) are assumed to be installed.
     """
-    lines: list[str] = []
-    thread_map = {t.ident: t for t in threading.enumerate()}
-    frames = sys._current_frames()
+    pid = str(os.getpid())
 
-    for thread_id, frame in sorted(frames.items()):
-        thread = thread_map.get(thread_id)
-        if thread:
-            name = thread.name
-            daemon = " (daemon)" if thread.daemon else ""
+    if profile_type.HasField("threads"):
+        return run_pyspy_dump(pid)
+    elif profile_type.HasField("cpu"):
+        return _run_pyspy_record(pid, duration_seconds, profile_type.cpu)
+    elif profile_type.HasField("memory"):
+        return _run_memray_profile(pid, duration_seconds, profile_type.memory)
+    else:
+        raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+
+
+def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy") -> bytes:
+    """Run py-spy dump to collect thread stacks from a process."""
+    cmd = build_pyspy_dump_cmd(pid, py_spy_bin)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"py-spy dump failed: {result.stderr}")
+    return result.stdout.encode("utf-8")
+
+
+def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
+    """Run py-spy record against a local process and return the output."""
+    spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=pid)
+    output_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
+            output_path = f.name
+
+        cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
+        if result.returncode != 0:
+            raise RuntimeError(f"py-spy record failed: {result.stderr}")
+        return Path(output_path).read_bytes()
+    finally:
+        if output_path is not None:
+            Path(output_path).unlink(missing_ok=True)
+
+
+def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
+    """Run memray attach + transform against a local process."""
+    spec = resolve_memory_spec(memory_config, duration_seconds, pid=pid)
+    trace_path = None
+    output_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+            trace_path = f.name
+
+        attach_cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path)
+        result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
+        if result.returncode != 0:
+            raise RuntimeError(f"memray attach failed: {result.stderr}")
+
+        if spec.output_is_file:
+            with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
+                output_path = f.name
+
+        transform_cmd = build_memray_transform_cmd(
+            spec, memray_bin="memray", trace_path=trace_path, output_path=output_path or ""
+        )
+        result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
+
+        if spec.output_is_file:
+            return Path(output_path).read_bytes()
         else:
-            name = "unknown"
-            daemon = ""
-        lines.append(f"--- Thread {name} (id={thread_id}){daemon} ---")
-        lines.extend(traceback.format_stack(frame))
-        lines.append("")
-
-    return "\n".join(lines).encode("utf-8")
+            return result.stdout.encode("utf-8")
+    finally:
+        if trace_path is not None:
+            Path(trace_path).unlink(missing_ok=True)
+        if output_path is not None:
+            Path(output_path).unlink(missing_ok=True)
 
 
 def is_system_target(target: str) -> bool:

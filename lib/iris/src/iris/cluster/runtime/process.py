@@ -40,10 +40,10 @@ from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
-    collect_thread_dump,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
+from iris.cluster.runtime.profile import run_pyspy_dump
 from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, ContainerStats, ContainerStatus, RuntimeLogReader
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
@@ -486,7 +486,8 @@ class ProcessContainerHandle:
             raise RuntimeError("Cannot profile: no running process")
 
         if profile_type.HasField("threads"):
-            return collect_thread_dump()
+            pid = str(self._container._process.pid)
+            return run_pyspy_dump(pid)
         elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):

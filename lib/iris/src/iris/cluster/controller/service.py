@@ -35,7 +35,7 @@ from iris.cluster.controller.state import (
     ControllerWorker,
 )
 from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
-from iris.cluster.runtime.profile import collect_thread_dump, is_system_target
+from iris.cluster.runtime.profile import is_system_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -962,14 +962,16 @@ class ControllerServiceImpl:
         - /system/process with cpu/memory: not yet supported
         - /job/.../task/N: proxied to the task's worker
         """
-        # Handle controller-local targets
+        # Handle controller-local targets: profile the controller process itself
         if is_system_target(request.target):
-            if request.HasField("profile_type") and request.profile_type.HasField("threads"):
-                return cluster_pb2.ProfileTaskResponse(profile_data=collect_thread_dump())
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                "CPU/memory profiling of /system/process is not yet supported on the controller",
-            )
+            if not request.HasField("profile_type"):
+                raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+            try:
+                duration = request.duration_seconds or 10
+                data = profile_local_process(duration, request.profile_type)
+                return cluster_pb2.ProfileTaskResponse(profile_data=data)
+            except Exception as e:
+                return cluster_pb2.ProfileTaskResponse(error=str(e))
 
         # Task target: parse, validate, proxy to worker
         try:
