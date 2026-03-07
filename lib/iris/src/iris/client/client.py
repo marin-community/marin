@@ -445,14 +445,13 @@ class NamespacedResolver:
             prefixed_name = name
 
         logger.debug("NamespacedResolver resolving: %s", prefixed_name)
-        matches = self._cluster.list_endpoints(prefix=prefixed_name)
+        matches = self._cluster.list_endpoints(prefix=prefixed_name, exact=True)
         logger.debug(
             "NamespacedResolver %s => %s",
             prefixed_name,
             [{"name": ep.name, "id": ep.endpoint_id, "address": ep.address} for ep in matches],
         )
 
-        # Filter to exact matches
         endpoints = [
             ResolvedEndpoint(
                 url=ep.address,
@@ -460,7 +459,6 @@ class NamespacedResolver:
                 metadata=dict(ep.metadata),
             )
             for ep in matches
-            if ep.name == prefixed_name
         ]
 
         return ResolveResult(name=name, endpoints=endpoints)

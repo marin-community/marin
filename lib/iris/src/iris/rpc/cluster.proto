@@ -643,16 +643,9 @@ message Controller {
     string endpoint_id = 1;
   }
 
-  message LookupEndpointRequest {
-    string name = 1;                 // Full prefixed name: "abc123/my-actor"
-  }
-
-  message LookupEndpointResponse {
-    Endpoint endpoint = 1;
-  }
-
   message ListEndpointsRequest {
     string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
+    bool exact = 2;                  // If true, match prefix as an exact name instead
   }
 
   message ListEndpointsResponse {
@@ -870,7 +863,6 @@ service ControllerService {
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
-  rpc LookupEndpoint(Controller.LookupEndpointRequest) returns (Controller.LookupEndpointResponse);
   rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
 
   // Autoscaler
