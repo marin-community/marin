@@ -697,6 +697,11 @@ class Controller:
 
         self._threads.stop()
 
+        # Remove log handler before closing the log store to avoid
+        # sqlite3.ProgrammingError spam from late log records.
+        logging.getLogger("iris").removeHandler(self._log_store_handler)
+        self._log_store_handler.close()
+
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""
         limiter = RateLimiter(interval_seconds=self._config.scheduler_interval.to_seconds())

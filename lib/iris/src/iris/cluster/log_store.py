@@ -282,8 +282,11 @@ class LogStoreHandler(logging.Handler):
         super().__init__()
         self._log_store = log_store
         self._key = key
+        self._closed = False
 
     def emit(self, record: logging.LogRecord) -> None:
+        if self._closed:
+            return
         try:
             entry = logging_pb2.LogEntry(
                 source="process",
@@ -294,3 +297,7 @@ class LogStoreHandler(logging.Handler):
             self._log_store.append(self._key, [entry])
         except Exception:
             self.handleError(record)
+
+    def close(self) -> None:
+        self._closed = True
+        super().close()
