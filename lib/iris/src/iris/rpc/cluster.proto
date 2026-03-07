@@ -79,7 +79,7 @@ message ProfileTaskResponse {
 message FetchLogsRequest {
   string source = 1;           // Log source key
   int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
-  int32 skip_lines = 3;        // Lines to skip (cursor for polling)
+  int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
   string regex = 4;            // Regex filter on log data
   int32 max_lines = 5;         // Max entries to return (0 = default 1000)
   bool tail = 6;               // Return last N entries instead of first N
@@ -88,7 +88,7 @@ message FetchLogsRequest {
 
 message FetchLogsResponse {
   repeated iris.logging.LogEntry entries = 1;
-  int32 lines_read = 2;        // Total line count at end of read (cursor for next poll)
+  int64 cursor = 2;            // Max autoincrement id seen (cursor for next poll)
 }
 
 enum JobState {
@@ -715,8 +715,8 @@ message Controller {
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
     string regex = 5;                // Regex filter (propagated to workers)
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
-    map<string, int64> resume_offsets = 7;  // Per-attempt line offset cursor: key = "{task_wire}/{attempt_id}"
-    string min_level = 8;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+    string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+    int64 cursor = 8;               // Autoincrement id cursor for incremental polling
   }
 
   message TaskLogBatch {
@@ -728,15 +728,14 @@ message Controller {
 
   message GetTaskLogsResponse {
     repeated TaskLogBatch task_logs = 1;
-    int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
-    bool truncated = 3;              // True if max_total_lines hit
+    bool truncated = 2;              // True if max_total_lines hit
 
     // Child job statuses (populated when include_children=true).
     // Included on every response so the client can detect state transitions
     // (e.g. child moved to FAILED) without a separate ListJobs RPC.
-    repeated JobStatus child_job_statuses = 4;
+    repeated JobStatus child_job_statuses = 3;
 
-    map<string, int64> resume_offsets = 5;  // Per-attempt line offset cursor for next poll
+    int64 cursor = 4;               // Max autoincrement id seen (cursor for next poll)
   }
 
   // --- Worker Detail (unified VM + worker view) ---

@@ -94,7 +94,7 @@ class WorkerServiceImpl:
     ) -> cluster_pb2.FetchLogsResponse:
         """Fetch logs from the worker's LogStore by key with filtering."""
         if not self._log_store:
-            return cluster_pb2.FetchLogsResponse(entries=[], lines_read=0)
+            return cluster_pb2.FetchLogsResponse(entries=[], cursor=0)
 
         compiled_regex = None
         if request.regex:
@@ -107,13 +107,13 @@ class WorkerServiceImpl:
         result = self._log_store.get_logs(
             request.source,
             since_ms=request.since_ms,
-            skip_lines=request.skip_lines,
+            cursor=request.cursor,
             regex_filter=compiled_regex,
             max_lines=max_lines,
             tail=request.tail,
             min_level=request.min_level,
         )
-        return cluster_pb2.FetchLogsResponse(entries=result.entries, lines_read=result.lines_read)
+        return cluster_pb2.FetchLogsResponse(entries=result.entries, cursor=result.cursor)
 
     def heartbeat(
         self,

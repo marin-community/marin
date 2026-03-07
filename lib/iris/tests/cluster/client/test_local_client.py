@@ -202,7 +202,7 @@ def _parent_with_delayed_child():
 
 
 def test_child_job_logs_sorted_by_timestamp(client):
-    """Logs from multiple child jobs are sorted globally by timestamp and include worker_id."""
+    """Logs from multiple child jobs are present in flattened prefix response."""
     parent_id = JobName.root("test-user", "test-child-logs")
     entrypoint = Entrypoint.from_callable(_parent_with_two_children)
     resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
@@ -217,17 +217,11 @@ def test_child_job_logs_sorted_by_timestamp(client):
     all_entries = []
     for batch in response.task_logs:
         for entry in batch.logs:
-            all_entries.append((entry.timestamp.epoch_ms, batch.worker_id, batch.task_id, entry.data))
+            all_entries.append(entry.data)
 
-    log_text = " ".join(e[3] for e in all_entries)
+    log_text = " ".join(all_entries)
     assert "CHILD_A_LINE_1" in log_text, f"Missing child-a logs in: {log_text}"
     assert "CHILD_B_LINE_1" in log_text, f"Missing child-b logs in: {log_text}"
-
-    # Verify worker_id is populated in every batch that has logs
-    batches_with_logs = [b for b in response.task_logs if len(b.logs) > 0]
-    assert all(
-        b.worker_id for b in batches_with_logs
-    ), f"worker_id missing in batches: {[(b.task_id, b.worker_id) for b in batches_with_logs]}"
 
 
 def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):

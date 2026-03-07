@@ -51,7 +51,7 @@ def task_log_key(task_id: JobName, attempt_id: int) -> str:
 @dataclass
 class LogReadResult:
     entries: list[logging_pb2.LogEntry]
-    lines_read: int  # total line count at end of read (cursor for next poll)
+    cursor: int  # max autoincrement id seen
 
 
 class LogStore:
@@ -132,7 +132,7 @@ class LogStore:
         key: str,
         *,
         since_ms: int = 0,
-        skip_lines: int = 0,
+        cursor: int = 0,
         regex_filter: re.Pattern[str] | None = None,
         max_lines: int = 0,
         tail: bool = False,
@@ -140,61 +140,106 @@ class LogStore:
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level) if min_level else 0
 
-        total = self._count_lines(key)
-        if total == 0:
-            return LogReadResult(entries=[], lines_read=0)
-
         has_filter = regex_filter is not None or since_ms > 0 or min_level_enum > 0
 
         if tail and max_lines > 0 and not has_filter:
-            effective_skip = max(skip_lines, total - max_lines)
+            # Fetch all rows past the cursor, then take the last N.
             rows = self._read_conn.execute(
-                "SELECT source, data, epoch_ms, level FROM logs " "WHERE key = ? " "ORDER BY id LIMIT -1 OFFSET ?",
-                (key, effective_skip),
+                "SELECT id, source, data, epoch_ms, level FROM logs WHERE key = ? AND id > ? ORDER BY id",
+                (key, cursor),
             ).fetchall()
+            rows = rows[-max_lines:]
         elif tail and max_lines > 0 and has_filter:
-            params: list = [key]
+            params: list = [key, cursor]
             where_extra = ""
             if since_ms > 0:
                 where_extra += " AND epoch_ms > ?"
                 params.append(since_ms)
             rows = self._read_conn.execute(
-                "SELECT source, data, epoch_ms, level FROM logs " f"WHERE key = ?{where_extra} " "ORDER BY id",
+                f"SELECT id, source, data, epoch_ms, level FROM logs WHERE key = ? AND id > ?{where_extra} ORDER BY id",
                 params,
             ).fetchall()
             if regex_filter:
-                rows = [r for r in rows if regex_filter.search(r[1])]
+                rows = [r for r in rows if regex_filter.search(r[2])]
             if min_level_enum > 0:
                 # level=0 (UNKNOWN) is always included so untagged output is never hidden.
-                rows = [r for r in rows if r[3] == 0 or r[3] >= min_level_enum]
+                rows = [r for r in rows if r[4] == 0 or r[4] >= min_level_enum]
             rows = rows[-max_lines:]
         else:
             # Forward mode
-            params = [key]
+            params = [key, cursor]
             where_extra = ""
             if since_ms > 0:
                 where_extra += " AND epoch_ms > ?"
                 params.append(since_ms)
 
             query = (
-                "SELECT source, data, epoch_ms, level FROM logs "
-                f"WHERE key = ?{where_extra} "
-                "ORDER BY id LIMIT -1 OFFSET ?"
+                f"SELECT id, source, data, epoch_ms, level FROM logs "
+                f"WHERE key = ? AND id > ?{where_extra} "
+                "ORDER BY id"
             )
-            params.append(skip_lines)
             rows = self._read_conn.execute(query, params).fetchall()
 
             if regex_filter:
-                rows = [r for r in rows if regex_filter.search(r[1])]
+                rows = [r for r in rows if regex_filter.search(r[2])]
             if min_level_enum > 0:
                 # level=0 (UNKNOWN) is always included so untagged output is never hidden.
-                rows = [r for r in rows if r[3] == 0 or r[3] >= min_level_enum]
+                rows = [r for r in rows if r[4] == 0 or r[4] >= min_level_enum]
 
             if max_lines > 0:
                 rows = rows[:max_lines]
 
+        if not rows:
+            return LogReadResult(entries=[], cursor=cursor)
+
+        max_id = max(r[0] for r in rows)
         entries = [self._row_to_entry(r) for r in rows]
-        return LogReadResult(entries=entries, lines_read=total)
+        return LogReadResult(entries=entries, cursor=max_id)
+
+    def get_logs_by_prefix(
+        self,
+        prefix: str,
+        *,
+        cursor: int = 0,
+        since_ms: int = 0,
+        regex_filter: re.Pattern[str] | None = None,
+        max_lines: int = 0,
+        min_level: str = "",
+    ) -> LogReadResult:
+        """Fetch logs for all keys matching prefix, ordered by autoincrement id."""
+        min_level_enum = str_to_log_level(min_level) if min_level else 0
+
+        params: list = [prefix + "%", cursor]
+        where = "WHERE key LIKE ? AND id > ?"
+        if since_ms > 0:
+            where += " AND epoch_ms > ?"
+            params.append(since_ms)
+
+        rows = self._read_conn.execute(
+            f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id",
+            params,
+        ).fetchall()
+
+        if regex_filter:
+            rows = [r for r in rows if regex_filter.search(r[3])]
+        if min_level_enum > 0:
+            rows = [r for r in rows if r[5] == 0 or r[5] >= min_level_enum]
+        if max_lines > 0:
+            rows = rows[:max_lines]
+
+        max_id = max((r[0] for r in rows), default=cursor)
+        entries = []
+        for r in rows:
+            # Parse attempt_id from key: key format is "task_wire:attempt_id"
+            key = r[1]
+            colon = key.rfind(":")
+            attempt_id = int(key[colon + 1 :]) if colon >= 0 else 0
+            entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
+            entry.timestamp.epoch_ms = r[4]
+            entry.attempt_id = attempt_id
+            entries.append(entry)
+
+        return LogReadResult(entries=entries, cursor=max_id)
 
     def has_logs(self, key: str) -> bool:
         row = self._read_conn.execute(
@@ -217,17 +262,10 @@ class LogStore:
 
     @staticmethod
     def _row_to_entry(row: tuple) -> logging_pb2.LogEntry:
-        # row: (source, data, epoch_ms, level)
-        entry = logging_pb2.LogEntry(source=row[0], data=row[1], level=row[3])
-        entry.timestamp.epoch_ms = row[2]
+        # row: (id, source, data, epoch_ms, level)
+        entry = logging_pb2.LogEntry(source=row[1], data=row[2], level=row[4])
+        entry.timestamp.epoch_ms = row[3]
         return entry
-
-    def _count_lines(self, key: str) -> int:
-        row = self._read_conn.execute(
-            "SELECT COUNT(*) FROM logs WHERE key = ?",
-            (key,),
-        ).fetchone()
-        return row[0]
 
     def cursor(self, key: str) -> LogCursor:
         """Return a stateful cursor for incremental reads on *key*."""
@@ -254,20 +292,20 @@ class LogStore:
 class LogCursor:
     """Stateful incremental reader for a single LogStore key.
 
-    Tracks position across calls to read() so callers don't need to manage
-    skip_lines/lines_read bookkeeping. Useful for streaming new log entries
+    Tracks an autoincrement id cursor across calls to read() so callers don't
+    need to manage cursor bookkeeping. Useful for streaming new log entries
     incrementally (e.g. heartbeat log forwarding).
     """
 
     def __init__(self, store: LogStore, key: str) -> None:
         self._store = store
         self._key = key
-        self._pos: int = 0
+        self._cursor: int = 0
 
     def read(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
         """Return new entries since the last call, advancing the cursor."""
-        result = self._store.get_logs(self._key, skip_lines=self._pos, max_lines=max_entries)
-        self._pos = result.lines_read
+        result = self._store.get_logs(self._key, cursor=self._cursor, max_lines=max_entries)
+        self._cursor = result.cursor
         return result.entries
 
 
