@@ -27,6 +27,7 @@ from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    collect_thread_dump,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
@@ -421,7 +422,10 @@ class KubernetesContainerHandle:
         )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory)."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
+        if profile_type.HasField("threads"):
+            return collect_thread_dump()
+
         if not self._pod_name:
             raise RuntimeError("Cannot profile: no running pod")
 
@@ -432,7 +436,7 @@ class KubernetesContainerHandle:
         elif profile_type.HasField("memory"):
             return self._profile_memory(duration_seconds, profile_type.memory, profile_id)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
     def _wrap_in_venv_shell(self, cmd: list[str]) -> list[str]:
         """Wrap a command to run inside the task venv via a login shell.
@@ -460,7 +464,7 @@ class KubernetesContainerHandle:
         )
         try:
             result = self.kubectl.exec(
-                self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=duration_seconds + 5
+                self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=duration_seconds + 30
             )
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")

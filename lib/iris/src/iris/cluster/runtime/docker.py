@@ -31,6 +31,7 @@ from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    collect_thread_dump,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
@@ -384,7 +385,10 @@ exec {quoted_cmd}
         return self._docker_stats(self._run_container_id)
 
     def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory)."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
+
+        if profile_type.HasField("threads"):
+            return collect_thread_dump()
 
         container_id = self._run_container_id
         if not container_id:
@@ -392,13 +396,12 @@ exec {quoted_cmd}
 
         profile_id = uuid.uuid4().hex[:8]
 
-        # Dispatch to CPU or memory profiling based on profile_type
         if profile_type.HasField("cpu"):
             return self._profile_cpu(container_id, duration_seconds, profile_type.cpu, profile_id)
         elif profile_type.HasField("memory"):
             return self._profile_memory(container_id, duration_seconds, profile_type.memory, profile_id)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
     def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
         return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
@@ -428,7 +431,8 @@ exec {quoted_cmd}
             spec.rate_hz,
         )
         try:
-            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
+            # py-spy needs extra headroom beyond the sample duration for writing output
+            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
             return self._docker_read_file(container_id, output_path)

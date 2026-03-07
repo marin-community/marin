@@ -10,9 +10,12 @@ not on pass-through of constructor arguments.
 import pytest
 
 from iris.cluster.runtime.profile import (
+    SYSTEM_PROCESS_TARGET,
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    collect_thread_dump,
+    is_system_target,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
@@ -133,3 +136,38 @@ def test_memray_transform_stats_includes_json_flag():
 
     assert "stats" in cmd
     assert "--json" in cmd
+
+
+# ---------------------------------------------------------------------------
+# collect_thread_dump: captures thread stacks from the current process
+# ---------------------------------------------------------------------------
+
+
+def test_collect_thread_dump_returns_bytes_with_thread_info():
+    data = collect_thread_dump()
+    text = data.decode("utf-8")
+    # Should include at least the MainThread
+    assert "Thread" in text
+    assert "MainThread" in text
+
+
+def test_collect_thread_dump_includes_stack_frames():
+    data = collect_thread_dump()
+    text = data.decode("utf-8")
+    # Should contain stack frame info (file paths with .py)
+    assert ".py" in text
+
+
+# ---------------------------------------------------------------------------
+# is_system_target / SYSTEM_PROCESS_TARGET
+# ---------------------------------------------------------------------------
+
+
+def test_is_system_target_matches_system_process():
+    assert is_system_target(SYSTEM_PROCESS_TARGET)
+    assert is_system_target("/system/process")
+
+
+def test_is_system_target_rejects_task_targets():
+    assert not is_system_target("/job/my-job/task/0")
+    assert not is_system_target("/job/my-job/task/0:1")

@@ -13,6 +13,7 @@ from connectrpc.request import RequestContext
 
 from iris.chaos import chaos
 from iris.cluster.log_store import LogStore
+from iris.cluster.runtime.profile import collect_thread_dump, is_system_target
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
@@ -135,15 +136,28 @@ class WorkerServiceImpl:
         request: cluster_pb2.ProfileTaskRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.ProfileTaskResponse:
-        """Profile a running task using py-spy (CPU) or memray (memory)."""
+        """Profile a running task or the worker process itself.
+
+        The target field determines what to profile:
+        - /system/process: the worker process itself
+        - /job/.../task/N:A: a specific task attempt (delegated to TaskProvider)
+        """
         with rpc_error_handler("profile_task"):
             try:
-                # Validate profile_type
                 if not request.HasField("profile_type"):
                     raise ValueError("profile_type is required")
 
+                # Thread dumps are handled locally regardless of target
+                if request.profile_type.HasField("threads"):
+                    data = collect_thread_dump()
+                    return cluster_pb2.ProfileTaskResponse(profile_data=data)
+
+                # /system/process targets the worker itself — not supported for cpu/memory yet
+                if is_system_target(request.target):
+                    raise ValueError("CPU/memory profiling of /system/process is not yet supported")
+
                 data = self._provider.profile_task(
-                    request.task_id,
+                    request.target,
                     duration_seconds=request.duration_seconds or 10,
                     profile_type=request.profile_type,
                 )

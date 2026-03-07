@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared profiling command construction for CPU (py-spy) and memory (memray).
+"""Shared profiling command construction for CPU (py-spy), memory (memray), and threads.
 
 Pure functions — no I/O, no subprocess calls. Both the Docker and process
 runtimes build their profiler commands through this module, eliminating
@@ -10,9 +10,15 @@ duplicated format maps and fragile index-based command construction.
 
 from __future__ import annotations
 
+import sys
+import threading
+import traceback
 from dataclasses import dataclass
 
 from iris.rpc import cluster_pb2
+
+# Target sentinel for profiling the local worker/controller process itself.
+SYSTEM_PROCESS_TARGET = "/system/process"
 
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
     cluster_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
@@ -115,3 +121,32 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
         return [memray_bin, "stats", "--json", trace_path]
     else:
         raise RuntimeError(f"Unknown memray reporter: {spec.reporter}")
+
+
+def collect_thread_dump() -> bytes:
+    """Collect a thread dump of the current process.
+
+    Returns a text dump with each thread's name, id, daemon status, and stack trace.
+    """
+    lines: list[str] = []
+    thread_map = {t.ident: t for t in threading.enumerate()}
+    frames = sys._current_frames()
+
+    for thread_id, frame in sorted(frames.items()):
+        thread = thread_map.get(thread_id)
+        if thread:
+            name = thread.name
+            daemon = " (daemon)" if thread.daemon else ""
+        else:
+            name = "unknown"
+            daemon = ""
+        lines.append(f"--- Thread {name} (id={thread_id}){daemon} ---")
+        lines.extend(traceback.format_stack(frame))
+        lines.append("")
+
+    return "\n".join(lines).encode("utf-8")
+
+
+def is_system_target(target: str) -> bool:
+    """Return True if the target refers to the local process rather than a task."""
+    return target == SYSTEM_PROCESS_TARGET
