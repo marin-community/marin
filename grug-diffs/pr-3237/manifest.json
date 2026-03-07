@@ -2,13 +2,13 @@
   "added_variants": [
     "max_model_flop_mini"
   ],
-  "base_sha": "e7847eaeb1ffac8aaf7f3e0455a2d2e44430e71a",
-  "head_sha": "03961c5930c20e49f3287a40972fe8559b8a68be",
+  "base_sha": "b4b44d66455429cb17edf5bd15e6344cd6b084d9",
+  "head_sha": "bb1548ced6bad118afc519924ab4820891b3fff4",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "moe",
-      "distance_score": 373,
+      "distance_score": 471,
       "report_relpath": "max_model_flop_mini/index.html",
       "status_counts": {
         "added": 0,
