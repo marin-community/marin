@@ -448,7 +448,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
         per_pos_out_sharding = self.per_pos_out_sharding
 
-        @hax.named_jit(axis_resources=self.axis_mapping)
+        @hax.named_jit(axis_resources=self.compute_axis_mapping)
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
             losses, weights, token_ids = self.loss_fn(model, batch)
             weighted_loss = losses * weights  # b t
