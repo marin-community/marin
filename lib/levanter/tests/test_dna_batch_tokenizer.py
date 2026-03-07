@@ -43,15 +43,18 @@ def test_no_special_tokens():
 
 
 @_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
-def test_soft_mask_weights_no_special_tokens():
-    """Uppercase gets uppercase_weight, lowercase gets lowercase_weight."""
+def test_weights_target_aligned_no_special_tokens():
+    """Weights are target-aligned: loss_weight[i] reflects the case of input_ids[i+1]."""
     tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
+    # Sequence: A  C  g  t
+    # Targets:  C  g  t  (last position placeholder)
+    # Weights:  1.0  0.1  0.1  0.0
     batch = [{"seq": "ACgt"}]
     result = bt(batch)[0]
 
-    np.testing.assert_allclose(result["loss_weight"], [1.0, 1.0, 0.1, 0.1])
+    np.testing.assert_allclose(result["loss_weight"], [1.0, 0.1, 0.1, 0.0])
 
 
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
@@ -79,15 +82,17 @@ def test_bos_eos_tokens_added():
 
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
 def test_loss_weights_with_bos_eos():
-    """BOS/EOS positions get weight 1.0; interior follows soft-masking."""
+    """Weights are target-aligned with BOS/EOS."""
     tokenizer = AutoTokenizer.from_pretrained(BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, lowercase_weight=0.1)
 
     batch = [{"seq": "ACgt"}]
     result = bt(batch)[0]
 
-    # BOS weight, uppercase A, uppercase C, lowercase g, lowercase t, EOS weight
-    expected = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 1.0], dtype=np.float32)
+    # Tokens:  BOS  A    C    g    t    EOS
+    # Targets: A    C    g    t    EOS  (last masked by loss fn)
+    # Weights: 1.0  1.0  0.1  0.1  1.0  1.0
+    expected = np.array([1.0, 1.0, 0.1, 0.1, 1.0, 1.0], dtype=np.float32)
     np.testing.assert_allclose(result["loss_weight"], expected)
 
 
@@ -140,19 +145,25 @@ def test_bos_only():
     result = bt([{"seq": "ACgt"}])[0]
     assert result["input_ids"].shape == (5,)  # BOS + 4 chars
     assert result["input_ids"][0] == tokenizer.bos_token_id
-    np.testing.assert_allclose(result["loss_weight"], [1.0, 1.0, 1.0, 0.1, 0.1])
+    # Tokens:  BOS  A    C    g    t
+    # Targets: A    C    g    t    (last masked)
+    # Weights: 1.0  1.0  0.1  0.1  0.0
+    np.testing.assert_allclose(result["loss_weight"], [1.0, 1.0, 0.1, 0.1, 0.0])
 
 
 @_skip_if_tokenizer_unavailable(NO_BOS_EOS_TOKENIZER)
 def test_uppercase_weight_zero():
-    """Setting uppercase_weight=0 zeroes out uppercase positions (nonfunctional mask)."""
+    """Setting uppercase_weight=0 zeroes out loss for predicting uppercase targets."""
     tokenizer = AutoTokenizer.from_pretrained(NO_BOS_EOS_TOKENIZER)
     bt = DNABatchTokenizer(tokenizer, uppercase_weight=0.0, lowercase_weight=1.0)
 
+    # Sequence: A    C    g    t
+    # Targets:  C    g    t    (last)
+    # Weights:  0.0  1.0  1.0  0.0
     batch = [{"seq": "ACgt"}]
     result = bt(batch)[0]
 
-    np.testing.assert_allclose(result["loss_weight"], [0.0, 0.0, 1.0, 1.0])
+    np.testing.assert_allclose(result["loss_weight"], [0.0, 1.0, 1.0, 0.0])
 
 
 @_skip_if_tokenizer_unavailable(BOS_EOS_TOKENIZER)
@@ -169,4 +180,7 @@ def test_eos_only():
     result = bt([{"seq": "ACgt"}])[0]
     assert result["input_ids"].shape == (5,)  # 4 chars + EOS
     assert result["input_ids"][-1] == eos_id
-    np.testing.assert_allclose(result["loss_weight"], [1.0, 1.0, 0.1, 0.1, 1.0])
+    # Tokens:  A    C    g    t    EOS
+    # Targets: C    g    t    EOS  (last masked)
+    # Weights: 1.0  0.1  0.1  1.0  1.0
+    np.testing.assert_allclose(result["loss_weight"], [1.0, 0.1, 0.1, 1.0, 1.0])

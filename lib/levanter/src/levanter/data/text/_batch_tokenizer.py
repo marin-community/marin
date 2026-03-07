@@ -215,13 +215,17 @@ class DNABatchTokenizer(BaseBatchTokenizer):
     """
     A batch processor that tokenizes DNA sequences with case-based loss weighting.
 
-    Assigns loss weights based on character case:
-    - Uppercase (ACGT): weight = uppercase_weight
-    - Lowercase (acgt): weight = lowercase_weight
+    Weights are **target-aligned**: ``loss_weight[i]`` reflects the case of the
+    *next* token (``input_ids[i+1]``), which is the prediction target at position
+    ``i`` in causal LM training.
+
+    Character case determines the weight:
+    - Uppercase target (ACGT): weight = uppercase_weight
+    - Lowercase target (acgt): weight = lowercase_weight
 
     If the tokenizer defines BOS/EOS token IDs, they are automatically prepended/appended
-    to the token sequences. Their loss weight is set to 1.0. Use ``num_special_tokens``
-    to query how many extra tokens are added (useful for computing model context size).
+    to the token sequences. Use ``num_special_tokens`` to query how many extra tokens
+    are added (useful for computing model context size).
 
     Assumptions:
     - Character-level tokenizer (1:1 character-to-token mapping)
@@ -266,20 +270,28 @@ class DNABatchTokenizer(BaseBatchTokenizer):
 
         char_arrays = np.array([list(t) for t in texts], dtype="U1")
         is_upper = np.char.isupper(char_arrays)
-        loss_weights = np.where(is_upper, self.uppercase_weight, self.lowercase_weight).astype(np.float32)
+        char_weights = np.where(is_upper, self.uppercase_weight, self.lowercase_weight).astype(np.float32)
 
         input_ids = encodings["input_ids"].astype(np.int32)
 
-        assert input_ids.shape == loss_weights.shape, (
-            f"Token count ({input_ids.shape[1]}) != char count ({loss_weights.shape[1]}). "
+        assert input_ids.shape == char_weights.shape, (
+            f"Token count ({input_ids.shape[1]}) != char count ({char_weights.shape[1]}). "
             "Tokenizer must be character-level."
         )
 
         batch_size = input_ids.shape[0]
 
+        # Align weights with targets: loss_weight[i] controls the loss for predicting
+        # input_ids[i+1], so it should reflect the case of the *next* character.
+        # Shift character weights left by 1; the last position predicts EOS (weight 1.0)
+        # or is masked by not_last_mask in the loss function if there is no EOS.
+        loss_weights = np.roll(char_weights, -1, axis=1)
+        loss_weights[:, -1] = 1.0 if self._has_eos else 0.0
+
         if self._has_bos:
             bos_ids = np.full((batch_size, 1), self.tokenizer.bos_token_id, dtype=np.int32)
-            bos_weights = np.ones((batch_size, 1), dtype=np.float32)
+            # BOS position predicts the first character — use that character's weight
+            bos_weights = char_weights[:, :1]
             input_ids = np.concatenate([bos_ids, input_ids], axis=1)
             loss_weights = np.concatenate([bos_weights, loss_weights], axis=1)
 
