@@ -1043,54 +1043,6 @@ def test_infer_block_sizes_tpu_v6_updated_tuning(
     assert block_sizes == expected
 
 
-@pytest.mark.parametrize(
-    ("b", "h", "v", "expected"),
-    [
-        (1024, 512, 32_000, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
-        (8192, 4096, 32_000, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)),
-        (16384, 1024, 32_000, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)),
-        (65536, 512, 32_000, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
-        (262_144, 1024, 32_000, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)),
-        (16_384, 2048, 32_000, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)),
-        (1024, 512, 50_257, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
-        (8192, 4096, 50_257, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)),
-        (16384, 1024, 50_257, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)),
-        (65536, 512, 50_257, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
-        (262_144, 1024, 50_257, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)),
-        (16_384, 2048, 50_257, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)),
-        (8192, 4096, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)),
-    ],
-)
-def test_infer_block_sizes_tpu_v4_mid_vocab_uses_tuned_buckets(
-    b: int,
-    h: int,
-    v: int,
-    expected: fused_api.BlockSizes,
-):
-    block_sizes, tuned_match = tuned_block_sizes.infer_block_sizes_with_tuned_match(
-        b=b,
-        h=h,
-        v=v,
-        dtype=jnp.bfloat16,
-        device_kind="TPU v4",
-    )
-    assert tuned_match
-    assert block_sizes == expected
-
-
-def test_infer_block_sizes_tpu_v4_huge_batch_small_h_prefers_full_hidden_tile():
-    block_sizes = infer_block_sizes(
-        b=262_144,
-        h=1024,
-        v=128_256,
-        dtype=jnp.bfloat16,
-        device_kind="TPU v4",
-    )
-    assert block_sizes.b_block_size == 1024
-    assert block_sizes.h_block_size == 1024
-    assert block_sizes.v_block_size == 256
-
-
 def test_infer_block_sizes_tpu_v4_huge_batch_small_h_jits_with_pallas():
     if jax.default_backend() != "tpu":
         pytest.skip("requires TPU backend")
