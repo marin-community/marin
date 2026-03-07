@@ -115,10 +115,12 @@ class TokenizeConfig(TokenizeConfigBase):
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
-    zephyr_max_parallelism: int = 256
-    """Maximum number of concurrent Zephyr tasks per tokenization step.
+    zephyr_max_parallelism: int = 4
+    """Maximum number of concurrent Zephyr worker actors per tokenization step.
 
-    Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
+    Controls the number of Ray actors in the write stage. Lower values reduce
+    preemption risk (fewer concurrent actors = lower probability that any one
+    is preempted before completing).
     """
 
     def as_lm_dataset_source_config(
@@ -179,10 +181,12 @@ class HfTokenizeConfig(TokenizeConfigBase):
     # TODO (rav): remove this once there's better way to capture this in datakit
     zephyr_num_cpus: int = 2
     zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
-    zephyr_max_parallelism: int = 256
-    """Maximum number of concurrent Zephyr tasks per tokenization step.
+    zephyr_max_parallelism: int = 4
+    """Maximum number of concurrent Zephyr worker actors per tokenization step.
 
-    Kept low to avoid head-node OOM when running many concurrent tokenization steps via the executor.
+    Controls the number of Ray actors in the write stage. Lower values reduce
+    preemption risk (fewer concurrent actors = lower probability that any one
+    is preempted before completing).
     """
 
     def as_lm_dataset_source_config(
@@ -455,7 +459,7 @@ def tokenize(config: TokenizeConfigBase):
         train_groups = local_preprocess_paths(train_paths)
         ctx = ZephyrContext(
             resources=config.worker_resources,
-            max_workers=min(config.max_workers, len(train_groups)),
+            max_workers=min(config.zephyr_max_parallelism, len(train_groups)),
             name="tokenize-train",
         )
         run_pipeline(ctx, train_groups, "train")
@@ -464,7 +468,7 @@ def tokenize(config: TokenizeConfigBase):
         validation_groups = local_preprocess_paths(validation_paths)
         ctx = ZephyrContext(
             resources=config.worker_resources,
-            max_workers=min(config.max_workers, len(validation_groups)),
+            max_workers=min(config.zephyr_max_parallelism, len(validation_groups)),
             name="tokenize-validation",
         )
         run_pipeline(ctx, validation_groups, "validation")

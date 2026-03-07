@@ -138,11 +138,22 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
                     try:
                         yield decoder.decode(line)
                     except Exception as e:
+                        error_msg = str(e).lower()
+                        if "truncated" in error_msg or "corrupt" in error_msg:
+                            logger.warning(
+                                "Skipping rest of %s: truncated/corrupt data at line %d (%s)",
+                                spec.path, line_num, e,
+                            )
+                            return
                         logger.error(f"Error decoding line {line_num} in {spec.path}: {e}")
                         raise RuntimeError(f"Error decoding line {line_num} in {spec.path}: {e}") from e
     except RuntimeError:
         raise  # Re-raise wrapped error
     except Exception as e:
+        error_msg = str(e).lower()
+        if "truncated" in error_msg or "corrupt" in error_msg:
+            logger.warning("Skipping corrupted file %s: %s", spec.path, e)
+            return
         logger.error(f"Error reading JSONL file {spec.path}: {e}")
         raise RuntimeError(f"Error reading JSONL file {spec.path}: {e}") from e
 
