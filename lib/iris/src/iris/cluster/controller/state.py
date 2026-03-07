@@ -1290,6 +1290,16 @@ class ControllerState:
         job.finished_at = Timestamp.now()
         txn.log("job_cancelled", event.job_id, reason=event.reason)
 
+        # Cancel child jobs (e.g. the reservation holder child) unconditionally.
+        # The usual path fires _cancel_child_jobs only via _finalize_job_state,
+        # which is triggered by _on_task_state_changed only when there is at
+        # least one non-terminal task. If all tasks were already terminal when
+        # this event arrived (e.g. a parent that just succeeded races with an
+        # explicit cancel), _finalize_job_state is never reached and child jobs
+        # would be silently orphaned — keeping holder tasks in worker
+        # running_tasks and blocking scale-down idle detection.
+        txn.tasks_to_kill.update(self._cancel_child_jobs(event.job_id, txn))
+
     # -------------------------------------------------------------------------
     # Task Event Handlers
     # -------------------------------------------------------------------------

@@ -27,6 +27,7 @@ from iris.cluster.controller.controller import (
     job_requirements_from_job,
 )
 from iris.cluster.controller.events import (
+    JobCancelledEvent,
     JobSubmittedEvent,
     TaskAssignedEvent,
     TaskStateChangedEvent,
@@ -1435,3 +1436,111 @@ def test_holder_task_worker_death_no_failure_record():
         ), f"cycle {cycle}: attempt list leaked ({len(holder_task.attempts)} entries)"
         assert holder_task.active_worker_id is None, "no active worker after death"
         assert holder_task.can_be_scheduled(), "holder task must be schedulable again"
+
+
+def test_holder_task_removed_from_worker_when_parent_succeeds():
+    """Holder task is cleaned from worker.running_tasks when the parent job succeeds.
+
+    PATH A (task-driven termination): a parent task succeeds → on_task_transition
+    returns JOB_STATE_SUCCEEDED → _finalize_job_state → _cancel_child_jobs →
+    _on_job_cancelled(holder) → _cleanup_task_resources removes the holder task
+    from the worker's running_tasks set.
+
+    Previously untested; the existing cancel test only covers PATH B
+    (explicit JobCancelledEvent), not this completion-driven path.
+    """
+    state = ControllerState()
+    request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    parent_tasks = state.get_job_tasks(parent_job_id)
+    assert len(holder_tasks) == 1
+    assert len(parent_tasks) == 1
+
+    holder_task = holder_tasks[0]
+    parent_task = parent_tasks[0]
+
+    wid_holder = _register_worker(state, "worker-holder")
+    wid_parent = _register_worker(state, "worker-parent")
+
+    state.handle_event(TaskAssignedEvent(task_id=holder_task.task_id, worker_id=wid_holder))
+    state.handle_event(TaskAssignedEvent(task_id=parent_task.task_id, worker_id=wid_parent))
+
+    worker_holder = state.get_worker(wid_holder)
+    assert holder_task.task_id in worker_holder.running_tasks
+
+    # Parent task succeeds → _finalize_job_state(SUCCEEDED) → _cancel_child_jobs
+    # → holder task killed → running_tasks entry discarded.
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=parent_task.task_id,
+            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            attempt_id=parent_task.current_attempt_id,
+        )
+    )
+
+    holder_task = state.get_task(holder_task.task_id)
+    assert holder_task is not None
+    assert holder_task.state == cluster_pb2.TASK_STATE_KILLED, (
+        f"expected holder task KILLED after parent success, "
+        f"got {cluster_pb2.TaskState.Name(holder_task.state)}"
+    )
+    worker_holder = state.get_worker(wid_holder)
+    assert holder_task.task_id not in worker_holder.running_tasks, (
+        "holder task must be removed from worker.running_tasks when parent succeeds"
+    )
+
+
+def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already_terminal():
+    """Holder is cleaned even when JobCancelledEvent arrives after all parent tasks finished.
+
+    The gap: _on_job_cancelled's task loop skips all terminal tasks, so
+    _on_task_state_changed is never invoked, _finalize_job_state is never
+    reached, and _cancel_child_jobs is never called on the normal cascade path.
+    Without the explicit _cancel_child_jobs call at the end of _on_job_cancelled,
+    the holder task would stay in worker.running_tasks indefinitely, making the
+    worker appear busy and blocking scale-down idle detection.
+    """
+    state = ControllerState()
+    request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    parent_tasks = state.get_job_tasks(parent_job_id)
+    holder_task = holder_tasks[0]
+    parent_task = parent_tasks[0]
+
+    wid = _register_worker(state, "worker")
+    state.handle_event(TaskAssignedEvent(task_id=holder_task.task_id, worker_id=wid))
+
+    worker = state.get_worker(wid)
+    assert holder_task.task_id in worker.running_tasks
+
+    # Directly mark the parent task terminal WITHOUT going through the event
+    # system. This simulates the race: the parent task already finished (and
+    # _finalize_job_state already ran, cleaning the holder), but then the job
+    # is submitted to cancel anyway. More importantly it lets us verify that
+    # _on_job_cancelled handles the case where all parent tasks are terminal
+    # (loop body never executes, so the old code never reached _cancel_child_jobs).
+    parent_task_ref = state.get_task(parent_task.task_id)
+    assert parent_task_ref is not None
+    parent_task_ref.state = cluster_pb2.TASK_STATE_KILLED
+
+    # Fire JobCancelledEvent. All parent tasks are now terminal so the loop
+    # skips them. Only the explicit _cancel_child_jobs call at the end of
+    # _on_job_cancelled can clean up the holder.
+    state.handle_event(JobCancelledEvent(job_id=parent_job_id, reason="manual cancel"))
+
+    holder_task = state.get_task(holder_task.task_id)
+    assert holder_task is not None
+    assert holder_task.state == cluster_pb2.TASK_STATE_KILLED, (
+        f"expected holder task KILLED, got {cluster_pb2.TaskState.Name(holder_task.state)}"
+    )
+    worker = state.get_worker(wid)
+    assert holder_task.task_id not in worker.running_tasks, (
+        "holder task must be removed from worker.running_tasks; "
+        "stale entry would block scale-down idle detection"
+    )
