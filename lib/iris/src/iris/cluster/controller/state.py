@@ -304,15 +304,17 @@ class ControllerTask:
 
     @property
     def active_worker_id(self) -> WorkerId | None:
-        """Worker ID only when the current attempt is actively assigned/running.
+        """Worker ID for display, suppressed only while awaiting re-scheduling.
 
-        Returns None if there are no attempts or the last attempt is terminal
-        (task failed or was preempted and is now waiting to retry). Use this
-        for display purposes; use worker_id for internal resource cleanup.
+        A PENDING task may carry a stale worker_id from a prior failed/preempted
+        attempt whose worker is already dead. Showing that address on the
+        dashboard is misleading. For every other state the most recent attempt's
+        worker is meaningful (actively running, or the worker that completed /
+        failed the task).
         """
-        if self.attempts and not self.attempts[-1].is_terminal():
-            return self.attempts[-1].worker_id
-        return None
+        if self.state == cluster_pb2.TASK_STATE_PENDING:
+            return None
+        return self.worker_id
 
     # --- Attempt management methods ---
 
