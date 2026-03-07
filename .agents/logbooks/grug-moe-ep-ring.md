@@ -1219,3 +1219,66 @@
   - Keep the current production recommendation unchanged:
     - no MaxText-derived flag change for the `v5p-8` `EP=4` fast path
   - If we want a TPU-runtime tweak later, the only candidate worth considering is an opt-in `LAYOUT_FOR_ALL_REDUCE_SCATTER` flag for `EP=2`; validate it on a fuller train-step path before promoting it.
+
+### 2026-03-07 20:35 - `v5p-64` MaxText flag sweep and direct-create runtime fix
+- Hypothesis: on the full `v5p-64` shape, MaxText's MoE TPU flag bundle might help more than it did on `v5p-8`, especially because `EP=8` still leaves `DP=4`, so data-parallel overlap has room to matter.
+- Command:
+  - Tried three direct-created spot `v5p-64` slices:
+    - `codex-grug-flags-v5p64` in `us-central1-a`
+    - `codex-grug-flags-v5p64b` in `us-central1-a`
+    - `codex-grug-flags-v5p64e` in `us-east5-a`
+  - All three used `--version=tpu-ubuntu2204-base` and failed the same way:
+    - local `uv run python -c "import jax; print(jax.devices())"` on worker `0` errored with `INTERNAL: Failed to get global TPU topology`
+    - `tpu-runtime.service` logs showed the wrong container image:
+      - `gcr.io/cloud-tpu-v2-images/fake_tensorflow:latest`
+  - Checked the current Google TPU JAX guidance for v5p and recreated the slice with the correct runtime:
+    - `codex-grug-flags-v5p64j` in `us-east5-a`
+    - `--version=v2-alpha-tpuv5`
+  - On `v2-alpha-tpuv5`, the clean launch pattern was:
+    - run the harness on every worker with `gcloud compute tpus tpu-vm ssh ... --worker=all`
+    - do **not** pass explicit `jax.distributed.initialize(...)` arguments
+    - let JAX auto-detect the slice across hosts
+  - Swept the canonical production `current` kernel with:
+    - `tokens=131072 hidden=2048 mlp_dim=768 experts=128 topk=8 shared_expert_dim=2048`
+    - `bench_pass=forward_backward`
+    - `distribution=random`
+    - `iters=3`, `warmup=1`
+  - Swept `EP=8`:
+    - baseline: `--xla_tpu_scoped_vmem_limit_kib=50000`
+    - `cf_ag`
+    - `dp_overlap`
+    - `layout_only`
+    - `maxtext_moe`
+    - `maxtext_moe_layout`
+    - repeated baseline
+  - Swept `EP=2`:
+    - baseline
+    - `layout_only`
+    - `maxtext_moe_layout`
+    - repeated baseline
+- Result:
+  - `EP=8`
+    - `baseline`: `21.921 ms`
+    - `cf_ag`: `21.978 ms`
+    - `dp_overlap`: `21.845 ms`
+    - `layout_only`: `21.894 ms`
+    - `maxtext_moe`: `22.857 ms`
+    - `maxtext_moe_layout`: `22.792 ms`
+    - `baseline_repeat`: `21.894 ms`
+  - `EP=2`
+    - `baseline`: `24.076 ms`
+    - `layout_only`: `24.035 ms`
+    - `maxtext_moe_layout`: `24.349 ms`
+    - `baseline_repeat`: `24.152 ms`
+- Interpretation:
+  - For direct-created `v5p-64` JAX runs, `--version=tpu-ubuntu2204-base` is a trap on this date; it booted the `fake_tensorflow` TPU runtime and never exposed a usable global topology.
+  - `--version=v2-alpha-tpuv5` fixed that immediately and is the right direct-create runtime for these experiments.
+  - On the actual `v5p-64` workload, the MaxText MoE flag story stayed weak:
+    - `EP=8`: `cf_ag`, `dp_overlap`, and `layout_only` all stayed inside baseline noise
+    - `EP=8`: the full MaxText MoE bundle regressed by about `4.3%`
+    - `EP=2`: `layout_only` was again a tiny positive (`~0.3%`), but smaller than the `v5p-8` effect
+    - `EP=2`: adding the full MaxText bundle still regressed (`~1.0%`)
+  - The only remotely positive signal on `v5p-64` is the same one seen on `v5p-8`: `LAYOUT_FOR_ALL_REDUCE_SCATTER`, and even there the effect is very small.
+- Next action:
+  - Keep the production recommendation unchanged for `v5p-64`: no MaxText-derived TPU flag change for the current fast path.
+  - If we ever need direct-created `v5p-64` TPU benchmarking again, use `--version=v2-alpha-tpuv5` from the start.
