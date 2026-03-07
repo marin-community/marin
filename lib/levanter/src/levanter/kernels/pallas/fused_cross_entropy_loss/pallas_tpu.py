@@ -492,11 +492,11 @@ def _linear_softmax_cross_entropy_loss_bwd_xla_delta_supertile(
     logits = jnp.where(valid_cols[None, :], logits, -jnp.inf)
     probs = jnp.exp(logits - lse[:, None].astype(logits.dtype))
     delta = dout_loss_plus_lse[:, None].astype(logits.dtype) * probs
-    delta = (delta * cap_deriv).astype(logits.dtype)
 
     label_idx = labels_i32 - v_start
     labels_one_hot = _labels_one_hot_emulated(label_idx, softmax_v_block_size, delta.dtype)
     delta = delta - dout_loss[:, None].astype(delta.dtype) * labels_one_hot
+    delta = (delta * cap_deriv).astype(logits.dtype)
 
     return jnp.where(valid_cols[None, :], delta, 0.0).astype(jnp.float32)
 
