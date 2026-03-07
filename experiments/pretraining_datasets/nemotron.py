@@ -3,10 +3,11 @@
 
 """NEMOTRON CC dataset definitions and tokenization."""
 
+import dataclasses
 import os.path
 
+from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
-
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
@@ -117,6 +118,8 @@ nemotron_mix = lm_mixture_data_config(
         "proofpile_2": 0.055,
     },
 )
+
+nemotron_mix_block_shuffle = dataclasses.replace(nemotron_mix, shuffle=DEFAULT_NEW_RUN_DATA_SHUFFLE)
 
 
 def tokenize_nemotron_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
