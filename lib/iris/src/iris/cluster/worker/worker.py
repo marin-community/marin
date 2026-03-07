@@ -527,12 +527,22 @@ class Worker:
     def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
         """Handle controller-initiated heartbeat with reconciliation.
 
-        Processes tasks_to_run and tasks_to_kill, reconciles expected_tasks against
-        actual state, and returns current running/completed tasks.
+        Processing order (sequential, not concurrent):
+        1. Submit tasks_to_run — registers each task in self._tasks
+        2. Kill tasks_to_kill — async, sets stop flag immediately
+        3. Reconcile expected_tasks — for each expected task, report its current
+           state. If not found in self._tasks, report WORKER_FAILED ("Task not
+           found on worker"). This can happen if submit_task threw in step 1.
+        4. Kill unexpected tasks — any task in self._tasks that is NOT in
+           expected_tasks or tasks_to_run is killed (controller no longer wants it)
+
+        The ordering guarantee between steps 1 and 3 is critical: a task that
+        appears in both tasks_to_run and expected_tasks (which is always the case
+        for newly-assigned tasks) will be submitted before reconciliation checks
+        for it, so it will be found.
 
         Kill operations are performed asynchronously in daemon threads to avoid
-        blocking the heartbeat RPC. The task's should_stop flag is set immediately,
-        and the container stop/wait/force-kill sequence runs in the background.
+        blocking the heartbeat RPC.
         """
         # Reset heartbeat deadline
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
@@ -602,8 +612,13 @@ class Worker:
                             tasks.append(entry)
 
                     # Kill tasks not in expected_tasks - the controller has decided these
-                    # tasks should no longer run (e.g., job was killed, task was reassigned)
+                    # tasks should no longer run (e.g., job was killed, task was reassigned).
+                    # Include tasks_to_run in the expected set: these were just submitted
+                    # in this heartbeat and may not yet appear in expected_tasks if the
+                    # controller excludes unconfirmed tasks.
                     expected_keys = {(entry.task_id, entry.attempt_id) for entry in request.expected_tasks}
+                    for run_req in request.tasks_to_run:
+                        expected_keys.add((run_req.task_id, run_req.attempt_id))
                     tasks_to_kill: list[tuple[str, int]] = []
                     for key, task in self._tasks.items():
                         if key not in expected_keys and task.status not in self._TERMINAL_STATES:
