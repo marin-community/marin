@@ -243,11 +243,7 @@ class RemoteClusterClient:
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
-
-        def _call():
-            self._client.terminate_job(request)
-
-        call_with_retry(f"terminate_job({job_id})", _call)
+        self._client.terminate_job(request)
 
     def register_endpoint(
         self,
@@ -268,11 +264,7 @@ class RemoteClusterClient:
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint via RPC."""
         request = cluster_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
-
-        def _call():
-            self._client.unregister_endpoint(request)
-
-        call_with_retry(f"unregister_endpoint({endpoint_id})", _call)
+        self._client.unregister_endpoint(request)
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[cluster_pb2.Controller.Endpoint]:
         def _call():
