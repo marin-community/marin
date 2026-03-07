@@ -22,6 +22,7 @@ from iris.cluster.controller.events import (
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Timestamp
@@ -414,12 +415,12 @@ def test_get_job_status_returns_original_request(client, state):
         replicas=2,
         constraints=[
             cluster_pb2.Constraint(
-                key="tpu-name",
+                key=WellKnownAttribute.TPU_NAME,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="my-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     job_id = submit_job(state, "request-detail-job", request)
 
@@ -485,10 +486,12 @@ def mock_autoscaler():
                 name="test-group",
                 config=config_pb2.ScaleGroupConfig(
                     name="test-group",
-                    accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                    accelerator_variant="v4-8",
                     min_slices=1,
                     max_slices=5,
+                    resources=config_pb2.ScaleGroupResources(
+                        device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                        device_variant="v4-8",
+                    ),
                 ),
                 slices=[
                     vm_pb2.SliceInfo(
@@ -575,7 +578,7 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
         assert "sliceId" in slice_info
         assert "vms" in slice_info
         assert len(slice_info["vms"]) == 1
-    assert group["config"]["acceleratorVariant"] == "v4-8"
+    assert group["config"]["resources"]["deviceVariant"] == "v4-8"
 
 
 def test_pending_reason_uses_autoscaler_hint_for_scale_up(
@@ -733,30 +736,12 @@ def test_get_worker_status_unknown_id_returns_error(client):
     assert resp.status_code != 200
 
 
-def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):
-    """Health endpoint returns status ok with worker and job counts."""
-    register_worker(state, "w1", "h1:8080", make_worker_metadata())
-    register_worker(state, "w2", "h2:8080", make_worker_metadata())
-    submit_job(state, "j1", job_request)
-
+def test_health_endpoint_returns_ok(client):
+    """Health endpoint returns a trivial ok response without querying state."""
     resp = client.get("/health")
 
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["workers"] == 2
-    assert data["jobs"] == 1
-
-
-def test_health_endpoint_empty_cluster(client):
-    """Health endpoint returns ok for empty cluster (no workers, no jobs)."""
-    resp = client.get("/health")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["workers"] == 0
-    assert data["jobs"] == 0
+    assert resp.json() == {"status": "ok"}
 
 
 # =============================================================================
@@ -764,33 +749,18 @@ def test_health_endpoint_empty_cluster(client):
 # =============================================================================
 
 
-def test_get_task_logs_for_missing_task_returns_empty(client):
-    """GetTaskLogs returns empty batch when the task doesn't exist."""
+def test_get_task_logs_for_missing_task_returns_empty_batch(client):
+    """GetTaskLogs returns a single batch with no logs for a nonexistent task."""
     resp = client.post(
         "/iris.cluster.ControllerService/GetTaskLogs",
         json={"id": JobName.root("test-user", "nonexistent").task(0).to_wire()},
         headers={"Content-Type": "application/json"},
     )
-    # With batch API, nonexistent task returns empty task_logs, not an error
     assert resp.status_code == 200
     data = resp.json()
-    assert data.get("taskLogs", []) == []
-
-
-def test_get_task_logs_error_for_unassigned_task(client, state, job_request):
-    """GetTaskLogs returns batch with error when the task has no worker assigned."""
-    submit_job(state, "pending-job", job_request)
-
-    resp = client.post(
-        "/iris.cluster.ControllerService/GetTaskLogs",
-        json={"id": JobName.root("test-user", "pending-job").task(0).to_wire()},
-        headers={"Content-Type": "application/json"},
-    )
-    # Batch API returns 200 with error in batch
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data.get("taskLogs", [])) == 1
-    assert "not found" in data["taskLogs"][0].get("error", "").lower()
+    batches = data.get("taskLogs", [])
+    assert len(batches) == 1
+    assert batches[0].get("logs", []) == []
 
 
 # =============================================================================
@@ -811,12 +781,12 @@ def test_coscheduling_failure_reason_no_workers(client, state):
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
             cluster_pb2.Constraint(
-                key="tpu-name",
+                key=WellKnownAttribute.TPU_NAME,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="nonexistent-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     submit_job(state, "cosched-job", request)
 
@@ -834,8 +804,8 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     # Register 2 workers with tpu-name=my-tpu
     for i in range(2):
         meta = make_worker_metadata()
-        meta.attributes["tpu-name"].CopyFrom(cluster_pb2.AttributeValue(string_value="my-tpu"))
-        meta.attributes["tpu-worker-id"].CopyFrom(cluster_pb2.AttributeValue(int_value=i))
+        meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(cluster_pb2.AttributeValue(string_value="my-tpu"))
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(cluster_pb2.AttributeValue(int_value=i))
         register_worker(state, f"w{i}", f"h{i}:8080", meta)
 
     # Submit a coscheduled job needing 4 replicas
@@ -847,12 +817,12 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
             cluster_pb2.Constraint(
-                key="tpu-name",
+                key=WellKnownAttribute.TPU_NAME,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="my-tpu"),
             ),
         ],
-        coscheduling=cluster_pb2.CoschedulingConfig(group_by="tpu-name"),
+        coscheduling=cluster_pb2.CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
     )
     submit_job(state, "big-cosched", request)
 
@@ -871,8 +841,8 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
 def test_worker_attributes_in_list_workers(client, state, make_worker_metadata):
     """ListWorkers RPC returns worker attributes in metadata."""
     meta = make_worker_metadata()
-    meta.attributes["tpu-name"].CopyFrom(cluster_pb2.AttributeValue(string_value="v5litepod-16"))
-    meta.attributes["tpu-worker-id"].CopyFrom(cluster_pb2.AttributeValue(int_value=0))
+    meta.attributes[WellKnownAttribute.TPU_NAME].CopyFrom(cluster_pb2.AttributeValue(string_value="v5litepod-16"))
+    meta.attributes[WellKnownAttribute.TPU_WORKER_ID].CopyFrom(cluster_pb2.AttributeValue(int_value=0))
     register_worker(state, "tpu-worker", "h1:8080", meta)
 
     resp = rpc_post(client, "ListWorkers")

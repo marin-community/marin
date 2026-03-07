@@ -10,6 +10,7 @@ import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from time import sleep
 from typing import Protocol
 
@@ -18,15 +19,13 @@ import uvicorn
 from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.log_store import LogStoreHandler, PROCESS_LOG_KEY
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
     SchedulingContext,
     WorkerSnapshot,
-    _evaluate_constraint,
-    device_compatible,
-    device_variant_matches,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
@@ -38,18 +37,21 @@ from iris.cluster.controller.state import (
     HeartbeatSnapshot,
     ReservationClaim,
 )
-from iris.cluster.types import (
-    REGION_ATTRIBUTE_KEY,
+from iris.cluster.constraints import (
     AttributeValue,
-    DeviceType,
+    Constraint,
+    PlacementRequirements,
+    WellKnownAttribute,
+    constraints_from_resources,
+    evaluate_constraint,
+    extract_placement_requirements,
+    merge_constraints,
+)
+from iris.cluster.types import (
     JobName,
     VmWorkerStatus,
     VmWorkerStatusMap,
     WorkerId,
-    get_device_type,
-    get_device_type_enum,
-    get_device_variant,
-    normalize_constraints,
 )
 from iris.cluster.controller.snapshot import (
     SnapshotResult,
@@ -60,7 +62,7 @@ from iris.cluster.controller.snapshot import (
     restore_tracked_workers,
     write_snapshot,
 )
-from iris.logging import get_global_buffer, slow_log
+from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, snapshot_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -183,20 +185,18 @@ def compute_demand_entries(
         if job.is_finished():
             continue
 
-        device = job.request.resources.device
-        device_type = get_device_type_enum(device)
-        device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
-        preemptible_pref: bool | None = None
-        required_regions: frozenset[str] | None = None
-        required_zones: frozenset[str] | None = None
         invalid_reason: str | None = None
         try:
-            normalized = normalize_constraints(job.request.constraints)
-            preemptible_pref = normalized.preemptible
-            required_regions = normalized.required_regions
-            required_zones = normalized.required_zones
+            normalized = extract_placement_requirements(job.request.constraints)
         except ValueError as e:
             invalid_reason = f"invalid_constraints: {e}"
+            normalized = PlacementRequirements(
+                device_type=None,
+                device_variants=None,
+                preemptible=None,
+                required_regions=None,
+                required_zones=None,
+            )
 
         if job.is_coscheduled:
             remaining_ids = []
@@ -209,13 +209,9 @@ def compute_demand_entries(
                     DemandEntry(
                         task_ids=remaining_ids,
                         coschedule_group_id=job.job_id.to_wire(),
-                        device_type=device_type,
-                        device_variant=device_variant,
+                        normalized=normalized,
                         constraints=list(job.request.constraints),
                         resources=job.request.resources,
-                        preemptible=preemptible_pref,
-                        required_regions=required_regions,
-                        required_zones=required_zones,
                         invalid_reason=invalid_reason,
                     )
                 )
@@ -228,13 +224,9 @@ def compute_demand_entries(
                 DemandEntry(
                     task_ids=[task.task_id.to_wire()],
                     coschedule_group_id=None,
-                    device_type=device_type,
-                    device_variant=device_variant,
+                    normalized=normalized,
                     constraints=list(job.request.constraints),
                     resources=job.request.resources,
-                    preemptible=preemptible_pref,
-                    required_regions=required_regions,
-                    required_zones=required_zones,
                     invalid_reason=invalid_reason,
                 )
             )
@@ -248,20 +240,18 @@ def _worker_matches_reservation_entry(
 ) -> bool:
     """Check if a worker is eligible for a reservation entry.
 
-    Matches device type, device variant, and all constraints.
+    Auto-injects device constraints from the reservation entry's resource spec
+    and merges them with explicit constraints on the entry, then evaluates all
+    constraints against the worker's attributes.
     """
-    entry_device_type = get_device_type(res_entry.resources.device)
-    if not device_compatible(entry_device_type, worker.device_type):
-        return False
+    auto = constraints_from_resources(res_entry.resources)
+    explicit = [Constraint.from_proto(c) for c in res_entry.constraints]
+    merged = merge_constraints(auto, explicit)
 
-    entry_variant = get_device_variant(res_entry.resources.device)
-    if entry_variant and entry_variant != "auto":
-        if not device_variant_matches(entry_variant, worker.device_variant):
-            return False
-
-    for constraint in res_entry.constraints:
+    merged_protos = [c.to_proto() for c in merged]
+    for constraint in merged_protos:
         attr = worker.attributes.get(constraint.key)
-        if not _evaluate_constraint(attr, constraint):
+        if not evaluate_constraint(attr, constraint):
             return False
 
     return True
@@ -354,7 +344,7 @@ def _reservation_region_constraints(
     region constraint, or if claimed workers lack region attributes, the
     existing constraints are returned unchanged.
     """
-    if any(c.key == REGION_ATTRIBUTE_KEY for c in existing_constraints):
+    if any(c.key == WellKnownAttribute.REGION for c in existing_constraints):
         return existing_constraints
 
     regions: set[str] = set()
@@ -364,7 +354,7 @@ def _reservation_region_constraints(
         worker = state.get_worker(worker_id)
         if worker is None:
             continue
-        region_attr = worker.attributes.get(REGION_ATTRIBUTE_KEY)
+        region_attr = worker.attributes.get(WellKnownAttribute.REGION)
         if region_attr is not None:
             regions.add(str(region_attr.value))
 
@@ -374,13 +364,13 @@ def _reservation_region_constraints(
     region_list = sorted(regions)
     if len(region_list) == 1:
         region_constraint = cluster_pb2.Constraint(
-            key=REGION_ATTRIBUTE_KEY,
+            key=WellKnownAttribute.REGION,
             op=cluster_pb2.CONSTRAINT_OP_EQ,
             value=cluster_pb2.AttributeValue(string_value=region_list[0]),
         )
     else:
         region_constraint = cluster_pb2.Constraint(
-            key=REGION_ATTRIBUTE_KEY,
+            key=WellKnownAttribute.REGION,
             op=cluster_pb2.CONSTRAINT_OP_IN,
             values=[cluster_pb2.AttributeValue(string_value=r) for r in region_list],
         )
@@ -514,6 +504,9 @@ class ControllerConfig:
     """If set, take a periodic best-effort snapshot this often.
     Runs in the autoscaler loop thread; does not pause scheduling."""
 
+    log_dir: Path | None = None
+    """Persistent directory for task log files. When None, uses a temp dir."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -564,19 +557,27 @@ class Controller:
         self._config = config
         self.stub_factory = worker_stub_factory
 
-        self._state = ControllerState(heartbeat_failure_threshold=config.heartbeat_failure_threshold)
+        self._state = ControllerState(
+            heartbeat_failure_threshold=config.heartbeat_failure_threshold,
+            log_dir=config.log_dir,
+        )
         self._scheduler = Scheduler()
         self._service = ControllerServiceImpl(
             self._state,
             self,
             bundle_prefix=config.bundle_prefix,
-            log_buffer=get_global_buffer(),
         )
         self._dashboard = ControllerDashboard(
             self._service,
             host=config.host,
             port=config.port,
         )
+
+        # Ingest process logs into the LogStore so they are available via FetchLogs.
+        self._log_store_handler = LogStoreHandler(self._state.log_store, key=PROCESS_LOG_KEY)
+        self._log_store_handler.setLevel(logging.DEBUG)
+        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger("iris").addHandler(self._log_store_handler)
 
         # Background loop state
         self._threads = threads if threads is not None else get_thread_container()
@@ -696,6 +697,11 @@ class Controller:
 
         self._threads.stop()
 
+        # Remove log handler before closing the log store to avoid
+        # sqlite3.ProgrammingError spam from late log records.
+        logging.getLogger("iris").removeHandler(self._log_store_handler)
+        self._log_store_handler.close()
+
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""
         limiter = RateLimiter(interval_seconds=self._config.scheduler_interval.to_seconds())
@@ -739,7 +745,10 @@ class Controller:
                 break
             if self._checkpoint_in_progress:
                 continue
-            self._heartbeat_all_workers()
+            try:
+                self._heartbeat_all_workers()
+            except Exception:
+                logger.exception("Heartbeat round failed, will retry next interval")
 
     def _is_reservation_satisfied(self, job: ControllerJob) -> bool:
         """Check if a job's reservation is fully satisfied.

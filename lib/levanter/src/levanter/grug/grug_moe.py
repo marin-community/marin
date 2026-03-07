@@ -27,7 +27,7 @@ from jax import shard_map
 from jax.sharding import PartitionSpec as P, get_abstract_mesh
 from jaxtyping import Array, Float, Int
 
-from haliax.nn.linear import gmm_sharded
+from haliax.nn.ragged_dot import ragged_dot
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
@@ -102,10 +102,10 @@ def _moe_mlp_local(
     )
 
     with jax.named_scope("moe_up_down"):
-        w13_out = gmm_sharded(x_dispatch, moe_w13, group_sizes)
+        w13_out = ragged_dot(x_dispatch, moe_w13, group_sizes)
         moe_dim = moe_w2.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2, group_sizes)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes)
 
     with jax.named_scope("scatter"):
         out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
@@ -187,10 +187,10 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = gmm_sharded(x_dispatch, moe_w13_local, group_sizes)
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = gmm_sharded(activation_fn(gate) * up, moe_w2_local, group_sizes)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
     with jax.named_scope("scatter"):
         out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")

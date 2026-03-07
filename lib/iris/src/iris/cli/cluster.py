@@ -387,7 +387,9 @@ def vm_status(ctx, scale_group):
         counts = dict(group.slice_state_counts)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
-        accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
+        accel_display = format_accelerator_display(
+            group.config.resources.device_type, group.config.resources.device_variant
+        )
         click.echo(f"  Accelerator: {accel_display}")
         click.echo(f"  Slices: {counts.get('ready', 0)}/{total} ready")
         click.echo(f"    Booting: {counts.get('booting', 0)}")

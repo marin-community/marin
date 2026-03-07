@@ -42,8 +42,8 @@ from iris.cluster.controller.local import (
     make_local_cluster_config,
     wait_for_worker_registration,
 )
+from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import (
-    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -51,8 +51,7 @@ from iris.cluster.types import (
     Namespace,
     ReservationEntry,
     ResourceSpec,
-    merge_constraints,
-    validate_tpu_replicas,
+    adjust_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -281,6 +280,7 @@ class Job:
         raise_on_failure: bool = True,
         stream_logs: bool = False,
         include_children: bool = False,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
 
@@ -289,6 +289,7 @@ class Job:
             poll_interval: Maximum time between status checks
             raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
             stream_logs: If True, stream logs from all tasks interleaved
+            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
             Final JobStatus
@@ -300,7 +301,7 @@ class Job:
         if not stream_logs:
             status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
         else:
-            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children)
+            status = self._wait_with_multi_task_streaming(timeout, poll_interval, include_children, min_level)
 
         if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
             raise JobFailedError(self._job_id, status)
@@ -312,11 +313,12 @@ class Job:
         timeout: float,
         poll_interval: float,
         include_children: bool,
+        min_level: str = "",
     ) -> cluster_pb2.JobStatus:
         """Wait while streaming logs from all tasks using batch log fetching.
 
         Uses a single batch RPC call per poll interval to fetch logs from all tasks,
-        rather than N individual calls. The batch API uses a global since_ms cursor
+        rather than N individual calls. The batch API uses an autoincrement id cursor
         for efficient incremental fetching.
         """
         return self._client._cluster_client.wait_for_job_with_streaming(
@@ -326,6 +328,7 @@ class Job:
             include_children=include_children,
             since_ms=0,
             state_logger=DefaultTaskStateLogger(),
+            min_level=min_level,
         )
 
     def terminate(self) -> None:
@@ -442,14 +445,13 @@ class NamespacedResolver:
             prefixed_name = name
 
         logger.debug("NamespacedResolver resolving: %s", prefixed_name)
-        matches = self._cluster.list_endpoints(prefix=prefixed_name)
+        matches = self._cluster.list_endpoints(prefix=prefixed_name, exact=True)
         logger.debug(
             "NamespacedResolver %s => %s",
             prefixed_name,
             [{"name": ep.name, "id": ep.endpoint_id, "address": ep.address} for ep in matches],
         )
 
-        # Filter to exact matches
         endpoints = [
             ResolvedEndpoint(
                 url=ep.address,
@@ -457,7 +459,6 @@ class NamespacedResolver:
                 metadata=dict(ep.metadata),
             )
             for ep in matches
-            if ep.name == prefixed_name
         ]
 
         return ResolveResult(name=name, endpoints=endpoints)
@@ -633,7 +634,7 @@ class IrisClient:
             raise ValueError("Job name cannot contain '/'")
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
-        validate_tpu_replicas(resources.device, replicas)
+        replicas = adjust_tpu_replicas(resources.device, replicas)
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -818,6 +819,7 @@ class IrisClient:
         max_lines: int = 0,
         regex: str | None = None,
         attempt_id: int = -1,
+        min_level: str = "",
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
@@ -828,6 +830,7 @@ class IrisClient:
             max_lines: Maximum number of log lines to return (0 = unlimited)
             regex: Regex filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
+            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
@@ -839,6 +842,7 @@ class IrisClient:
             max_total_lines=max_lines,
             regex=regex,
             attempt_id=attempt_id,
+            min_level=min_level,
         )
 
         result: list[TaskLogEntry] = []

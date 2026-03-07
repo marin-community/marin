@@ -21,6 +21,7 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
@@ -41,6 +42,7 @@ class GrugMoeLaunchConfig:
     data: LmDataConfig
     output_path: str
     run_id: str
+    resources: ResourceConfig
     steps: int
     batch_size: int
     seed: int
@@ -97,6 +99,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
+        mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
@@ -112,6 +115,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     run_config = GrugRunConfig(
         model=config.model,
         data=config.data,
+        resources=config.resources,
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
@@ -132,6 +136,7 @@ grug_moe_trial = ExecutorStep(
         output_path=this_output_path(),
         # Keep run id out of versioning so changing job metadata doesn't create a new output path.
         run_id=RESOLVED_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(2_000),
         batch_size=versioned(512),
         seed=versioned(0),
@@ -169,7 +174,6 @@ grug_moe_trial = ExecutorStep(
             )
         ),
     ),
-    resources=ResourceConfig.with_tpu("v5p-8"),
 )
 
 

@@ -9,6 +9,7 @@ modify state, or run threads.
 """
 
 import pytest
+from iris.cluster.constraints import WellKnownAttribute, constraints_from_resources
 from iris.cluster.controller.events import (
     JobSubmittedEvent,
     TaskAssignedEvent,
@@ -19,11 +20,11 @@ from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
     SchedulingResult,
-    device_variant_matches,
 )
 from iris.cluster.controller.state import ControllerState, ControllerTask
-from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobName, WorkerId
-from iris.rpc import cluster_pb2
+from iris.cluster.constraints import Constraint, merge_constraints
+from iris.cluster.types import JobName, WorkerId
+from iris.rpc import cluster_pb2, config_pb2
 from iris.time_utils import Timestamp
 
 
@@ -68,6 +69,25 @@ def register_worker(
     return wid
 
 
+def _inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest) -> None:
+    """Auto-inject device constraints from the resource spec, mirroring service.py.
+
+    In production, the service layer merges auto-generated device constraints
+    into the request before storing the job. Tests bypass the service layer,
+    so we replicate that logic here.
+    """
+    auto = constraints_from_resources(request.resources)
+    if not auto:
+        return
+
+    user = [Constraint.from_proto(c) for c in request.constraints]
+    merged = merge_constraints(auto, user)
+
+    del request.constraints[:]
+    for c in merged:
+        request.constraints.append(c.to_proto())
+
+
 def submit_job(
     state: ControllerState,
     job_id: str,
@@ -75,6 +95,7 @@ def submit_job(
     timestamp_ms: int | None = None,
 ) -> list[ControllerTask]:
     """Submit a job via event and return created tasks."""
+    _inject_device_constraints(request)
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     state.handle_event(
@@ -208,7 +229,7 @@ def coscheduled_job_request():
         cpu: int = 1,
         memory_bytes: int = 1024**3,
         replicas: int = 4,
-        group_by: str = "tpu-name",
+        group_by: str = WellKnownAttribute.TPU_NAME,
     ) -> cluster_pb2.Controller.LaunchJobRequest:
         job_name = JobName.from_string(name) if name.startswith("/") else JobName.root("test-user", name)
         req = cluster_pb2.Controller.LaunchJobRequest(
@@ -238,7 +259,12 @@ def resource_spec():
 
 @pytest.fixture
 def worker_metadata():
-    """Create WorkerMetadata for testing."""
+    """Create WorkerMetadata for testing.
+
+    Automatically populates device-type and device-variant attributes so
+    constraint-based scheduling works the same way as production (where
+    _build_worker_attributes sets these from WorkerConfig).
+    """
 
     def _make(
         cpu: int = 10,
@@ -256,7 +282,7 @@ def worker_metadata():
         else:
             device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
 
-        return cluster_pb2.WorkerMetadata(
+        meta = cluster_pb2.WorkerMetadata(
             hostname="test-worker",
             ip_address="127.0.0.1",
             cpu_count=cpu,
@@ -267,6 +293,19 @@ def worker_metadata():
             tpu_name=tpu_name,
             device=device,
         )
+
+        # Populate well-known attributes matching what _build_worker_attributes does
+        if tpu_name:
+            meta.attributes[WellKnownAttribute.DEVICE_TYPE].string_value = "tpu"
+            meta.attributes[WellKnownAttribute.DEVICE_VARIANT].string_value = tpu_name.lower()
+        elif gpu_count > 0:
+            meta.attributes[WellKnownAttribute.DEVICE_TYPE].string_value = "gpu"
+            if gpu_name:
+                meta.attributes[WellKnownAttribute.DEVICE_VARIANT].string_value = gpu_name.lower()
+        else:
+            meta.attributes[WellKnownAttribute.DEVICE_TYPE].string_value = "cpu"
+
+        return meta
 
     return _make
 
@@ -515,18 +554,18 @@ def test_constraint_filters_workers_by_attribute(scheduler, state, job_request, 
     """Job with constraint only schedules on workers with matching attribute."""
     # Worker 1 with tpu-name attribute
     meta1 = worker_metadata()
-    meta1.attributes["tpu-name"].string_value = "tpu-a"
+    meta1.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
     register_worker(state, "w1", "addr1", meta1)
 
     # Worker 2 with different tpu-name
     meta2 = worker_metadata()
-    meta2.attributes["tpu-name"].string_value = "tpu-b"
+    meta2.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-b"
     register_worker(state, "w2", "addr2", meta2)
 
     # Job with constraint requiring tpu-name = "tpu-a"
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = "tpu-name"
+    constraint.key = WellKnownAttribute.TPU_NAME
     constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
     constraint.value.string_value = "tpu-a"
     tasks = submit_job(state, "j1", req)
@@ -561,12 +600,12 @@ def test_constraint_string_operators(
 ):
     """String equality operators (EQ, NE) filter workers by attribute value."""
     meta = worker_metadata()
-    meta.attributes["region"].string_value = worker_value
+    meta.attributes[WellKnownAttribute.REGION].string_value = worker_value
     register_worker(state, "w1", "addr", meta)
 
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = "region"
+    constraint.key = WellKnownAttribute.REGION
     constraint.op = op
     constraint.value.string_value = constraint_value
     submit_job(state, "j1", req)
@@ -704,21 +743,21 @@ def test_constraint_numeric_operators_with_floats(scheduler, state, job_request,
 def test_constraint_in_operator_matches_any_value(scheduler, state, job_request, worker_metadata):
     """IN constraint matches workers whose attribute value is in the provided set."""
     meta1 = worker_metadata()
-    meta1.attributes["region"].string_value = "us-central1"
+    meta1.attributes[WellKnownAttribute.REGION].string_value = "us-central1"
     register_worker(state, "w1", "addr1", meta1)
 
     meta2 = worker_metadata()
-    meta2.attributes["region"].string_value = "us-central2"
+    meta2.attributes[WellKnownAttribute.REGION].string_value = "us-central2"
     register_worker(state, "w2", "addr2", meta2)
 
     meta3 = worker_metadata()
-    meta3.attributes["region"].string_value = "eu-west4"
+    meta3.attributes[WellKnownAttribute.REGION].string_value = "eu-west4"
     register_worker(state, "w3", "addr3", meta3)
 
     # Job with IN constraint: region IN (us-central1, us-central2)
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = "region"
+    constraint.key = WellKnownAttribute.REGION
     constraint.op = cluster_pb2.CONSTRAINT_OP_IN
     constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central1"))
     constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central2"))
@@ -736,12 +775,12 @@ def test_constraint_in_operator_matches_any_value(scheduler, state, job_request,
 def test_constraint_in_operator_no_match(scheduler, state, job_request, worker_metadata):
     """IN constraint with no matching workers produces no assignments."""
     meta = worker_metadata()
-    meta.attributes["region"].string_value = "eu-west4"
+    meta.attributes[WellKnownAttribute.REGION].string_value = "eu-west4"
     register_worker(state, "w1", "addr1", meta)
 
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = "region"
+    constraint.key = WellKnownAttribute.REGION
     constraint.op = cluster_pb2.CONSTRAINT_OP_IN
     constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central1"))
     constraint.values.append(cluster_pb2.AttributeValue(string_value="us-central2"))
@@ -757,30 +796,30 @@ def test_multiple_constraints_all_must_match(scheduler, state, job_request, work
     """Multiple constraints are ANDed together."""
     # Worker 1: tpu-name=tpu-a, tpu-worker-id=0
     meta1 = worker_metadata()
-    meta1.attributes["tpu-name"].string_value = "tpu-a"
-    meta1.attributes["tpu-worker-id"].int_value = 0
+    meta1.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+    meta1.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = 0
     register_worker(state, "w1", "addr1", meta1)
 
     # Worker 2: tpu-name=tpu-a, tpu-worker-id=1
     meta2 = worker_metadata()
-    meta2.attributes["tpu-name"].string_value = "tpu-a"
-    meta2.attributes["tpu-worker-id"].int_value = 1
+    meta2.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+    meta2.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = 1
     register_worker(state, "w2", "addr2", meta2)
 
     # Worker 3: tpu-name=tpu-b, tpu-worker-id=0
     meta3 = worker_metadata()
-    meta3.attributes["tpu-name"].string_value = "tpu-b"
-    meta3.attributes["tpu-worker-id"].int_value = 0
+    meta3.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-b"
+    meta3.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = 0
     register_worker(state, "w3", "addr3", meta3)
 
     # Job requiring tpu-name=tpu-a AND tpu-worker-id=0
     req = job_request()
     c1 = req.constraints.add()
-    c1.key = "tpu-name"
+    c1.key = WellKnownAttribute.TPU_NAME
     c1.op = cluster_pb2.CONSTRAINT_OP_EQ
     c1.value.string_value = "tpu-a"
     c2 = req.constraints.add()
-    c2.key = "tpu-worker-id"
+    c2.key = WellKnownAttribute.TPU_WORKER_ID
     c2.op = cluster_pb2.CONSTRAINT_OP_EQ
     c2.value.int_value = 0
     submit_job(state, "j1", req)
@@ -802,7 +841,7 @@ def test_constraint_with_missing_attribute_fails(scheduler, state, job_request, 
     # Job requiring tpu-name = "tpu-a"
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = "tpu-name"
+    constraint.key = WellKnownAttribute.TPU_NAME
     constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
     constraint.value.string_value = "tpu-a"
     submit_job(state, "j1", req)
@@ -818,7 +857,7 @@ def test_job_without_constraints_schedules_anywhere(scheduler, state, job_reques
     """Job without constraints can be scheduled on any worker."""
     # Worker 1 with attribute
     meta1 = worker_metadata()
-    meta1.attributes["tpu-name"].string_value = "tpu-a"
+    meta1.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
     register_worker(state, "w1", "addr1", meta1)
 
     # Worker 2 without attribute
@@ -846,8 +885,8 @@ def test_coscheduled_job_assigns_all_tasks_atomically(scheduler, state, worker_m
     # Create 4 workers on tpu-a
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}", meta)
 
     # Create coscheduled job with 4 replicas
@@ -858,7 +897,7 @@ def test_coscheduled_job_assigns_all_tasks_atomically(scheduler, state, worker_m
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -872,7 +911,7 @@ def test_coscheduled_job_assigns_all_tasks_atomically(scheduler, state, worker_m
     # Verify all workers are in the tpu-a group
     for worker_id in assigned_worker_ids:
         worker = state.get_worker(worker_id)
-        assert worker.attributes["tpu-name"].value == "tpu-a"
+        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-a"
 
     # Tasks assigned in order: task-0 -> worker-0, task-1 -> worker-1, etc.
     for task_id, worker_id in result.assignments:
@@ -886,8 +925,8 @@ def test_coscheduled_job_waits_when_insufficient_workers(scheduler, state, worke
     # Only 2 workers on tpu-a
     for i in range(2):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}", meta)
 
     # Job requires 4 replicas
@@ -898,7 +937,7 @@ def test_coscheduled_job_waits_when_insufficient_workers(scheduler, state, worke
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -913,8 +952,8 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     # tpu-a: 4 workers, 2 are busy (low capacity)
     for i in range(4):
         meta = worker_metadata(cpu=2)  # Each worker has 2 CPUs
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"wa{i}", f"addra{i}", meta)
 
     # Consume capacity on first 2 workers of tpu-a by submitting a job
@@ -937,8 +976,8 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     # tpu-b: 4 workers, all free
     for i in range(4):
         meta = worker_metadata(cpu=2)
-        meta.attributes["tpu-name"].string_value = "tpu-b"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-b"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"wb{i}", f"addrb{i}", meta)
 
     # Coscheduled job requiring 4 replicas, 2 CPUs each
@@ -949,7 +988,7 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -959,7 +998,7 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     assert len(result.assignments) == 4
     for _, worker_id in result.assignments:
         worker = state.get_worker(worker_id)
-        assert worker.attributes["tpu-name"].value == "tpu-b"
+        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-b"
 
 
 def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadata):
@@ -968,8 +1007,8 @@ def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadat
     worker_ids = [3, 1, 0, 2]  # Deliberately out of order
     for i, wid in enumerate(worker_ids):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = wid
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = wid
         register_worker(state, f"w{wid}", f"addr{i}", meta)
 
     # Create coscheduled job with 4 replicas
@@ -980,7 +1019,7 @@ def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadat
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -992,7 +1031,7 @@ def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadat
     for task_id, worker_id in result.assignments:
         task = state.get_task(task_id)
         worker = state.get_worker(worker_id)
-        worker_tpu_id = worker.attributes["tpu-worker-id"].value
+        worker_tpu_id = worker.attributes[WellKnownAttribute.TPU_WORKER_ID].value
         assert (
             task.task_index == worker_tpu_id
         ), f"Task {task.task_index} assigned to worker with tpu-worker-id={worker_tpu_id}"
@@ -1003,17 +1042,17 @@ def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
     # tpu-a: 4 workers with region=us-west
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
-        meta.attributes["region"].string_value = "us-west"
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        meta.attributes[WellKnownAttribute.REGION].string_value = "us-west"
         register_worker(state, f"wa{i}", f"addra{i}", meta)
 
     # tpu-b: 4 workers with region=us-east
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-b"
-        meta.attributes["tpu-worker-id"].int_value = i
-        meta.attributes["region"].string_value = "us-east"
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-b"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        meta.attributes[WellKnownAttribute.REGION].string_value = "us-east"
         register_worker(state, f"wb{i}", f"addrb{i}", meta)
 
     # Coscheduled job requiring region=us-east
@@ -1024,9 +1063,9 @@ def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     constraint = req.constraints.add()
-    constraint.key = "region"
+    constraint.key = WellKnownAttribute.REGION
     constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
     constraint.value.string_value = "us-east"
     submit_job(state, "j1", req)
@@ -1038,7 +1077,7 @@ def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
     assert len(result.assignments) == 4
     for _, worker_id in result.assignments:
         worker = state.get_worker(worker_id)
-        assert worker.attributes["tpu-name"].value == "tpu-b"
+        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-b"
 
 
 def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata):
@@ -1047,8 +1086,8 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
     for i in range(4):
         cpu = 2 if i < 2 else 1  # First 2 have 2 CPU, last 2 have only 1
         meta = worker_metadata(cpu=cpu)
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}", meta)
 
     # Coscheduled job requiring 4 replicas, 2 CPUs each
@@ -1059,7 +1098,7 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
     context = _build_context(scheduler, state)
@@ -1071,8 +1110,8 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
     # Now add a new TPU group with 4 workers, all with sufficient capacity
     for i in range(4):
         meta = worker_metadata(cpu=2)
-        meta.attributes["tpu-name"].string_value = "tpu-b"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-b"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"wb{i}", f"addrb{i}", meta)
 
     # Re-run the scheduler - job should now be assigned to the new group
@@ -1083,7 +1122,7 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
     assert len(result.assignments) == 4
     for _, worker_id in result.assignments:
         worker = state.get_worker(worker_id)
-        assert worker.attributes["tpu-name"].value == "tpu-b"
+        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-b"
 
 
 # =============================================================================
@@ -1096,8 +1135,8 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
     # Create TPU group "tpu-a" with 4 workers, one tainted
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         if i == 0:
             meta.attributes["taint:maintenance"].string_value = "true"
         register_worker(state, f"wa{i}", f"addra{i}", meta)
@@ -1105,8 +1144,8 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
     # Create TPU group "tpu-b" with 4 workers, none tainted
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-b"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-b"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"wb{i}", f"addrb{i}", meta)
 
     # Coscheduled job with 4 replicas + NOT_EXISTS taint constraint
@@ -1117,7 +1156,7 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     c = req.constraints.add()
     c.key = "taint:maintenance"
     c.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
@@ -1130,7 +1169,7 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
     assert len(result.assignments) == 4
     for _, worker_id in result.assignments:
         worker = state.get_worker(worker_id)
-        assert worker.attributes["tpu-name"].value == "tpu-b"
+        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-b"
 
 
 # =============================================================================
@@ -1138,20 +1177,10 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
 # =============================================================================
 
 
-def test_tpu_chip_count_deducted_from_capacity(scheduler, state):
+def test_tpu_chip_count_deducted_from_capacity(scheduler, state, worker_metadata):
     """TPU chip count is deducted when task is scheduled."""
-    # Worker with 4 TPU chips (simulating v5litepod-16 per-VM)
-    meta = cluster_pb2.WorkerMetadata(
-        hostname="tpu-worker",
-        ip_address="127.0.0.1",
-        cpu_count=10,
-        memory_bytes=10 * 1024**3,
-        disk_bytes=10 * 1024**3,
-        tpu_name="v5litepod-16",
-    )
-    device = cluster_pb2.DeviceConfig()
-    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
-    meta.device.CopyFrom(device)
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.count = 4
     register_worker(state, "w1", "addr1", meta)
 
     # First job requires 4 TPU chips
@@ -1198,20 +1227,10 @@ def test_tpu_chip_count_deducted_from_capacity(scheduler, state):
     assert len(result.assignments) == 0
 
 
-def test_tpu_job_rejected_when_insufficient_chips(scheduler, state):
+def test_tpu_job_rejected_when_insufficient_chips(scheduler, state, worker_metadata):
     """TPU job is not scheduled when worker has fewer chips than required."""
-    # Worker with 4 TPU chips
-    meta = cluster_pb2.WorkerMetadata(
-        hostname="tpu-worker",
-        ip_address="127.0.0.1",
-        cpu_count=10,
-        memory_bytes=10 * 1024**3,
-        disk_bytes=10 * 1024**3,
-        tpu_name="v5litepod-16",
-    )
-    device = cluster_pb2.DeviceConfig()
-    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
-    meta.device.CopyFrom(device)
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.count = 4
     register_worker(state, "w1", "addr1", meta)
 
     # Job requires 8 TPU chips - more than worker has
@@ -1235,20 +1254,10 @@ def test_tpu_job_rejected_when_insufficient_chips(scheduler, state):
     assert len(result.assignments) == 0
 
 
-def test_tpu_count_released_after_task_completion(scheduler, state):
+def test_tpu_count_released_after_task_completion(scheduler, state, worker_metadata):
     """TPU chips are released when task completes, allowing new tasks to schedule."""
-    # Worker with 4 TPU chips
-    meta = cluster_pb2.WorkerMetadata(
-        hostname="tpu-worker",
-        ip_address="127.0.0.1",
-        cpu_count=10,
-        memory_bytes=10 * 1024**3,
-        disk_bytes=10 * 1024**3,
-        tpu_name="v5litepod-16",
-    )
-    device = cluster_pb2.DeviceConfig()
-    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
-    meta.device.CopyFrom(device)
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.count = 4
     register_worker(state, "w1", "addr1", meta)
 
     # First job uses all 4 TPU chips
@@ -1311,18 +1320,18 @@ def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_
     """Job constrained to non-preemptible workers is only scheduled on a matching worker."""
     # Preemptible worker
     meta_preemptible = worker_metadata()
-    meta_preemptible.attributes[PREEMPTIBLE_ATTRIBUTE_KEY].string_value = "true"
+    meta_preemptible.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "true"
     register_worker(state, "w-preemptible", "addr1", meta_preemptible)
 
     # On-demand worker
     meta_ondemand = worker_metadata()
-    meta_ondemand.attributes[PREEMPTIBLE_ATTRIBUTE_KEY].string_value = "false"
+    meta_ondemand.attributes[WellKnownAttribute.PREEMPTIBLE].string_value = "false"
     register_worker(state, "w-ondemand", "addr2", meta_ondemand)
 
     # Job requiring non-preemptible worker
     req = job_request()
     constraint = req.constraints.add()
-    constraint.key = PREEMPTIBLE_ATTRIBUTE_KEY
+    constraint.key = WellKnownAttribute.PREEMPTIBLE
     constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
     constraint.value.string_value = "false"
     tasks = submit_job(state, "j1", req)
@@ -1402,7 +1411,7 @@ def test_scheduler_child_of_older_tree_beats_newer_root(scheduler, state, job_re
 
 
 def test_scheduler_reports_device_variant_mismatch(scheduler, state, worker_metadata):
-    """Scheduler reports device variant mismatch in error message."""
+    """Scheduler reports constraint failure when no worker matches device variant."""
     # Worker with v5litepod-16
     meta = worker_metadata(tpu_name="v5litepod-16")
     meta.device.tpu.variant = "v5litepod-16"
@@ -1431,25 +1440,16 @@ def test_scheduler_reports_device_variant_mismatch(scheduler, state, worker_meta
         job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
     )
 
-    assert "variant" in diagnostics.lower()
-    assert "v5litepod-32" in diagnostics
-    assert "v5litepod-16" in diagnostics
+    # Constraint-based matching: the device-variant constraint key is reported
+    assert "device-variant" in diagnostics
+    assert "constraints" in diagnostics.lower()
 
 
 def test_scheduler_reports_tpu_count_exceeded(scheduler, state, worker_metadata):
     """Scheduler reports TPU count exceeded in error message."""
-    # Worker with 4 TPU chips
-    meta = cluster_pb2.WorkerMetadata(
-        hostname="tpu-worker",
-        ip_address="127.0.0.1",
-        cpu_count=10,
-        memory_bytes=10 * 1024**3,
-        disk_bytes=10 * 1024**3,
-        tpu_name="v5litepod-16",
-    )
-    device = cluster_pb2.DeviceConfig()
-    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
-    meta.device.CopyFrom(device)
+    # Worker with 4 TPU chips -- use fixture so device attributes are populated
+    meta = worker_metadata(tpu_name="v5litepod-16")
+    meta.device.tpu.count = 4
     register_worker(state, "w1", "addr1", meta)
 
     # Job requesting 8 TPU chips
@@ -1481,7 +1481,7 @@ def test_scheduler_reports_tpu_count_exceeded(scheduler, state, worker_metadata)
 
 
 def test_scheduler_reports_device_type_mismatch(scheduler, state, worker_metadata):
-    """Scheduler reports device type mismatch in error message."""
+    """Scheduler reports constraint failure when worker device type doesn't match."""
     # CPU-only worker
     meta = worker_metadata()
     register_worker(state, "w1", "addr", meta)
@@ -1509,8 +1509,9 @@ def test_scheduler_reports_device_type_mismatch(scheduler, state, worker_metadat
         job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
     )
 
-    assert "device" in diagnostics.lower()
-    assert "tpu" in diagnostics.lower()
+    # Constraint-based matching: the device-type constraint is in the diagnostic
+    assert "device-type" in diagnostics
+    assert "constraints" in diagnostics.lower()
 
 
 def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worker_metadata):
@@ -1519,8 +1520,8 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worke
     for i in range(4):
         cpu = 4 if i < 2 else 1  # First 2 have 4 CPU, last 2 have only 1
         meta = worker_metadata(cpu=cpu)
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}", meta)
 
     # Coscheduled job requiring 4 replicas, 2 CPUs each
@@ -1531,7 +1532,7 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worke
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
@@ -1566,23 +1567,14 @@ def test_diagnostics_for_schedulable_job_does_not_say_unknown_failure(scheduler,
     assert "schedulable" in diagnostics.lower()
 
 
-def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state):
+def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state, worker_metadata):
     """Two coscheduled TPU jobs cannot use the same TPU group simultaneously."""
     # Create 4 workers in tpu-group "tpu-a", each with 4 TPU chips
     for i in range(4):
-        meta = cluster_pb2.WorkerMetadata(
-            hostname=f"tpu-worker-{i}",
-            ip_address="127.0.0.1",
-            cpu_count=10,
-            memory_bytes=10 * 1024**3,
-            disk_bytes=10 * 1024**3,
-            tpu_name="v5litepod-16",
-        )
-        device = cluster_pb2.DeviceConfig()
-        device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
-        meta.device.CopyFrom(device)
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta = worker_metadata(tpu_name="v5litepod-16")
+        meta.device.tpu.count = 4
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}", meta)
 
     tpu_resource = cluster_pb2.ResourceSpecProto(
@@ -1599,7 +1591,7 @@ def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state):
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=4,
     )
-    req1.coscheduling.group_by = "tpu-name"
+    req1.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks1 = submit_job(state, "j1", req1)
 
     # Schedule and commit job 1
@@ -1616,7 +1608,7 @@ def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state):
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=4,
     )
-    req2.coscheduling.group_by = "tpu-name"
+    req2.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j2", req2)
 
     context = _build_context(scheduler, state)
@@ -1918,13 +1910,14 @@ def test_mixed_variant_cluster_many_jobs_all_scheduled(state, worker_metadata):
             ), f"Job {job_name} assigned to {worker.device_variant}, expected v5litepod-16"
 
 
-def test_gpu_job_matches_worker_with_full_nvidia_smi_variant(scheduler, state, worker_metadata):
-    """A job requesting variant="H100" matches a worker reporting "NVIDIA H100 80GB HBM3".
+def test_gpu_job_matches_worker_with_config_variant(scheduler, state, worker_metadata):
+    """A GPU job requesting variant="H100" matches a worker with device-variant="H100".
 
-    nvidia-smi reports the full GPU model string, but configs and jobs use short
-    names. The scheduler uses substring matching so these interoperate.
+    In production, the worker's device-variant attribute comes from the scale
+    group config (e.g. "H100"), not the nvidia-smi probe string. Both job and
+    worker use the same canonical name, matched via EQ constraint.
     """
-    meta = worker_metadata(gpu_count=8, gpu_name="NVIDIA H100 80GB HBM3")
+    meta = worker_metadata(gpu_count=8, gpu_name="H100")
     register_worker(state, "gpu-w1", "addr", meta)
 
     req = cluster_pb2.Controller.LaunchJobRequest(
@@ -1950,18 +1943,66 @@ def test_gpu_job_matches_worker_with_full_nvidia_smi_variant(scheduler, state, w
     assert result.assignments[0][1] == WorkerId("gpu-w1")
 
 
-@pytest.mark.parametrize(
-    "job_variant, worker_variant, expected",
-    [
-        ("H100", "NVIDIA H100 80GB HBM3", True),
-        ("h100", "NVIDIA H100 80GB HBM3", True),
-        ("H100", "H100", True),
-        ("A100", "NVIDIA H100 80GB HBM3", False),
-        ("H100", "NVIDIA H200", False),
-        ("H100", None, False),
-        ("A100", "NVIDIA A100-SXM4-80GB", True),
-        ("v5litepod", "v5litepod-16", True),
-    ],
-)
-def test_device_variant_matches(job_variant, worker_variant, expected):
-    assert device_variant_matches(job_variant, worker_variant) == expected
+def _register_worker_with_probed_attributes(state, worker_id, address, metadata):
+    """Register a worker, populating attributes via _build_worker_attributes (as real workers do)."""
+    from iris.cluster.worker.env_probe import _build_worker_attributes
+
+    # Determine accelerator_type and variant from the device config on metadata,
+    # mirroring what the autoscaler would set on WorkerConfig.
+    if metadata.device.HasField("tpu"):
+        accel_type = config_pb2.ACCELERATOR_TYPE_TPU
+        accel_variant = metadata.device.tpu.variant
+    elif metadata.device.HasField("gpu"):
+        accel_type = config_pb2.ACCELERATOR_TYPE_GPU
+        accel_variant = metadata.device.gpu.variant
+    else:
+        accel_type = config_pb2.ACCELERATOR_TYPE_CPU
+        accel_variant = ""
+
+    attrs = _build_worker_attributes(
+        accelerator_type=accel_type,
+        accelerator_variant=accel_variant,
+        preemptible=False,
+        tpu_name=metadata.tpu_name,
+        tpu_worker_id=str(0),
+        device=metadata.device,
+        extra_attributes={},
+    )
+    for key, val in attrs.items():
+        metadata.attributes[key].CopyFrom(val)
+    return register_worker(state, worker_id, address, metadata)
+
+
+def test_device_variant_in_constraint_matches_probed_workers(scheduler, state, job_request, worker_metadata):
+    """device_variant_constraint matches workers whose attributes come from _build_worker_attributes.
+
+    This is the end-to-end test: worker attributes are built the same way real
+    workers build them, and the scheduler's IN constraint finds a match.
+
+    Uses v5litepod-8 and v4-8 as the flexible alternatives (both vm_count=1)
+    so the constraint represents a realistic flexible request.
+    """
+    meta1 = worker_metadata(tpu_name="v5litepod-8")
+    _register_worker_with_probed_attributes(state, "w1", "addr1", meta1)
+
+    meta2 = worker_metadata(tpu_name="v4-8")
+    _register_worker_with_probed_attributes(state, "w2", "addr2", meta2)
+
+    meta3 = worker_metadata(tpu_name="v5litepod-16")
+    _register_worker_with_probed_attributes(state, "w3", "addr3", meta3)
+
+    req = job_request()
+    constraint = cluster_pb2.Constraint(
+        key=WellKnownAttribute.DEVICE_VARIANT,
+        op=cluster_pb2.CONSTRAINT_OP_IN,
+    )
+    for v in ["v5litepod-8", "v4-8"]:
+        constraint.values.append(cluster_pb2.AttributeValue(string_value=v))
+    req.constraints.append(constraint)
+
+    submit_job(state, "flex-job", req)
+    result = schedule_until_done(scheduler, state)
+
+    assert len(result.assignments) == 1
+    assigned_worker = result.assignments[0][1]
+    assert assigned_worker in {WorkerId("w1"), WorkerId("w2")}

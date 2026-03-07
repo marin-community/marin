@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 
 from google.protobuf import json_format
 
-from iris.cluster.types import Constraint, JobName
+from iris.cluster.constraints import Constraint
+from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)

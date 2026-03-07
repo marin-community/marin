@@ -37,6 +37,7 @@ from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -449,5 +450,6 @@ def tokenize(config: TokenizeConfigBase):
 
 @draccus.wrap()
 def main(config: TokenizeConfig):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     tokenize(config)

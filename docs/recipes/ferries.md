@@ -205,6 +205,13 @@ If canary fails:
 - only then open a focused PR if a canary script/config change is necessary,
 - relaunch and monitor to terminal state.
 
+#### Canary profiling triage
+
+- The full `profile_summary.json` is in the workflow logs (default params: `--warmup-steps 5`, `--breakdown-mode exclusive_per_track`, `--hot-op-limit 25`). The step summary has pointers to the raw trace artifact and W&B run.
+- The log summary is ephemeral and not published. To re-analyze with different parameters, fetch the raw trace via `--run-target` — see `docs/recipes/agent_profiling.md`.
+- If the canary failed early, the profile may only cover warmup steps — check `step_time.all_steps.count` before drawing conclusions from steady-state stats.
+- `exclusive_per_track` (the default) can hide device stalls that overlap across tracks. Use `exclusive_global` when investigating stall-heavy profiles.
+
 ## Promotion Rule (Daily)
 If a daily variant is clearly better holistically, promote it as the new default daily recipe/template.
 

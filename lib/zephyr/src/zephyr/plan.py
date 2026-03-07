@@ -11,6 +11,7 @@ knowledge of logical operation types.
 from __future__ import annotations
 
 import heapq
+import inspect
 import logging
 import os
 import zlib
@@ -42,6 +43,7 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,7 @@ class Scatter:
 
     key_fn: Callable[[Any], Any]  # item → key
     num_output_shards: int
+    sort_fn: Callable[[Any], Any] | None = None  # Optional secondary sort within each group
 
 
 @dataclass
@@ -103,6 +106,7 @@ class Reduce:
 
     key_fn: Callable[[Any], Any]
     reducer_fn: Callable[[Any, Iterator], Any]
+    sort_fn: Callable[[Any], Any] | None = None  # Must match Scatter's sort_fn
 
 
 @dataclass
@@ -153,9 +157,13 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
         yield from fn(item)
 
 
-def _reduce_gen(shard: Any, key_fn: Callable, reducer_fn: Callable) -> Iterator:
-    for key, items_iter in _merge_sorted_chunks(shard, key_fn):
-        yield reducer_fn(key, items_iter)
+def _reduce_gen(shard: Any, key_fn: Callable, reducer_fn: Callable, sort_fn: Callable | None = None) -> Iterator:
+    is_gen = inspect.isgeneratorfunction(reducer_fn)
+    for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn):
+        if is_gen:
+            yield from reducer_fn(key, items_iter)
+        else:
+            yield reducer_fn(key, items_iter)
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
@@ -409,11 +417,11 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
         elif isinstance(op, GroupByOp):
             num_shards = op.num_output_shards if op.num_output_shards is not None else -1
             state.add_op(
-                Scatter(key_fn=op.key_fn, num_output_shards=num_shards),
+                Scatter(key_fn=op.key_fn, num_output_shards=num_shards, sort_fn=op.sort_fn),
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
+            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn, sort_fn=op.sort_fn))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -586,6 +594,7 @@ def _group_items_by_hash(
     key_fn: Callable,
     num_output_shards: int,
     chunk_size: int,
+    sort_fn: Callable | None = None,
 ) -> dict[int, list[list[Any]]]:
     """Group items by hash of key into num_output_shards target shards with sorted chunks.
 
@@ -594,10 +603,23 @@ def _group_items_by_hash(
         key_fn: Function to extract grouping key from item
         num_output_shards: Number of output shards to distribute across
         chunk_size: Number of items per chunk
+        sort_fn: Optional secondary sort key. When provided, chunks are sorted by
+            (key_fn, sort_fn) so items within each group arrive in order.
 
     Returns:
         Dict mapping shard index to list of chunks for that shard
     """
+    # When sort_fn is provided, sort by composite (group_key, sort_key).
+    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
+    if sort_fn is not None:
+        captured_sort_fn = sort_fn
+
+        def chunk_sort_key(item):
+            return (key_fn(item), captured_sort_fn(item))
+
+    else:
+        chunk_sort_key = key_fn
+
     output_chunks: dict[int, list[list[Any]]] = defaultdict(list)
     output_tmp: dict[int, list] = defaultdict(list)
 
@@ -606,28 +628,31 @@ def _group_items_by_hash(
         target_shard = deterministic_hash(key) % num_output_shards
         output_tmp[target_shard].append(item)
         if chunk_size > 0 and len(output_tmp[target_shard]) >= chunk_size:
-            sorted_items = sorted(output_tmp[target_shard], key=key_fn)
+            sorted_items = sorted(output_tmp[target_shard], key=chunk_sort_key)
             output_chunks[target_shard].append(sorted_items)
             output_tmp[target_shard] = []
 
     # Add all remaining chunks
     for target_shard, shard_items in output_tmp.items():
         if shard_items:
-            sorted_items = sorted(shard_items, key=key_fn)
+            sorted_items = sorted(shard_items, key=chunk_sort_key)
             output_chunks[target_shard].append(sorted_items)
 
     return output_chunks
 
 
-def _merge_sorted_chunks(shard, key_fn: Callable) -> Iterator[tuple[object, Iterator]]:
+def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = None) -> Iterator[tuple[object, Iterator]]:
     """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
 
-    Each chunk is assumed to be sorted by key. This function performs a k-way merge
-    across all chunks and groups consecutive items with the same key.
+    Each chunk is assumed to be sorted by key (and optionally by sort_fn within key).
+    This function performs a k-way merge across all chunks and groups consecutive
+    items with the same key.
 
     Args:
         shard: Shard containing sorted chunks (iterable of chunk lists)
-        key_fn: Function to extract key from item
+        key_fn: Function to extract grouping key from item
+        sort_fn: Optional secondary sort key. When provided, the merge uses
+            (key_fn, sort_fn) for ordering but still groups by key_fn alone.
 
     Yields:
         Tuples of (key, iterator_of_items) for each unique key
@@ -636,8 +661,18 @@ def _merge_sorted_chunks(shard, key_fn: Callable) -> Iterator[tuple[object, Iter
     for chunk_data in shard.iter_chunks():
         chunk_iterators.append(iter(chunk_data))
 
-    # Use heapq.merge to k-way merge sorted streams
-    merged_stream = heapq.merge(*chunk_iterators, key=key_fn)
+    # Merge by composite key when sort_fn is provided, but group by key_fn only.
+    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
+    if sort_fn is not None:
+        captured_sort_fn = sort_fn
+
+        def merge_key(item):
+            return (key_fn(item), captured_sort_fn(item))
+
+    else:
+        merge_key = key_fn
+
+    merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
     yield from groupby(merged_stream, key=key_fn)
 
 
@@ -740,8 +775,7 @@ def run_stage(
         ChunkHeader followed by list of items for each chunk produced
     """
 
-    # TODO(rav): this should live in a common logging configuration module?
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(filename)s:%(lineno)d %(message)s")
+    configure_logging(level=logging.INFO)
 
     from zephyr.writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
@@ -792,7 +826,9 @@ def run_stage(
         elif isinstance(op, Scatter):
             # Hash items to output shards
             num_output_shards = op.num_output_shards if op.num_output_shards > 0 else ctx.total_shards
-            output_chunks = _group_items_by_hash(stream, op.key_fn, num_output_shards, ctx.chunk_size)
+            output_chunks = _group_items_by_hash(
+                stream, op.key_fn, num_output_shards, ctx.chunk_size, sort_fn=op.sort_fn
+            )
 
             # Yield chunks for each output shard
             for shard_idx in range(num_output_shards):
@@ -803,7 +839,7 @@ def run_stage(
 
         elif isinstance(op, Reduce):
             # Merge sorted chunks and reduce per key
-            stream = _reduce_gen(ctx.shard, op.key_fn, op.reducer_fn)
+            stream = _reduce_gen(ctx.shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn)
             op_index += 1
 
         elif isinstance(op, Fold):

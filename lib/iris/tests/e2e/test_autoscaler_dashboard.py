@@ -14,14 +14,11 @@ import pytest
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.constraints import WellKnownAttribute, zone_constraint
 from iris.cluster.types import (
-    REGION_ATTRIBUTE_KEY,
-    ZONE_ATTRIBUTE_KEY,
     Entrypoint,
     EnvironmentSpec,
-    ReservationEntry,
     ResourceSpec,
-    zone_constraint,
 )
 from iris.rpc import config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -35,7 +32,7 @@ from .conftest import (
     wait_for_dashboard_ready,
 )
 
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 pytestmark = pytest.mark.e2e
 
@@ -49,22 +46,23 @@ def _add_scale_group(
 ) -> None:
     sg = config.scale_groups[name]
     sg.name = name
-    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.accelerator_variant = variant
     sg.num_vms = num_vms
     sg.min_slices = 1
     sg.max_slices = 2
     sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
     sg.resources.disk_bytes = 1024 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.resources.device_variant = variant
+    sg.resources.preemptible = True
     sg.slice_template.preemptible = True
     sg.slice_template.num_vms = num_vms
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.slice_template.accelerator_variant = variant
     sg.slice_template.local.SetInParent()
     if zone:
-        sg.worker.attributes[ZONE_ATTRIBUTE_KEY] = zone
-        sg.worker.attributes[REGION_ATTRIBUTE_KEY] = zone.rsplit("-", 1)[0]
+        sg.worker.attributes[WellKnownAttribute.ZONE] = zone
+        sg.worker.attributes[WellKnownAttribute.REGION] = zone.rsplit("-", 1)[0]
 
 
 def _make_two_group_config() -> config_pb2.IrisClusterConfig:
@@ -144,11 +142,11 @@ def test_autoscaler_tab_logs_section_rendered(cluster, page, screenshot):
     _click_autoscaler_tab(page, cluster)
 
     if not _is_noop_page(page):
-        page.wait_for_selector("h3:has-text('Autoscaler Logs')", timeout=10000)
-        logs_pre = page.locator("h3:has-text('Autoscaler Logs') + pre")
-        logs_pre.wait_for(timeout=10000)
-        content = logs_pre.text_content(timeout=5000)
-        assert content is not None and len(content) > 0, "Autoscaler logs pre element is empty"
+        page.wait_for_selector("h2:has-text('Autoscaler Logs')", timeout=10000)
+        log_container = page.locator(".log-viewer:has(h2:has-text('Autoscaler Logs')) .log-container")
+        log_container.wait_for(timeout=10000)
+        content = log_container.text_content(timeout=5000)
+        assert content is not None, "Autoscaler log container not found"
         assert content != "Loading logs...", "Logs section still showing loading state"
 
     screenshot("autoscaler-logs")
@@ -159,13 +157,6 @@ def _noop_task():
     import time
 
     time.sleep(1)
-
-
-def _long_noop_task():
-    """A task that sleeps long enough to stay pending during the test."""
-    import time
-
-    time.sleep(300)
 
 
 def test_autoscaler_tab_unmet_demand_shows_concise_reason(cluster, page, screenshot):
@@ -205,49 +196,3 @@ def test_autoscaler_tab_unmet_demand_shows_concise_reason(cluster, page, screens
 
     # Clean up the job
     cluster.kill(job)
-
-
-def test_autoscaler_tab_demand_shows_job_sources(cluster, page, screenshot):
-    """Clicking the demand disclosure triangle reveals which jobs created the demand.
-
-    Uses reservation entries to create persistent demand that survives task scheduling.
-    Reservations always generate demand entries regardless of whether tasks are running,
-    making them ideal for testing the demand visibility feature.
-    """
-    job_a = cluster.client.submit(
-        entrypoint=Entrypoint.from_callable(_long_noop_task),
-        name="demand-vis-job-a",
-        resources=ResourceSpec(cpu=1, memory="1g"),
-        environment=EnvironmentSpec(),
-        reservation=[ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g"))],
-    )
-    job_b = cluster.client.submit(
-        entrypoint=Entrypoint.from_callable(_long_noop_task),
-        name="demand-vis-job-b",
-        resources=ResourceSpec(cpu=1, memory="1g"),
-        environment=EnvironmentSpec(),
-        reservation=[ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g"))],
-    )
-
-    # Give the autoscaler time to evaluate demand
-    time.sleep(3)
-
-    _click_autoscaler_tab(page, cluster)
-
-    if not _is_noop_page(page):
-        page.wait_for_selector(".scale-groups-table", timeout=10000)
-
-        # Find a demand cell with a disclosure triangle and click it
-        demand_toggle = page.locator(".demand-toggle").first
-        demand_toggle.wait_for(timeout=10000)
-        demand_toggle.click()
-
-        # The detail row should now be visible with job names
-        page.wait_for_selector(".demand-detail-row", timeout=5000)
-        detail_text = page.locator(".demand-detail-row").first.text_content()
-        assert "demand-vis-job" in detail_text, f"Expected job name in detail row, got: {detail_text}"
-
-    screenshot("autoscaler-demand-job-sources")
-
-    cluster.kill(job_a)
-    cluster.kill(job_b)

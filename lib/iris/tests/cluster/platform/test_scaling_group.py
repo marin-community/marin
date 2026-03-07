@@ -32,8 +32,9 @@ DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
     cpu_millicores=64000,
     memory_bytes=64 * 1024**3,
     disk_bytes=100 * 1024**3,
-    gpu_count=0,
-    tpu_count=8,
+    device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+    device_variant="v5p-8",
+    device_count=8,
 )
 
 
@@ -179,8 +180,6 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
         name="test-group",
         min_slices=1,
         max_slices=5,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5p-8",
     )
     config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
     config.slice_template.gcp.zone = "us-central1-a"
@@ -194,8 +193,6 @@ def unbounded_config() -> config_pb2.ScaleGroupConfig:
         name="unbounded-group",
         min_slices=0,
         max_slices=100,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5p-8",
     )
     config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
     config.slice_template.gcp.zone = "us-central1-a"
@@ -751,8 +748,6 @@ class TestScalingGroupAvailability:
                 name="test-group",
                 min_slices=0,
                 max_slices=2,
-                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                accelerator_variant="v5p-8",
             ),
         )
         discovered = [make_mock_slice_handle(f"slice-{i}") for i in range(2)]
@@ -790,8 +785,6 @@ class TestScalingGroupAvailability:
                 name="test-group",
                 min_slices=0,
                 max_slices=1,
-                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                accelerator_variant="v5p-8",
             ),
         )
         discovered = [make_mock_slice_handle("slice-0")]
@@ -884,8 +877,6 @@ class TestScalingGroupAvailability:
                 name="test-group",
                 min_slices=0,
                 max_slices=10,
-                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                accelerator_variant="v5p-8",
             ),
         )
         config.slice_template.gcp.zone = "us-central1-a"
@@ -913,8 +904,6 @@ class TestScalingGroupAvailability:
                 name="test-group",
                 min_slices=0,
                 max_slices=10,
-                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                accelerator_variant="v5p-8",
             ),
         )
         config.slice_template.gcp.zone = "us-central1-a"
@@ -938,8 +927,6 @@ class TestScalingGroupAvailability:
                 name="test-group",
                 min_slices=0,
                 max_slices=1,
-                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                accelerator_variant="v5p-8",
             ),
         )
         config.slice_template.gcp.zone = "us-central1-a"
@@ -959,7 +946,7 @@ class TestScalingGroupAvailability:
         self, scale_group_config: config_pb2.ScaleGroupConfig
     ):
         """matches_device_requirement filters groups by device type and variant."""
-        from iris.cluster.types import DeviceType
+        from iris.cluster.constraints import DeviceType
 
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)  # TPU with accelerator_variant="v5p-8"
@@ -968,11 +955,15 @@ class TestScalingGroupAvailability:
         assert group.matches_device_requirement(DeviceType.CPU, None)
 
         # TPU with matching variant (case-insensitive)
-        assert group.matches_device_requirement(DeviceType.TPU, "v5p-8")
-        assert group.matches_device_requirement(DeviceType.TPU, "V5P-8")
-        assert group.matches_device_requirement(DeviceType.TPU, "V5p-8")
+        assert group.matches_device_requirement(DeviceType.TPU, frozenset({"v5p-8"}))
+        assert group.matches_device_requirement(DeviceType.TPU, frozenset({"V5P-8"}))
+        assert group.matches_device_requirement(DeviceType.TPU, frozenset({"V5p-8"}))
         assert group.matches_device_requirement(DeviceType.TPU, None)  # None = any TPU
-        assert not group.matches_device_requirement(DeviceType.TPU, "v5litepod-4")
+        assert not group.matches_device_requirement(DeviceType.TPU, frozenset({"v5litepod-4"}))
+
+        # Multiple variants: matches if group variant is in the set
+        assert group.matches_device_requirement(DeviceType.TPU, frozenset({"v4-8", "v5p-8"}))
+        assert not group.matches_device_requirement(DeviceType.TPU, frozenset({"v4-8", "v5litepod-4"}))
 
         # GPU doesn't match TPU group
         assert not group.matches_device_requirement(DeviceType.GPU, None)
@@ -1075,7 +1066,6 @@ class TestPrepareSliceConfigPreemptible:
 
         parent = config_pb2.ScaleGroupConfig(
             name="test-group",
-            accelerator_variant="v5litepod-16",
         )
         parent.slice_template.preemptible = True
         parent.slice_template.gcp.zone = "us-central1-a"
@@ -1090,7 +1080,6 @@ class TestPrepareSliceConfigPreemptible:
 
         parent = config_pb2.ScaleGroupConfig(
             name="test-group",
-            accelerator_variant="v5litepod-16",
         )
         parent.slice_template.gcp.zone = "us-central1-a"
         parent.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
@@ -1103,11 +1092,19 @@ class TestPrepareSliceConfigGpuCount:
     """prepare_slice_config propagates gpu_count from parent resources."""
 
     def test_gpu_count_propagated_from_resources(self):
+        from iris.cluster.config import _derive_slice_config_from_resources
         from iris.cluster.controller.scaling_group import prepare_slice_config
 
         parent = config_pb2.ScaleGroupConfig(name="gpu-group")
-        parent.resources.CopyFrom(config_pb2.ScaleGroupResources(gpu_count=8))
+        parent.resources.CopyFrom(
+            config_pb2.ScaleGroupResources(device_count=8, device_type=config_pb2.ACCELERATOR_TYPE_GPU)
+        )
         parent.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
+        # Simulate config loading: derive slice_template fields from resources
+        wrapper = config_pb2.IrisClusterConfig()
+        wrapper.scale_groups["gpu-group"].CopyFrom(parent)
+        _derive_slice_config_from_resources(wrapper)
+        parent = wrapper.scale_groups["gpu-group"]
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
         assert result.gpu_count == 8

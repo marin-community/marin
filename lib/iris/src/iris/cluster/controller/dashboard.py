@@ -24,7 +24,6 @@ from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
@@ -84,15 +83,4 @@ class ControllerDashboard:
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
-        workers_resp = self._service.list_workers(cluster_pb2.Controller.ListWorkersRequest(), None)
-        jobs_resp = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
-        worker_count = len(workers_resp.workers)
-        job_count = len(jobs_resp.jobs)
-
-        response = {
-            "status": "ok",
-            "workers": worker_count,
-            "jobs": job_count,
-        }
-
-        return JSONResponse(response)
+        return JSONResponse({"status": "ok"})

@@ -20,9 +20,12 @@ def _make_scale_group_config(name: str, **kwargs) -> config_pb2.ScaleGroupConfig
     """Create a ScaleGroupConfig with GCP zones in slice_template."""
     return config_pb2.ScaleGroupConfig(
         name=name,
-        accelerator_variant="v4-8",
         min_slices=0,
         max_slices=3,
+        resources=config_pb2.ScaleGroupResources(
+            device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            device_variant="v5litepod-8",
+        ),
         slice_template=config_pb2.SliceConfig(
             gcp=config_pb2.GcpSliceConfig(zone="us-central1-a"),
         ),

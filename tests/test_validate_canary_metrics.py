@@ -10,7 +10,7 @@ from scripts.canary.validate_canary_metrics import lookup_metric, main, read_sum
 
 HEALTHY_SUMMARY = {
     "train": {"loss": 3.75},
-    "throughput": {"mfu": 30.0},
+    "throughput": {"mfu": 30.0, "p50_mfu": 28.0},
     "_step": 3814,
     "_runtime": 2400,
 }

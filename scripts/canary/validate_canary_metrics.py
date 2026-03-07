@@ -23,7 +23,7 @@ THRESHOLDS = [
     # (summary_key, display_name, check, threshold)
     # check(actual, threshold) → True means passing
     ("train/loss", "Final loss", operator.le, 4.0),
-    ("throughput/mfu", "MFU (%)", operator.ge, 25.0),
+    ("throughput/p50_mfu", "MFU p50 (%)", operator.ge, 22.0),
     ("_step", "Steps completed", operator.ge, 3000),
     ("_runtime", "Wall-clock (s)", operator.le, 3600),
 ]

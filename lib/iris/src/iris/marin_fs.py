@@ -61,6 +61,24 @@ _REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
     "europe-west4": "marin-eu-west4",
 }
 
+# All known primary marin data buckets, keyed by region.
+# Used by the mirror filesystem to scan for files across regions.
+REGION_TO_DATA_BUCKET: dict[str, str] = {
+    "us-central1": "marin-us-central1",
+    "us-central2": "marin-us-central2",
+    "us-east1": "marin-us-east1",
+    "us-east5": "marin-us-east5",
+    "us-west4": "marin-us-west4",
+    "europe-west4": "marin-eu-west4",
+    "asia-northeast1": "marin-asia-northeast1",
+}
+
+# Reverse lookup: bucket name → canonical GCP region.
+# Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
+# canonical region names even when the bucket uses abbreviated naming
+# (e.g. "marin-eu-west4" → "europe-west4" instead of "eu-west4").
+_BUCKET_TO_REGION: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+
 
 # ---------------------------------------------------------------------------
 # Low-level region helpers
@@ -84,9 +102,21 @@ def region_from_metadata() -> str | None:
 
 
 def region_from_prefix(prefix: str) -> str | None:
-    """Extract region from a ``gs://marin-{region}/…`` prefix string."""
-    m = re.match(r"gs://marin-([^/]+)", prefix)
-    return m.group(1) if m else None
+    """Extract the canonical GCP region from a ``gs://marin-{region}/…`` prefix.
+
+    Uses ``_BUCKET_TO_REGION`` to normalize abbreviated bucket names
+    (e.g. ``gs://marin-eu-west4`` → ``europe-west4``).
+    """
+    m = re.match(r"gs://([^/]+)", prefix)
+    if not m:
+        return None
+    bucket = m.group(1)
+    if bucket in _BUCKET_TO_REGION:
+        return _BUCKET_TO_REGION[bucket]
+    # Fall back to stripping the "marin-" prefix.
+    if bucket.startswith("marin-"):
+        return bucket[len("marin-") :]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -534,8 +564,12 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     """Like ``fsspec.core.url_to_fs`` but wraps GCS filesystems in a cross-region guard.
 
     Returns ``(fs, path)``.  For non-GCS URLs the filesystem is returned
-    unwrapped.
+    unwrapped.  ``mirror://`` URLs are handled by :class:`iris.mirror_fs.MirrorFileSystem`.
     """
+    # Ensure mirror:// protocol is registered before dispatch.
+    if url.startswith("mirror://"):
+        import iris.mirror_fs  # noqa: F401 — triggers fsspec registration
+
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)

@@ -57,7 +57,6 @@ def _make_slice_config(
         name_prefix=name_prefix,
         num_vms=1,
         gpu_count=gpu_count,
-        accelerator_variant="H100",
         coreweave=config_pb2.CoreweaveSliceConfig(
             region="LGA1",
             instance_type=instance_type,
@@ -768,7 +767,6 @@ def test_create_slice_rejects_multi_node(fake_kubectl: FakeKubectl):
         name_prefix="h100-8x",
         num_vms=2,
         gpu_count=8,
-        accelerator_variant="H100",
         coreweave=config_pb2.CoreweaveSliceConfig(
             region="LGA1",
             instance_type="gd-8xh100ib-i128",
@@ -1567,7 +1565,6 @@ def _make_cluster_config_with_workers(
         config_pb2.SliceConfig(
             name_prefix=scale_group_name,
             num_vms=1,
-            accelerator_variant="H100",
             coreweave=config_pb2.CoreweaveSliceConfig(
                 region="LGA1",
                 instance_type="gd-8xh100ib-i128",
@@ -1575,7 +1572,7 @@ def _make_cluster_config_with_workers(
             ),
         )
     )
-    sg.resources.CopyFrom(config_pb2.ScaleGroupResources(gpu_count=8))
+    sg.resources.CopyFrom(config_pb2.ScaleGroupResources(device_count=8, device_type=config_pb2.ACCELERATOR_TYPE_GPU))
     return config
 
 

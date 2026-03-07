@@ -14,8 +14,7 @@ import click
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.snapshot import read_snapshot_from_path
 from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
-from iris.cluster.task_logging import ProcessLogSink
-from iris.logging import configure_logging, get_global_buffer
+from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import Duration
 
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 def default_bundle_prefix() -> str:
     """Return a region-local temp bucket path for bundle storage.
 
-    Uses the same marin_temp_bucket API that log_prefix uses, with a 7-day TTL
+    Uses marin_temp_bucket with a 7-day TTL
     since bundles are ephemeral and regenerated on each job submission.
     """
     return marin_temp_bucket(ttl_days=7, prefix="iris/bundles")
@@ -111,8 +110,6 @@ def serve(
                 base_worker_config.CopyFrom(cluster_config.defaults.worker)
                 if not base_worker_config.controller_address:
                     base_worker_config.controller_address = platform.discover_controller(cluster_config.controller)
-                if cluster_config.storage.log_prefix:
-                    base_worker_config.log_prefix = cluster_config.storage.log_prefix
                 base_worker_config.platform.CopyFrom(cluster_config.platform)
 
             autoscaler = create_autoscaler(
@@ -147,6 +144,7 @@ def serve(
         scheduler_interval=Duration.from_seconds(scheduler_interval),
         heartbeat_failure_threshold=heartbeat_failure_threshold,
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
+        log_dir=Path("/tmp/iris/controller-logs"),
     )
 
     try:
@@ -184,21 +182,10 @@ def serve(
 
     logger.info("Controller is ready to accept connections")
 
-    log_prefix = (cluster_config.storage.log_prefix if cluster_config else None) or marin_temp_bucket(
-        ttl_days=30, prefix="iris-logs"
-    )
-    process_log_sink = ProcessLogSink(
-        prefix=log_prefix,
-        process_name="controller",
-        log_buffer=get_global_buffer(),
-    )
-    logger.info("Controller process log sink enabled: %s", process_log_sink.log_path)
-
     stop_event = threading.Event()
 
     def handle_shutdown(_signum, _frame):
         logger.info("Shutdown signal received, stopping controller...")
-        process_log_sink.close()
         controller.stop()
         logger.info("Controller stopped")
         stop_event.set()

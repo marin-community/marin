@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import optax
+from fray.cluster import ResourceConfig
 from haliax import Axis
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -37,6 +38,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
+from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -51,7 +53,7 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    train_batch_pspec: P = field(default_factory=lambda: P(("data",)))
+    train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
@@ -63,7 +65,7 @@ class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
     eval_batch_size: int = 512
-    eval_batch_pspec: P = field(default_factory=lambda: P(("data",)))
+    eval_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
@@ -78,6 +80,7 @@ class GrugRunConfig:
 
     model: GrugModelConfig
     data: LmDataConfig
+    resources: ResourceConfig
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -112,7 +115,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("data",)),
+    batch_pspec: P = P(("data", "expert")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
@@ -320,7 +323,7 @@ def _make_train_step(
     return train_step
 
 
-def run_grug(config: GrugRunConfig) -> None:
+def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
     trainer.initialize()
@@ -481,6 +484,8 @@ def run_grug(config: GrugRunConfig) -> None:
                 router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
                 if router_metrics:
                     levanter.tracker.log(router_metrics, step=step)
+                if "train/cross_entropy_loss" in metrics:
+                    levanter.tracker.log({"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]}, step=step)
 
                 if watch_stats is not None:
                     levanter.tracker.log(watch_stats, step=step)
@@ -495,6 +500,20 @@ def run_grug(config: GrugRunConfig) -> None:
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
+
+
+def run_grug(config: GrugRunConfig) -> None:
+    """Dispatch grug training through Fray jobs."""
+    trainer = config.trainer.trainer
+    if trainer.id is None:
+        raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    dispatch_grug_training_run(
+        run_id=trainer.id,
+        config=config,
+        local_entrypoint=_run_grug_local,
+        resources=config.resources,
+    )
 
 
 __all__ = [

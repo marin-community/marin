@@ -24,7 +24,7 @@ AUTHOR = Author(
     url="https://whenwen.github.io",
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def get_num_train_steps(param_count, batch_size, seq_len):

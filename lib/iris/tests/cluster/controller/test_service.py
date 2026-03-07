@@ -13,11 +13,12 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerState, ControllerTask
-from iris.cluster.types import JobName, WorkerId
-from iris.logging import BufferedLogRecord, LogRingBuffer
+from iris.cluster.constraints import device_variant_constraint
+from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import cluster_pb2
 
 
@@ -557,61 +558,6 @@ def test_list_workers_returns_all(service, worker_metadata):
         assert w.healthy is True
 
 
-def test_get_process_logs():
-    """Test GetProcessLogs RPC retrieves logs from the buffer."""
-
-    state = ControllerState()
-    mock_scheduler = MockSchedulerWake()
-    log_buffer = LogRingBuffer(maxlen=100)
-
-    # Add some test log records
-    log_buffer.append(
-        BufferedLogRecord(seq=1, timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1")
-    )
-    log_buffer.append(
-        BufferedLogRecord(
-            seq=2, timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log"
-        )
-    )
-    log_buffer.append(
-        BufferedLogRecord(seq=3, timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2")
-    )
-
-    service = ControllerServiceImpl(
-        state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=log_buffer
-    )
-
-    # Test: Get all logs
-    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
-    assert len(response.records) == 3
-    assert response.records[0].message == "Test log 1"
-    assert response.records[1].logger_name == "iris.cluster.vm"
-    assert response.records[2].level == "ERROR"
-
-    # Test: Filter by prefix
-    response = service.get_process_logs(
-        cluster_pb2.Controller.GetProcessLogsRequest(prefix="iris.cluster.vm", limit=0), None
-    )
-    assert len(response.records) == 1
-    assert response.records[0].message == "Autoscaler log"
-
-    # Test: Limit results
-    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=2), None)
-    assert len(response.records) == 2
-    assert response.records[0].message == "Autoscaler log"
-    assert response.records[1].message == "Test log 2"
-
-
-def test_get_process_logs_no_buffer():
-    """Test GetProcessLogs returns empty when buffer is None."""
-    state = ControllerState()
-    mock_scheduler = MockSchedulerWake()
-    service = ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=None)
-
-    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
-    assert len(response.records) == 0
-
-
 # =============================================================================
 # GetTaskLogs Tests
 # =============================================================================
@@ -630,3 +576,77 @@ def test_get_task_logs_invalid_regex_returns_error(service, job_request):
     )
     assert len(response.task_logs) == 1
     assert "Invalid regex filter" in response.task_logs[0].error
+
+
+# =============================================================================
+# Constraint Injection Tests
+# =============================================================================
+
+
+def test_launch_job_injects_device_constraints_from_tpu_resource(service, state):
+    """Job with TPU resource spec gets auto-injected device-type and device-variant constraints."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "tpu-job").to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    request.resources.device.CopyFrom(tpu_device("v5litepod-16"))
+
+    service.launch_job(request, None)
+
+    job = state.get_job(JobName.root("test-user", "tpu-job"))
+    stored_constraints = list(job.request.constraints)
+    keys = {c.key for c in stored_constraints}
+    assert WellKnownAttribute.DEVICE_TYPE in keys
+    assert WellKnownAttribute.DEVICE_VARIANT in keys
+
+    dt = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE)
+    assert dt.value.string_value == "tpu"
+    dv = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT)
+    assert dv.value.string_value == "v5litepod-16"
+
+
+def test_launch_job_user_constraints_override_auto(service, state):
+    """Explicit user constraints for canonical keys replace auto-generated ones."""
+    user_variant = device_variant_constraint(["v5litepod-16", "v6e-16"])
+
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "multi-variant-job").to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    request.resources.device.CopyFrom(tpu_device("v5litepod-16"))
+    request.constraints.append(user_variant.to_proto())
+
+    service.launch_job(request, None)
+
+    job = state.get_job(JobName.root("test-user", "multi-variant-job"))
+    stored_constraints = list(job.request.constraints)
+
+    # device-variant should be the user's IN constraint, not the auto EQ
+    dv_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT]
+    assert len(dv_constraints) == 1
+    assert dv_constraints[0].op == cluster_pb2.CONSTRAINT_OP_IN
+
+    # device-type should still be auto-injected
+    dt_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE]
+    assert len(dt_constraints) == 1
+    assert dt_constraints[0].value.string_value == "tpu"
+
+
+def test_launch_job_cpu_resource_no_constraints_injected(service, state):
+    """CPU-only jobs get no auto-injected device constraints."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "cpu-job").to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    request.resources.device.CopyFrom(cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice()))
+
+    service.launch_job(request, None)
+
+    job = state.get_job(JobName.root("test-user", "cpu-job"))
+    assert len(job.request.constraints) == 0

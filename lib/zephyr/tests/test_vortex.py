@@ -58,6 +58,15 @@ class TestVortexReader:
         records = list(load_vortex(str(empty_path)))
         assert records == []
 
+    def test_load_vortex_empty_file_with_column_projection(self, tmp_path):
+        """Test loading an empty vortex file with column projection."""
+        empty_path = tmp_path / "empty.vortex"
+        write_vortex_file([], str(empty_path))
+
+        spec = InputFileSpec(path=str(empty_path), columns=["id", "attributes"])
+        records = list(load_vortex(spec))
+        assert records == []
+
 
 class TestVortexWriter:
     """Tests for write_vortex_file() function."""
