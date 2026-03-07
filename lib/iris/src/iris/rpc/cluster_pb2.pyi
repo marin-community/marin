@@ -142,22 +142,22 @@ class ProfileTaskResponse(_message.Message):
     def __init__(self, profile_data: _Optional[bytes] = ..., error: _Optional[str] = ...) -> None: ...
 
 class FetchLogsRequest(_message.Message):
-    __slots__ = ("source", "since_ms", "cursor", "regex", "max_lines", "tail", "min_level")
+    __slots__ = ("source", "since_ms", "cursor", "substring", "max_lines", "tail", "min_level")
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     SINCE_MS_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
-    REGEX_FIELD_NUMBER: _ClassVar[int]
+    SUBSTRING_FIELD_NUMBER: _ClassVar[int]
     MAX_LINES_FIELD_NUMBER: _ClassVar[int]
     TAIL_FIELD_NUMBER: _ClassVar[int]
     MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
     source: str
     since_ms: int
     cursor: int
-    regex: str
+    substring: str
     max_lines: int
     tail: bool
     min_level: str
-    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., regex: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ...) -> None: ...
+    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., substring: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ...) -> None: ...
 
 class FetchLogsResponse(_message.Message):
     __slots__ = ("entries", "cursor")
@@ -880,12 +880,12 @@ class Controller(_message.Message):
         users: _containers.RepeatedCompositeFieldContainer[Controller.UserSummary]
         def __init__(self, users: _Optional[_Iterable[_Union[Controller.UserSummary, _Mapping]]] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
-        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex", "attempt_id", "min_level", "cursor")
+        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "substring", "attempt_id", "min_level", "cursor")
         ID_FIELD_NUMBER: _ClassVar[int]
         INCLUDE_CHILDREN_FIELD_NUMBER: _ClassVar[int]
         SINCE_MS_FIELD_NUMBER: _ClassVar[int]
         MAX_TOTAL_LINES_FIELD_NUMBER: _ClassVar[int]
-        REGEX_FIELD_NUMBER: _ClassVar[int]
+        SUBSTRING_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
         CURSOR_FIELD_NUMBER: _ClassVar[int]
@@ -893,11 +893,11 @@ class Controller(_message.Message):
         include_children: bool
         since_ms: int
         max_total_lines: int
-        regex: str
+        substring: str
         attempt_id: int
         min_level: str
         cursor: int
-        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., regex: _Optional[str] = ..., attempt_id: _Optional[int] = ..., min_level: _Optional[str] = ..., cursor: _Optional[int] = ...) -> None: ...
+        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., substring: _Optional[str] = ..., attempt_id: _Optional[int] = ..., min_level: _Optional[str] = ..., cursor: _Optional[int] = ...) -> None: ...
     class TaskLogBatch(_message.Message):
         __slots__ = ("task_id", "logs", "error", "worker_id")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]

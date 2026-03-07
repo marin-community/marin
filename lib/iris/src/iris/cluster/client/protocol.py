@@ -104,7 +104,7 @@ class ClusterClient(Protocol):
         include_children: bool = False,
         since_ms: int = 0,
         max_total_lines: int = 0,
-        regex: str | None = None,
+        substring: str | None = None,
         attempt_id: int = -1,
         cursor: int = 0,
         min_level: str = "",

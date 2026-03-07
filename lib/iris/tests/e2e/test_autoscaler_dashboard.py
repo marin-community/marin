@@ -196,3 +196,42 @@ def test_autoscaler_tab_unmet_demand_shows_concise_reason(cluster, page, screens
 
     # Clean up the job
     cluster.kill(job)
+
+
+def test_autoscaler_tab_slice_detail_toggle(cluster, page, screenshot):
+    """Clicking the slice toggle in the Slices column expands per-slice details."""
+    _click_autoscaler_tab(page, cluster)
+
+    if not _is_noop_page(page):
+        # Wait for the routing table to render with slices
+        page.wait_for_selector(".slice-toggle", timeout=10000)
+
+        # Click the first slice toggle (arrow next to the badge)
+        page.click(".slice-toggle", timeout=5000)
+        time.sleep(0.3)
+
+        # Verify slice detail row appears with slice IDs and VM counts
+        page.wait_for_selector(".slice-detail-row", timeout=5000)
+        detail = page.locator(".slice-detail-row .slice-row")
+        assert detail.count() >= 1, f"Expected at least 1 slice detail row, got {detail.count()}"
+
+        # Verify the slice row shows VM count
+        detail_text = page.locator(".slice-detail-row").first.text_content(timeout=5000)
+        assert "vm" in detail_text, f"Expected 'vm' count in slice detail, got: {detail_text}"
+
+        # Freshly-ready slices should show "active" badge (not idle yet)
+        assert_visible(page, ".slice-idle-badge.active")
+
+    screenshot("autoscaler-slice-detail-expanded")
+
+
+def test_autoscaler_tab_slice_badges_show_ready_count(cluster, page, screenshot):
+    """Slice badges in the waterfall table show ready count for groups with slices."""
+    _click_autoscaler_tab(page, cluster)
+
+    if not _is_noop_page(page):
+        page.wait_for_selector(".slice-badge.ready", timeout=10000)
+        badges = page.locator(".slice-badge.ready")
+        assert badges.count() >= 2, f"Expected at least 2 ready badges (one per group), got {badges.count()}"
+
+    screenshot("autoscaler-slice-badges")

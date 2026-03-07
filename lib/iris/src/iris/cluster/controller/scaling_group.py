@@ -173,10 +173,19 @@ def _lifecycle_to_vm_state(lifecycle: SliceLifecycleState) -> vm_pb2.VmState:
     }[lifecycle]
 
 
-def slice_state_to_proto(state: SliceState) -> vm_pb2.SliceInfo:
+def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = None) -> vm_pb2.SliceInfo:
     """Convert a SliceState to a SliceInfo proto for RPC APIs."""
     created_at = state.handle.created_at
     vm_state = _lifecycle_to_vm_state(state.lifecycle)
+
+    is_idle = False
+    if idle_threshold is not None and state.lifecycle == SliceLifecycleState.READY:
+        if state.last_active.epoch_ms() == 0:
+            is_idle = True
+        else:
+            idle_duration = Duration.from_ms(Timestamp.now().epoch_ms() - state.last_active.epoch_ms())
+            is_idle = idle_duration >= idle_threshold
+
     return vm_pb2.SliceInfo(
         slice_id=state.handle.slice_id,
         scale_group=state.handle.scale_group,
@@ -192,6 +201,8 @@ def slice_state_to_proto(state: SliceState) -> vm_pb2.SliceInfo:
             for i, addr in enumerate(state.vm_addresses)
         ],
         error_message=state.error_message,
+        last_active=state.last_active.to_proto(),
+        idle=is_idle,
     )
 
 
@@ -997,7 +1008,8 @@ class ScalingGroup:
             availability_reason=availability.reason,
             blocked_until=blocked_until.to_proto(),
             scale_up_cooldown_until=cooldown_until.to_proto(),
-            slices=[slice_state_to_proto(state) for state in snapshot],
+            slices=[slice_state_to_proto(state, idle_threshold=self._idle_threshold) for state in snapshot],
+            idle_threshold_ms=self._idle_threshold.to_ms(),
         )
         for state_name, count in counts.items():
             status.slice_state_counts[state_name] = count

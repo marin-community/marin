@@ -340,7 +340,7 @@ class RemoteClusterClient:
         include_children: bool = False,
         since_ms: int = 0,
         max_total_lines: int = 0,
-        regex: str | None = None,
+        substring: str | None = None,
         attempt_id: int = -1,
         cursor: int = 0,
         min_level: str = "",
@@ -352,7 +352,7 @@ class RemoteClusterClient:
             include_children: Include logs from child jobs (job ID only)
             since_ms: Only return logs after this timestamp (exclusive)
             max_total_lines: Maximum total lines (0 = default 10000)
-            regex: Regex filter for log content
+            substring: Substring filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
             cursor: Autoincrement id cursor for incremental polling
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
@@ -362,7 +362,7 @@ class RemoteClusterClient:
             include_children=include_children,
             since_ms=since_ms,
             max_total_lines=max_total_lines,
-            regex=regex or "",
+            substring=substring or "",
             attempt_id=attempt_id,
             cursor=cursor,
             min_level=min_level,

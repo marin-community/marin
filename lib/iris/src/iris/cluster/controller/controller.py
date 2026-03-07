@@ -17,26 +17,6 @@ from typing import Protocol
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
-from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.log_store import LogStoreHandler, PROCESS_LOG_KEY
-from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
-from iris.cluster.controller.scheduler import (
-    JobRequirements,
-    Scheduler,
-    SchedulingContext,
-    WorkerSnapshot,
-)
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.state import (
-    HEARTBEAT_FAILURE_THRESHOLD,
-    ControllerJob,
-    ControllerState,
-    ControllerTask,
-    ControllerWorker,
-    HeartbeatSnapshot,
-    ReservationClaim,
-)
 from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
@@ -47,12 +27,16 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     merge_constraints,
 )
-from iris.cluster.types import (
-    JobName,
-    VmWorkerStatus,
-    VmWorkerStatusMap,
-    WorkerId,
+from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
+from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
+from iris.cluster.controller.scheduler import (
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    WorkerSnapshot,
 )
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.snapshot import (
     SnapshotResult,
     create_snapshot,
@@ -61,6 +45,23 @@ from iris.cluster.controller.snapshot import (
     restore_snapshot,
     restore_tracked_workers,
     write_snapshot,
+)
+from iris.cluster.controller.state import (
+    HEARTBEAT_FAILURE_THRESHOLD,
+    RESERVATION_HOLDER_JOB_NAME,
+    ControllerJob,
+    ControllerState,
+    ControllerTask,
+    ControllerWorker,
+    HeartbeatSnapshot,
+    ReservationClaim,
+)
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStoreHandler
+from iris.cluster.types import (
+    JobName,
+    VmWorkerStatus,
+    VmWorkerStatusMap,
+    WorkerId,
 )
 from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
@@ -145,6 +146,7 @@ def compute_demand_entries(
     # Also track which jobs have reservations so we can apply taint injection.
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
+    has_direct_reservation: set[JobName] = set()
     for task in all_schedulable:
         if task.job_id not in jobs:
             job = state.get_job(task.job_id)
@@ -152,6 +154,7 @@ def compute_demand_entries(
                 jobs[task.job_id] = job_requirements_from_job(job)
                 if job.request.HasField("reservation"):
                     has_reservation.add(task.job_id)
+                    has_direct_reservation.add(task.job_id)
                 elif _find_reservation_ancestor(state, task.job_id) is not None:
                     has_reservation.add(task.job_id)
 
@@ -163,7 +166,7 @@ def compute_demand_entries(
         task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
         dry_run_workers = _inject_reservation_taints(workers, claims)
-        dry_run_jobs = _inject_taint_constraints(jobs, has_reservation)
+        dry_run_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
         context = scheduler.create_scheduling_context(
             dry_run_workers,
@@ -289,15 +292,23 @@ def _inject_reservation_taints(
 def _inject_taint_constraints(
     jobs: dict[JobName, JobRequirements],
     has_reservation: set[JobName],
+    has_direct_reservation: set[JobName] | None = None,
 ) -> dict[JobName, JobRequirements]:
-    """Add NOT_EXISTS reservation-job constraint to non-reservation jobs.
+    """Add reservation taint constraints to jobs.
 
-    This prevents normal jobs from being scheduled onto claimed workers.
-    Reservation jobs are left unchanged — they can use both claimed and
-    unclaimed workers (the reservation is a floor, not a ceiling).
+    Three-way logic:
+    - Direct reservation jobs (has_direct_reservation): get an EQ constraint
+      forcing them onto their claimed workers only.
+    - Descendants of reservation jobs (has_reservation minus direct): no
+      constraint — they can use both claimed and unclaimed workers.
+    - Non-reservation jobs: get a NOT_EXISTS constraint blocking them from
+      claimed workers.
     """
     if not has_reservation and not jobs:
         return jobs
+
+    if has_direct_reservation is None:
+        has_direct_reservation = set()
 
     taint_constraint = cluster_pb2.Constraint(
         key=RESERVATION_TAINT_KEY,
@@ -306,7 +317,17 @@ def _inject_taint_constraints(
 
     modified: dict[JobName, JobRequirements] = {}
     for job_id, req in jobs.items():
-        if job_id in has_reservation:
+        if job_id in has_direct_reservation:
+            eq_constraint = cluster_pb2.Constraint(
+                key=RESERVATION_TAINT_KEY,
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value=job_id.to_wire()),
+            )
+            modified[job_id] = replace(
+                req,
+                constraints=[*list(req.constraints), eq_constraint],
+            )
+        elif job_id in has_reservation:
             modified[job_id] = req
         else:
             modified[job_id] = replace(
@@ -417,7 +438,14 @@ def _preference_pass(
             continue
 
         job_wire = job_id.to_wire()
-        for wid in claimed_by_job.get(job_wire, ()):
+        # Holder jobs are children of the reservation job — look up claims
+        # under the parent's wire ID.
+        claim_key = job_wire
+        if RESERVATION_HOLDER_JOB_NAME in job_wire:
+            parent = job_id.parent
+            if parent is not None:
+                claim_key = parent.to_wire()
+        for wid in claimed_by_job.get(claim_key, ()):
             if context.assignment_counts.get(wid, 0) >= context.max_assignments_per_worker:
                 continue
             capacity = context.capacities.get(wid)
@@ -493,6 +521,12 @@ class ControllerConfig:
 
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
+
+    max_tasks_per_job_per_cycle: int = 4
+    """Maximum tasks from a single non-coscheduled job to consider per scheduling
+    cycle. Bounds CPU time in the scheduler when many tasks are pending, preventing
+    GIL starvation of the heartbeat thread. Coscheduled jobs are exempt (they need
+    all tasks for atomic assignment). Set to 0 for unlimited."""
 
     heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
     """Consecutive heartbeat failures before marking worker as dead."""
@@ -656,6 +690,7 @@ class Controller:
             host=self._config.host,
             port=self._config.port,
             log_level="warning",
+            log_config=None,
             timeout_keep_alive=120,
         )
         self._server = uvicorn.Server(server_config)
@@ -847,9 +882,13 @@ class Controller:
 
         # Handle timeouts and reservation gates before scheduling.
         # Holder tasks participate in scheduling like normal tasks.
+        # Cap non-coscheduled tasks per job to bound scheduling CPU time.
         schedulable_task_ids: list[JobName] = []
         jobs: dict[JobName, JobRequirements] = {}
         has_reservation: set[JobName] = set()
+        has_direct_reservation: set[JobName] = set()
+        tasks_per_job: dict[JobName, int] = defaultdict(int)
+        cap = self._config.max_tasks_per_job_per_cycle
         for task in pending_tasks:
             if not task.can_be_scheduled():
                 continue
@@ -863,11 +902,15 @@ class Controller:
             # Holder tasks are always schedulable (they ARE the reservation).
             if not job.is_reservation_holder and not self._is_reservation_satisfied(job):
                 continue
+            if cap > 0 and not job.is_coscheduled and tasks_per_job[task.job_id] >= cap:
+                continue
+            tasks_per_job[task.job_id] += 1
             schedulable_task_ids.append(task.task_id)
             if task.job_id not in jobs:
                 jobs[task.job_id] = job_requirements_from_job(job)
                 if job.request.HasField("reservation"):
                     has_reservation.add(task.job_id)
+                    has_direct_reservation.add(task.job_id)
                 elif _find_reservation_ancestor(self._state, task.job_id) is not None:
                     has_reservation.add(task.job_id)
 
@@ -877,7 +920,7 @@ class Controller:
         # Inject reservation taints: claimed workers get a taint attribute,
         # non-reservation jobs get a NOT_EXISTS constraint for it.
         modified_workers = _inject_reservation_taints(workers, self._reservation_claims)
-        jobs = _inject_taint_constraints(jobs, has_reservation)
+        jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
         with slow_log(logger, "snapshot_building_counts", threshold_ms=50):
             building_counts = self._state.snapshot_building_counts()

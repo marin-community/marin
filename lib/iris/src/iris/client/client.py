@@ -817,7 +817,7 @@ class IrisClient:
         include_children: bool = False,
         start: Timestamp | None = None,
         max_lines: int = 0,
-        regex: str | None = None,
+        substring: str | None = None,
         attempt_id: int = -1,
         min_level: str = "",
     ) -> list[TaskLogEntry]:
@@ -828,7 +828,7 @@ class IrisClient:
             include_children: Include logs from child jobs (job ID only)
             start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
-            regex: Regex filter for log content
+            substring: Substring filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
@@ -840,7 +840,7 @@ class IrisClient:
             include_children=include_children,
             since_ms=start.epoch_ms() if start else 0,
             max_total_lines=max_lines,
-            regex=regex,
+            substring=substring,
             attempt_id=attempt_id,
             min_level=min_level,
         )
