@@ -47,7 +47,7 @@ def _escape_like(s: str) -> str:
     return s.translate(_LIKE_ESCAPE_TABLE)
 
 
-PROCESS_LOG_KEY = "/process"
+PROCESS_LOG_KEY = "/system/process"
 
 
 def task_log_key(task_id: JobName, attempt_id: int) -> str:

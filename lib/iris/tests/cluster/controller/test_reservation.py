@@ -645,37 +645,49 @@ def test_taint_constraint_added_to_non_reservation_jobs():
 
 
 def test_taint_constraint_not_added_to_reservation_jobs():
-    """Reservation jobs do not get the NOT_EXISTS constraint."""
+    """Direct reservation jobs get an EQ constraint forcing them onto claimed workers."""
     res_job = JobName.root("test-user", "reserved")
     jobs = {
         res_job: _make_job_requirements(),
     }
     has_reservation = {res_job}
+    has_direct_reservation = {res_job}
 
-    result = _inject_taint_constraints(jobs, has_reservation)
+    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
     constraints = result[res_job].constraints
-    not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
-    assert len(not_exists) == 0
+    eq = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
+    assert len(eq) == 1
+    assert eq[0].op == cluster_pb2.CONSTRAINT_OP_EQ
+    assert eq[0].value.string_value == res_job.to_wire()
 
 
 def test_taint_constraint_mixed_jobs():
-    """With both reservation and regular jobs, only regular jobs get the constraint."""
+    """Direct reservation gets EQ, descendant gets nothing, regular gets NOT_EXISTS."""
     res_job = JobName.root("test-user", "reserved")
+    descendant_job = JobName.from_string("/test-user/reserved/child")
     reg_job = JobName.root("test-user", "regular")
     jobs = {
         res_job: _make_job_requirements(),
+        descendant_job: _make_job_requirements(),
         reg_job: _make_job_requirements(),
     }
-    has_reservation = {res_job}
+    has_reservation = {res_job, descendant_job}
+    has_direct_reservation = {res_job}
 
-    result = _inject_taint_constraints(jobs, has_reservation)
+    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
-    # Reserved job: no taint constraint
+    # Direct reservation job: EQ constraint
     res_constraints = [c for c in result[res_job].constraints if c.key == RESERVATION_TAINT_KEY]
-    assert len(res_constraints) == 0
+    assert len(res_constraints) == 1
+    assert res_constraints[0].op == cluster_pb2.CONSTRAINT_OP_EQ
+    assert res_constraints[0].value.string_value == res_job.to_wire()
 
-    # Regular job: has taint constraint
+    # Descendant: no taint constraint
+    desc_constraints = [c for c in result[descendant_job].constraints if c.key == RESERVATION_TAINT_KEY]
+    assert len(desc_constraints) == 0
+
+    # Regular job: NOT_EXISTS constraint
     reg_constraints = [c for c in result[reg_job].constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(reg_constraints) == 1
     assert reg_constraints[0].op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
@@ -697,8 +709,9 @@ def test_taint_constraint_preserves_existing_constraints():
         ),
     }
     has_reservation: set[JobName] = set()
+    has_direct_reservation: set[JobName] = set()
 
-    result = _inject_taint_constraints(jobs, has_reservation)
+    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
     constraints = result[JobName.root("test-user", "regular")].constraints
     assert len(constraints) == 2
@@ -1184,11 +1197,25 @@ def test_taint_exemption_for_children_of_reservation_job():
 
     assert child_jid in has_reservation
 
-    # Child does NOT get NOT_EXISTS constraint
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    # Track direct reservations
+    has_direct_reservation: set[JobName] = set()
+    for task in pending:
+        job = ctrl.state.get_job(task.job_id)
+        if job and not job.is_finished() and job.request.HasField("reservation"):
+            has_direct_reservation.add(task.job_id)
+
+    # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
+    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     child_constraints = modified_jobs[child_jid].constraints
-    not_exists = [c for c in child_constraints if c.key == RESERVATION_TAINT_KEY]
-    assert len(not_exists) == 0
+    taint = [c for c in child_constraints if c.key == RESERVATION_TAINT_KEY]
+    assert len(taint) == 0
+
+    # Parent (direct reservation) gets EQ constraint
+    parent_jid = JobName.root("test-user", "res-parent")
+    if parent_jid in modified_jobs:
+        parent_constraints = [c for c in modified_jobs[parent_jid].constraints if c.key == RESERVATION_TAINT_KEY]
+        assert len(parent_constraints) == 1
+        assert parent_constraints[0].op == cluster_pb2.CONSTRAINT_OP_EQ
 
 
 def test_grandchildren_inherit_reservation_from_ancestor():
@@ -1305,12 +1332,26 @@ def test_grandchildren_inherit_reservation_from_ancestor():
     assert gc_a_jid in has_reservation
     assert gc_b_jid in has_reservation
 
-    # Neither gets NOT_EXISTS constraint
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    # Track direct reservations
+    has_direct_reservation: set[JobName] = set()
+    for task in pending:
+        job = ctrl.state.get_job(task.job_id)
+        if job and not job.is_finished() and job.request.HasField("reservation"):
+            has_direct_reservation.add(task.job_id)
+
+    # Neither grandchild gets any taint constraint (descendants)
+    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     for gc_jid in [gc_a_jid, gc_b_jid]:
         gc_constraints = modified_jobs[gc_jid].constraints
-        not_exists = [c for c in gc_constraints if c.key == RESERVATION_TAINT_KEY]
-        assert len(not_exists) == 0
+        taint = [c for c in gc_constraints if c.key == RESERVATION_TAINT_KEY]
+        assert len(taint) == 0
+
+    # Direct reservation jobs get EQ constraint
+    for direct_jid in [child_a_jid, child_b_jid]:
+        if direct_jid in modified_jobs:
+            direct_constraints = [c for c in modified_jobs[direct_jid].constraints if c.key == RESERVATION_TAINT_KEY]
+            assert len(direct_constraints) == 1
+            assert direct_constraints[0].op == cluster_pb2.CONSTRAINT_OP_EQ
 
     # Unrelated job DOES get NOT_EXISTS constraint
     unrelated_jid = JobName.root("test-user", "unrelated")
@@ -1325,7 +1366,7 @@ def test_grandchildren_inherit_reservation_from_ancestor():
         coscheduling_group_by=None,
     )
     jobs[unrelated_jid] = unrelated_req
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     unrelated_constraints = modified_jobs[unrelated_jid].constraints
     not_exists = [c for c in unrelated_constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1

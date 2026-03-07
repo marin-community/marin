@@ -13,7 +13,7 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
-from iris.cluster.log_store import LogStore, LogStoreHandler, PROCESS_LOG_KEY
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerRuntime
 from iris.cluster.types import JobName
@@ -155,9 +155,9 @@ class Worker:
 
         self._log_store = LogStore()
         self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
-        self._log_store_handler.setLevel(logging.DEBUG)
+        self._log_store_handler.setLevel(logging.INFO)
         self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
-        logging.getLogger("iris").addHandler(self._log_store_handler)
+        logging.getLogger().addHandler(self._log_store_handler)
 
         self._service = WorkerServiceImpl(self, log_store=self._log_store)
         self._dashboard = WorkerDashboard(
@@ -189,6 +189,7 @@ class Worker:
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
+                log_config=None,
                 timeout_keep_alive=120,
             )
         )

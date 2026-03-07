@@ -17,8 +17,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
+from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.bundle_store import BundleStore
-from iris.cluster.log_store import task_log_key
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -34,8 +34,7 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
 )
-from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.log_store import PROCESS_LOG_KEY
+from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -1105,7 +1104,7 @@ class ControllerServiceImpl:
             status_message=worker_status_message(worker),
         )
 
-        # Fetch worker daemon logs via FetchLogs(/process) if worker is healthy
+        # Fetch worker daemon logs via FetchLogs(/system/process) if worker is healthy
         worker_log_entries: list[cluster_pb2.FetchLogsResponse] = []
         if worker.healthy:
             try:

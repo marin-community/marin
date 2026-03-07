@@ -74,7 +74,7 @@ message ProfileTaskResponse {
 
 // Unified log fetching request, shared by controller and worker services.
 // The source key identifies the log stream:
-//   /process                - local process logs (controller or worker)
+//   /system/process                - local process logs (controller or worker)
 //   /job/name/task/0:0      - task attempt logs (task_wire:attempt_id)
 message FetchLogsRequest {
   string source = 1;           // Log source key
