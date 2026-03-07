@@ -182,6 +182,7 @@ fi
 # Start worker container without restart policy first (fail fast during bootstrap)
 sudo docker run -d --name iris-worker \\
     --network=host \\
+    --ulimit core=0:0 \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
     -v /dev/shm/iris:/dev/shm/iris \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
