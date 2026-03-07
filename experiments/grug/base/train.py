@@ -454,7 +454,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
-                batch = next(iterator)
+                with jax.profiler.TraceAnnotation("load_batch"):
+                    batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
                 # grad_watch runs only on its configured interval.
@@ -467,14 +468,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 jax.block_until_ready(metrics["train/loss"])
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
-                state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
-                last_loss = metrics["train/loss"]
-                last_step_duration = duration
-                levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
-                levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                with jax.profiler.TraceAnnotation("callbacks"):
+                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+                    last_loss = metrics["train/loss"]
+                    last_step_duration = duration
+                    levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                    levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
 
-                if watch_stats is not None:
-                    levanter.tracker.log(watch_stats, step=step)
+                    if watch_stats is not None:
+                        levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
