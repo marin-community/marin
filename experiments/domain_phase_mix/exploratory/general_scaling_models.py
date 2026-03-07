@@ -2740,6 +2740,259 @@ def _fit_dsre_ceq_no_interference(spec: DatasetSpec, **kw):
 
 
 # ---------------------------------------------------------------------------
+# Model: DS-RE-CEQ-ST (size-tied per-domain overfit thresholds)
+# ---------------------------------------------------------------------------
+def _fit_dsre_ceq_st(
+    spec: DatasetSpec,
+    *,
+    gate: bool = True,
+    satiety: bool = True,
+    per_domain_pi: bool = True,
+    interference: bool = True,
+    n_restarts: int = 8,
+    seed: int = 0,
+    maxiter: int = 500,
+    reg: float = 1e-4,
+):
+    """DS-RE-CEQ with size-tied per-domain overfit thresholds (tau_d).
+
+    Same core physics as _fit_dsre_ceq (satiety + interference + CES utility),
+    but the penalty is per-domain with thresholds tied to dataset size:
+
+      tau_d = exp(logtau0 + beta * centered_log_size_d)
+
+    where centered_log_size_d is derived from the epoch multipliers (proxy for
+    1/size). Penalty weights b_d ~ C_bar_d emphasize smaller domains.
+
+    Replaces the single scalar tau with (logtau0, beta) — net +1 parameter.
+    """
+    rng = np.random.default_rng(seed)
+    W = spec.weights
+    y = spec.y
+    _, N, M = W.shape
+
+    C = _broadcast_epoch_mult(spec.epoch_multipliers, N, M)
+    E = _compute_epochs(W, C)
+
+    S_list = _parse_small(spec.small_domains, M)
+    pen_idx = np.array(S_list, dtype=int)
+
+    # Size proxy: Cbar_d = mean_k C[k,d] ~ 1/size_d
+    C_dom = np.mean(C, axis=0)  # (M,)
+    C_pen = C_dom[pen_idx]
+    log_size = -np.log(np.maximum(C_pen, 1e-12))
+    log_size_centered = log_size - float(np.mean(log_size))
+    # Penalty weights: smaller domains get more weight
+    b = C_pen / float(np.sum(C_pen))
+
+    huber_d = _huber_delta(y)
+
+    use_gate = gate and interference
+    use_lambda = interference
+    n_pi_sets = M if per_domain_pi else 1
+
+    n_params = (
+        3
+        + (M - 1)
+        + 1
+        + n_pi_sets * max(N - 1, 0)
+        + (max(N - 1, 0) * M if use_lambda else 0)
+        + (M if satiety else 0)
+        + (N if use_gate else 0)
+        + 2  # logtau0, beta (replaces single log_tau)
+    )
+
+    Cum = np.zeros_like(E)
+    if N > 1:
+        Cum[:, 1:, :] = np.cumsum(E[:, :-1, :], axis=1)
+
+    med_tau = float(np.median(E[:, :, S_list].sum(axis=(1, 2))) + 1e-6)
+
+    def _softmax_l(logits: np.ndarray) -> np.ndarray:
+        z = logits - np.max(logits)
+        e = np.exp(z)
+        return e / e.sum()
+
+    def _sig(x: float) -> float:
+        return 1.0 / (1.0 + np.exp(-np.clip(x, -50.0, 50.0)))
+
+    def unpack(p: np.ndarray):
+        idx = 0
+        c0 = float(p[idx])
+        logA = float(p[idx + 1])
+        logB = float(p[idx + 2])
+        idx += 3
+
+        logits = np.zeros(M)
+        if M > 1:
+            logits[: M - 1] = p[idx : idx + (M - 1)]
+            idx += M - 1
+        a = _softmax_l(logits)
+
+        rho = float(np.clip(5.0 * np.tanh(p[idx]), -10.0, 0.99))
+        idx += 1
+
+        pi_dom = np.zeros((M, N))
+        if per_domain_pi:
+            for d in range(M):
+                full = np.zeros(N)
+                if N > 1:
+                    full[: N - 1] = p[idx : idx + (N - 1)]
+                    idx += N - 1
+                pi_dom[d] = _softmax_l(full)
+        else:
+            full = np.zeros(N)
+            if N > 1:
+                full[: N - 1] = p[idx : idx + (N - 1)]
+                idx += N - 1
+            shared = _softmax_l(full)
+            for d in range(M):
+                pi_dom[d] = shared
+
+        lam = np.zeros((N, M))
+        if use_lambda and N > 1:
+            raw = p[idx : idx + (N - 1) * M].reshape(N - 1, M)
+            idx += (N - 1) * M
+            lam[1:] = np.exp(np.clip(raw, -8.0, 8.0))
+
+        if satiety:
+            phi = np.array([_sig(float(p[idx + d])) for d in range(M)])
+            idx += M
+        else:
+            phi = np.ones(M)
+
+        if use_gate:
+            g = np.array([_sig(float(p[idx + k])) for k in range(N)])
+            idx += N
+            g[0] = 0.0
+        elif interference:
+            g = np.ones(N)
+            g[0] = 0.0
+        else:
+            g = np.zeros(N)
+
+        logtau0 = float(np.clip(p[idx], -8.0, 10.0))
+        beta = float(np.clip(p[idx + 1], -4.0, 4.0))
+        idx += 2
+
+        return c0, logA, logB, a, rho, pi_dom, lam, phi, g, logtau0, beta
+
+    def forward(p: np.ndarray, W_in: np.ndarray) -> np.ndarray:
+        c0, logA, logB, a, rho, pi_dom, lam, phi, g, logtau0, beta = unpack(p)
+        A_coef = float(np.exp(np.clip(logA, -10.0, 10.0)))
+        B_coef = float(np.exp(np.clip(logB, -10.0, 10.0)))
+
+        R_in = W_in.shape[0]
+        E_in = _compute_epochs(W_in, C)
+        invW = 1.0 - W_in
+
+        Cum_in = np.zeros_like(E_in)
+        if N > 1:
+            Cum_in[:, 1:, :] = np.cumsum(E_in[:, :-1, :], axis=1)
+
+        prior = phi[None, None, :] * Cum_in
+        z = np.log1p(prior + E_in) - np.log1p(prior)
+
+        lam_eff = lam * g[:, None]
+        c = invW * lam_eff[None, :, :]
+        suffix = np.cumsum(c[:, ::-1, :], axis=1)[:, ::-1]
+        exp_term = np.zeros_like(c)
+        if N > 1:
+            exp_term[:, :-1, :] = suffix[:, 1:, :]
+        r = np.exp(-exp_term)
+
+        S = np.zeros((R_in, M))
+        X_ret = np.zeros((R_in, M))
+        for d in range(M):
+            pi = pi_dom[d][None, :]
+            S[:, d] = np.sum(pi * r[:, :, d] * z[:, :, d], axis=1)
+            X_ret[:, d] = np.sum(pi * r[:, :, d] * E_in[:, :, d], axis=1)
+
+        U = _ces_mean_stable(np.maximum(S, 1e-12), a[None, :], rho)
+
+        # Per-domain penalty with size-tied thresholds
+        X_pen = X_ret[:, pen_idx]  # (R_in, |S|)
+        tau_vec = np.exp(logtau0 + beta * log_size_centered)  # (|S|,)
+        h = _softplus_scaled(X_pen - tau_vec[None, :], 1.0)
+        P = np.sum(b[None, :] * (h * h), axis=1)
+
+        return c0 - A_coef * U + B_coef * P
+
+    def obj(p: np.ndarray) -> float:
+        yhat = forward(p, W)
+        loss = float(np.sum(_pseudo_huber(yhat - y, huber_d)))
+        loss += float(reg) * float(np.sum(p * p))
+        return loss
+
+    best_val, best_p = np.inf, None
+
+    for _ in range(n_restarts):
+        p0 = np.zeros(n_params)
+        idx = 0
+        p0[idx] = float(np.median(y))
+        p0[idx + 1] = float(rng.normal(0.0, 1.0))
+        p0[idx + 2] = float(rng.normal(-2.0, 1.0))
+        idx += 3
+        if M > 1:
+            p0[idx : idx + (M - 1)] = rng.normal(0.0, 0.5, M - 1)
+            idx += M - 1
+        p0[idx] = float(rng.normal(0.0, 0.7))
+        idx += 1
+        n_pi_total = n_pi_sets * max(N - 1, 0)
+        if n_pi_total > 0:
+            p0[idx : idx + n_pi_total] = rng.normal(0.0, 0.5, n_pi_total)
+            idx += n_pi_total
+        if use_lambda and N > 1:
+            p0[idx : idx + (N - 1) * M] = rng.normal(-1.0, 0.5, (N - 1) * M)
+            idx += (N - 1) * M
+        if satiety:
+            p0[idx : idx + M] = rng.normal(2.0, 0.6, M)
+            idx += M
+        if use_gate:
+            t = np.linspace(-2.0, 2.0, N)
+            p0[idx : idx + N] = t + rng.normal(0.0, 0.6, N)
+            idx += N
+        p0[idx] = float(np.log(med_tau) + rng.normal(0.0, 0.3))  # logtau0
+        p0[idx + 1] = float(rng.normal(0.0, 0.3))  # beta
+        idx += 2
+
+        try:
+            res = minimize(
+                obj, p0, method="L-BFGS-B",
+                options={"maxiter": maxiter, "ftol": 1e-10},
+            )
+            if np.isfinite(res.fun) and res.fun < best_val:
+                best_val, best_p = float(res.fun), res.x
+        except Exception:
+            continue
+
+    if best_p is None:
+        raise RuntimeError("DS-RE-CEQ-ST optimization failed to converge")
+
+    final_p = best_p.copy()
+
+    def predict(W_new: np.ndarray) -> np.ndarray:
+        return forward(final_p, _as_3d(W_new))
+
+    return predict, {"n_params": n_params, "final_p": final_p.copy()}
+
+
+def _fit_dsre_ceq_st_lite(spec: DatasetSpec, **kw):
+    """DS-RE-CEQ-ST Lite: shared pi, no per-domain satiety, no gate."""
+    return _fit_dsre_ceq_st(spec, per_domain_pi=False, satiety=False, gate=False, **kw)
+
+
+def _fit_dsre_ceq_st_lite_nogate(spec: DatasetSpec, **kw):
+    """DS-RE-CEQ-ST Lite-NoGate: shared pi, no satiety, no gate, interference on."""
+    return _fit_dsre_ceq_st(spec, per_domain_pi=False, satiety=False, gate=False, **kw)
+
+
+def _fit_dsre_ceq_st_no_interference(spec: DatasetSpec, **kw):
+    """CR-CEQ-ST baseline: no interference (r_{k,d}=1), size-tied tau."""
+    return _fit_dsre_ceq_st(spec, interference=False, satiety=False, gate=False, per_domain_pi=False, **kw)
+
+
+# ---------------------------------------------------------------------------
 # Model: PCEQ (Phase CES utility + entropy + epoch-overfit quadratic)
 # ---------------------------------------------------------------------------
 def _ces_utility_features_general(
@@ -2966,6 +3219,22 @@ GENERAL_MODELS: list[GeneralModelSpec] = [
     GeneralModelSpec(
         "DS-RE-CEQ(ni)", _fit_dsre_ceq_no_interference, lambda _: True,
         "DS-RE-CEQ without interference"
+    ),
+    GeneralModelSpec(
+        "DS-RE-CEQ-ST", _fit_dsre_ceq_st, lambda _: True,
+        "DS-RE-CEQ with size-tied per-domain tau"
+    ),
+    GeneralModelSpec(
+        "DS-RE-CEQ-ST(lite)", _fit_dsre_ceq_st_lite, lambda _: True,
+        "DS-RE-CEQ-ST lite: shared pi, no satiety, no gate"
+    ),
+    GeneralModelSpec(
+        "DS-RE-CEQ-ST(lng)", _fit_dsre_ceq_st_lite_nogate, lambda _: True,
+        "DS-RE-CEQ-ST lite-nogate"
+    ),
+    GeneralModelSpec(
+        "CR-CEQ-ST", _fit_dsre_ceq_st_no_interference, lambda _: True,
+        "CR-CEQ baseline with size-tied tau (no interference)"
     ),
     # Hybrid models: mixture design + economics utility + information theory
     GeneralModelSpec("SHEQ", _fit_sheq, lambda _: True, "Scheffé+log + epoch-entropy + epoch-overfit quadratic"),
