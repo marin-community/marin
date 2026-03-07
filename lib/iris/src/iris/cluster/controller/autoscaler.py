@@ -805,20 +805,10 @@ class Autoscaler:
         self._last_routing_decision = result
 
         if result.unmet_entries:
-            logger.error(
-                "CAPACITY INSUFFICIENT: %d demand entries cannot be satisfied by any group",
+            logger.debug(
+                "Unmet demand: %d entries cannot be satisfied (visible in dashboard)",
                 len(result.unmet_entries),
             )
-            for unmet in result.unmet_entries[:10]:
-                entry = unmet.entry
-                logger.warning(
-                    "Unmet demand: reason=%s device=%s:%s resources=%s tasks=%s",
-                    unmet.reason,
-                    entry.normalized.device_type,
-                    entry.normalized.device_variants,
-                    entry.resources,
-                    entry.task_ids,
-                )
 
         decisions = []
         for name, group in self._groups.items():
