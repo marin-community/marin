@@ -236,7 +236,11 @@ class ControllerTask:
 
     Retry Semantics:
         - failure_count: Incremented on TASK_STATE_FAILED. Checked against max_retries_failure.
-        - preemption_count: Incremented on TASK_STATE_WORKER_FAILED. Checked against max_retries_preemption.
+        - preemption_count: Incremented on TASK_STATE_WORKER_FAILED **only if** the task
+          was confirmed by the worker (reached BUILDING or RUNNING). Checked against
+          max_retries_preemption.
+        - Delivery failures (WORKER_FAILED while still ASSIGNED) are not counted against
+          any budget — the task simply returns to PENDING for rescheduling.
 
         When a task fails with retry budget remaining, it stays in the failure state but
         can_be_scheduled() returns True. The scheduler creates a new attempt when re-dispatching.
@@ -443,12 +447,29 @@ class ControllerTask:
         Does NOT reset task state - current attempt stays terminal.
         Scheduler will create new attempt when it reassigns the task.
 
+        Counting rules:
+        - TASK_STATE_FAILED always increments failure_count (user/task bug).
+        - TASK_STATE_WORKER_FAILED increments preemption_count ONLY if the
+          worker confirmed it had the task (state progressed beyond ASSIGNED
+          to BUILDING or RUNNING). If the task was still ASSIGNED, the worker
+          never received it — this is a delivery failure and is NOT counted
+          against any budget. The task simply goes back to PENDING.
+
+        Note: self.state still holds the PRE-transition value here because
+        handle_attempt_result updates it after _handle_failure returns.
+
         Args:
             new_state: The failure state (TASK_STATE_FAILED or TASK_STATE_WORKER_FAILED)
         """
         if new_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
-            self.preemption_count += 1
-            can_retry = self.preemption_count <= self.max_retries_preemption
+            if self.state in (cluster_pb2.TASK_STATE_BUILDING, cluster_pb2.TASK_STATE_RUNNING):
+                # Worker had the task and lost it → real preemption.
+                self.preemption_count += 1
+                can_retry = self.preemption_count <= self.max_retries_preemption
+            else:
+                # Task was never confirmed by the worker (still ASSIGNED).
+                # This is a delivery failure — don't count against any budget.
+                can_retry = True
         else:
             self.failure_count += 1
             can_retry = self.failure_count <= self.max_retries_failure
@@ -1945,8 +1966,40 @@ class ControllerState:
     def begin_heartbeat(self, worker_id: WorkerId) -> HeartbeatSnapshot | None:
         """Atomically snapshot worker state and drain dispatch buffers.
 
+        This is phase 1 of the heartbeat protocol. The three phases are:
+
+        Phase 1 — begin_heartbeat (under lock):
+            Snapshot running_tasks and drain pending_dispatch into an immutable
+            HeartbeatSnapshot. After this call, pending_dispatch is empty for
+            this worker.
+
+        Phase 2 — RPC (no lock):
+            Send HeartbeatRequest to the worker. The request contains:
+            - tasks_to_run: new tasks to start (from pending_dispatch)
+            - tasks_to_kill: tasks to stop
+            - expected_tasks: all tasks the controller believes are on this
+              worker (from running_tasks), used for reconciliation
+
+            Invariant: every task in tasks_to_run also appears in expected_tasks,
+            because _on_task_assigned adds the task to running_tasks (which feeds
+            expected_tasks) and buffer_dispatch adds it to pending_dispatch (which
+            feeds tasks_to_run). The worker processes tasks_to_run before
+            reconciling expected_tasks, so newly-submitted tasks will be found.
+
+        Phase 3 — complete_heartbeat or fail_heartbeat (under lock):
+            On success: process worker's response (task state changes, health).
+            On failure: revert undelivered tasks (tasks_to_run) back to PENDING
+            so the scheduler can reassign them. Increment consecutive_failures;
+            if threshold exceeded, cascade WORKER_FAILED to all tasks.
+
+        Preconditions:
+            - worker_id is registered in _workers
+        Postconditions:
+            - pending_dispatch[worker_id] is empty (drained into snapshot)
+            - Snapshot is immutable and safe to use without locks
+            - Caller MUST call exactly one of complete_heartbeat or fail_heartbeat
+
         Returns None if worker is no longer registered (removed while heartbeat pending).
-        The snapshot is immutable and can be used for RPC without holding locks.
         """
         with self._lock:
             worker = self._workers.get(worker_id)
@@ -1978,7 +2031,16 @@ class ControllerState:
         snapshot: HeartbeatSnapshot,
         response: cluster_pb2.HeartbeatResponse,
     ) -> None:
-        """Process successful heartbeat response.
+        """Process successful heartbeat response (phase 3, success path).
+
+        Preconditions:
+            - snapshot was returned by begin_heartbeat for this worker
+            - response is the worker's HeartbeatResponse
+        Postconditions:
+            - worker.healthy = True, consecutive_failures = 0
+            - Task states updated from worker reports (BUILDING, RUNNING, terminal)
+            - Terminal tasks trigger retry/cleanup via the normal state machine
+            - Worker resource metrics updated
 
         Updates worker health state and processes task state changes from the response.
         Log entries are collected under the state lock but flushed to SQLite after
@@ -2067,12 +2129,24 @@ class ControllerState:
         self._transactions.append(txn)
 
     def fail_heartbeat(self, snapshot: HeartbeatSnapshot, error: str) -> None:
-        """Handle heartbeat failure - requeue dispatches, track failures.
+        """Handle heartbeat RPC failure (phase 3, failure path).
 
-        Requeues any buffered dispatches so they can be retried on the next heartbeat.
-        Increments the worker's consecutive failure count. If the threshold is exceeded,
-        the worker will be marked as failed and pending dispatches are cleared (tasks
-        will be requeued via WORKER_FAILED state transition).
+        Preconditions:
+            - snapshot was returned by begin_heartbeat for this worker
+            - The heartbeat RPC failed (timeout, connection refused, etc.)
+        Postconditions:
+            - worker.consecutive_failures incremented
+            - If threshold exceeded: worker pruned, ALL tasks cascade to WORKER_FAILED
+            - If worker still healthy: tasks in snapshot.tasks_to_run are reverted
+              to PENDING (the worker never received them). Tasks only in
+              expected_tasks (previously confirmed) are left alone — the failure
+              may be transient and the worker may still be running them.
+            - Kill requests are re-buffered (idempotent, safe to retry)
+
+        The revert for undelivered tasks (tasks_to_run) goes through the normal
+        WORKER_FAILED state machine path. Because the task is still in ASSIGNED
+        state (never progressed to BUILDING/RUNNING), _handle_failure treats this
+        as a delivery failure: no budget is consumed, the task returns to PENDING.
         """
         with self._lock:
             worker = self._workers.get(snapshot.worker_id)
@@ -2085,13 +2159,27 @@ class ControllerState:
             self._on_worker_heartbeat_failed(txn, event)
             self._transactions.append(txn)
 
-            # Only requeue dispatches if worker is still healthy.
-            # If worker failed, tasks are already being requeued via WORKER_FAILED
-            # state transition, and we don't want stale dispatches lingering.
             if worker.healthy:
-                pd = self._pending_dispatch.setdefault(snapshot.worker_id, PendingDispatch())
-                pd.tasks_to_run.extend(snapshot.tasks_to_run)
-                pd.tasks_to_kill.extend(snapshot.tasks_to_kill)
+                # Revert undelivered task assignments: the worker never received
+                # these, so transition them back to PENDING for rescheduling.
+                # This avoids tying up resources on an unreachable worker and
+                # prevents "Task not found" reports on subsequent heartbeats.
+                for req in snapshot.tasks_to_run:
+                    task_id = JobName.from_wire(req.task_id)
+                    task = self._tasks.get(task_id)
+                    if task and not task.is_finished():
+                        revert_event = TaskStateChangedEvent(
+                            task_id=task_id,
+                            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                            attempt_id=req.attempt_id,
+                            error=f"Heartbeat delivery failed: {error}",
+                        )
+                        self._on_task_state_changed(txn, revert_event)
+
+                # Requeue kills — they're idempotent and harmless to retry.
+                if snapshot.tasks_to_kill:
+                    pd = self._pending_dispatch.setdefault(snapshot.worker_id, PendingDispatch())
+                    pd.tasks_to_kill.extend(snapshot.tasks_to_kill)
             else:
                 # Worker failed - clear any pending dispatches
                 self._pending_dispatch.pop(snapshot.worker_id, None)

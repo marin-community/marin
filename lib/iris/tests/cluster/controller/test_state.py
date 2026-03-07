@@ -490,9 +490,12 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     # 1. Worker marked unhealthy
     assert worker.healthy is False
 
-    # 2. Task requeued (back to PENDING for retry)
+    # 2. Task requeued (back to PENDING for retry).
+    #    Since the task was still ASSIGNED (never confirmed BUILDING/RUNNING),
+    #    this is a delivery failure — no budget consumed at all.
     assert task.state == cluster_pb2.TASK_STATE_PENDING
-    assert task.preemption_count == 1
+    assert task.preemption_count == 0
+    assert task.failure_count == 0
     assert task.can_be_scheduled()
 
     # 3. Task should be requeued for retry
@@ -2095,27 +2098,39 @@ def test_fail_heartbeat_clears_dispatch_when_worker_fails(job_request, worker_me
     )
 
 
-def test_fail_heartbeat_requeues_dispatch_when_worker_healthy(job_request, worker_metadata):
-    """Dispatch buffer is repopulated when worker remains healthy after failure.
+def test_fail_heartbeat_reverts_undelivered_assignments(job_request, worker_metadata):
+    """Undelivered task assignments are reverted to PENDING on heartbeat failure.
 
     When heartbeat fails but worker is still below failure threshold,
-    the dispatches should be requeued for the next heartbeat attempt.
+    tasks in tasks_to_run (never delivered to the worker) are reverted
+    to PENDING so the scheduler can reassign them to a reachable worker.
     """
 
     state = ControllerState()
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
-    # Submit and dispatch a task
-    tasks = submit_job(state, "j1", job_request("job1"))
-    dispatch_task(state, tasks[0], worker_id)
+    # Submit a job and assign its task to the worker
+    req = job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
 
-    # Buffer a dispatch
-    fake_request = cluster_pb2.Worker.RunTaskRequest(task_id="/test-user/fake/0")
-    state.buffer_dispatch(worker_id, fake_request)
+    # Assign the task (creates attempt, commits resources)
+    state.handle_event(TaskAssignedEvent(task_id=task.task_id, worker_id=worker_id))
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
+    assert task.current_attempt_id == 0
 
-    # Take snapshot
+    # Buffer the dispatch for delivery
+    run_request = cluster_pb2.Worker.RunTaskRequest(
+        task_id=task.task_id.to_wire(),
+        attempt_id=0,
+    )
+    state.buffer_dispatch(worker_id, run_request)
+
+    # Take snapshot (drains buffer)
     snapshot = state.begin_heartbeat(worker_id)
     assert snapshot is not None
+    assert len(snapshot.tasks_to_run) == 1
 
     # Fail heartbeat (worker stays healthy - below threshold)
     state.fail_heartbeat(snapshot, "Timeout")
@@ -2125,9 +2140,17 @@ def test_fail_heartbeat_requeues_dispatch_when_worker_healthy(job_request, worke
     assert worker.healthy
     assert worker.consecutive_failures == 1
 
-    # Verify dispatch was requeued
-    assert worker_id in state._pending_dispatch
-    assert len(state._pending_dispatch[worker_id].tasks_to_run) == 1
+    # Verify undelivered task was reverted to PENDING (not requeued as dispatch)
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.can_be_scheduled()
+
+    # Delivery failure: no budget consumed at all.
+    assert task.preemption_count == 0
+    assert task.failure_count == 0
+
+    # Verify dispatch was NOT requeued (task is back in scheduling queue instead)
+    pending_dispatch = state._pending_dispatch.get(worker_id)
+    assert pending_dispatch is None or len(pending_dispatch.tasks_to_run) == 0
 
 
 def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
@@ -2165,6 +2188,124 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
     # Verify job is succeeded
     job = state.get_job(tasks[0].job_id)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_worker_failed_from_assigned_is_delivery_failure(job_request, worker_metadata):
+    """WORKER_FAILED on a task still in ASSIGNED state is a delivery failure.
+
+    When a task was assigned but never confirmed running (BUILDING/RUNNING),
+    a WORKER_FAILED is a delivery failure — no budget is consumed. This
+    prevents preemption count inflation from repeated 'Task not found' reports.
+    """
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # Assign but do NOT transition to RUNNING
+    state.handle_event(TaskAssignedEvent(task_id=task.task_id, worker_id=worker_id))
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
+
+    # Worker reports WORKER_FAILED (e.g., "Task not found on worker")
+    transition_task(
+        state,
+        task.task_id,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        error="Task not found on worker",
+    )
+
+    # Delivery failure: no budget consumed at all
+    assert task.preemption_count == 0
+    assert task.failure_count == 0
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.can_be_scheduled()
+
+
+def test_worker_failed_from_running_counts_as_preemption(job_request, worker_metadata):
+    """WORKER_FAILED on a task in RUNNING state counts as a preemption."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # Full lifecycle: assign and transition to RUNNING
+    dispatch_task(state, task, worker_id)
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Worker dies
+    transition_task(
+        state,
+        task.task_id,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        error="Worker crashed",
+    )
+
+    # Real preemption: counts against preemption budget
+    assert task.preemption_count == 1
+    assert task.failure_count == 0
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.can_be_scheduled()
+
+
+def test_worker_failed_from_building_counts_as_preemption(job_request, worker_metadata):
+    """WORKER_FAILED on a task in BUILDING state counts as a preemption."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # Assign and transition to BUILDING (worker confirmed it received the task)
+    state.handle_event(TaskAssignedEvent(task_id=task.task_id, worker_id=worker_id))
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_BUILDING)
+    assert task.state == cluster_pb2.TASK_STATE_BUILDING
+
+    # Worker dies
+    transition_task(
+        state,
+        task.task_id,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        error="Worker crashed",
+    )
+
+    # Real preemption: worker had started processing the task
+    assert task.preemption_count == 1
+    assert task.failure_count == 0
+
+
+def test_fail_heartbeat_kills_requeue_only(job_request, worker_metadata):
+    """Kill requests are still requeued on heartbeat failure (idempotent)."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    tasks = submit_job(state, "j1", job_request("job1"))
+    dispatch_task(state, tasks[0], worker_id)
+
+    # Buffer a kill
+    state.buffer_kill(worker_id, tasks[0].task_id.to_wire())
+
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+    assert len(snapshot.tasks_to_kill) == 1
+
+    # Fail heartbeat
+    state.fail_heartbeat(snapshot, "Timeout")
+
+    worker = state.get_worker(worker_id)
+    assert worker.healthy
+
+    # Kills should be requeued
+    pd = state._pending_dispatch.get(worker_id)
+    assert pd is not None
+    assert len(pd.tasks_to_kill) == 1
 
 
 # =============================================================================
