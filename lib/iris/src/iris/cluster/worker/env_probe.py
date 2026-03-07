@@ -464,12 +464,19 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
 
     Docker probing is implicit: if the worker is processing heartbeats
     and fetching task status, Docker is operational.
+
+    If disk_path does not exist (e.g. during teardown), the probe is
+    skipped and the worker is considered healthy.
     """
+    dp = Path(disk_path)
+    if not dp.exists():
+        return HealthCheckResult(healthy=True)
+
     errors: list[str] = []
 
     # Check tempfile write
     try:
-        probe_path = Path(disk_path) / ".iris_health_probe"
+        probe_path = dp / ".iris_health_probe"
         probe_path.write_text("ok")
         probe_path.unlink()
     except OSError as e:

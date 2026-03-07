@@ -1141,17 +1141,19 @@ class Controller:
 
         worker_futures = [self._dispatch_executor.submit(_dispatch_worker) for _ in range(worker_count)]
 
-        # Phase 3: consume all responses via unified report_heartbeat path.
-        # State decides the action: OK, TRANSIENT_FAILURE, or WORKER_FAILED.
+        # Phase 3: consume all responses via complete_heartbeat / fail_heartbeat.
+        # Each returns a HeartbeatAction: OK, TRANSIENT_FAILURE, or WORKER_FAILED.
         fail_count = 0
         failed_workers: list[str] = []
         with slow_log(logger, "heartbeat phase 3 (process results)", threshold_ms=500):
             for _ in snapshots:
                 snapshot, response, error = result_queue.get()
-                if error is not None:
-                    logger.debug("Heartbeat error for %s: %s", snapshot.worker_id, error)
 
-                action = self._state.report_heartbeat(snapshot, response, error)
+                if response is not None:
+                    action = self._state.complete_heartbeat(snapshot, response)
+                else:
+                    logger.debug("Heartbeat error for %s: %s", snapshot.worker_id, error)
+                    action = self._state.fail_heartbeat(snapshot, error or "unknown error")
 
                 if action == HeartbeatAction.WORKER_FAILED:
                     fail_count += 1

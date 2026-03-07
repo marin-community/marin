@@ -80,13 +80,13 @@ def test_worker_heartbeat_expired_check(state, worker_metadata):
     assert worker.is_heartbeat_expired(very_short_timeout)
 
 
-def test_report_heartbeat_success(state, worker_metadata):
+def test_complete_heartbeat_success(state, worker_metadata):
     """Successful heartbeat with healthy worker returns OK."""
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
     response = cluster_pb2.HeartbeatResponse(worker_healthy=True)
-    action = state.report_heartbeat(snapshot, response)
+    action = state.complete_heartbeat(snapshot, response)
 
     assert action == HeartbeatAction.OK
     worker = state.get_worker(WorkerId("worker1"))
@@ -94,12 +94,12 @@ def test_report_heartbeat_success(state, worker_metadata):
     assert worker.healthy
 
 
-def test_report_heartbeat_rpc_failure_below_threshold(state, worker_metadata):
+def test_fail_heartbeat_below_threshold(state, worker_metadata):
     """RPC failure below threshold returns TRANSIENT_FAILURE, worker stays alive."""
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
-    action = state.report_heartbeat(snapshot, None, error="connection refused")
+    action = state.fail_heartbeat(snapshot, "connection refused")
     assert action == HeartbeatAction.TRANSIENT_FAILURE
 
     worker = state.get_worker(WorkerId("worker1"))
@@ -107,7 +107,7 @@ def test_report_heartbeat_rpc_failure_below_threshold(state, worker_metadata):
     assert worker.consecutive_failures == 1
 
 
-def test_report_heartbeat_rpc_failure_at_threshold(state, worker_metadata):
+def test_fail_heartbeat_at_threshold(state, worker_metadata):
     """RPC failures at threshold return WORKER_FAILED and prune the worker."""
     state_with_threshold = ControllerState(heartbeat_failure_threshold=3)
     _register_worker(state_with_threshold, "worker1", worker_metadata)
@@ -115,11 +115,11 @@ def test_report_heartbeat_rpc_failure_at_threshold(state, worker_metadata):
 
     # First two failures are transient
     for _i in range(2):
-        action = state_with_threshold.report_heartbeat(snapshot, None, error="timeout")
+        action = state_with_threshold.fail_heartbeat(snapshot, "timeout")
         assert action == HeartbeatAction.TRANSIENT_FAILURE
 
     # Third failure exceeds the threshold
-    action = state_with_threshold.report_heartbeat(snapshot, None, error="timeout")
+    action = state_with_threshold.fail_heartbeat(snapshot, "timeout")
     assert action == HeartbeatAction.WORKER_FAILED
 
     # Worker should be pruned from state
@@ -127,7 +127,7 @@ def test_report_heartbeat_rpc_failure_at_threshold(state, worker_metadata):
     assert worker is None
 
 
-def test_report_heartbeat_unhealthy_worker(state, worker_metadata):
+def test_complete_heartbeat_unhealthy_worker(state, worker_metadata):
     """Worker reporting unhealthy immediately returns WORKER_FAILED."""
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
@@ -136,7 +136,7 @@ def test_report_heartbeat_unhealthy_worker(state, worker_metadata):
         worker_healthy=False,
         health_error="disk free space 2.1% below threshold 5%",
     )
-    action = state.report_heartbeat(snapshot, response)
+    action = state.complete_heartbeat(snapshot, response)
 
     assert action == HeartbeatAction.WORKER_FAILED
     # Worker should be pruned from state
@@ -170,7 +170,7 @@ def test_unhealthy_worker_cascades_to_tasks(state, worker_metadata):
         )
     )
 
-    # Now report unhealthy heartbeat
+    # Now report unhealthy heartbeat via complete_heartbeat
     snapshot = _make_snapshot("worker1", running_tasks=[RunningTaskEntry(task_id, 0)])
     response = cluster_pb2.HeartbeatResponse(
         worker_healthy=False,
@@ -183,7 +183,7 @@ def test_unhealthy_worker_cascades_to_tasks(state, worker_metadata):
             )
         ],
     )
-    action = state.report_heartbeat(snapshot, response)
+    action = state.complete_heartbeat(snapshot, response)
     assert action == HeartbeatAction.WORKER_FAILED
 
     # Task should be marked WORKER_FAILED
