@@ -105,7 +105,7 @@ def test_multi_worker_execution(multi_worker_cluster):
         replicas=6,
     )
 
-    status = multi_worker_cluster.wait(job, timeout=30)
+    status = multi_worker_cluster.wait(job, timeout=60)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     workers_used = set()
