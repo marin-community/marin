@@ -532,7 +532,9 @@ class Worker:
         2. Kill tasks_to_kill — async, sets stop flag immediately
         3. Reconcile expected_tasks — for each expected task, report its current
            state. If not found in self._tasks, report WORKER_FAILED ("Task not
-           found on worker"). This can happen if submit_task threw in step 1.
+           found on worker"). This happens when the worker has reset its state
+           (_tasks.clear() in _reset_worker_state) between heartbeats — from
+           the controller's perspective this is equivalent to a worker restart.
         4. Kill unexpected tasks — any task in self._tasks that is NOT in
            expected_tasks or tasks_to_run is killed (controller no longer wants it)
 
