@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "cdf03d459656",
+  "strategy": "manual-commit",
+  "branch": "kevin/sft",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "scripts/samples/qwen2.5-coder-7b-sft-sharkdp__bat-562.txt",
+    "scripts/samples/qwen3-8b-sft-sharkdp__bat-562.txt",
+    "scripts/test_single_prompt_sweb_eval.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cd/f03d459656/0/metadata.json",
+      "transcript": "/cd/f03d459656/0/full.jsonl",
+      "context": "/cd/f03d459656/0/context.md",
+      "content_hash": "/cd/f03d459656/0/content_hash.txt",
+      "prompt": "/cd/f03d459656/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 216133,
+    "cache_read_tokens": 3013577,
+    "output_tokens": 21548,
+    "api_call_count": 49
+  }
+}
