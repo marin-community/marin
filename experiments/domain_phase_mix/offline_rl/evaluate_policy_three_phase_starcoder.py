@@ -13,18 +13,22 @@ import re
 import sys
 import uuid
 from dataclasses import dataclass, replace
+from functools import cache
 from pathlib import Path
+from typing import Any
 
 import fsspec
+import joblib
+import numpy as np
 import optax
 import pandas as pd
 from fray.cluster import ResourceConfig
+from iris.marin_fs import marin_region
 from levanter.optim.config import LrSchedule, LrScheduleContext
 
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.utils import create_cache_tokenizer_step
-from marin.utilities.gcs_utils import get_vm_region
 
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.experiment import MixtureExperiment
@@ -40,7 +44,14 @@ from experiments.domain_phase_mix.offline_rl.contracts import (
     DEFAULT_PHASE_END_STEPS,
     DEFAULT_TOTAL_STEPS,
 )
-from experiments.domain_phase_mix.offline_rl.policy_artifact import clip_action, load_policy_artifact, normalize_state
+from experiments.domain_phase_mix.offline_rl.policy_artifact import (
+    AnyPolicyArtifact,
+    PolicyArtifactV1,
+    PolicyArtifactV2,
+    clip_action,
+    load_policy_artifact,
+    normalize_state,
+)
 from experiments.domain_phase_mix.three_phase_starcoder_experiment import (
     BATCH_SIZE,
     EVAL_DATASETS_CACHE_PATH,
@@ -237,6 +248,128 @@ def _fetch_wandb_run_by_display_name(entity: str, project: str, display_name: st
     return runs[-1]
 
 
+@cache
+def _load_policy_artifact_cached(artifact_path: str) -> AnyPolicyArtifact:
+    return load_policy_artifact(artifact_path)
+
+
+def _artifact_state_defaults(artifact: PolicyArtifactV1 | PolicyArtifactV2) -> dict[str, float]:
+    return {
+        key: float(value)
+        for key, value in zip(artifact.state_keys, artifact.state_mean, strict=True)
+    }
+
+
+def _resolve_policy_model_path(artifact_path: str, model_path_str: str) -> Path:
+    artifact_dir = Path(artifact_path).resolve().parent
+    model_path = Path(model_path_str)
+    if not model_path.is_absolute():
+        return (artifact_dir / model_path).resolve()
+    if model_path.exists():
+        return model_path
+
+    candidates = [
+        artifact_dir / model_path.name,
+        artifact_dir / "terminal_reward" / model_path.name,
+        artifact_dir / "delta_reward" / model_path.name,
+        artifact_dir / "full_models" / "outcome_planner" / model_path.name,
+        artifact_dir / "full_models" / "discrete_iql" / model_path.name,
+        artifact_dir / "full_models" / "discrete_cql" / model_path.name,
+        artifact_dir / "full_models" / "discrete_bc" / model_path.name,
+        artifact_dir / "full_models" / "continuous_cql" / model_path.name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    raise FileNotFoundError(
+        f"Policy model path {model_path} does not exist and no local fallback was found near {artifact_dir}."
+    )
+
+
+@cache
+def _load_outcome_planner_bundle(artifact_path: str) -> dict[str, Any]:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2) or artifact.kind != "sklearn_outcome_planner_v2":
+        raise ValueError(f"Artifact at {artifact_path} is not a v2 outcome planner.")
+    model_path = _resolve_policy_model_path(artifact_path, artifact.model_path)
+    bundle = joblib.load(model_path)
+    if not isinstance(bundle, dict):
+        raise TypeError(f"Expected planner bundle dict at {model_path}, found {type(bundle)!r}.")
+    required = {"feature_keys", "action_grid", "reward_models", "behavior_policy", "support_threshold"}
+    missing = required.difference(bundle)
+    if missing:
+        raise KeyError(f"Planner bundle at {model_path} is missing keys: {sorted(missing)}")
+    return bundle
+
+
+def _phase_lengths(total_steps: int, phase_end_steps: tuple[int, ...]) -> list[int]:
+    starts = [0, *phase_end_steps]
+    ends = [*phase_end_steps, total_steps]
+    return [int(end - start) for start, end in zip(starts, ends, strict=True)]
+
+
+def _decision_steps(phase_end_steps: tuple[int, ...]) -> list[int]:
+    return [0, *phase_end_steps]
+
+
+def _last_metric_at_or_before(
+    history: pd.DataFrame,
+    metric_col: str,
+    decision_step: int,
+) -> tuple[float | None, int | None]:
+    if metric_col not in history.columns:
+        return None, None
+    metric = history.loc[(history["step"] <= decision_step) & history[metric_col].notna(), ["step", metric_col]]
+    if metric.empty:
+        return None, None
+    row = metric.sort_values("step").iloc[-1]
+    return float(row[metric_col]), int(row["step"])
+
+
+def _mean_metric_between(
+    history: pd.DataFrame,
+    metric_col: str,
+    start_step: int,
+    end_step: int,
+) -> float | None:
+    if metric_col not in history.columns:
+        return None
+    metric = history.loc[
+        (history["step"] > start_step) & (history["step"] <= end_step) & history[metric_col].notna(),
+        metric_col,
+    ]
+    if metric.empty:
+        return None
+    return float(metric.mean())
+
+
+def _compute_exposure(actions: list[float], phase_lengths: list[int], decision_index: int) -> tuple[float, float, float]:
+    if decision_index <= 0:
+        return 0.5, 0.0, 0.0
+    if len(actions) < decision_index:
+        raise ValueError(
+            f"Need {decision_index} prior actions to build state for decision {decision_index}, found {len(actions)}."
+        )
+    consumed = sum(phase_lengths[:decision_index])
+    weighted = sum(actions[idx] * phase_lengths[idx] for idx in range(decision_index))
+    prev_action = actions[decision_index - 1]
+    prev_prev = actions[decision_index - 2] if decision_index > 1 else prev_action
+    cumulative = float(weighted / consumed) if consumed > 0 else 0.0
+    delta_prev = float(prev_action - prev_prev) if decision_index > 1 else 0.0
+    return float(prev_action), cumulative, delta_prev
+
+
+def _history_from_completed_run(wb_run, metric_keys: tuple[str, ...]) -> pd.DataFrame:
+    long_rows = collect_history_long_rows(
+        wb_run,
+        metric_keys=metric_keys,
+        history_samples=DEFAULT_HISTORY_SAMPLES,
+    )
+    long_df = dedupe_history_rows(pd.DataFrame(long_rows))
+    return build_wide_history(long_df).sort_values("step").reset_index(drop=True)
+
+
 def _state_from_completed_run(
     wb_run,
     *,
@@ -245,7 +378,88 @@ def _state_from_completed_run(
     prev_action: float,
     objective_metric: str,
     total_steps: int,
+    artifact_path: str,
+    prior_actions: list[float],
+    phase_end_steps: tuple[int, ...],
 ) -> dict[str, float]:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if isinstance(artifact, PolicyArtifactV2):
+        history = _history_from_completed_run(
+            wb_run,
+            metric_keys=(
+                "train/loss",
+                "eval/loss",
+                objective_metric,
+                "optim/learning_rate",
+                "optim/adam_lr",
+                "grad/norm/total",
+            ),
+        )
+        defaults = _artifact_state_defaults(artifact)
+        phase_lengths = _phase_lengths(total_steps, phase_end_steps)
+        decision_steps = _decision_steps(phase_end_steps)
+        next_step = decision_steps[phase_index + 1] if phase_index < 2 else total_steps
+        prev_action_value, cumulative_exposure, delta_prev_action = _compute_exposure(
+            prior_actions,
+            phase_lengths,
+            phase_index,
+        )
+
+        last_train_loss, _ = _last_metric_at_or_before(history, "train/loss", decision_step)
+        last_eval_loss, eval_step = _last_metric_at_or_before(history, "eval/loss", decision_step)
+        last_obj_bpb, obj_step = _last_metric_at_or_before(history, objective_metric, decision_step)
+        last_lr, _ = _last_metric_at_or_before(history, "optim/learning_rate", decision_step)
+        last_adam_lr, _ = _last_metric_at_or_before(history, "optim/adam_lr", decision_step)
+        last_grad_norm, _ = _last_metric_at_or_before(history, "grad/norm/total", decision_step)
+        avg_lr_to_next_boundary = _mean_metric_between(history, "optim/learning_rate", decision_step, next_step)
+        avg_lr_remaining = _mean_metric_between(history, "optim/learning_rate", decision_step, total_steps)
+
+        if any(step is not None for step in (eval_step, obj_step)):
+            last_eval_like_step = max(step for step in (eval_step, obj_step) if step is not None)
+            steps_since_last_eval_frac = (decision_step - last_eval_like_step) / float(total_steps)
+        else:
+            steps_since_last_eval_frac = 1.0
+
+        state = defaults.copy()
+        state.update(
+            {
+                "decision_index": float(phase_index),
+                "num_phases_total": 3.0,
+                "remaining_decisions": float(max(0, 3 - phase_index - 1)),
+                "budget_frac_consumed": float(decision_step) / float(total_steps),
+                "budget_frac_remaining": 1.0 - (float(decision_step) / float(total_steps)),
+                "last_train_loss": defaults.get("last_train_loss", 0.0)
+                if last_train_loss is None
+                else float(last_train_loss),
+                "last_eval_loss": defaults.get("last_eval_loss", 0.0)
+                if last_eval_loss is None
+                else float(last_eval_loss),
+                "last_obj_bpb": defaults.get("last_obj_bpb", 0.0) if last_obj_bpb is None else float(last_obj_bpb),
+                "train_eval_gap": (
+                    defaults.get("train_eval_gap", 0.0)
+                    if last_train_loss is None or last_eval_loss is None
+                    else float(last_eval_loss - last_train_loss)
+                ),
+                "global_step": float(decision_step),
+                "steps_since_last_eval_frac": float(steps_since_last_eval_frac),
+                "optim/learning_rate": defaults.get("optim/learning_rate", 0.0) if last_lr is None else float(last_lr),
+                "optim/adam_lr": defaults.get("optim/adam_lr", 0.0) if last_adam_lr is None else float(last_adam_lr),
+                "avg_lr_to_next_boundary": defaults.get("avg_lr_to_next_boundary", 0.0)
+                if avg_lr_to_next_boundary is None
+                else float(avg_lr_to_next_boundary),
+                "avg_lr_remaining": defaults.get("avg_lr_remaining", 0.0)
+                if avg_lr_remaining is None
+                else float(avg_lr_remaining),
+                "grad/norm/total": defaults.get("grad/norm/total", 0.0)
+                if last_grad_norm is None
+                else float(last_grad_norm),
+                "prev_action_starcoder": float(prev_action_value),
+                "cumulative_starcoder_exposure": float(cumulative_exposure),
+                "delta_prev_action": float(delta_prev_action),
+            }
+        )
+        return {key: float(state[key]) for key in artifact.state_keys}
+
     long_rows = collect_history_long_rows(
         wb_run,
         metric_keys=("train/loss", "eval/loss", objective_metric, "throughput/total_tokens"),
@@ -267,29 +481,29 @@ def _state_from_completed_run(
 
 
 def _policy_predict_action(artifact_path: str, state: dict[str, float], device: str = "cpu") -> float:
-    artifact = load_policy_artifact(artifact_path)
-    normalized = normalize_state(state, artifact).reshape(1, -1)
-    artifact_dir = Path(artifact_path).resolve().parent
-    model_path = Path(artifact.model_path)
-    if model_path.is_absolute():
-        if not model_path.exists():
-            # Support policy artifacts produced on other machines by falling back
-            # to artifact-local paths.
-            candidates = [
-                (artifact_dir / model_path.name),
-                (artifact_dir / "terminal_reward" / model_path.name),
-                (artifact_dir / "delta_reward" / model_path.name),
-            ]
-            for candidate in candidates:
-                if candidate.exists():
-                    model_path = candidate
-                    break
-            else:
-                raise FileNotFoundError(
-                    f"Policy model path {model_path} does not exist and no local fallback was found near {artifact_dir}."
-                )
-    else:
-        model_path = (artifact_dir / model_path).resolve()
+    artifact = _load_policy_artifact_cached(artifact_path)
+    state_with_defaults = _artifact_state_defaults(artifact)
+    state_with_defaults.update({key: float(value) for key, value in state.items()})
+
+    if isinstance(artifact, PolicyArtifactV2) and artifact.kind == "sklearn_outcome_planner_v2":
+        bundle = _load_outcome_planner_bundle(artifact_path)
+        planner_state = pd.DataFrame(
+            [{key: float(state_with_defaults[key]) for key in bundle["feature_keys"]}],
+            columns=list(bundle["feature_keys"]),
+        )
+        action_grid = np.asarray(bundle["action_grid"], dtype=np.float32)
+        tiled = pd.concat([planner_state] * len(action_grid), ignore_index=True)
+        support_matrix = bundle["behavior_policy"].predict_proba(tiled)
+        support = support_matrix[np.arange(len(action_grid)), np.arange(len(action_grid))]
+        scores = bundle["reward_models"].blended_stage_scores(tiled, action_grid)
+        support_threshold = float(bundle.get("support_threshold", artifact.metadata.get("support_threshold", 0.0)))
+        supported = np.where(support >= support_threshold)[0]
+        candidate_indices = supported if len(supported) > 0 else np.where(support == np.max(support))[0]
+        best_local = int(candidate_indices[np.argmin(scores[candidate_indices])])
+        return float(action_grid[best_local])
+
+    normalized = normalize_state(state_with_defaults, artifact).reshape(1, -1)
+    model_path = _resolve_policy_model_path(artifact_path, artifact.model_path)
     try:
         import d3rlpy
     except ImportError as exc:
@@ -303,6 +517,9 @@ def _policy_predict_action(artifact_path: str, state: dict[str, float], device: 
         policy = load_learnable(str(model_path), device=device)
     action = policy.predict(normalized)
     raw = float(action[0][0] if hasattr(action[0], "__len__") else action[0])
+    if isinstance(artifact, PolicyArtifactV2) and artifact.action_values:
+        index = int(np.clip(round(raw), 0, len(artifact.action_values) - 1))
+        return float(artifact.action_values[index])
     return clip_action(raw, artifact)
 
 
@@ -348,12 +565,10 @@ def _should_force_local_dry_run(config: EvaluateConfig) -> bool:
     if not config.allow_local_fallback:
         return False
 
-    try:
-        get_vm_region()
-        return False
-    except Exception:
+    if marin_region() is None:
         logger.warning("Could not resolve VM region metadata; forcing dry-run policy evaluation.")
         return True
+    return False
 
 
 def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
@@ -368,6 +583,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
     job_token = uuid.uuid4().hex[:8]
     objective_metric = config.objective_metric
     force_dry_run = _should_force_local_dry_run(config)
+    artifact = _load_policy_artifact_cached(config.policy_artifact_path)
 
     rows: list[dict] = []
     for replicate_idx in range(config.n_replicates):
@@ -377,16 +593,34 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
         actions = []
         run_ids = []
 
-        # Initial state is neutral and normalized by artifact stats.
-        state = {
-            "phase_index": 0.0,
-            "last_train_loss": 0.0,
-            "last_eval_loss": 0.0,
-            "last_obj_bpb": 0.0,
-            "tokens_frac": 0.0,
-            "steps_since_last_eval_frac": 1.0,
-            "prev_action_starcoder": 0.5,
-        }
+        state = _artifact_state_defaults(artifact)
+        if isinstance(artifact, PolicyArtifactV2):
+            state.update(
+                {
+                    "decision_index": 0.0,
+                    "num_phases_total": 3.0,
+                    "remaining_decisions": 2.0,
+                    "budget_frac_consumed": 0.0,
+                    "budget_frac_remaining": 1.0,
+                    "global_step": 0.0,
+                    "steps_since_last_eval_frac": 1.0,
+                    "prev_action_starcoder": 0.5,
+                    "cumulative_starcoder_exposure": 0.0,
+                    "delta_prev_action": 0.0,
+                }
+            )
+        else:
+            state.update(
+                {
+                    "phase_index": 0.0,
+                    "last_train_loss": 0.0,
+                    "last_eval_loss": 0.0,
+                    "last_obj_bpb": 0.0,
+                    "tokens_frac": 0.0,
+                    "steps_since_last_eval_frac": 1.0,
+                    "prev_action_starcoder": 0.5,
+                }
+            )
 
         checkpoint_path: str | None = None
         final_metric = None
@@ -470,6 +704,9 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
                             prev_action=action,
                             objective_metric=objective_metric,
                             total_steps=config.total_steps,
+                            artifact_path=config.policy_artifact_path,
+                            prior_actions=actions,
+                            phase_end_steps=config.phase_end_steps,
                         )
                     else:
                         summary_value = wb_run.summary.get(objective_metric)
@@ -478,15 +715,41 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
             if replicate_force_dry:
                 run_ids.append(f"dry_run_rep{replicate_idx}_phase{phase_idx}")
                 checkpoint_path = f"dry://rep{replicate_idx}/phase{phase_idx}/checkpoint"
-                state = {
-                    "phase_index": float(min(phase_idx + 1, 2)),
-                    "last_train_loss": 0.0,
-                    "last_eval_loss": 0.0,
-                    "last_obj_bpb": 0.0,
-                    "tokens_frac": (phase_idx + 1) / 3.0,
-                    "steps_since_last_eval_frac": 0.0,
-                    "prev_action_starcoder": action,
-                }
+                state = _artifact_state_defaults(artifact)
+                if isinstance(artifact, PolicyArtifactV2):
+                    decision_index = float(min(phase_idx + 1, 2))
+                    budget_frac_consumed = (phase_idx + 1) / 3.0
+                    global_step = (
+                        float(config.phase_end_steps[min(phase_idx, 1)])
+                        if phase_idx < 2
+                        else float(config.total_steps)
+                    )
+                    state.update(
+                        {
+                            "decision_index": decision_index,
+                            "num_phases_total": 3.0,
+                            "remaining_decisions": float(max(0, 2 - (phase_idx + 1))),
+                            "budget_frac_consumed": budget_frac_consumed,
+                            "budget_frac_remaining": 1.0 - budget_frac_consumed,
+                            "global_step": global_step,
+                            "steps_since_last_eval_frac": 0.0,
+                            "prev_action_starcoder": action,
+                            "cumulative_starcoder_exposure": float(np.mean(actions)),
+                            "delta_prev_action": float(actions[-1] - actions[-2]) if len(actions) > 1 else 0.0,
+                        }
+                    )
+                else:
+                    state.update(
+                        {
+                            "phase_index": float(min(phase_idx + 1, 2)),
+                            "last_train_loss": 0.0,
+                            "last_eval_loss": 0.0,
+                            "last_obj_bpb": 0.0,
+                            "tokens_frac": (phase_idx + 1) / 3.0,
+                            "steps_since_last_eval_frac": 0.0,
+                            "prev_action_starcoder": action,
+                        }
+                    )
                 final_metric = 0.0
 
         rows.append(

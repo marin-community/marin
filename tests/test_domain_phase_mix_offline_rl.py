@@ -2,32 +2,56 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from experiments.domain_phase_mix.offline_rl import evaluate_policy_three_phase_starcoder as eval_runner
+from experiments.domain_phase_mix.offline_rl.build_pooled_transition_dataset import (
+    BuildPooledTransitionConfig,
+    build_action_grid,
+    build_pooled_transition_dataset,
+    discretize_action,
+)
 from experiments.domain_phase_mix.offline_rl.build_transitions import (
     augment_suffix_fragments,
     build_transition_tables,
+)
+from experiments.domain_phase_mix.offline_rl.collect_pooled_starcoder_dataset import (
+    _resolve_phase_weights,
+    _scan_history_batch,
 )
 from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dataset import (
     build_wide_history,
     dedupe_history_rows,
 )
-from experiments.domain_phase_mix.offline_rl.contracts import default_feature_config
-from experiments.domain_phase_mix.offline_rl.evaluate_policy_three_phase_starcoder import (
-    EvaluateConfig,
-    _should_force_local_dry_run,
-    build_phase_train_plan,
+from experiments.domain_phase_mix.offline_rl.contracts import (
+    PooledDatasetConfig,
+    default_feature_config,
+)
+from experiments.domain_phase_mix.offline_rl.ope import (
+    direct_method_value,
+    doubly_robust_estimate,
+    fit_behavior_policy,
+    fit_fqe_model,
+    fit_reward_models,
+    initial_state_value,
+    policy_diagnostics,
 )
 from experiments.domain_phase_mix.offline_rl.policy_artifact import (
     PolicyArtifactV1,
+    PolicyArtifactV2,
     clip_action,
     load_policy_artifact,
     save_policy_artifact,
 )
 from experiments.domain_phase_mix.offline_rl.train_cql_policy import TrainCQLConfig, train_policy
+from experiments.domain_phase_mix.offline_rl.train_offline_policy_bench import (
+    OfflinePolicyBenchConfig,
+    run_offline_policy_bench,
+)
 
 
 def test_dedupe_history_rows_keeps_latest_entry():
@@ -60,6 +84,29 @@ def test_dedupe_history_rows_keeps_latest_entry():
     deduped = dedupe_history_rows(long_df)
     assert len(deduped) == 1
     assert float(deduped.iloc[0]["metric_value"]) == 1.5
+
+
+def test_scan_history_batch_skips_after_retry_exhaustion():
+    class _AlwaysFailRun:
+        id = "run-fail"
+
+        def scan_history(self, keys):
+            raise RuntimeError(f"boom: {keys}")
+
+    rows = _scan_history_batch(_AlwaysFailRun(), ("grad/norm/total",), attempts=2, backoff_seconds=0.0)
+    assert rows == []
+
+
+def test_resolve_phase_weights_handles_legacy_base_offset():
+    phase_weights = {"phase_0": {"starcoder": 0.2}, "phase_1": {"starcoder": 0.3}}
+    resolved = _resolve_phase_weights(
+        map_from_configs={("exp", 42): phase_weights},
+        map_from_csv={},
+        source_experiment="exp",
+        local_run_id=90042,
+        wandb_run_id="run-id",
+    )
+    assert resolved == phase_weights
 
 
 def _synthetic_run_tables():
@@ -183,6 +230,97 @@ def test_policy_artifact_roundtrip_and_clip(tmp_path):
     assert clip_action(-5.0, loaded) == 0.1
 
 
+def test_policy_model_path_falls_back_to_artifact_local_full_models(tmp_path):
+    artifact_dir = tmp_path / "bundle"
+    model_dir = artifact_dir / "full_models" / "outcome_planner"
+    model_dir.mkdir(parents=True)
+    model_path = model_dir / "planner.joblib"
+    model_path.write_bytes(b"planner")
+    artifact_path = artifact_dir / "selected_policy_artifact.json"
+    save_policy_artifact(
+        artifact_path,
+        PolicyArtifactV2(
+            kind="sklearn_outcome_planner_v2",
+            objective_metric="eval/loss",
+            state_keys=("decision_index",),
+            action_low=0.05,
+            action_high=0.95,
+            action_values=[0.05, 0.5, 0.95],
+            state_mean=[0.0],
+            state_std=[1.0],
+            reward_mean=0.0,
+            reward_std=1.0,
+            model_path="/tmp/moved/planner.joblib",
+            metadata={"support_threshold": 0.02},
+        ),
+    )
+
+    resolved = eval_runner._resolve_policy_model_path(str(artifact_path), "/tmp/moved/planner.joblib")
+    assert resolved == model_path.resolve()
+
+
+def test_outcome_planner_predicts_supported_lowest_score_action(tmp_path, monkeypatch):
+    class _FakeBehaviorPolicy:
+        def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
+            return np.asarray(
+                [
+                    [0.01, 0.49, 0.50],
+                    [0.01, 0.49, 0.50],
+                    [0.01, 0.49, 0.50],
+                ],
+                dtype=np.float32,
+            )
+
+    class _FakeRewardModels:
+        def blended_stage_scores(self, frame: pd.DataFrame, action_values: np.ndarray) -> np.ndarray:
+            del frame
+            return np.asarray([3.0, 2.0, 1.0], dtype=np.float32)
+
+    artifact_dir = tmp_path / "planner_eval"
+    artifact_dir.mkdir(parents=True)
+    artifact_path = artifact_dir / "selected_policy_artifact.json"
+    save_policy_artifact(
+        artifact_path,
+        PolicyArtifactV2(
+            kind="sklearn_outcome_planner_v2",
+            objective_metric="eval/loss",
+            state_keys=("decision_index", "last_obj_bpb"),
+            action_low=0.05,
+            action_high=0.95,
+            action_values=[0.1, 0.2, 0.3],
+            state_mean=[0.0, 1.0],
+            state_std=[1.0, 1.0],
+            reward_mean=0.0,
+            reward_std=1.0,
+            model_path="/tmp/elsewhere/planner.joblib",
+            metadata={"support_threshold": 0.02},
+        ),
+    )
+    fallback_model = artifact_dir / "full_models" / "outcome_planner" / "planner.joblib"
+    fallback_model.parent.mkdir(parents=True)
+    fallback_model.write_bytes(b"planner")
+
+    monkeypatch.setattr(
+        eval_runner.joblib,
+        "load",
+        lambda _: {
+            "feature_keys": ("decision_index", "last_obj_bpb"),
+            "action_grid": [0.1, 0.2, 0.3],
+            "reward_models": _FakeRewardModels(),
+            "behavior_policy": _FakeBehaviorPolicy(),
+            "support_threshold": 0.02,
+        },
+    )
+    eval_runner._load_policy_artifact_cached.cache_clear()
+    eval_runner._load_outcome_planner_bundle.cache_clear()
+
+    action = eval_runner._policy_predict_action(
+        str(artifact_path),
+        {"decision_index": 1.0, "last_obj_bpb": 0.9},
+    )
+    assert math.isclose(action, 0.3, rel_tol=0.0, abs_tol=1e-6)
+
+
 def test_cql_smoke_with_fake_backend(tmp_path):
     episodes = pd.DataFrame(
         [
@@ -295,6 +433,8 @@ def test_cql_smoke_with_fake_backend(tmp_path):
 
 
 def test_online_phase_planning_handoffs():
+    from experiments.domain_phase_mix.offline_rl.evaluate_policy_three_phase_starcoder import build_phase_train_plan
+
     p0 = build_phase_train_plan(0, checkpoint_path=None)
     p1 = build_phase_train_plan(1, checkpoint_path="gs://x/checkpoint-1")
     p2 = build_phase_train_plan(2, checkpoint_path="gs://x/checkpoint-2")
@@ -306,8 +446,13 @@ def test_online_phase_planning_handoffs():
 
 
 def test_local_fallback_preflight(monkeypatch):
-    module_path = "experiments.domain_phase_mix.offline_rl.evaluate_policy_three_phase_starcoder.get_vm_region"
-    monkeypatch.setattr(module_path, lambda: (_ for _ in ()).throw(ValueError("no metadata")))
+    from experiments.domain_phase_mix.offline_rl.evaluate_policy_three_phase_starcoder import (
+        EvaluateConfig,
+        _should_force_local_dry_run,
+    )
+
+    module_path = "experiments.domain_phase_mix.offline_rl.evaluate_policy_three_phase_starcoder.marin_region"
+    monkeypatch.setattr(module_path, lambda: None)
     cfg = EvaluateConfig(
         policy_artifact_path="x/policy_artifact.json",
         output_dir="tmp",
@@ -323,3 +468,339 @@ def test_local_fallback_preflight(monkeypatch):
         allow_local_fallback=False,
     )
     assert _should_force_local_dry_run(cfg_no_fallback) is False
+
+
+def test_action_grid_roundtrip_is_bounded():
+    grid = build_action_grid(0.05, 0.95, 21)
+    idx, value = discretize_action(0.271, grid)
+    assert 0 <= idx < 21
+    assert 0.05 <= value <= 0.95
+    assert np.isclose(value, grid[idx])
+
+
+def test_build_pooled_transition_dataset_stage_tables(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    runs = pd.DataFrame(
+        [
+            {
+                "wandb_run_id": "two-a",
+                "run_name": "two-a",
+                "source_experiment": "two_phase_starcoder_4",
+                "run_family": "two_phase_starcoder",
+                "local_run_id": 1,
+                "num_phases_total": 2,
+                "total_steps": 3814,
+                "phase_boundaries_json": "[1904]",
+                "phase_0_starcoder": 0.2,
+                "phase_1_starcoder": 0.3,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.82,
+            },
+            {
+                "wandb_run_id": "three-a",
+                "run_name": "three-a",
+                "source_experiment": "three_phase_starcoder_1",
+                "run_family": "three_phase_starcoder",
+                "local_run_id": 2,
+                "num_phases_total": 3,
+                "total_steps": 5722,
+                "phase_boundaries_json": "[1888, 3833]",
+                "phase_0_starcoder": 0.1,
+                "phase_1_starcoder": 0.4,
+                "phase_2_starcoder": 0.7,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.76,
+            },
+        ]
+    )
+    history = pd.DataFrame(
+        [
+            {
+                "wandb_run_id": "two-a",
+                "step": 0,
+                "train/loss": 2.5,
+                "eval/loss": np.nan,
+                "eval/paloma/dolma_100_programing_languages/bpb": np.nan,
+                "optim/learning_rate": 0.001,
+                "optim/adam_lr": 0.001,
+                "throughput/examples_per_second": 10.0,
+                "throughput/tokens_per_second": 100.0,
+                "grad/norm/total": 1.0,
+                "total_tokens": 0.0,
+            },
+            {
+                "wandb_run_id": "two-a",
+                "step": 1904,
+                "train/loss": 2.0,
+                "eval/loss": 2.1,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.9,
+                "optim/learning_rate": 0.0008,
+                "optim/adam_lr": 0.0008,
+                "throughput/examples_per_second": 10.5,
+                "throughput/tokens_per_second": 110.0,
+                "grad/norm/total": 0.9,
+                "total_tokens": 1.0,
+            },
+            {
+                "wandb_run_id": "two-a",
+                "step": 3814,
+                "train/loss": 1.8,
+                "eval/loss": 1.9,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.82,
+                "optim/learning_rate": 0.0004,
+                "optim/adam_lr": 0.0004,
+                "throughput/examples_per_second": 11.0,
+                "throughput/tokens_per_second": 120.0,
+                "grad/norm/total": 0.8,
+                "total_tokens": 2.0,
+            },
+            {
+                "wandb_run_id": "three-a",
+                "step": 0,
+                "train/loss": 2.6,
+                "eval/loss": np.nan,
+                "eval/paloma/dolma_100_programing_languages/bpb": np.nan,
+                "optim/learning_rate": 0.0011,
+                "optim/adam_lr": 0.0011,
+                "throughput/examples_per_second": 9.0,
+                "throughput/tokens_per_second": 90.0,
+                "grad/norm/total": 1.2,
+                "total_tokens": 0.0,
+            },
+            {
+                "wandb_run_id": "three-a",
+                "step": 1888,
+                "train/loss": 2.2,
+                "eval/loss": 2.3,
+                "eval/paloma/dolma_100_programing_languages/bpb": 1.0,
+                "optim/learning_rate": 0.0009,
+                "optim/adam_lr": 0.0009,
+                "throughput/examples_per_second": 9.5,
+                "throughput/tokens_per_second": 95.0,
+                "grad/norm/total": 1.0,
+                "total_tokens": 1.0,
+            },
+            {
+                "wandb_run_id": "three-a",
+                "step": 3833,
+                "train/loss": 2.0,
+                "eval/loss": 2.05,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.9,
+                "optim/learning_rate": 0.0007,
+                "optim/adam_lr": 0.0007,
+                "throughput/examples_per_second": 9.8,
+                "throughput/tokens_per_second": 98.0,
+                "grad/norm/total": 0.95,
+                "total_tokens": 2.0,
+            },
+            {
+                "wandb_run_id": "three-a",
+                "step": 5722,
+                "train/loss": 1.7,
+                "eval/loss": 1.8,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.76,
+                "optim/learning_rate": 0.0003,
+                "optim/adam_lr": 0.0003,
+                "throughput/examples_per_second": 10.1,
+                "throughput/tokens_per_second": 101.0,
+                "grad/norm/total": 0.7,
+                "total_tokens": 3.0,
+            },
+        ]
+    )
+
+    runs.to_parquet(input_dir / "runs.parquet", index=False)
+    history.to_parquet(input_dir / "history_wide.parquet", index=False)
+
+    decisions, _feature_manifest, manifest = build_pooled_transition_dataset(
+        BuildPooledTransitionConfig(
+            input_dir=str(input_dir),
+            output_dir=str(tmp_path / "output"),
+            dataset_config=PooledDatasetConfig(n_cv_folds=2),
+        )
+    )
+    assert manifest["n_runs"] == 2
+    assert set(decisions[decisions["decision_index"] == 0]["run_family"]) == {
+        "two_phase_starcoder",
+        "three_phase_starcoder",
+    }
+    assert set(decisions[decisions["decision_index"] == 1]["run_family"]) == {
+        "two_phase_starcoder",
+        "three_phase_starcoder",
+    }
+    assert set(decisions[decisions["decision_index"] == 2]["run_family"]) == {"three_phase_starcoder"}
+    assert "decision_index" in {
+        row["feature_name"] for row in json.loads((tmp_path / "output" / "feature_manifest.json").read_text())["rows"]
+    }
+    assert {"decision_0.parquet", "decision_1.parquet", "decision_2.parquet"} <= {
+        path.name for path in (tmp_path / "output").iterdir()
+    }
+
+
+class _ArrayPolicy:
+    def __init__(self, name: str, action_idx: int):
+        self.name = name
+        self.action_idx = action_idx
+
+    def predict_action_indices(self, frame: pd.DataFrame) -> np.ndarray:
+        return np.full(len(frame), self.action_idx, dtype=np.int64)
+
+
+class _StateAwarePolicy:
+    def __init__(self, name: str):
+        self.name = name
+
+    def predict_action_indices(self, frame: pd.DataFrame) -> np.ndarray:
+        preferred = frame["decision_feature"].to_numpy(dtype=np.float32)
+        return np.where(preferred > 1.5, 2, 1).astype(np.int64)
+
+
+def test_ope_prefers_better_policy():
+    action_grid = np.asarray([0.05, 0.5, 0.95], dtype=np.float32)
+    rows = []
+    for episode_id in range(12):
+        preferred = 2 if episode_id % 2 == 0 else 1
+        for decision_index in range(3):
+            for action_idx, action_value in enumerate(action_grid):
+                reward = 1.0 if action_idx == preferred else 0.0
+                rows.append(
+                    {
+                        "wandb_run_id": f"run-{episode_id}-{action_idx}-{decision_index}",
+                        "episode_id": f"episode-{episode_id}-{action_idx}",
+                        "step_in_episode": 0,
+                        "decision_index": decision_index,
+                        "run_family": "three_phase_starcoder",
+                        "action_idx": action_idx,
+                        "action_grid_value": float(action_value),
+                        "action_starcoder": float(action_value),
+                        "done": True,
+                        "reward_dense_raw": reward,
+                        "final_objective": -reward,
+                        "decision_feature": float(preferred),
+                        "num_phases_total": 3.0,
+                        "remaining_decisions": float(2 - decision_index),
+                        "budget_frac_consumed": float(decision_index) / 3.0,
+                        "budget_frac_remaining": 1.0 - float(decision_index) / 3.0,
+                    }
+                )
+    frame = pd.DataFrame(rows)
+    feature_keys = (
+        "decision_feature",
+        "decision_index",
+        "num_phases_total",
+        "remaining_decisions",
+        "budget_frac_consumed",
+        "budget_frac_remaining",
+    )
+    train_episode_ids = tuple(f"episode-{idx}-" for idx in range(6))
+    val_episode_ids = tuple(f"episode-{idx}-" for idx in range(6, 12))
+    train = frame[frame["episode_id"].str.startswith(train_episode_ids)].reset_index(drop=True)
+    val = frame[frame["episode_id"].str.startswith(val_episode_ids)].reset_index(drop=True)
+    behavior = fit_behavior_policy(train, feature_keys, action_count=3, random_state=0)
+    reward_models = fit_reward_models(
+        train,
+        feature_keys,
+        random_state=0,
+        final_model_weight=1.0,
+        reward_bonus_weight=0.0,
+    )
+    good_policy = _StateAwarePolicy("good")
+    bad_policy = _ArrayPolicy("bad", 0)
+
+    fqe_good = fit_fqe_model(train, feature_keys, good_policy, action_grid, gamma=1.0, random_state=0, iterations=8)
+    fqe_bad = fit_fqe_model(train, feature_keys, bad_policy, action_grid, gamma=1.0, random_state=0, iterations=8)
+
+    assert direct_method_value(val, good_policy, reward_models) >= direct_method_value(val, bad_policy, reward_models)
+    assert initial_state_value(val, good_policy, fqe_good, action_grid) >= initial_state_value(
+        val, bad_policy, fqe_bad, action_grid
+    )
+    assert doubly_robust_estimate(val, good_policy, behavior, fqe_good, action_grid, gamma=1.0) >= (
+        doubly_robust_estimate(val, bad_policy, behavior, fqe_bad, action_grid, gamma=1.0)
+    )
+
+    diagnostics_df, summary = policy_diagnostics(
+        frame=val,
+        policy=_ArrayPolicy("collapsed", 0),
+        behavior_policy=behavior,
+        action_grid=(0.05, 0.5, 0.95),
+        support_threshold=0.4,
+    )
+    assert not diagnostics_df.empty
+    assert summary["boundary_rate"] == 1.0
+
+
+def test_offline_policy_bench_smoke(tmp_path):
+    input_dir = tmp_path / "dataset"
+    output_dir = tmp_path / "bench"
+    input_dir.mkdir()
+
+    action_grid = [0.05, 0.5, 0.95]
+    feature_keys = [
+        "decision_index",
+        "num_phases_total",
+        "remaining_decisions",
+        "budget_frac_consumed",
+        "budget_frac_remaining",
+        "last_obj_bpb",
+        "prev_action_starcoder",
+    ]
+    rows = []
+    for run_index in range(8):
+        run_family = "three_phase_starcoder" if run_index < 4 else "two_phase_starcoder"
+        n_decisions = 3 if run_family == "three_phase_starcoder" else 2
+        fold = run_index % 2
+        preferred = 2 if run_index % 2 == 0 else 1
+        final_reward = 0.0
+        prev_action = 0.5
+        for decision_index in range(n_decisions):
+            action_idx = preferred if decision_index == 0 else 1
+            action_value = action_grid[action_idx]
+            reward = 1.0 if action_idx == preferred else 0.0
+            final_reward += reward
+            rows.append(
+                {
+                    "wandb_run_id": f"run-{run_index}",
+                    "episode_id": f"run-{run_index}",
+                    "step_in_episode": decision_index,
+                    "cv_fold": fold,
+                    "run_family": run_family,
+                    "decision_index": decision_index,
+                    "action_idx": action_idx,
+                    "action_grid_value": action_value,
+                    "action_starcoder": action_value,
+                    "done": decision_index == n_decisions - 1,
+                    "reward_dense_raw": reward,
+                    "final_objective": float(n_decisions - final_reward),
+                    "last_obj_bpb": float(1.0 - 0.1 * decision_index),
+                    "prev_action_starcoder": prev_action,
+                    "num_phases_total": float(n_decisions),
+                    "remaining_decisions": float(n_decisions - decision_index - 1),
+                    "budget_frac_consumed": float(decision_index) / float(n_decisions),
+                    "budget_frac_remaining": 1.0 - float(decision_index) / float(n_decisions),
+                }
+            )
+            prev_action = action_value
+    decisions = pd.DataFrame(rows)
+    decisions.to_parquet(input_dir / "decisions.parquet", index=False)
+    with (input_dir / "feature_manifest.json").open("w") as f:
+        json.dump({"selected_feature_keys": feature_keys}, f)
+    with (input_dir / "dataset_manifest.json").open("w") as f:
+        json.dump({"action_grid": action_grid, "n_cv_folds": 2}, f)
+
+    summary = run_offline_policy_bench(
+        OfflinePolicyBenchConfig(
+            input_dir=str(input_dir),
+            output_dir=str(output_dir),
+            fqe_iterations=2,
+            d3rlpy_steps=2,
+            d3rlpy_steps_per_epoch=1,
+            discrete_iql_epochs=2,
+            discrete_iql_batch_size=8,
+            include_continuous_cql=False,
+            device="cpu",
+        )
+    )
+    assert (output_dir / "fold_scores.csv").exists()
+    assert (output_dir / "policy_summary.csv").exists()
+    assert (output_dir / "artifacts" / "discrete_cql.json").exists()
+    assert summary["best_dr_method"] is not None

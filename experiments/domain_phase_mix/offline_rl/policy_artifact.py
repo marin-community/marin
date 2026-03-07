@@ -1,17 +1,19 @@
 # Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Policy artifact format and helpers for offline-RL baselines."""
+"""Policy artifact formats and helpers for offline-RL baselines."""
 
 from __future__ import annotations
 
 import dataclasses
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
+
+from experiments.domain_phase_mix.offline_rl.contracts import PolicyKindV2
 
 
 @dataclass(frozen=True)
@@ -30,7 +32,29 @@ class PolicyArtifactV1:
     model_path: str
 
 
-def save_policy_artifact(path: str | Path, artifact: PolicyArtifactV1) -> None:
+@dataclass(frozen=True)
+class PolicyArtifactV2:
+    """Serialized metadata for pooled offline-control v2 policies."""
+
+    kind: PolicyKindV2
+    objective_metric: str
+    state_keys: tuple[str, ...]
+    action_low: float
+    action_high: float
+    action_values: list[float]
+    state_mean: list[float]
+    state_std: list[float]
+    reward_mean: float
+    reward_std: float
+    model_path: str
+    aux_paths: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, float | int | str | bool] = field(default_factory=dict)
+
+
+AnyPolicyArtifact = PolicyArtifactV1 | PolicyArtifactV2
+
+
+def save_policy_artifact(path: str | Path, artifact: AnyPolicyArtifact) -> None:
     """Persist a policy artifact to JSON."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -38,26 +62,51 @@ def save_policy_artifact(path: str | Path, artifact: PolicyArtifactV1) -> None:
         json.dump(dataclasses.asdict(artifact), f, indent=2, sort_keys=True)
 
 
-def load_policy_artifact(path: str | Path) -> PolicyArtifactV1:
-    """Load a policy artifact from JSON."""
+save_policy_artifact_v2 = save_policy_artifact
+
+
+def load_policy_artifact(path: str | Path) -> AnyPolicyArtifact:
+    """Load a v1 or v2 policy artifact from JSON."""
     source = Path(path)
     with source.open() as f:
         payload = json.load(f)
-    return PolicyArtifactV1(
-        kind=payload["kind"],
+
+    kind = str(payload["kind"])
+    if kind == "d3rlpy_cql_continuous_v1":
+        return PolicyArtifactV1(
+            kind="d3rlpy_cql_continuous_v1",
+            objective_metric=payload["objective_metric"],
+            state_keys=tuple(payload["state_keys"]),
+            action_low=float(payload["action_low"]),
+            action_high=float(payload["action_high"]),
+            state_mean=[float(x) for x in payload["state_mean"]],
+            state_std=[float(x) for x in payload["state_std"]],
+            reward_mean=float(payload["reward_mean"]),
+            reward_std=float(payload["reward_std"]),
+            model_path=str(payload["model_path"]),
+        )
+
+    return PolicyArtifactV2(
+        kind=kind,  # type: ignore[arg-type]
         objective_metric=payload["objective_metric"],
         state_keys=tuple(payload["state_keys"]),
         action_low=float(payload["action_low"]),
         action_high=float(payload["action_high"]),
+        action_values=[float(x) for x in payload.get("action_values", [])],
         state_mean=[float(x) for x in payload["state_mean"]],
         state_std=[float(x) for x in payload["state_std"]],
         reward_mean=float(payload["reward_mean"]),
         reward_std=float(payload["reward_std"]),
         model_path=str(payload["model_path"]),
+        aux_paths={str(k): str(v) for k, v in payload.get("aux_paths", {}).items()},
+        metadata=payload.get("metadata", {}),
     )
 
 
-def normalize_state(state: dict[str, float], artifact: PolicyArtifactV1) -> np.ndarray:
+load_policy_artifact_v2 = load_policy_artifact
+
+
+def normalize_state(state: dict[str, float], artifact: PolicyArtifactV1 | PolicyArtifactV2) -> np.ndarray:
     """Normalize a state dict to the policy's expected feature vector."""
     raw = np.asarray([float(state[key]) for key in artifact.state_keys], dtype=np.float32)
     mean = np.asarray(artifact.state_mean, dtype=np.float32)
@@ -66,6 +115,15 @@ def normalize_state(state: dict[str, float], artifact: PolicyArtifactV1) -> np.n
     return (raw - mean) / safe_std
 
 
-def clip_action(action: float, artifact: PolicyArtifactV1) -> float:
+def clip_action(action: float, artifact: PolicyArtifactV1 | PolicyArtifactV2) -> float:
     """Clip an action to policy bounds."""
     return float(np.clip(action, artifact.action_low, artifact.action_high))
+
+
+def discretize_action(action: float, artifact: PolicyArtifactV2) -> tuple[int, float]:
+    """Map a continuous action onto the nearest v2 discrete action value."""
+    if not artifact.action_values:
+        raise ValueError("Policy artifact does not define a discrete action grid.")
+    values = np.asarray(artifact.action_values, dtype=np.float32)
+    index = int(np.argmin(np.abs(values - action)))
+    return index, float(values[index])

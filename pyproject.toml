@@ -17,6 +17,8 @@ dependencies = [
     "marin",
     "zephyr",
     # top level deps. try to keep these small.
+    "joblib",
+    "scikit-learn",
     "watchdog",
 ]
 
