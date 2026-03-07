@@ -111,7 +111,7 @@ def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2
     proto = cluster_pb2.TaskStatus(
         task_id=task.task_id.to_wire(),
         state=task.state,
-        worker_id=str(task.worker_id) if task.worker_id else "",
+        worker_id=str(task.active_worker_id) if task.active_worker_id else "",
         worker_address=worker_address,
         exit_code=task.exit_code or 0,
         error=task.error or "",
@@ -124,6 +124,13 @@ def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2
         proto.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
     if task.resource_usage:
         proto.resource_usage.CopyFrom(task.resource_usage)
+    # For pending tasks with prior terminal attempts, surface retry context.
+    if task.state == cluster_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].is_terminal():
+        last = task.attempts[-1]
+        proto.pending_reason = (
+            f"Retrying (attempt {len(task.attempts)}, " f"last: {cluster_pb2.TaskState.Name(last.state).lower()})"
+        )
+        proto.can_be_scheduled = True
     return proto
 
 
@@ -364,8 +371,9 @@ class ControllerServiceImpl:
         tasks = self._state.get_job_tasks(job.job_id)
 
         # Batch-fetch all referenced workers in one lock acquisition instead of
-        # acquiring the lock per task.
-        worker_ids = {t.worker_id for t in tasks if t.worker_id}
+        # acquiring the lock per task. Use active_worker_id so pruned (dead)
+        # workers are not looked up.
+        worker_ids = {t.active_worker_id for t in tasks if t.active_worker_id}
         workers_by_id = self._state.get_workers_batch(worker_ids)
 
         task_statuses = []
@@ -375,7 +383,7 @@ class ControllerServiceImpl:
             total_failure_count += task.failure_count
             total_preemption_count += task.preemption_count
 
-            worker = workers_by_id.get(task.worker_id) if task.worker_id else None
+            worker = workers_by_id.get(task.active_worker_id) if task.active_worker_id else None
             worker_address = worker.address if worker else ""
 
             task_statuses.append(task_to_proto(task, worker_address=worker_address))

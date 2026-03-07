@@ -302,6 +302,20 @@ class ControllerTask:
             return self.attempts[-1].worker_id
         return None
 
+    @property
+    def active_worker_id(self) -> WorkerId | None:
+        """Worker ID for display, suppressed only while awaiting re-scheduling.
+
+        A PENDING task may carry a stale worker_id from a prior failed/preempted
+        attempt whose worker is already dead. Showing that address on the
+        dashboard is misleading. For every other state the most recent attempt's
+        worker is meaningful (actively running, or the worker that completed /
+        failed the task).
+        """
+        if self.state == cluster_pb2.TASK_STATE_PENDING:
+            return None
+        return self.worker_id
+
     # --- Attempt management methods ---
 
     def create_attempt(
@@ -476,6 +490,23 @@ class ControllerTask:
         if state == cluster_pb2.TASK_STATE_WORKER_FAILED:
             return self.preemption_count > self.max_retries_preemption
         return False
+
+    def release_to_pending(self) -> int:
+        """Discard the current in-flight attempt and reset to PENDING.
+
+        Used exclusively for reservation holder tasks when their assigned worker
+        dies. Because holder tasks are virtual (never dispatched), failed attempts
+        are meaningless and must not accumulate. The non-terminal attempt is
+        removed so the task can be cleanly reassigned without any failure record.
+
+        Returns:
+            The task's state before the reset, for job state accounting.
+        """
+        old_state = self.state
+        if self.current_attempt and not self.current_attempt.is_terminal():
+            self.attempts.pop()
+        self.state = cluster_pb2.TASK_STATE_PENDING
+        return old_state
 
     def can_be_scheduled(self) -> bool:
         """Check if task is ready to be scheduled.
@@ -1115,6 +1146,17 @@ class ControllerState:
             if task.state in TERMINAL_TASK_STATES:
                 continue
 
+            job = self._jobs.get(task.job_id)
+            if job and job.is_reservation_holder:
+                # Holder tasks are virtual (never dispatched, no entrypoint).
+                # Discard the in-flight attempt and requeue silently — no
+                # WORKER_FAILED record, no retry budget burn, no accumulation.
+                old_state = task.release_to_pending()
+                self._requeue_task(task, txn)
+                job.on_task_transition(old_state, task.state)
+                txn.log("holder_task_released", task_id, worker_id=str(event.worker_id))
+                continue
+
             cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
@@ -1247,6 +1289,16 @@ class ControllerState:
         job.error = event.reason
         job.finished_at = Timestamp.now()
         txn.log("job_cancelled", event.job_id, reason=event.reason)
+
+        # Cancel child jobs (e.g. the reservation holder child) unconditionally.
+        # The usual path fires _cancel_child_jobs only via _finalize_job_state,
+        # which is triggered by _on_task_state_changed only when there is at
+        # least one non-terminal task. If all tasks were already terminal when
+        # this event arrived (e.g. a parent that just succeeded races with an
+        # explicit cancel), _finalize_job_state is never reached and child jobs
+        # would be silently orphaned — keeping holder tasks in worker
+        # running_tasks and blocking scale-down idle detection.
+        txn.tasks_to_kill.update(self._cancel_child_jobs(event.job_id, txn))
 
     # -------------------------------------------------------------------------
     # Task Event Handlers
