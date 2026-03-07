@@ -80,6 +80,23 @@ accidental collision with normal job names."""
 HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
 
+
+class HeartbeatAction(Enum):
+    """Action the controller should take after reporting a heartbeat result.
+
+    OK: Heartbeat succeeded, worker is healthy. No special action needed.
+    TRANSIENT_FAILURE: RPC failed but worker is still within the failure threshold.
+        Dispatches were re-queued for the next heartbeat.
+    WORKER_FAILED: Worker exceeded the heartbeat failure threshold or reported itself
+        as unhealthy. The worker has been pruned from state. The controller should
+        evict the cached stub and notify the autoscaler.
+    """
+
+    OK = "ok"
+    TRANSIENT_FAILURE = "transient_failure"
+    WORKER_FAILED = "worker_failed"
+
+
 RESOURCE_HISTORY_MAX = 60
 """~5 minutes at 5s heartbeat interval."""
 
@@ -2230,6 +2247,58 @@ class ControllerState:
                 # all tasks in running_tasks. Clear stale dispatches so they don't
                 # linger after the worker is pruned.
                 self._pending_dispatch.pop(snapshot.worker_id, None)
+
+    def report_heartbeat(
+        self,
+        snapshot: HeartbeatSnapshot,
+        response: cluster_pb2.HeartbeatResponse | None,
+        error: str | None = None,
+    ) -> HeartbeatAction:
+        """Unified heartbeat result handler (phase 3).
+
+        Merges the success and failure paths into a single entry point.
+        The controller always calls this method with either:
+        - response set (RPC succeeded) — processes task states and checks worker health
+        - response=None, error set (RPC failed) — increments failure counter
+
+        Returns a HeartbeatAction telling the controller what to do next.
+        """
+        if response is not None:
+            # Check if the worker reported itself as unhealthy
+            if not response.worker_healthy:
+                health_error = response.health_error or "worker reported unhealthy"
+                logger.warning(
+                    "Worker %s reported unhealthy: %s",
+                    snapshot.worker_id,
+                    health_error,
+                )
+                # Process the response first so we capture final task states
+                self.complete_heartbeat(snapshot, response)
+                # Then immediately fail the worker
+                with self._lock:
+                    worker = self._workers.get(snapshot.worker_id)
+                    if worker:
+                        event = WorkerFailedEvent(
+                            worker_id=snapshot.worker_id,
+                            error=f"health check failed: {health_error}",
+                        )
+                        txn = TransactionLog(event=event)
+                        self._on_worker_failed(txn, event)
+                        self._transactions.append(txn)
+                return HeartbeatAction.WORKER_FAILED
+
+            # Normal success path
+            self.complete_heartbeat(snapshot, response)
+            return HeartbeatAction.OK
+
+        # RPC failure path
+        self.fail_heartbeat(snapshot, error or "unknown error")
+
+        # Check if the worker was pruned from state (exceeded failure threshold)
+        if self.get_worker(snapshot.worker_id) is None:
+            return HeartbeatAction.WORKER_FAILED
+
+        return HeartbeatAction.TRANSIENT_FAILURE
 
     def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
         """Load workers from static configuration."""
