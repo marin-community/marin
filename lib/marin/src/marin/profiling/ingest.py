@@ -63,7 +63,14 @@ _COMM_PATTERNS = (
     "psum",
     "send",
     "recv",
+    # GPU/NCCL-style (no separators)
+    "nccl",
+    "allgather",
+    "allreduce",
+    "reducescatter",
 )
+
+_DEVICE_OP_THREAD_NAMES = frozenset({"XLA Ops", "Async XLA Ops"})
 
 _STALL_PATTERN = re.compile(
     r"wait|barrier|dependency-wait|donation holds|semaphore|acquire|idle|blocked|sleep", re.IGNORECASE
@@ -140,6 +147,7 @@ class _CompleteTraceEvent:
     run_id: str | None
     process_name: str | None
     thread_name: str | None
+    step_num: int | None
 
 
 @dataclass
@@ -550,6 +558,7 @@ def _parse_complete_events(
                 run_id=_string_like_arg(event.get("args"), "run_id"),
                 process_name=process_names.get(pid),
                 thread_name=thread_names.get((pid, tid)),
+                step_num=_int_like_arg(event.get("args"), "step_num"),
             )
         )
 
@@ -652,6 +661,8 @@ def _make_trace_provenance(events: list[_CompleteTraceEvent], *, trace_sha256: s
 
 def _summarize_step_times(events: list[_CompleteTraceEvent], *, warmup_steps: int) -> StepTimeSummary:
     per_step: dict[int, list[float]] = defaultdict(list)
+
+    # TPU path: device "Steps" thread with numeric event names.
     for event in events:
         if not _is_device_event(event):
             continue
@@ -662,6 +673,19 @@ def _summarize_step_times(events: list[_CompleteTraceEvent], *, warmup_steps: in
         except ValueError:
             continue
         per_step[step].append(event.dur)
+
+    # GPU fallback: host-side StepTraceAnnotation events (step_num in args).
+    # Filter to name="train" on /host:CPU to avoid averaging unrelated spans
+    # (e.g. device-side events that also carry step_num).
+    if not per_step:
+        for event in events:
+            if event.step_num is None:
+                continue
+            if event.name != "train":
+                continue
+            if not event.process_name or not event.process_name.startswith("/host:"):
+                continue
+            per_step[event.step_num].append(event.dur)
 
     averaged_steps: list[tuple[int, float]] = []
     for step, durations in per_step.items():
@@ -823,9 +847,7 @@ def _summarize_hot_ops(
     aggregate: dict[str, dict[str, float | int | str | Counter[str] | list[float]]] = {}
 
     for event, exclusive_duration in zip(events, exclusive, strict=True):
-        if not _is_device_event(event):
-            continue
-        if event.thread_name not in {"XLA Ops", "Async XLA Ops"}:
+        if not _is_device_op_event(event):
             continue
 
         bucket = aggregate.setdefault(
@@ -972,11 +994,9 @@ def _summarize_communication(events: list[_CompleteTraceEvent], exclusive: list[
     aggregate: dict[str, tuple[int, float]] = {}
 
     for event, duration in zip(events, exclusive, strict=True):
-        if not _is_device_event(event):
+        if not _is_device_op_event(event):
             continue
         if not _is_communication_name(event.name):
-            continue
-        if event.thread_name not in {"XLA Ops", "Async XLA Ops"}:
             continue
 
         collective = _collective_kind(event.name)
@@ -1000,9 +1020,7 @@ def _summarize_pre_op_gaps(events: list[_CompleteTraceEvent], *, limit: int) -> 
 
     by_track: dict[tuple[int, int], list[_CompleteTraceEvent]] = defaultdict(list)
     for event in events:
-        if not _is_device_event(event):
-            continue
-        if event.thread_name not in {"XLA Ops", "Async XLA Ops"}:
+        if not _is_device_op_event(event):
             continue
         by_track[(event.pid, event.tid)].append(event)
 
@@ -1060,9 +1078,7 @@ def _summarize_hierarchical_regions(
     aggregate: dict[str, dict[str, float | int]] = {}
 
     for event, exclusive_duration in zip(events, exclusive, strict=True):
-        if not _is_device_event(event):
-            continue
-        if event.thread_name not in {"XLA Ops", "Async XLA Ops"}:
+        if not _is_device_op_event(event):
             continue
 
         path_parts = _hierarchical_parts(event)
@@ -1140,9 +1156,7 @@ def _summarize_gap_region_contexts(events: list[_CompleteTraceEvent], *, limit: 
 
     by_track: dict[tuple[int, int], list[_CompleteTraceEvent]] = defaultdict(list)
     for event in events:
-        if not _is_device_event(event):
-            continue
-        if event.thread_name not in {"XLA Ops", "Async XLA Ops"}:
+        if not _is_device_op_event(event):
             continue
         by_track[(event.pid, event.tid)].append(event)
 
@@ -1562,13 +1576,27 @@ def _is_device_event(event: _CompleteTraceEvent) -> bool:
     return bool(event.process_name and event.process_name.startswith("/device:"))
 
 
+def _is_device_op_thread(thread_name: str | None) -> bool:
+    if thread_name is None:
+        return False
+    if thread_name in _DEVICE_OP_THREAD_NAMES:
+        return True
+    if thread_name.startswith("Stream #"):
+        return True
+    return False
+
+
+def _is_device_op_event(event: _CompleteTraceEvent) -> bool:
+    return _is_device_event(event) and _is_device_op_thread(event.thread_name)
+
+
 def _collective_kind(name: str) -> str:
     lowered = name.lower()
-    if "all-reduce" in lowered or "psum" in lowered:
+    if "all-reduce" in lowered or "allreduce" in lowered or "psum" in lowered:
         return "all-reduce"
-    if "all-gather" in lowered or "all_gather" in lowered:
+    if "all-gather" in lowered or "all_gather" in lowered or "allgather" in lowered:
         return "all-gather"
-    if "reduce-scatter" in lowered:
+    if "reduce-scatter" in lowered or "reducescatter" in lowered:
         return "reduce-scatter"
     if "all-to-all" in lowered or "alltoall" in lowered:
         return "all-to-all"
@@ -1681,9 +1709,7 @@ def _preferred_region_path_by_op(events: list[_CompleteTraceEvent], *, max_depth
     counters: dict[str, dict[str, int]] = defaultdict(dict)
 
     for event in events:
-        if not _is_device_event(event):
-            continue
-        if event.thread_name not in {"XLA Ops", "Async XLA Ops"}:
+        if not _is_device_op_event(event):
             continue
         if not event.tf_op:
             continue
@@ -1813,4 +1839,18 @@ def _string_like_arg(args_value: Any, key: str) -> str | None:
         return value if value else None
     if isinstance(value, (int, float)):
         return str(value)
+    return None
+
+
+def _int_like_arg(args_value: Any, key: str) -> int | None:
+    if not isinstance(args_value, dict):
+        return None
+    value = args_value.get(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
     return None
