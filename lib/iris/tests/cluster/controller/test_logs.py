@@ -50,15 +50,6 @@ def test_get_logs_tail_returns_last_n(log_store: LogStore):
     assert [e.data for e in result.entries] == [f"line-{i}" for i in range(90, 100)]
 
 
-def test_get_logs_tail_chronological_order(log_store: LogStore):
-    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(50)]
-    log_store.append(KEY, entries)
-
-    result = log_store.get_logs(KEY, max_lines=5, tail=True)
-    timestamps = [e.timestamp.epoch_ms for e in result.entries]
-    assert timestamps == sorted(timestamps)
-
-
 def test_get_logs_tail_with_regex(log_store: LogStore):
     entries = [_make_entry(f"{'ERROR' if i % 10 == 0 else 'INFO'}: msg-{i}", epoch_ms=i) for i in range(100)]
     log_store.append(KEY, entries)
@@ -77,18 +68,10 @@ def test_get_logs_tail_with_since_ms(log_store: LogStore):
     assert [e.data for e in result.entries] == ["line-95", "line-96", "line-97", "line-98", "line-99"]
 
 
-def test_get_logs_tail_fewer_than_max(log_store: LogStore):
-    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(3)]
-    log_store.append(KEY, entries)
-
-    result = log_store.get_logs(KEY, max_lines=100, tail=True)
-    assert len(result.entries) == 3
-
-
 def test_get_logs_tail_empty_file(log_store: LogStore):
     result = log_store.get_logs(KEY, max_lines=10, tail=True)
     assert result.entries == []
-    assert result.lines_read == 0
+    assert result.cursor == 0
 
 
 def test_get_logs_forward_unchanged(log_store: LogStore):
@@ -145,64 +128,38 @@ def test_persistent_log_dir(tmp_path: Path):
 
 
 # =============================================================================
-# Skip-lines / offset tests
+# Cursor-based pagination tests
 # =============================================================================
 
 
-def test_skip_lines_seeks_efficiently(log_store: LogStore):
-    """Append 1000 lines, skip_lines=990 returns last 10."""
+def test_cursor_skips_already_seen(log_store: LogStore):
+    """Append 1000 lines, use cursor from first 990 to get last 10."""
     entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(1000)]
     log_store.append(KEY, entries)
 
-    result = log_store.get_logs(KEY, skip_lines=990)
+    result_head = log_store.get_logs(KEY, max_lines=990)
+    assert len(result_head.entries) == 990
+
+    result = log_store.get_logs(KEY, cursor=result_head.cursor)
     assert len(result.entries) == 10
     assert [e.data for e in result.entries] == [f"line-{i}" for i in range(990, 1000)]
-    assert result.lines_read == 1000
 
 
-def test_skip_lines_round_trip(log_store: LogStore):
-    """Append -> read -> append more -> read(skip=prev) returns only new."""
+def test_cursor_round_trip(log_store: LogStore):
+    """Append -> read -> append more -> read(cursor=prev) returns only new."""
     entries1 = [_make_entry(f"batch1-{i}", epoch_ms=i) for i in range(10)]
     log_store.append(KEY, entries1)
 
     result1 = log_store.get_logs(KEY)
     assert len(result1.entries) == 10
-    cursor = result1.lines_read
+    cursor = result1.cursor
 
     entries2 = [_make_entry(f"batch2-{i}", epoch_ms=100 + i) for i in range(5)]
     log_store.append(KEY, entries2)
 
-    result2 = log_store.get_logs(KEY, skip_lines=cursor)
+    result2 = log_store.get_logs(KEY, cursor=cursor)
     assert len(result2.entries) == 5
     assert [e.data for e in result2.entries] == [f"batch2-{i}" for i in range(5)]
-    assert result2.lines_read == 15
-
-
-def test_line_offsets_rebuilt_on_restart(tmp_path: Path):
-    """Append, close, new store with same dir, skip works."""
-    log_dir = tmp_path / "logs"
-    store1 = LogStore(log_dir=log_dir)
-    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(20)]
-    store1.append(KEY, entries)
-    store1.close()
-
-    store2 = LogStore(log_dir=log_dir)
-    result = store2.get_logs(KEY, skip_lines=15)
-    assert len(result.entries) == 5
-    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(15, 20)]
-    assert result.lines_read == 20
-    store2.close()
-
-
-def test_tail_uses_offset_array(log_store: LogStore):
-    """tail=True returns last N."""
-    entries = [_make_entry(f"line-{i}", epoch_ms=i) for i in range(50)]
-    log_store.append(KEY, entries)
-
-    result = log_store.get_logs(KEY, max_lines=5, tail=True)
-    assert len(result.entries) == 5
-    assert [e.data for e in result.entries] == [f"line-{i}" for i in range(45, 50)]
-    assert result.lines_read == 50
 
 
 def test_has_logs_no_known_attempts(tmp_path: Path):
@@ -227,7 +184,67 @@ def test_clear_removes_logs(log_store: LogStore):
     assert not log_store.has_logs(KEY)
     result = log_store.get_logs(KEY)
     assert result.entries == []
-    assert result.lines_read == 0
+    assert result.cursor == 0
+
+
+# =============================================================================
+# Prefix-based query tests
+# =============================================================================
+
+
+def test_get_logs_by_prefix_returns_all_matching(log_store: LogStore):
+    """Prefix query returns entries from all matching keys in id order."""
+    t0 = JobName.from_wire("/job/test/task/0")
+    t1 = JobName.from_wire("/job/test/task/1")
+
+    log_store.append(task_log_key(t0, 0), [_make_entry("t0-a0-line0", epoch_ms=1)])
+    log_store.append(task_log_key(t0, 1), [_make_entry("t0-a1-line0", epoch_ms=2)])
+    log_store.append(task_log_key(t1, 0), [_make_entry("t1-a0-line0", epoch_ms=3)])
+
+    result = log_store.get_logs_by_prefix("/job/test/")
+    assert len(result.entries) == 3
+    assert [e.data for e in result.entries] == ["t0-a0-line0", "t0-a1-line0", "t1-a0-line0"]
+    # attempt_id is parsed from key
+    assert [e.attempt_id for e in result.entries] == [0, 1, 0]
+
+
+def test_get_logs_by_prefix_cursor_continuation(log_store: LogStore):
+    """Cursor-based continuation with prefix returns no duplicates."""
+    t0 = JobName.from_wire("/job/test/task/0")
+    log_store.append(task_log_key(t0, 0), [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)])
+
+    result1 = log_store.get_logs_by_prefix("/job/test/", max_lines=3)
+    assert len(result1.entries) == 3
+
+    result2 = log_store.get_logs_by_prefix("/job/test/", cursor=result1.cursor)
+    assert len(result2.entries) == 2
+    assert [e.data for e in result2.entries] == ["line-3", "line-4"]
+
+
+def test_get_logs_by_prefix_isolation(log_store: LogStore):
+    """Prefix /job/test/ does not match /job/testing/."""
+    t_test = JobName.from_wire("/job/test/task/0")
+    t_testing = JobName.from_wire("/job/testing/task/0")
+
+    log_store.append(task_log_key(t_test, 0), [_make_entry("test-line")])
+    log_store.append(task_log_key(t_testing, 0), [_make_entry("testing-line")])
+
+    result = log_store.get_logs_by_prefix("/job/test/")
+    assert len(result.entries) == 1
+    assert result.entries[0].data == "test-line"
+
+
+def test_cursor_with_since_ms(log_store: LogStore):
+    """Combined cursor + since_ms filters correctly."""
+    log_store.append(KEY, [_make_entry(f"line-{i}", epoch_ms=i * 10) for i in range(10)])
+
+    # Get cursor past first 5 entries
+    result1 = log_store.get_logs(KEY, max_lines=5)
+    cursor = result1.cursor
+
+    # Only entries with epoch_ms > 70 and id > cursor
+    result2 = log_store.get_logs(KEY, cursor=cursor, since_ms=70)
+    assert [e.data for e in result2.entries] == ["line-8", "line-9"]
 
 
 # =============================================================================

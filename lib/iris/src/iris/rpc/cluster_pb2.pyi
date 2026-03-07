@@ -142,30 +142,30 @@ class ProfileTaskResponse(_message.Message):
     def __init__(self, profile_data: _Optional[bytes] = ..., error: _Optional[str] = ...) -> None: ...
 
 class FetchLogsRequest(_message.Message):
-    __slots__ = ("source", "since_ms", "skip_lines", "regex", "max_lines", "tail", "min_level")
+    __slots__ = ("source", "since_ms", "cursor", "regex", "max_lines", "tail", "min_level")
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     SINCE_MS_FIELD_NUMBER: _ClassVar[int]
-    SKIP_LINES_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
     REGEX_FIELD_NUMBER: _ClassVar[int]
     MAX_LINES_FIELD_NUMBER: _ClassVar[int]
     TAIL_FIELD_NUMBER: _ClassVar[int]
     MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
     source: str
     since_ms: int
-    skip_lines: int
+    cursor: int
     regex: str
     max_lines: int
     tail: bool
     min_level: str
-    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., skip_lines: _Optional[int] = ..., regex: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ...) -> None: ...
+    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., regex: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ...) -> None: ...
 
 class FetchLogsResponse(_message.Message):
-    __slots__ = ("entries", "lines_read")
+    __slots__ = ("entries", "cursor")
     ENTRIES_FIELD_NUMBER: _ClassVar[int]
-    LINES_READ_FIELD_NUMBER: _ClassVar[int]
+    CURSOR_FIELD_NUMBER: _ClassVar[int]
     entries: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
-    lines_read: int
-    def __init__(self, entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., lines_read: _Optional[int] = ...) -> None: ...
+    cursor: int
+    def __init__(self, entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., cursor: _Optional[int] = ...) -> None: ...
 
 class TaskStatus(_message.Message):
     __slots__ = ("task_id", "state", "worker_id", "worker_address", "exit_code", "error", "started_at", "finished_at", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled")
@@ -880,31 +880,24 @@ class Controller(_message.Message):
         users: _containers.RepeatedCompositeFieldContainer[Controller.UserSummary]
         def __init__(self, users: _Optional[_Iterable[_Union[Controller.UserSummary, _Mapping]]] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
-        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex", "attempt_id", "resume_offsets", "min_level")
-        class ResumeOffsetsEntry(_message.Message):
-            __slots__ = ("key", "value")
-            KEY_FIELD_NUMBER: _ClassVar[int]
-            VALUE_FIELD_NUMBER: _ClassVar[int]
-            key: str
-            value: int
-            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "regex", "attempt_id", "min_level", "cursor")
         ID_FIELD_NUMBER: _ClassVar[int]
         INCLUDE_CHILDREN_FIELD_NUMBER: _ClassVar[int]
         SINCE_MS_FIELD_NUMBER: _ClassVar[int]
         MAX_TOTAL_LINES_FIELD_NUMBER: _ClassVar[int]
         REGEX_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-        RESUME_OFFSETS_FIELD_NUMBER: _ClassVar[int]
         MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
+        CURSOR_FIELD_NUMBER: _ClassVar[int]
         id: str
         include_children: bool
         since_ms: int
         max_total_lines: int
         regex: str
         attempt_id: int
-        resume_offsets: _containers.ScalarMap[str, int]
         min_level: str
-        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., regex: _Optional[str] = ..., attempt_id: _Optional[int] = ..., resume_offsets: _Optional[_Mapping[str, int]] = ..., min_level: _Optional[str] = ...) -> None: ...
+        cursor: int
+        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., regex: _Optional[str] = ..., attempt_id: _Optional[int] = ..., min_level: _Optional[str] = ..., cursor: _Optional[int] = ...) -> None: ...
     class TaskLogBatch(_message.Message):
         __slots__ = ("task_id", "logs", "error", "worker_id")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
@@ -917,25 +910,16 @@ class Controller(_message.Message):
         worker_id: str
         def __init__(self, task_id: _Optional[str] = ..., logs: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., error: _Optional[str] = ..., worker_id: _Optional[str] = ...) -> None: ...
     class GetTaskLogsResponse(_message.Message):
-        __slots__ = ("task_logs", "last_timestamp_ms", "truncated", "child_job_statuses", "resume_offsets")
-        class ResumeOffsetsEntry(_message.Message):
-            __slots__ = ("key", "value")
-            KEY_FIELD_NUMBER: _ClassVar[int]
-            VALUE_FIELD_NUMBER: _ClassVar[int]
-            key: str
-            value: int
-            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        __slots__ = ("task_logs", "truncated", "child_job_statuses", "cursor")
         TASK_LOGS_FIELD_NUMBER: _ClassVar[int]
-        LAST_TIMESTAMP_MS_FIELD_NUMBER: _ClassVar[int]
         TRUNCATED_FIELD_NUMBER: _ClassVar[int]
         CHILD_JOB_STATUSES_FIELD_NUMBER: _ClassVar[int]
-        RESUME_OFFSETS_FIELD_NUMBER: _ClassVar[int]
+        CURSOR_FIELD_NUMBER: _ClassVar[int]
         task_logs: _containers.RepeatedCompositeFieldContainer[Controller.TaskLogBatch]
-        last_timestamp_ms: int
         truncated: bool
         child_job_statuses: _containers.RepeatedCompositeFieldContainer[JobStatus]
-        resume_offsets: _containers.ScalarMap[str, int]
-        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., last_timestamp_ms: _Optional[int] = ..., truncated: _Optional[bool] = ..., child_job_statuses: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ..., resume_offsets: _Optional[_Mapping[str, int]] = ...) -> None: ...
+        cursor: int
+        def __init__(self, task_logs: _Optional[_Iterable[_Union[Controller.TaskLogBatch, _Mapping]]] = ..., truncated: _Optional[bool] = ..., child_job_statuses: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ..., cursor: _Optional[int] = ...) -> None: ...
     class GetWorkerStatusRequest(_message.Message):
         __slots__ = ("id",)
         ID_FIELD_NUMBER: _ClassVar[int]
