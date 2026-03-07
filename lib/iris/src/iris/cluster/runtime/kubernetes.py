@@ -74,6 +74,7 @@ def _build_task_script(config: ContainerConfig) -> str:
     """Build a shell script that prepares workdir, then runs the task."""
     lines = [
         "set -e",
+        "ulimit -c 0",
         'echo "iris-task starting (git_hash=${IRIS_GIT_HASH:-unknown})"',
         f"mkdir -p {shlex.quote(config.workdir)}",
         f"cd {shlex.quote(config.workdir)}",
