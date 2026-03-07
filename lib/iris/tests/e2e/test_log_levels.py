@@ -16,6 +16,12 @@ from iris.rpc import cluster_pb2, logging_pb2
 
 pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
 
+# Log propagation traverses two 5-second intervals (worker monitor poll +
+# controller heartbeat), so worst-case delivery is 10s+ before any CI
+# scheduling overhead.  30s gives comfortable margin.
+_LOG_POLL_DEADLINE_S = 30
+_LOG_POLL_INTERVAL_S = 0.25
+
 
 def _emit_multi_level_logs():
     """Callable that emits log lines at multiple levels."""
@@ -43,35 +49,45 @@ def _emit_multi_level_logs():
     log.error("error-marker")
 
 
+def _poll_task_logs(cluster, job, marker: str, *, task_index: int = 0) -> list:
+    """Poll controller until task logs containing *marker* appear.
+
+    Returns the full list of log entries once the marker is found.
+    Raises AssertionError if the deadline expires.
+    """
+    task_id = job.job_id.task(task_index).to_wire()
+    deadline = time.monotonic() + _LOG_POLL_DEADLINE_S
+    entries: list = []
+    polls = 0
+    while time.monotonic() < deadline:
+        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
+        response = cluster.controller_client.get_task_logs(request)
+        entries = [e for batch in response.task_logs for e in batch.logs]
+        polls += 1
+        if any(marker in e.data for e in entries):
+            return entries
+        time.sleep(_LOG_POLL_INTERVAL_S)
+
+    raise AssertionError(
+        f"{marker!r} not found after {polls} polls over {_LOG_POLL_DEADLINE_S}s. "
+        f"Got {len(entries)} entries: {[e.data for e in entries]}"
+    )
+
+
 def test_task_logs_have_level_field(cluster):
     """Task emitting logs at different levels gets level fields populated."""
     job = cluster.submit(_emit_multi_level_logs, "log-levels")
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
-    # Fetch logs via controller RPC
-    task_id = job.job_id.task(0).to_wire()
-    deadline = time.monotonic() + 10
-    entries = []
-    while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = cluster.controller_client.get_task_logs(request)
-        entries = []
-        for batch in response.task_logs:
-            entries.extend(batch.logs)
-        # Wait until we see some entries with markers
-        if any("info-marker" in e.data for e in entries):
-            break
-        time.sleep(0.5)
+    entries = _poll_task_logs(cluster, job, "info-marker")
 
-    # Verify that entries with our markers have the level field populated
     markers_found = {}
     for entry in entries:
         for marker in ("info-marker", "warning-marker", "error-marker"):
             if marker in entry.data:
                 markers_found[marker] = entry.level
 
-    assert "info-marker" in markers_found, f"info-marker not found in logs. Entries: {[e.data for e in entries]}"
     assert markers_found["info-marker"] == logging_pb2.LOG_LEVEL_INFO
     assert markers_found.get("warning-marker") == logging_pb2.LOG_LEVEL_WARNING
     assert markers_found.get("error-marker") == logging_pb2.LOG_LEVEL_ERROR
@@ -85,32 +101,19 @@ def test_log_level_filter(cluster):
 
     task_id = job.job_id.task(0).to_wire()
 
-    # Wait for logs to propagate
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
-        response = cluster.controller_client.get_task_logs(request)
-        all_entries = []
-        for batch in response.task_logs:
-            all_entries.extend(batch.logs)
-        if any("info-marker" in e.data for e in all_entries):
-            break
-        time.sleep(0.5)
+    # Wait for logs to propagate before testing the filter
+    _poll_task_logs(cluster, job, "info-marker")
 
     # Now fetch with min_level=WARNING - should exclude INFO and DEBUG
     request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
     response = cluster.controller_client.get_task_logs(request)
-    filtered = []
-    for batch in response.task_logs:
-        filtered.extend(batch.logs)
+    filtered = [e for batch in response.task_logs for e in batch.logs]
 
-    # Should have warning and error markers but not info
     filtered_data = [e.data for e in filtered]
     assert any(
         "warning-marker" in d for d in filtered_data
     ), f"warning-marker missing from filtered logs: {filtered_data}"
     assert any("error-marker" in d for d in filtered_data), f"error-marker missing from filtered logs: {filtered_data}"
-    # Info marker should be filtered out (it has level=INFO which is below WARNING)
     assert not any(
         "info-marker" in d for d in filtered_data if d
     ), f"info-marker should be filtered out at WARNING level: {filtered_data}"
