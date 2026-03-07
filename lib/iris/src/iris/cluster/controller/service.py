@@ -790,35 +790,13 @@ class ControllerServiceImpl:
         self._state.remove_endpoint(request.endpoint_id)
         return cluster_pb2.Empty()
 
-    def lookup_endpoint(
-        self,
-        request: cluster_pb2.Controller.LookupEndpointRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.LookupEndpointResponse:
-        """Look up a service endpoint by name. Only endpoints for executing jobs are returned."""
-        endpoints = self._state.lookup_endpoints(request.name)
-        if not endpoints:
-            logger.debug("Endpoint lookup found no results: name=%s", request.name)
-            return cluster_pb2.Controller.LookupEndpointResponse()
-
-        e = endpoints[0]
-        return cluster_pb2.Controller.LookupEndpointResponse(
-            endpoint=cluster_pb2.Controller.Endpoint(
-                endpoint_id=e.endpoint_id,
-                name=e.name,
-                address=e.address,
-                job_id=e.job_id.to_wire(),
-                metadata=e.metadata,
-            )
-        )
-
     def list_endpoints(
         self,
         request: cluster_pb2.Controller.ListEndpointsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix. Only endpoints for executing jobs are returned."""
-        endpoints = self._state.list_endpoints_by_prefix(request.prefix)
+        """List endpoints by name prefix (or exact name when request.exact is set)."""
+        endpoints = self._state.list_endpoints(request.prefix, exact=request.exact)
         return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[
                 cluster_pb2.Controller.Endpoint(

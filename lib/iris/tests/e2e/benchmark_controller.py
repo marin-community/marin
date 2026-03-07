@@ -684,7 +684,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
                         cluster_pb2.Controller.RegisterEndpointRequest(
                             name=ep_name,
                             address=f"10.0.0.{t % 256}:{10000 + t}",
-                            job_id=job.job_id,
+                            job_id=job.job_id.to_wire(),
                         )
                     )
             reg_time = time.monotonic() - reg_start
@@ -702,9 +702,9 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             # Exact endpoint lookup
             sample_name = endpoint_names[len(endpoint_names) // 2]
             _time_rpc(
-                "LookupEndpoint (exact)",
-                lambda: controller_client.lookup_endpoint(
-                    cluster_pb2.Controller.LookupEndpointRequest(name=sample_name)
+                "ListEndpoints (exact)",
+                lambda: controller_client.list_endpoints(
+                    cluster_pb2.Controller.ListEndpointsRequest(prefix=sample_name, exact=True)
                 ),
                 iters,
             )
@@ -723,7 +723,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 f"GetJobStatus ({tasks_per_job} tasks)",
                 lambda: controller_client.get_job_status(
-                    cluster_pb2.Controller.GetJobStatusRequest(job_id=jobs[0].job_id)
+                    cluster_pb2.Controller.GetJobStatusRequest(job_id=jobs[0].job_id.to_wire())
                 ),
                 iters,
             )
@@ -731,7 +731,9 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             # ListTasks for one job
             _time_rpc(
                 f"ListTasks (job filter, {tasks_per_job} tasks)",
-                lambda: controller_client.list_tasks(cluster_pb2.Controller.ListTasksRequest(job_id=jobs[0].job_id)),
+                lambda: controller_client.list_tasks(
+                    cluster_pb2.Controller.ListTasksRequest(job_id=jobs[0].job_id.to_wire())
+                ),
                 iters,
             )
 

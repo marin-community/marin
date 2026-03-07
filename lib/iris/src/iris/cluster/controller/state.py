@@ -2144,22 +2144,21 @@ class ControllerState:
         job = self._jobs.get(ep.job_id)
         return job is not None and not job.is_finished()
 
-    def lookup_endpoints(self, name: str) -> list[ControllerEndpoint]:
-        """Find endpoints by exact name match for non-terminal jobs. O(matches)."""
-        with self._lock:
-            eids = self._endpoints_by_name.get(name)
-            if not eids:
-                return []
-            return [ep for eid in eids if (ep := self._endpoints.get(eid)) is not None and self._is_endpoint_visible(ep)]
+    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[ControllerEndpoint]:
+        """Find visible endpoints by name prefix or exact name.
 
-    def list_endpoints_by_prefix(self, prefix: str) -> list[ControllerEndpoint]:
-        """List endpoints matching a name prefix for non-terminal jobs.
-
-        Still O(names) over the name index keys, but avoids the per-endpoint
-        job lookup for non-matching names. A sorted name index (e.g.
-        SortedDict) would make this O(log N + matches).
+        When exact=True, uses the secondary name index for O(1) lookup.
+        When exact=False, iterates name index keys for prefix matching.
+        A sorted name index (e.g. SortedDict) would improve prefix to O(log N + matches).
         """
         with self._lock:
+            if exact:
+                eids = self._endpoints_by_name.get(prefix)
+                if not eids:
+                    return []
+                return [
+                    ep for eid in eids if (ep := self._endpoints.get(eid)) is not None and self._is_endpoint_visible(ep)
+                ]
             results = []
             for name, eids in self._endpoints_by_name.items():
                 if not name.startswith(prefix):

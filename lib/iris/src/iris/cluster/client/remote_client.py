@@ -265,9 +265,9 @@ class RemoteClusterClient:
         request = cluster_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
         self._client.unregister_endpoint(request)
 
-    def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
+    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[cluster_pb2.Controller.Endpoint]:
         def _call():
-            request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
+            request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
             response = self._client.list_endpoints(request, timeout_ms=10_000)
             return list(response.endpoints)
 

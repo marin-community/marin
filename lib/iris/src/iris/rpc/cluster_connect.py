@@ -49,9 +49,6 @@ class ControllerService(Protocol):
     async def unregister_endpoint(self, request: cluster__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def lookup_endpoint(self, request: cluster__pb2.Controller.LookupEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.LookupEndpointResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def list_endpoints(self, request: cluster__pb2.Controller.ListEndpointsRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -197,16 +194,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.unregister_endpoint,
-                ),
-                "/iris.cluster.ControllerService/LookupEndpoint": Endpoint.unary(
-                    method=MethodInfo(
-                        name="LookupEndpoint",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.LookupEndpointRequest,
-                        output=cluster__pb2.Controller.LookupEndpointResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.lookup_endpoint,
                 ),
                 "/iris.cluster.ControllerService/ListEndpoints": Endpoint.unary(
                     method=MethodInfo(
@@ -534,26 +521,6 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.UnregisterEndpointRequest,
                 output=cluster__pb2.Empty,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def lookup_endpoint(
-        self,
-        request: cluster__pb2.Controller.LookupEndpointRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.LookupEndpointResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="LookupEndpoint",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.LookupEndpointRequest,
-                output=cluster__pb2.Controller.LookupEndpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1003,8 +970,6 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def unregister_endpoint(self, request: cluster__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def lookup_endpoint(self, request: cluster__pb2.Controller.LookupEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.LookupEndpointResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_endpoints(self, request: cluster__pb2.Controller.ListEndpointsRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_autoscaler_status(self, request: cluster__pb2.Controller.GetAutoscalerStatusRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetAutoscalerStatusResponse:
@@ -1140,16 +1105,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.unregister_endpoint,
-                ),
-                "/iris.cluster.ControllerService/LookupEndpoint": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="LookupEndpoint",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.LookupEndpointRequest,
-                        output=cluster__pb2.Controller.LookupEndpointResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.lookup_endpoint,
                 ),
                 "/iris.cluster.ControllerService/ListEndpoints": EndpointSync.unary(
                     method=MethodInfo(
@@ -1477,26 +1432,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.UnregisterEndpointRequest,
                 output=cluster__pb2.Empty,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def lookup_endpoint(
-        self,
-        request: cluster__pb2.Controller.LookupEndpointRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Controller.LookupEndpointResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="LookupEndpoint",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.LookupEndpointRequest,
-                output=cluster__pb2.Controller.LookupEndpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
