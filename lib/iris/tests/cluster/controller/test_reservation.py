@@ -36,9 +36,11 @@ from iris.cluster.controller.events import (
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.state import RESERVATION_HOLDER_JOB_NAME, ControllerState, ControllerWorker
-from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.constraints import (
     AttributeValue,
+    Constraint,
+    ConstraintOp,
+    WellKnownAttribute,
     device_variant_constraint,
     get_device_type,
     get_device_variant,
@@ -1542,3 +1544,141 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     assert holder_task.task_id not in worker.running_tasks, (
         "holder task must be removed from worker.running_tasks; " "stale entry would block scale-down idle detection"
     )
+
+
+# =============================================================================
+# Holder task device-type constraint injection
+# =============================================================================
+
+
+def _tpu_device(variant: str = "v5p-64", count: int = 4) -> cluster_pb2.DeviceConfig:
+    return cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=variant, count=count))
+
+
+def _tpu_metadata(variant: str = "v5p-64", region: str | None = None) -> cluster_pb2.WorkerMetadata:
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="test-tpu",
+        ip_address="127.0.0.1",
+        cpu_count=32,
+        memory_bytes=64 * 1024**3,
+        disk_bytes=500 * 1024**3,
+        device=_tpu_device(variant),
+    )
+    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(cluster_pb2.AttributeValue(string_value="tpu"))
+    meta.attributes[WellKnownAttribute.DEVICE_VARIANT].CopyFrom(cluster_pb2.AttributeValue(string_value=variant.lower()))
+    if region:
+        meta.attributes["region"].CopyFrom(cluster_pb2.AttributeValue(string_value=region))
+    return meta
+
+
+def _region_constraint(region: str) -> cluster_pb2.Constraint:
+    """Create a region=<value> constraint proto."""
+    return Constraint(key="region", op=ConstraintOp.EQ, value=region).to_proto()
+
+
+def test_holder_task_gets_device_constraints_from_tpu_entry():
+    """Holder task for a TPU reservation entry must have device-type constraints.
+
+    When an entry has explicit constraints (e.g. region) but no device-type,
+    the holder job must still get auto-injected device constraints from the
+    entry's resource spec. Without this, the holder could land on a CPU worker.
+    """
+    state = ControllerState()
+
+    # Entry has TPU resources + region constraint, but NO device-type constraint.
+    entry = _make_reservation_entry(
+        device=_tpu_device("v5p-64", count=4),
+        constraints=[_region_constraint("us-central2")],
+    )
+    request = _make_job_request_with_reservation(reservation_entries=[entry])
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    holder_job = state._jobs[holder_job_id]
+    constraint_keys = [c.key for c in holder_job.request.constraints]
+
+    assert (
+        WellKnownAttribute.DEVICE_TYPE in constraint_keys
+    ), f"holder job missing device-type constraint; got keys: {constraint_keys}"
+    assert (
+        WellKnownAttribute.DEVICE_VARIANT in constraint_keys
+    ), f"holder job missing device-variant constraint; got keys: {constraint_keys}"
+    assert "region" in constraint_keys, "holder job should still have the explicit region constraint"
+
+
+def test_holder_task_not_scheduled_on_wrong_device_type():
+    """Holder task for a TPU entry must not be assigned to a CPU worker.
+
+    End-to-end test: submit a reservation with a TPU entry that has only a
+    region constraint (no device-type), register both a TPU and CPU worker,
+    and verify the scheduler assigns the holder to the TPU worker only.
+    """
+    state = ControllerState()
+
+    entry = _make_reservation_entry(
+        device=_tpu_device("v5p-64", count=4),
+        constraints=[_region_constraint("us-central2")],
+    )
+    request = _make_job_request_with_reservation(reservation_entries=[entry])
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    # Register a CPU worker and a TPU worker, both in the same region.
+    cpu_meta = _cpu_metadata()
+    cpu_meta.attributes["region"].CopyFrom(cluster_pb2.AttributeValue(string_value="us-central2"))
+    cpu_wid = _register_worker(state, "cpu-worker", metadata=cpu_meta)
+    tpu_wid = _register_worker(state, "tpu-worker", metadata=_tpu_metadata("v5p-64", region="us-central2"))
+
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+    holder_task = holder_tasks[0]
+
+    # Build scheduling context with both workers and run find_assignments.
+    cpu_worker = state.get_worker(cpu_wid)
+    tpu_worker = state.get_worker(tpu_wid)
+
+    holder_req = job_requirements_from_job(state._jobs[holder_job_id])
+    context = _build_context_with_workers(
+        [cpu_worker, tpu_worker],
+        pending_tasks=[holder_task.task_id],
+        jobs={holder_job_id: holder_req},
+    )
+    scheduler = Scheduler()
+    result = scheduler.find_assignments(context)
+
+    assigned_workers = [wid for _, wid in result.assignments]
+    assert (
+        WorkerId("tpu-worker") in assigned_workers
+    ), f"holder task should be assigned to TPU worker, got: {assigned_workers}"
+    assert WorkerId("cpu-worker") not in assigned_workers, "holder task must NOT land on CPU worker"
+
+
+def test_preference_pass_routes_holder_to_claimed_worker():
+    """Preference pass resolves holder tasks through their parent's claims."""
+    parent_job_id = JobName.root("test-user", "res-job")
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+    holder_task_id = holder_job_id.task(0)
+
+    w1 = _make_worker("w1")
+    w2 = _make_worker("w2")
+
+    req = _make_job_requirements()
+    has_reservation = {holder_job_id}
+
+    # Claim is keyed by the parent job's wire ID.
+    claims = {WorkerId("w1"): ReservationClaim(job_id=parent_job_id.to_wire(), entry_idx=0)}
+
+    context = _build_context_with_workers(
+        [w1, w2],
+        pending_tasks=[holder_task_id],
+        jobs={holder_job_id: req},
+    )
+
+    assignments = _preference_pass(context, has_reservation, claims)
+
+    assert len(assignments) == 1
+    assert assignments[0] == (
+        holder_task_id,
+        WorkerId("w1"),
+    ), f"holder task should land on claimed worker w1, got: {assignments}"
+    assert holder_task_id not in context.pending_tasks

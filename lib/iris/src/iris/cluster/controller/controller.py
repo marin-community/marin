@@ -30,6 +30,7 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
     HEARTBEAT_FAILURE_THRESHOLD,
+    RESERVATION_HOLDER_JOB_NAME,
     ControllerJob,
     ControllerState,
     ControllerTask,
@@ -417,7 +418,14 @@ def _preference_pass(
             continue
 
         job_wire = job_id.to_wire()
-        for wid in claimed_by_job.get(job_wire, ()):
+        # Holder jobs are children of the reservation job — look up claims
+        # under the parent's wire ID.
+        claim_key = job_wire
+        if RESERVATION_HOLDER_JOB_NAME in job_wire:
+            parent = job_id.parent
+            if parent is not None:
+                claim_key = parent.to_wire()
+        for wid in claimed_by_job.get(claim_key, ()):
             if context.assignment_counts.get(wid, 0) >= context.max_assignments_per_worker:
                 continue
             capacity = context.capacities.get(wid)

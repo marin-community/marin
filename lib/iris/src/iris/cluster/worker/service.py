@@ -100,7 +100,7 @@ class WorkerServiceImpl:
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
-            substring_filter=request.regex,
+            substring_filter=request.substring,
             max_lines=max_lines,
             tail=request.tail,
             min_level=request.min_level,

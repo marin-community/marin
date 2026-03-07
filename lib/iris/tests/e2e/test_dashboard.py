@@ -70,7 +70,7 @@ def test_job_detail_page(cluster, page, screenshot):
 
 
 def test_job_detail_shows_task_logs(cluster, page, screenshot):
-    """Job detail Task Logs panel shows logs, line limit buttons, and regex filter."""
+    """Job detail Task Logs panel shows logs, line limit buttons, and substring filter."""
     job = cluster.submit(_verbose_task, "dash-task-logs")
     cluster.wait(job, timeout=30)
 
@@ -105,8 +105,8 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
     )
     screenshot("task-logs-limit-all")
 
-    # Test regex filter — filter for ERROR lines only
-    page.fill("input[placeholder='regex']", "ERROR")
+    # Test substring filter — filter for ERROR lines only
+    page.fill("input[placeholder='substring']", "ERROR")
     page.click("button:has-text('Apply')")
     page.wait_for_function(
         "() => document.querySelector('pre') && "
@@ -114,7 +114,7 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
         "document.querySelector('pre').textContent.includes('[ERROR]')",
         timeout=5000,
     )
-    screenshot("task-logs-regex-error")
+    screenshot("task-logs-substring-error")
 
     # Clear filter — all lines return
     page.click("button:has-text('Clear')")
@@ -122,7 +122,7 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
         "() => document.querySelector('pre') && document.querySelector('pre').textContent.includes('[INFO]')",
         timeout=5000,
     )
-    screenshot("task-logs-regex-cleared")
+    screenshot("task-logs-substring-cleared")
 
 
 def test_workers_tab(cluster, page, screenshot):

@@ -80,6 +80,8 @@ class LogStore:
         self._write_lock = Lock()
         self._max_records = max_records
         self._append_count = 0
+        self._checkpoint_interval = 50_000
+        self._since_last_checkpoint = 0
 
     @staticmethod
     def _make_conn(db_path: str) -> sqlite3.Connection:
@@ -100,9 +102,7 @@ class LogStore:
                 rows,
             )
             self._write_conn.commit()
-            self._append_count += len(entries)
-            if self._append_count >= self._max_records:
-                self._evict_if_needed()
+            self._post_write_maintenance(len(entries))
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
         """Write log entries from multiple keys in a single transaction.
@@ -122,9 +122,17 @@ class LogStore:
                 all_rows,
             )
             self._write_conn.commit()
-            self._append_count += len(all_rows)
-            if self._append_count >= self._max_records:
-                self._evict_if_needed()
+            self._post_write_maintenance(len(all_rows))
+
+    def _post_write_maintenance(self, n_written: int) -> None:
+        """Run eviction and WAL truncation as needed. Must hold self._write_lock."""
+        self._append_count += n_written
+        self._since_last_checkpoint += n_written
+        if self._append_count >= self._max_records:
+            self._evict_if_needed()
+        if self._since_last_checkpoint >= self._checkpoint_interval:
+            self._write_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self._since_last_checkpoint = 0
 
     def get_logs(
         self,

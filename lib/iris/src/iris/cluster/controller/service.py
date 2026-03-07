@@ -896,7 +896,7 @@ class ControllerServiceImpl:
         # Build the log key or prefix for the query.
         job_wire = job_name.to_wire()
         cursor = request.cursor
-        substring_filter = request.regex  # treated as substring match (was regex, now LIKE)
+        substring_filter = request.substring
 
         if job_name.is_task and requested_attempt_id >= 0:
             # Exact key: single task + single attempt
@@ -1067,7 +1067,7 @@ class ControllerServiceImpl:
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
-            substring_filter=request.regex,
+            substring_filter=request.substring,
             max_lines=max_lines,
             tail=request.tail,
             min_level=request.min_level,
