@@ -35,7 +35,8 @@ from iris.cluster.controller.state import (
     ReservationClaim,
 )
 from iris.cluster.platform.base import CloudWorkerState, CommandResult, Labels, Platform, SliceHandle, WorkerStatus
-from iris.cluster.types import AttributeValue, JobName, WorkerId
+from iris.cluster.constraints import AttributeValue
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 

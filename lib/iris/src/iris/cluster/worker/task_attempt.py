@@ -202,9 +202,14 @@ def build_iris_env(
     user_env_vars = dict(task.request.environment.env_vars)
     if user_env_vars:
         env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
-    if task.request.constraints:
+    # Only propagate region/zone constraints to children; device constraints
+    # are re-derived from each child's own resource spec.
+    from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
+
+    inheritable = [c for c in task.request.constraints if c.key in INHERITED_CONSTRAINT_KEYS]
+    if inheritable:
         env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
-            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in task.request.constraints]
+            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in inheritable]
         )
 
     # Inject allocated ports

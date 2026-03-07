@@ -135,8 +135,9 @@ message AutoscalerAction {
 message DemandEntryStatus {
   repeated string task_ids = 1;
   string coschedule_group_id = 2;
-  iris.config.AcceleratorType accelerator_type = 3;
-  string accelerator_variant = 4;
+  reserved 3, 4;
+  string device_type = 7;      // "cpu", "gpu", "tpu"
+  string device_variant = 8;   // e.g. "v5p-8", "H100", or "*" for any
   bool preemptible = 5;
   ResourceSpec resources = 6;
 }

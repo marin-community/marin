@@ -30,6 +30,7 @@ from pathlib import Path
 
 import click
 from iris.client import IrisClient
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -104,21 +105,21 @@ class DemoCluster:
         config = config_pb2.IrisClusterConfig()
         cpu_sg = config.scale_groups["cpu"]
         cpu_sg.name = "cpu"
-        cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         cpu_sg.resources.memory_bytes = int(16 * 1e9)
         cpu_sg.resources.disk_bytes = int(128 * 1e9)
         cpu_sg.resources.cpu_millicores = 1000
+        cpu_sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
         cpu_sg.min_slices = 0
         cpu_sg.max_slices = 4
 
         tpu_sg = config.scale_groups["tpu_v5e_16"]
         tpu_sg.name = "tpu_v5e_16"
-        tpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
-        tpu_sg.accelerator_variant = "v5litepod-16"
         tpu_sg.resources.memory_bytes = int(16 * 1e9)
         tpu_sg.resources.disk_bytes = int(128 * 1e9)
         tpu_sg.resources.cpu_millicores = 128000
-        tpu_sg.resources.tpu_count = 4  # chips_per_vm for v5litepod-16
+        tpu_sg.resources.device_count = 4  # chips_per_vm for v5litepod-16
+        tpu_sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+        tpu_sg.resources.device_variant = "v5litepod-16"
         tpu_sg.num_vms = 4
         tpu_sg.min_slices = 0
         tpu_sg.max_slices = 4
@@ -246,7 +247,7 @@ class DemoCluster:
                 device=tpu_device("v5litepod-16"),
             ),
             environment=EnvironmentSpec(),
-            coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            coscheduling=CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
             replicas=4,
         )
         status = job.wait()

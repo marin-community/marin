@@ -35,6 +35,7 @@ from iris.cluster.controller.state import (
     ControllerTask,
     ControllerWorker,
 )
+from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.log_store import PROCESS_LOG_KEY
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
@@ -209,6 +210,32 @@ class ControllerProtocol(Protocol):
     stub_factory: StubFactoryProtocol
 
 
+def _inject_resource_constraints(
+    request: cluster_pb2.Controller.LaunchJobRequest,
+) -> cluster_pb2.Controller.LaunchJobRequest:
+    """Merge auto-generated device constraints into a job submission request.
+
+    Constraints derived from ResourceSpecProto.device (device-type, device-variant)
+    are merged with any explicit user constraints on the request.  For canonical
+    keys the user's explicit constraints replace auto-generated ones, so e.g.
+    a user-provided multi-variant IN constraint overrides the single-variant
+    EQ constraint from the resource spec.
+    """
+    auto = constraints_from_resources(request.resources)
+    if not auto:
+        return request
+
+    user = [Constraint.from_proto(c) for c in request.constraints]
+    merged = merge_constraints(auto, user)
+
+    new_request = cluster_pb2.Controller.LaunchJobRequest()
+    new_request.CopyFrom(request)
+    del new_request.constraints[:]
+    for c in merged:
+        new_request.constraints.append(c.to_proto())
+    return new_request
+
+
 class ControllerServiceImpl:
     """ControllerService RPC implementation.
 
@@ -303,6 +330,11 @@ class ControllerServiceImpl:
                 new_request.ClearField("bundle_blob")
                 new_request.bundle_gcs_path = bundle_path
                 request = new_request
+
+            # Auto-inject device constraints from the resource spec.
+            # Explicit user constraints for canonical keys (device-type,
+            # device-variant, etc.) replace auto-generated ones.
+            request = _inject_resource_constraints(request)
 
             # Submit job via event API
             self._state.handle_event(

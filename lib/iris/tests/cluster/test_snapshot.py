@@ -26,7 +26,8 @@ from iris.cluster.controller.state import (
     ControllerTaskAttempt,
     ControllerWorker,
 )
-from iris.cluster.types import AttributeValue, JobName, WorkerId
+from iris.cluster.constraints import AttributeValue, WellKnownAttribute
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
@@ -53,7 +54,7 @@ def _make_worker(worker_id: str = "w-1", address: str = "10.0.0.1:10001") -> Con
         address=address,
         metadata=metadata,
         last_heartbeat=Timestamp.now(),
-        attributes={"region": AttributeValue("us-central1")},
+        attributes={WellKnownAttribute.REGION: AttributeValue("us-central1")},
     )
 
 
@@ -160,7 +161,7 @@ def test_snapshot_roundtrip_preserves_workers():
     # Identity preserved
     assert restored_worker.worker_id == WorkerId("w-42")
     assert restored_worker.address == "10.0.0.42:10001"
-    assert restored_worker.attributes["region"].value == "us-central1"
+    assert restored_worker.attributes[WellKnownAttribute.REGION].value == "us-central1"
 
     # Health reset to fresh
     assert restored_worker.healthy is True

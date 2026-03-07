@@ -33,7 +33,14 @@ from iris.cluster.platform.base import (
     QuotaExhaustedError,
     RemoteWorkerHandle,
 )
-from iris.cluster.types import DeviceType, VmWorkerStatusMap
+from iris.cluster.constraints import (
+    ConstraintIndex,
+    DeviceType,
+    PlacementRequirements,
+    get_device_type_enum,
+    routing_constraints,
+)
+from iris.cluster.types import VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
@@ -82,17 +89,18 @@ class ScalingDecision:
 
 @dataclass
 class DemandEntry:
-    """A demand entry specifying resource requirements and constraints."""
+    """A demand entry specifying resource requirements and constraints.
+
+    The `normalized` field carries all categorical placement constraints
+    (device type, variant, preemptible, region, zone) as a single object,
+    replacing what was previously spread across separate fields.
+    """
 
     task_ids: list[str]
     coschedule_group_id: str | None
-    device_type: DeviceType
-    device_variant: str | None  # None = any variant of this type
+    normalized: PlacementRequirements
     constraints: list[cluster_pb2.Constraint]
     resources: cluster_pb2.ResourceSpecProto
-    preemptible: bool | None = None  # None = no preference
-    required_regions: frozenset[str] | None = None
-    required_zones: frozenset[str] | None = None
     invalid_reason: str | None = None
 
 
@@ -197,7 +205,7 @@ def compute_required_slices(group: ScalingGroup, entries: list[DemandEntry]) -> 
     for entry in entries:
         if entry.coschedule_group_id:
             coscheduled_count += 1
-        elif entry.device_type != DeviceType.CPU:
+        elif get_device_type_enum(entry.resources.device) != DeviceType.CPU:
             # Accelerator entries are not bin-packable — each task needs
             # exclusive access to the device, so treat as 1 VM per entry.
             accel_vm_count += 1
@@ -275,7 +283,11 @@ class RoutingBudget:
         return self._assign_packable(entry)
 
     def _assign_packable(self, entry: DemandEntry) -> bool:
-        if self.vm_capacity is None:
+        # TODO: track accelerator counts in VmBin so we can bin-pack mixed workloads.
+        # For now, accelerator entries are VM-exclusive (one VM per entry).
+        is_accel = get_device_type_enum(entry.resources.device) != DeviceType.CPU
+
+        if self.vm_capacity is None or is_accel:
             if self.vms_used >= self.max_vms:
                 return False
             self.packable_bins.append(VmBin(cpu_remaining=0, memory_remaining=0, disk_remaining=0))
@@ -378,29 +390,38 @@ class GroupRoutingStatus:
     reason: str
 
 
+def _format_variants(variants: frozenset[str] | None) -> str:
+    """Format device variants for diagnostic messages."""
+    if not variants:
+        return "*"
+    return ",".join(sorted(variants))
+
+
 def _diagnose_no_matching_group(entry: DemandEntry, groups: list[ScalingGroup]) -> str:
     """Produce a concise, actionable reason when no group matches a demand entry.
 
     Checks filters in order (device → preemptible → zone → region) and reports
     the first mismatch with enough context to fix the issue.
     """
-    device_matches = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+    n = entry.normalized
+    device_type = n.device_type or DeviceType.CPU
+    device_matches = [g for g in groups if g.matches_device_requirement(device_type, n.device_variants)]
+
+    variants_str = _format_variants(n.device_variants)
 
     if not device_matches:
-        return f"no_matching_group: no groups with device {entry.device_type.value}:{entry.device_variant or '*'}"
+        return f"no_matching_group: no groups with device {device_type.value}:{variants_str}"
 
-    if entry.preemptible is not None:
-        preempt_matches = [g for g in device_matches if g.config.slice_template.preemptible == entry.preemptible]
+    if n.preemptible is not None:
+        preempt_matches = [g for g in device_matches if g.config.resources.preemptible == n.preemptible]
         if not preempt_matches:
-            want = "preemptible" if entry.preemptible else "non-preemptible"
-            return (
-                f"no_matching_group: no {want} groups for device {entry.device_type.value}:{entry.device_variant or '*'}"
-            )
+            want = "preemptible" if n.preemptible else "non-preemptible"
+            return f"no_matching_group: no {want} groups for device {device_type.value}:{variants_str}"
         device_matches = preempt_matches
 
-    if entry.required_zones:
+    if n.required_zones:
         available_zones = {g.zone for g in device_matches} - {None}
-        requested = sorted(entry.required_zones)
+        requested = sorted(n.required_zones)
         msg = f"no_matching_group: no groups in zone {', '.join(requested)}"
         for req_zone in requested:
             close = difflib.get_close_matches(req_zone, available_zones, n=1, cutoff=0.7)
@@ -408,11 +429,11 @@ def _diagnose_no_matching_group(entry: DemandEntry, groups: list[ScalingGroup]) 
                 msg += f" (did you mean {close[0]}?)"
         return msg
 
-    if entry.required_regions:
-        requested = sorted(entry.required_regions)
+    if n.required_regions:
+        requested = sorted(n.required_regions)
         return f"no_matching_group: no groups in region {', '.join(requested)}"
 
-    return f"no_matching_group: no groups match device={entry.device_type.value}:{entry.device_variant or '*'}"
+    return f"no_matching_group: no groups match device={device_type.value}:{_format_variants(n.device_variants)}"
 
 
 def _diagnose_no_capacity(
@@ -444,15 +465,7 @@ def _matches_filters(group: ScalingGroup, entry: DemandEntry) -> bool:
 
     Does NOT check resource capacity or accept-demand readiness.
     """
-    if not group.matches_device_requirement(entry.device_type, entry.device_variant):
-        return False
-    if entry.preemptible is not None and group.config.slice_template.preemptible != entry.preemptible:
-        return False
-    if entry.required_regions and group.region not in entry.required_regions:
-        return False
-    if entry.required_zones and group.zone not in entry.required_zones:
-        return False
-    return True
+    return group.matches_constraints(entry.constraints)
 
 
 def _build_group_statuses(
@@ -516,6 +529,10 @@ def route_demand(
     ts = timestamp or Timestamp.now()
     sorted_groups = sorted(groups, key=lambda g: g.config.priority or 100)
 
+    # Build a ConstraintIndex over scaling groups for O(1) constraint matching
+    group_attrs = {g.name: g.to_attributes() for g in sorted_groups}
+    group_index = ConstraintIndex.build(group_attrs)
+
     routed: dict[str, list[DemandEntry]] = {}
     unmet: list[UnmetDemand] = []
     group_reasons: dict[str, str] = {}
@@ -540,7 +557,9 @@ def route_demand(
             unmet.append(UnmetDemand(entry=entry, reason=entry.invalid_reason))
             continue
 
-        matching_groups = [g for g in sorted_groups if _matches_filters(g, entry)]
+        routing_cs = routing_constraints(entry.constraints)
+        matching_names = group_index.matching_entities(routing_cs)
+        matching_groups = [g for g in sorted_groups if g.name in matching_names]
         if not matching_groups:
             unmet.append(UnmetDemand(entry=entry, reason=_diagnose_no_matching_group(entry, sorted_groups)))
             continue
@@ -795,8 +814,8 @@ class Autoscaler:
                 logger.warning(
                     "Unmet demand: reason=%s device=%s:%s resources=%s tasks=%s",
                     unmet.reason,
-                    entry.device_type,
-                    entry.device_variant,
+                    entry.normalized.device_type,
+                    entry.normalized.device_variants,
                     entry.resources,
                     entry.task_ids,
                 )
@@ -969,16 +988,15 @@ class Autoscaler:
         wc = config_pb2.WorkerConfig()
         wc.CopyFrom(self._base_worker_config)
 
-        # Accelerator config from scale group
-        wc.accelerator_type = group.config.accelerator_type
-        if group.config.accelerator_variant:
-            wc.accelerator_variant = group.config.accelerator_variant
-        if (
-            group.config.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
-            and group.config.HasField("resources")
-            and group.config.resources.gpu_count > 0
-        ):
-            wc.gpu_count = group.config.resources.gpu_count
+        # Accelerator config from scale group resources
+        resources = group.config.resources if group.config.HasField("resources") else None
+        if resources is not None:
+            wc.accelerator_type = resources.device_type
+            if resources.device_variant:
+                wc.accelerator_variant = resources.device_variant
+            if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
+                wc.gpu_count = resources.device_count
+            wc.preemptible = resources.preemptible
 
         # Worker settings from scale group
         if group.config.HasField("worker"):
@@ -1150,13 +1168,6 @@ class Autoscaler:
         return status
 
     def _routing_decision_to_proto(self, decision: RoutingDecision) -> vm_pb2.RoutingDecision:
-        def _device_type_to_proto(device_type: DeviceType) -> int:
-            if device_type == DeviceType.GPU:
-                return config_pb2.ACCELERATOR_TYPE_GPU
-            if device_type == DeviceType.TPU:
-                return config_pb2.ACCELERATOR_TYPE_TPU
-            return config_pb2.ACCELERATOR_TYPE_CPU
-
         def _resource_spec_proto(resources: cluster_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
             gpu_count = 0
             tpu_count = 0
@@ -1174,12 +1185,13 @@ class Autoscaler:
             )
 
         def _entry_to_proto(entry: DemandEntry) -> vm_pb2.DemandEntryStatus:
+            n = entry.normalized
             return vm_pb2.DemandEntryStatus(
                 task_ids=entry.task_ids,
                 coschedule_group_id=entry.coschedule_group_id or "",
-                accelerator_type=_device_type_to_proto(entry.device_type),
-                accelerator_variant=entry.device_variant or "",
-                preemptible=bool(entry.preemptible),
+                device_type=n.device_type.value if n.device_type else "",
+                device_variant=_format_variants(n.device_variants),
+                preemptible=bool(n.preemptible),
                 resources=_resource_spec_proto(entry.resources),
             )
 
