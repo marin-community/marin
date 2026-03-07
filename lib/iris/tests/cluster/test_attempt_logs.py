@@ -25,7 +25,7 @@ from iris.rpc import cluster_pb2
 from pathlib import Path
 
 IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 def _fail_then_succeed(attempt_marker: str):

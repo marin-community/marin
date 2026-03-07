@@ -133,9 +133,9 @@ def test_build_resources_gpu():
 def local_cluster_and_config(tmp_path):
     """Start local cluster and create config file for it."""
     iris_root = Path(__file__).resolve().parents[1]
-    demo_config_path = iris_root / "examples" / "demo.yaml"
+    test_config_path = iris_root / "examples" / "test.yaml"
 
-    config = load_config(demo_config_path)
+    config = load_config(test_config_path)
     config = make_local_config(config)
 
     with connect_cluster(config) as url:
