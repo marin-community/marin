@@ -89,6 +89,15 @@ def _validation_run_name(model_name: str, candidate_id: str) -> str:
     return f"validate_{model_slug}_{candidate_id[:8]}"
 
 
+def _validation_experiment_name(model_name: str, candidate_id: str, max_len: int = 64) -> str:
+    model_slug = model_name.lower().replace(" ", "_").replace("/", "_")
+    candidate_slug = candidate_id[:8]
+    prefix = "nextgen_validation_"
+    suffix = f"_{candidate_slug}"
+    max_model_len = max(max_len - len(prefix) - len(suffix), 1)
+    return f"{prefix}{model_slug[:max_model_len]}{suffix}"
+
+
 def _region_local_marin_path(default_path: str) -> str:
     """Map a Marin GCS path to the current region bucket when possible."""
     current_prefix = marin_prefix().rstrip("/")
@@ -146,7 +155,7 @@ def main() -> None:
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
     experiment = create_three_phase_experiment(
-        name=args.name_prefix,
+        name=_validation_experiment_name(args.model_name, selected.candidate_id),
         eval_datasets_cache_path=eval_datasets_cache_path,
     )
     run_name = _validation_run_name(args.model_name, selected.candidate_id)

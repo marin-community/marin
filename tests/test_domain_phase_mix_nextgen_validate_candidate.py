@@ -43,6 +43,16 @@ def test_load_candidate_for_model_reads_assignment(tmp_path):
     assert selected.phase_weights["phase_2"]["starcoder"] == 0.3
 
 
+def test_validation_experiment_name_stays_within_wandb_tag_limit():
+    name = validate_candidate._validation_experiment_name(
+        "DS-RE-CEQ-WITH-A-VERY-LONG-MODEL-NAME-FOR-VALIDATION",
+        "cand-deadbeefcafebabe",
+    )
+    assert len(name) <= 64
+    assert name.startswith("nextgen_validation_")
+    assert name.endswith("_cand-dea")
+
+
 def test_main_builds_validation_training_step(monkeypatch, tmp_path):
     fit_dir = tmp_path / "fit"
     fit_dir.mkdir()
@@ -117,6 +127,7 @@ def test_main_builds_validation_training_step(monkeypatch, tmp_path):
     assert captured["name_prefix"] == "my_validation_prefix"
     assert captured["run_name"].startswith("validate_ds-re-ceq_cand-dea")
     assert captured["weight_config"].phase_weights["phase_1"]["starcoder"] == 0.2
+    assert captured["experiment_kwargs"]["name"] == "nextgen_validation_ds-re-ceq_cand-dea"
     assert captured["experiment_kwargs"]["eval_datasets_cache_path"].startswith("gs://marin-eu-west4/")
     assert captured["eval_cache_kwargs"]["gcs_path"].startswith("gs://marin-eu-west4/")
     assert captured["tokenizer_kwargs"]["gcs_path"].startswith("gs://marin-eu-west4/")
