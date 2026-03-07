@@ -3,7 +3,7 @@
   "checkpoint_id": "cdf03d459656",
   "strategy": "manual-commit",
   "branch": "kevin/sft",
-  "checkpoints_count": 1,
+  "checkpoints_count": 6,
   "files_touched": [
     "scripts/samples/qwen2.5-coder-7b-sft-sharkdp__bat-562.txt",
     "scripts/samples/qwen3-8b-sft-sharkdp__bat-562.txt",
@@ -23,13 +23,20 @@
       "context": "/cd/f03d459656/1/context.md",
       "content_hash": "/cd/f03d459656/1/content_hash.txt",
       "prompt": "/cd/f03d459656/1/prompt.txt"
+    },
+    {
+      "metadata": "/cd/f03d459656/2/metadata.json",
+      "transcript": "/cd/f03d459656/2/full.jsonl",
+      "context": "/cd/f03d459656/2/context.md",
+      "content_hash": "/cd/f03d459656/2/content_hash.txt",
+      "prompt": "/cd/f03d459656/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 131,
-    "cache_creation_tokens": 284157,
-    "cache_read_tokens": 5914741,
-    "output_tokens": 43324,
-    "api_call_count": 98
+    "input_tokens": 495,
+    "cache_creation_tokens": 1359421,
+    "cache_read_tokens": 36006531,
+    "output_tokens": 135417,
+    "api_call_count": 402
   }
 }
