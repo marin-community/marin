@@ -11,6 +11,7 @@ rendering via screenshots.
 import time
 
 import pytest
+from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.rpc import cluster_pb2
 
 from .conftest import _is_noop_page, assert_visible, dashboard_click, dashboard_goto, wait_for_dashboard_ready
@@ -69,7 +70,7 @@ def test_job_detail_page(cluster, page, screenshot):
 
 
 def test_job_detail_shows_task_logs(cluster, page, screenshot):
-    """Job detail Task Logs panel shows logs, line limit buttons, and regex filter."""
+    """Job detail Task Logs panel shows logs, line limit buttons, and substring filter."""
     job = cluster.submit(_verbose_task, "dash-task-logs")
     cluster.wait(job, timeout=30)
 
@@ -90,7 +91,7 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
     # Click "100" button — should truncate to 100 lines
     page.click("button:has-text('100')")
     page.wait_for_function(
-        "() => document.querySelector('span')  && " "document.body.textContent.includes('(truncated)')",
+        "() => document.querySelector('span')  && document.body.textContent.includes('(truncated)')",
         timeout=5000,
     )
     screenshot("task-logs-limit-100")
@@ -104,8 +105,8 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
     )
     screenshot("task-logs-limit-all")
 
-    # Test regex filter — filter for ERROR lines only
-    page.fill("input[placeholder='regex']", "ERROR")
+    # Test substring filter — filter for ERROR lines only
+    page.fill("input[placeholder='substring']", "ERROR")
     page.click("button:has-text('Apply')")
     page.wait_for_function(
         "() => document.querySelector('pre') && "
@@ -113,15 +114,15 @@ def test_job_detail_shows_task_logs(cluster, page, screenshot):
         "document.querySelector('pre').textContent.includes('[ERROR]')",
         timeout=5000,
     )
-    screenshot("task-logs-regex-error")
+    screenshot("task-logs-substring-error")
 
     # Clear filter — all lines return
     page.click("button:has-text('Clear')")
     page.wait_for_function(
-        "() => document.querySelector('pre') && " "document.querySelector('pre').textContent.includes('[INFO]')",
+        "() => document.querySelector('pre') && document.querySelector('pre').textContent.includes('[INFO]')",
         timeout=5000,
     )
-    screenshot("task-logs-regex-cleared")
+    screenshot("task-logs-substring-cleared")
 
 
 def test_workers_tab(cluster, page, screenshot):
@@ -321,6 +322,44 @@ def test_job_detail_task_table_shows_resource_values(cluster, page, screenshot):
     cluster.wait(job, timeout=30)
 
 
+def test_job_detail_shows_constraints(cluster, page, screenshot):
+    """Job detail page renders constraints as chips in the Job Request section.
+
+    Uses region=local (set by make_local_config on all local scale groups) so
+    the job schedules successfully while still exercising EQ, IN, and EXISTS
+    constraint rendering.
+    """
+    constraints = [
+        Constraint(key="region", op=ConstraintOp.EQ, value="local"),
+        Constraint(key="env-tag", op=ConstraintOp.EXISTS),
+        Constraint(key="device-variant", op=ConstraintOp.IN, values=("v5p-8", "v6e-4")),
+    ]
+    job = cluster.submit(_quick, "dash-constraints", constraints=constraints)
+    # Job will go unschedulable (no workers have device-variant v5p-8/v6e-4) —
+    # we only need it to exist so we can inspect the detail page.
+    time.sleep(3)
+
+    dashboard_goto(page, f"{cluster.url}/job/{job.job_id.to_wire()}")
+    wait_for_dashboard_ready(page)
+
+    if not _is_noop_page(page):
+        # Open the Job Request collapsible to show constraints
+        page.click("text=Job Request")
+        page.wait_for_function(
+            "() => document.querySelector('.constraint-chip') !== null",
+            timeout=5000,
+        )
+        chips = page.locator(".constraint-chip")
+        texts = [chips.nth(i).text_content() for i in range(chips.count())]
+        assert any("region = local" in t for t in texts), f"Expected region constraint in {texts}"
+        assert any("env-tag exists" in t for t in texts), f"Expected env-tag exists constraint in {texts}"
+        assert any(
+            "device-variant in (v5p-8, v6e-4)" in t for t in texts
+        ), f"Expected device-variant constraint in {texts}"
+
+    screenshot("job-detail-constraints")
+
+
 def test_autoscaler_tab(cluster, page, screenshot):
     """Autoscaler tab shows scale groups."""
     wait_for_dashboard_ready(page)
@@ -335,10 +374,10 @@ def test_controller_logs(cluster, page, screenshot):
     dashboard_click(page, 'button.tab-btn:has-text("Logs")')
 
     if not _is_noop_page(page):
-        page.wait_for_selector("#log-container", timeout=10000)
+        page.wait_for_selector(".log-container", timeout=10000)
         page.wait_for_function(
             "() => document.querySelectorAll('.log-line').length > 0"
-            " || document.querySelector('.empty-state') !== null",
+            " || document.querySelector('.log-empty') !== null",
             timeout=10000,
         )
     screenshot("controller-logs")

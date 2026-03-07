@@ -57,19 +57,23 @@ from pathlib import Path
 from typing import Literal, TextIO
 
 import click
-import fsspec
+
 from iris.client import IrisClient
 from iris.cluster.config import load_config
-from iris.cluster.types import (
+from iris.cluster.constraints import (
     Constraint,
+    WellKnownAttribute,
+    device_variant_constraint,
+    preemptible_constraint,
+    region_constraint,
+)
+from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     ReservationEntry,
     ResourceSpec,
     gpu_device,
-    preemptible_constraint,
-    region_constraint,
     tpu_device,
 )
 from iris.rpc import cluster_pb2, config_pb2
@@ -82,32 +86,6 @@ DEFAULT_SCREENSHOT_DIR = Path("/tmp/iris-smoke-screenshots")
 
 DEFAULT_JOB_TIMEOUT = 600  # 10 minutes; all jobs launch in parallel, this is the global wait ceiling
 DEFAULT_BOOT_TIMEOUT = 300  # 5 minutes; cluster start + connection
-
-
-def _worker_process_log_path(log_prefix: str, worker_id: str) -> str:
-    return f"{log_prefix.rstrip('/')}/process/worker/{worker_id}/logs.jsonl"
-
-
-def _load_worker_process_logs(log_prefix: str, worker_id: str, limit: int = 200) -> list[dict]:
-    path = _worker_process_log_path(log_prefix, worker_id)
-    try:
-        with fsspec.open(path, "rb") as f:
-            data = f.read().decode("utf-8", errors="replace")
-    except FileNotFoundError:
-        return []
-    except Exception as e:
-        logger.warning("Failed to fetch worker process logs from %s: %s", path, e)
-        return []
-    lines = [line for line in data.splitlines() if line.strip()]
-    if limit > 0:
-        lines = lines[-limit:]
-    records: list[dict] = []
-    for line in lines:
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
 
 
 # =============================================================================
@@ -155,7 +133,8 @@ def detect_accelerator(config_path: Path) -> AcceleratorConfig:
     for _name, sg in config.scale_groups.items():
         if sg.HasField("max_slices") and sg.max_slices <= 0:
             continue
-        if sg.accelerator_type not in (config_pb2.ACCELERATOR_TYPE_GPU, config_pb2.ACCELERATOR_TYPE_TPU):
+        resources = sg.resources
+        if resources.device_type not in (config_pb2.ACCELERATOR_TYPE_GPU, config_pb2.ACCELERATOR_TYPE_TPU):
             continue
 
         template = sg.slice_template
@@ -167,19 +146,19 @@ def detect_accelerator(config_path: Path) -> AcceleratorConfig:
         elif platform == "gcp" and template.gcp.zone:
             region = template.gcp.zone.rsplit("-", 1)[0]
 
-        if sg.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU:
+        if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU:
             return AcceleratorConfig(
                 device_type="gpu",
-                variant=sg.accelerator_variant,
-                count=sg.resources.gpu_count or 1,
+                variant=resources.device_variant,
+                count=resources.device_count or 1,
                 num_vms=sg.num_vms,
                 region=region,
             )
 
         return AcceleratorConfig(
             device_type="tpu",
-            variant=sg.accelerator_variant,
-            count=sg.resources.tpu_count,
+            variant=resources.device_variant,
+            count=resources.device_count,
             num_vms=sg.num_vms,
             region=region,
         )
@@ -410,12 +389,12 @@ def _assert_region_child(expected_region: str):
 
     def _child_check_region():
         from iris.cluster.client import get_job_info
-        from iris.cluster.types import REGION_ATTRIBUTE_KEY as RK
+        from iris.cluster.constraints import WellKnownAttribute as _WKA
 
         info = get_job_info()
         if info is None:
             raise RuntimeError("Not running in an Iris job context")
-        region_constraints = [c for c in info.constraints if c.key == RK]
+        region_constraints = [c for c in info.constraints if c.key == _WKA.REGION]
         if not region_constraints:
             raise RuntimeError(f"No region constraint found. constraints={info.constraints}")
         actual = region_constraints[0].value
@@ -790,6 +769,10 @@ class SmokeTestRunner:
         For local mode this is directly usable; for remote mode the caller
         should still establish a dashboard tunnel.
         """
+        # build and push images first
+        if not self.config.local:
+            _run_iris("build", "all", "--push", config_path=self.config.config_path)
+
         args = ["cluster", "start"]
         if self.config.local:
             args.append("--local")
@@ -964,6 +947,9 @@ class SmokeTestRunner:
 
         tests.append(SmokeTestCase(f"Reserved job ({a.label()})", self._run_reserved_job))
 
+        if a.is_tpu:
+            tests.append(SmokeTestCase(f"Flexible device variant ({a.variant})", self._run_flexible_device_variant_job))
+
         return tests
 
     def _run_test_cases_parallel(self, controller_url: str, tests: list[SmokeTestCase]) -> None:
@@ -1002,7 +988,7 @@ class SmokeTestRunner:
         for sg in self._cluster_config.scale_groups.values():
             if sg.HasField("max_slices") and sg.max_slices <= 0:
                 continue
-            if sg.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+            if sg.resources.device_type != config_pb2.ACCELERATOR_TYPE_CPU:
                 continue
             if sg.slice_template.preemptible:
                 continue
@@ -1107,7 +1093,7 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_distributed_work_job),
             job_name=f"smoke-coscheduled-{self._run_id}",
             resources=ResourceSpec(device=self._accel.make_device()),
-            coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            coscheduling=CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
             replicas=self._accel.num_vms,
         )
 
@@ -1124,7 +1110,7 @@ class SmokeTestRunner:
             job_name=f"smoke-jax-tpu-{self._run_id}",
             resources=ResourceSpec(device=self._accel.make_device()),
             environment=EnvironmentSpec(pip_packages=["jax[tpu]"]),
-            coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            coscheduling=CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
             replicas=self._accel.num_vms,
         )
 
@@ -1185,6 +1171,23 @@ class SmokeTestRunner:
             constraints=[preemptible_constraint(False)],
         )
 
+    def _run_flexible_device_variant_job(self, client: IrisClient) -> TestResult:
+        """Run a job requesting either the real TPU variant or a non-existent one.
+
+        The constraint lists the cluster's actual variant alongside a fake variant
+        ("v0-fake-8"). The autoscaler should route the job to the real group since
+        no scale group matches the fake variant.
+        """
+        a = self._accel
+        return self._run_job_test(
+            client=client,
+            test_name=f"Flexible device variant ({a.variant} + v0-fake-8)",
+            entrypoint=Entrypoint.from_callable(_hello_job),
+            job_name=f"smoke-flexible-variant-{self._run_id}",
+            resources=ResourceSpec(device=a.make_device()),
+            constraints=[device_variant_constraint([a.variant, "v0-fake-8"])],
+        )
+
     # ----- Diagnostics and cleanup -----
 
     def _dump_controller_diagnostics(self):
@@ -1202,48 +1205,9 @@ class SmokeTestRunner:
         self._dump_job_list()
 
     def _dump_worker_process_logs(self):
-        assert self._controller_url
-        log_prefix = self._cluster_config.storage.log_prefix
-        if not log_prefix:
-            logger.warning("Worker process logs unavailable: storage.log_prefix not configured")
-            return
-        try:
-            result = _run_iris_rpc(self._controller_url, "controller", "list-workers")
-            if result.returncode != 0:
-                logger.warning("Failed to list workers: %s", result.stderr)
-                return
-            workers = json.loads(result.stdout).get("workers", [])
-        except Exception as e:
-            logger.warning("Could not list workers: %s", e)
-            return
-        if not workers:
-            logger.warning("No workers reported by controller")
-            return
-
-        for worker in workers:
-            worker_id = worker.get("worker_id") or "unknown"
-            records = _load_worker_process_logs(log_prefix, worker_id, limit=500)
-            if not records:
-                logger.info("Worker %s: no process logs found", worker_id)
-                continue
-            warn_error = [r for r in records if r.get("level") in ("WARNING", "ERROR")]
-            if not warn_error:
-                logger.info("Worker %s: no WARNING/ERROR logs", worker_id)
-                continue
-            seen: dict[str, int] = {}
-            for r in warn_error:
-                msg = r.get("message", "")
-                core = msg.split("] ", 1)[-1] if "] " in msg else msg
-                seen[core] = seen.get(core, 0) + 1
-            logger.warning(
-                "Worker %s WARNING/ERROR logs (%d entries, %d unique):",
-                worker_id,
-                len(warn_error),
-                len(seen),
-            )
-            for msg, count in seen.items():
-                suffix = f" (x{count})" if count > 1 else ""
-                logger.warning("  %s%s", msg, suffix)
+        # Worker process logs are now stored in SQLite and served via the FetchLogs RPC.
+        # Remote log file scraping is no longer supported.
+        logger.info("Worker process logs are available via FetchLogs RPC (LogStore)")
 
     def _dump_process_logs(self):
         assert self._controller_url
@@ -1417,7 +1381,7 @@ class SmokeTestRunner:
     "--no-snapshot-cycle",
     "no_snapshot_cycle",
     is_flag=True,
-    default=False,
+    default=True,
     help="Skip the snapshot/restore cycle between test phases",
 )
 def main(

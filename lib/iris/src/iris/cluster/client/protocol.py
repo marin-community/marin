@@ -87,7 +87,7 @@ class ClusterClient(Protocol):
 
     def unregister_endpoint(self, endpoint_id: str) -> None: ...
 
-    def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]: ...
+    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[cluster_pb2.Controller.Endpoint]: ...
 
     def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]: ...
 
@@ -104,8 +104,9 @@ class ClusterClient(Protocol):
         include_children: bool = False,
         since_ms: int = 0,
         max_total_lines: int = 0,
-        regex: str | None = None,
+        substring: str | None = None,
         attempt_id: int = -1,
+        cursor: int = 0,
         min_level: str = "",
     ) -> cluster_pb2.Controller.GetTaskLogsResponse: ...
 

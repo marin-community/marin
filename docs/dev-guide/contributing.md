@@ -13,13 +13,7 @@ cd marin
 uv venv --python 3.11
 source .venv/bin/activate
 uv sync --package marin --group dev
-cat <<'EOF' > .git/hooks/pre-commit
-#!/bin/sh
-set -e
-cd "$(git rev-parse --show-toplevel)"
-./infra/pre-commit.py --fix
-EOF
-chmod +x .git/hooks/pre-commit
+make setup_pre_commit
 ```
 
 Alternatively, you can install all the core dependencies and build `marin` as a Python

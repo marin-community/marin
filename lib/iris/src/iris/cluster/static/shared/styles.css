@@ -513,6 +513,52 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
   padding: 2px 0;
 }
 
+/* Slice detail sub-row (expanded from Slices column) */
+.slice-detail-row td {
+  padding: 0 12px 8px 12px;
+  background: #f6f8fa;
+  border-bottom: 1px solid var(--color-border);
+}
+.slice-detail-content { padding: 6px 0 2px 12px; }
+.slice-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.slice-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text);
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slice-vm-count {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+.slice-idle-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.slice-idle-badge.idle { background: #fff8c5; color: #9a6700; }
+.slice-idle-badge.active { background: #dafbe1; color: #1a7f37; }
+.slice-idle-badge.booting { background: #ddf4ff; color: #0969da; }
+
+/* Slice toggle in the Slices column */
+.slice-toggle {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.slice-toggle:hover .slice-badge { text-decoration: underline; }
+
 .future-feature {
   color: #57606a;
   font-style: italic;
@@ -574,6 +620,21 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
 .log-line.ERROR { color: #cf222e; }
 .log-line.DEBUG { color: #57606a; }
 .log-line.INFO { color: #1f2328; }
+
+/* === Unified Log Viewer === */
+.log-viewer { margin-bottom: 16px; }
+.log-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.log-control { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #57606a; }
+.log-control input, .log-control select { font-size: 13px; padding: 4px 8px; border: 1px solid #d1d9e0; border-radius: 4px; }
+.log-control input.input-error { border-color: #cf222e; }
+.log-filter-error { color: #cf222e; font-size: 12px; margin-bottom: 4px; }
+.log-container { max-height: 60vh; overflow-y: auto; background: white; border-radius: 6px; border: 1px solid #d1d9e0; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 8px 12px; }
+.log-empty { color: #57606a; padding: 12px; text-align: center; }
+.log-time { color: #6b7280; margin-right: 8px; font-size: 11px; }
+.log-data { white-space: pre-wrap; word-break: break-all; }
+.log-line.warning { color: #9a6700; }
+.log-line.error, .log-line.critical { color: #cf222e; }
+.log-line.debug { color: #57606a; }
 
 /* === Worker Detail Page === */
 .worker-detail { max-width: 1100px; }
@@ -1184,4 +1245,23 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
 
 .resource-cell .sparkline {
   flex-shrink: 0;
+}
+
+/* === Constraint list === */
+.constraint-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.constraint-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #f6f8fa;
+  border: 1px solid #d1d9e0;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #1f2328;
+  white-space: nowrap;
 }

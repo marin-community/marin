@@ -6,9 +6,9 @@ Iris has three overlapping test surfaces that evolved independently:
 
 | Surface | Location | What it tests | Cluster setup |
 |---------|----------|---------------|---------------|
-| **Chaos tests** | `tests/chaos/` | Failure injection (RPC, heartbeat, task lifecycle, VM) | `connect_cluster()` with `demo.yaml` + `make_local_config()` |
+| **Chaos tests** | `tests/chaos/` | Failure injection (RPC, heartbeat, task lifecycle, VM) | `connect_cluster()` with `test.yaml` + `make_local_config()` |
 | **E2E tests** | `tests/cluster/test_e2e.py` | Job lifecycle, scheduling, ports, endpoints, Docker, TPU sim | `E2ECluster` context manager (manual Controller+Worker or LocalController) |
-| **Screenshot script** | `scripts/screenshot-dashboard.py` | Visual dashboard rendering | `connect_cluster()` with `demo.yaml` + Playwright |
+| **Screenshot script** | `scripts/screenshot-dashboard.py` | Visual dashboard rendering | `connect_cluster()` with `test.yaml` + Playwright |
 
 These share significant infrastructure (cluster boot, job submission, wait loops)
 but use incompatible fixtures and patterns. The screenshot script isn't a test at
@@ -71,7 +71,7 @@ lib/iris/tests/e2e/
 #### `cluster` fixture
 
 Boots a local Iris cluster using `connect_cluster()` with a test config derived
-from `demo.yaml`. Yields a `TestCluster` dataclass that wraps the url and client:
+from `test.yaml`. Yields a `TestCluster` dataclass that wraps the url and client:
 
 ```python
 @dataclass

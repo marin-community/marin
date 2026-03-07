@@ -35,7 +35,7 @@ def mock_hf_fs():
 
         fs = MagicMock()
 
-        def mock_open(path, mode="rb"):
+        def mock_open(path, mode="rb", **_kwargs):
             if path in files:
                 return io.BytesIO(files[path])
             raise FileNotFoundError(f"File not found: {path}")
@@ -197,7 +197,7 @@ def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
                 return content
             return b""
 
-    hf_fs.open.side_effect = lambda path, mode="rb": FlakyReader()
+    hf_fs.open.side_effect = lambda path, mode="rb", **_kwargs: FlakyReader()
 
     with (
         patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs),
@@ -208,6 +208,8 @@ def test_stream_file_to_fsspec_retries_on_timeout(tmp_path):
             file_path,
             str(destination),
             expected_size=len(content),
+            read_timeout_seconds=1.0,
+            progress_log_interval_seconds=0.0,
         )
 
     assert result["status"] == "success"

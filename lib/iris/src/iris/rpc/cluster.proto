@@ -72,11 +72,23 @@ message ProfileTaskResponse {
   string error = 2;             // Non-empty if profiling failed
 }
 
-message ProcessLogRecord {
-  double timestamp = 1;
-  string level = 2;
-  string logger_name = 3;
-  string message = 4;
+// Unified log fetching request, shared by controller and worker services.
+// The source key identifies the log stream:
+//   /system/process                - local process logs (controller or worker)
+//   /job/name/task/0:0      - task attempt logs (task_wire:attempt_id)
+message FetchLogsRequest {
+  string source = 1;           // Log source key
+  int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
+  int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
+  string substring = 4;        // Substring filter on log data (matched via SQL LIKE)
+  int32 max_lines = 5;         // Max entries to return (0 = default 1000)
+  bool tail = 6;               // Return last N entries instead of first N
+  string min_level = 7;        // Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+}
+
+message FetchLogsResponse {
+  repeated iris.logging.LogEntry entries = 1;
+  int64 cursor = 2;            // Max autoincrement id seen (cursor for next poll)
 }
 
 enum JobState {
@@ -631,16 +643,9 @@ message Controller {
     string endpoint_id = 1;
   }
 
-  message LookupEndpointRequest {
-    string name = 1;                 // Full prefixed name: "abc123/my-actor"
-  }
-
-  message LookupEndpointResponse {
-    Endpoint endpoint = 1;
-  }
-
   message ListEndpointsRequest {
     string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
+    bool exact = 2;                  // If true, match prefix as an exact name instead
   }
 
   message ListEndpointsResponse {
@@ -708,10 +713,10 @@ message Controller {
     bool include_children = 2;       // Include child jobs (only for job IDs)
     int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
-    string regex = 5;                // Regex filter (propagated to workers)
+    string substring = 5;             // Substring filter (matched via SQL LIKE)
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
-    map<string, int64> resume_offsets = 7;  // Per-attempt line offset cursor: key = "{task_wire}/{attempt_id}"
-    string min_level = 8;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+    string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+    int64 cursor = 8;               // Autoincrement id cursor for incremental polling
   }
 
   message TaskLogBatch {
@@ -723,25 +728,14 @@ message Controller {
 
   message GetTaskLogsResponse {
     repeated TaskLogBatch task_logs = 1;
-    int64 last_timestamp_ms = 2;     // Max timestamp seen (for next since_ms)
-    bool truncated = 3;              // True if max_total_lines hit
+    bool truncated = 2;              // True if max_total_lines hit
 
     // Child job statuses (populated when include_children=true).
     // Included on every response so the client can detect state transitions
     // (e.g. child moved to FAILED) without a separate ListJobs RPC.
-    repeated JobStatus child_job_statuses = 4;
+    repeated JobStatus child_job_statuses = 3;
 
-    map<string, int64> resume_offsets = 5;  // Per-attempt line offset cursor for next poll
-  }
-
-  // --- Process Logs ---
-  message GetProcessLogsRequest {
-    string prefix = 1;   // Logger name prefix filter (empty = all)
-    int32 limit = 2;     // Max records to return (0 = default 200)
-  }
-
-  message GetProcessLogsResponse {
-    repeated ProcessLogRecord records = 1;
+    int64 cursor = 4;               // Max autoincrement id seen (cursor for next poll)
   }
 
   // --- Worker Detail (unified VM + worker view) ---
@@ -760,8 +754,10 @@ message Controller {
     // Bootstrap logs (from VM init)
     string bootstrap_logs = 4;
 
-    // Worker daemon logs (proxied from worker, empty if unhealthy/absent)
-    repeated ProcessLogRecord worker_logs = 5;
+    // Worker daemon logs (proxied from worker via FetchLogs, empty if unhealthy/absent)
+    repeated iris.logging.LogEntry worker_log_entries = 9;
+
+    reserved 5;  // was: repeated ProcessLogRecord worker_logs
 
     // Recent tasks that ran or are running on this worker (newest first)
     repeated TaskStatus recent_tasks = 6;
@@ -816,15 +812,6 @@ message Worker {
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
 
-  // --- Process Logs ---
-  message GetProcessLogsRequest {
-    string prefix = 1;   // Logger name prefix filter (empty = all)
-    int32 limit = 2;     // Max records to return (0 = default 200)
-  }
-
-  message GetProcessLogsResponse {
-    repeated ProcessLogRecord records = 1;
-  }
 }
 
 // ============================================================================
@@ -875,7 +862,6 @@ service ControllerService {
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
-  rpc LookupEndpoint(Controller.LookupEndpointRequest) returns (Controller.LookupEndpointResponse);
   rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
 
   // Autoscaler
@@ -891,8 +877,8 @@ service ControllerService {
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
 
-  // Controller process logs
-  rpc GetProcessLogs(Controller.GetProcessLogsRequest) returns (Controller.GetProcessLogsResponse);
+  // Unified log fetching (process logs, task logs, etc. by key)
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
 
   // Profiling (proxied to worker)
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
@@ -908,7 +894,7 @@ service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
-  rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
 }

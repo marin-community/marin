@@ -12,7 +12,7 @@ import pytest
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
-from iris.cluster.types import Constraint, ConstraintOp
+from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration
@@ -21,7 +21,7 @@ from .conftest import IRIS_ROOT, IrisTestCluster, assert_visible, dashboard_goto
 
 pytestmark = pytest.mark.e2e
 
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 def _make_cold_start_scaleup_config() -> config_pb2.IrisClusterConfig:
@@ -31,14 +31,15 @@ def _make_cold_start_scaleup_config() -> config_pb2.IrisClusterConfig:
 
     sg = config.scale_groups["tpu_v5e_16"]
     sg.name = "tpu_v5e_16"
-    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.accelerator_variant = "v5litepod-16"
     sg.num_vms = 1
     sg.min_slices = 0
     sg.max_slices = 2
     sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
     sg.resources.disk_bytes = 1024 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.resources.device_variant = "v5litepod-16"
+    sg.resources.preemptible = True
     sg.slice_template.preemptible = True
     sg.slice_template.num_vms = 1
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
@@ -104,7 +105,7 @@ def test_multi_worker_execution(multi_worker_cluster):
         replicas=6,
     )
 
-    status = multi_worker_cluster.wait(job, timeout=30)
+    status = multi_worker_cluster.wait(job, timeout=60)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     workers_used = set()

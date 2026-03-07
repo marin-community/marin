@@ -15,12 +15,21 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
+from collections.abc import Sequence
+
 from iris.cluster.platform.base import Labels, Platform, SliceHandle
-from iris.cluster.types import (
+from iris.cluster.constraints import (
+    AttributeValue,
+    CONSTRAINT_REGISTRY,
     DeviceType,
-    REGION_ATTRIBUTE_KEY,
+    ResourceCapacity,
+    WellKnownAttribute,
+    check_resource_fit,
+    evaluate_constraint,
+    is_cpu_device_type_constraint,
+)
+from iris.cluster.types import (
     VmWorkerStatusMap,
-    ZONE_ATTRIBUTE_KEY,
     get_gpu_count,
     get_tpu_count,
 )
@@ -118,8 +127,10 @@ def prepare_slice_config(
     """Build a SliceConfig for platform.create_slice() from a template.
 
     Copies the template and sets the name_prefix and managed/scale-group labels.
-    Propagates accelerator_type, accelerator_variant, num_vms, and resource
-    fields from the parent ScaleGroupConfig when the template doesn't set them.
+    Propagates num_vms from the parent ScaleGroupConfig when the template
+    doesn't set it. accelerator_type, accelerator_variant, preemptible,
+    gpu_count, and disk_size_gb are already derived from resources onto the
+    template by _derive_slice_config_from_resources() during config loading.
     """
     labels = Labels(label_prefix)
     config = config_pb2.SliceConfig()
@@ -130,17 +141,6 @@ def prepare_slice_config(
 
     if not config.num_vms and parent_config.HasField("num_vms"):
         config.num_vms = parent_config.num_vms
-
-    if not config.accelerator_type and parent_config.accelerator_type:
-        config.accelerator_type = parent_config.accelerator_type
-    if not config.accelerator_variant and parent_config.accelerator_variant:
-        config.accelerator_variant = parent_config.accelerator_variant
-
-    if parent_config.HasField("resources"):
-        config.gpu_count = parent_config.resources.gpu_count
-        disk_bytes = parent_config.resources.disk_bytes
-        if disk_bytes:
-            config.disk_size_gb = disk_bytes // (1024**3)
 
     return config
 
@@ -173,10 +173,19 @@ def _lifecycle_to_vm_state(lifecycle: SliceLifecycleState) -> vm_pb2.VmState:
     }[lifecycle]
 
 
-def slice_state_to_proto(state: SliceState) -> vm_pb2.SliceInfo:
+def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = None) -> vm_pb2.SliceInfo:
     """Convert a SliceState to a SliceInfo proto for RPC APIs."""
     created_at = state.handle.created_at
     vm_state = _lifecycle_to_vm_state(state.lifecycle)
+
+    is_idle = False
+    if idle_threshold is not None and state.lifecycle == SliceLifecycleState.READY:
+        if state.last_active.epoch_ms() == 0:
+            is_idle = True
+        else:
+            idle_duration = Duration.from_ms(Timestamp.now().epoch_ms() - state.last_active.epoch_ms())
+            is_idle = idle_duration >= idle_threshold
+
     return vm_pb2.SliceInfo(
         slice_id=state.handle.slice_id,
         scale_group=state.handle.scale_group,
@@ -192,6 +201,8 @@ def slice_state_to_proto(state: SliceState) -> vm_pb2.SliceInfo:
             for i, addr in enumerate(state.vm_addresses)
         ],
         error_message=state.error_message,
+        last_active=state.last_active.to_proto(),
+        idle=is_idle,
     )
 
 
@@ -304,7 +315,7 @@ class ScalingGroup:
     def region(self) -> str | None:
         """Region derived from worker attributes or slice template."""
         if self._config.HasField("worker"):
-            region = self._config.worker.attributes.get(REGION_ATTRIBUTE_KEY, "").strip()
+            region = self._config.worker.attributes.get(WellKnownAttribute.REGION, "").strip()
             if region:
                 return region
         template = self._config.slice_template
@@ -318,7 +329,7 @@ class ScalingGroup:
     def zone(self) -> str | None:
         """Zone derived from worker attributes or slice template."""
         if self._config.HasField("worker"):
-            zone = self._config.worker.attributes.get(ZONE_ATTRIBUTE_KEY, "").strip()
+            zone = self._config.worker.attributes.get(WellKnownAttribute.ZONE, "").strip()
             if zone:
                 return zone
         template = self._config.slice_template
@@ -509,9 +520,8 @@ class ScalingGroup:
     def check_resource_fit(self, resources: cluster_pb2.ResourceSpecProto) -> str | None:
         """Check whether a demand entry's resources fit within one VM.
 
-        A group resource value of 0 means "not configured" and is treated as
-        unlimited for that dimension. This prevents groups that omit optional
-        resource limits (e.g. disk) from rejecting all tasks that request them.
+        Unconfigured group resource values (0 in the proto) are passed as None
+        to ResourceCapacity, meaning unlimited for that dimension.
 
         Returns None if the resources fit, or a human-readable reason string.
         """
@@ -519,29 +529,20 @@ class ScalingGroup:
         if sg_resources is None:
             return f"group '{self.name}' has no resources configured"
 
-        if sg_resources.cpu_millicores and resources.cpu_millicores > sg_resources.cpu_millicores:
-            return (
-                f"cpu: need {resources.cpu_millicores / 1000:g},"
-                f" group '{self.name}' has {sg_resources.cpu_millicores / 1000:g}"
-            )
-        if sg_resources.memory_bytes and resources.memory_bytes > sg_resources.memory_bytes:
-            need_gb = resources.memory_bytes / (1024**3)
-            have_gb = sg_resources.memory_bytes / (1024**3)
-            return f"memory: need {need_gb:.1f}GB, group '{self.name}' has {have_gb:.1f}GB"
-        if sg_resources.disk_bytes and resources.disk_bytes > sg_resources.disk_bytes:
-            need_gb = resources.disk_bytes / (1024**3)
-            have_gb = sg_resources.disk_bytes / (1024**3)
-            return f"disk: need {need_gb:.1f}GB, group '{self.name}' has {have_gb:.1f}GB"
-
-        gpu_count = get_gpu_count(resources.device)
-        if gpu_count > sg_resources.gpu_count:
-            return f"gpu: need {gpu_count}, group '{self.name}' has {sg_resources.gpu_count}"
-
-        tpu_count = get_tpu_count(resources.device)
-        if tpu_count > sg_resources.tpu_count:
-            return f"tpu: need {tpu_count}, group '{self.name}' has {sg_resources.tpu_count}"
-
-        return None
+        device_count = get_gpu_count(resources.device) + get_tpu_count(resources.device)
+        available = ResourceCapacity(
+            cpu_millicores=sg_resources.cpu_millicores or None,
+            memory_bytes=sg_resources.memory_bytes or None,
+            disk_bytes=sg_resources.disk_bytes or None,
+            gpu_count=sg_resources.device_count or None,
+        )
+        required = ResourceCapacity(
+            cpu_millicores=resources.cpu_millicores,
+            memory_bytes=resources.memory_bytes,
+            disk_bytes=resources.disk_bytes,
+            gpu_count=device_count,
+        )
+        return check_resource_fit(available, required)
 
     def update_slice_activity(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp) -> None:
         """Update activity timestamps for all slices based on worker status.
@@ -773,30 +774,70 @@ class ScalingGroup:
                 counts[state.lifecycle] += 1
         return counts
 
-    def matches_device_requirement(self, device_type: DeviceType, device_variant: str | None) -> bool:
+    def matches_device_requirement(self, device_type: DeviceType, device_variants: frozenset[str] | None) -> bool:
         """Check if this group can satisfy the given device requirements.
 
         Matching rules:
         - CPU demand: matches ANY group (all VMs have CPUs)
-        - GPU/TPU with variant=None: matches any group of the same device type
-        - GPU/TPU with specific variant: requires exact variant match
+        - GPU/TPU with device_variants=None: matches any group of the same device type
+        - GPU/TPU with specific variants: group variant must be in the set (case-insensitive)
         """
         if device_type == DeviceType.CPU:
             return True  # CPU jobs can run on ANY group
 
-        # Check device type matches
         group_type = self._get_device_type()
         if group_type != device_type:
             return False
 
-        # None variant = any group of this type; specific variant = case-insensitive match
-        if device_variant is None:
+        if device_variants is None:
             return True
-        return self._config.accelerator_variant.lower() == device_variant.lower()
+        group_variant = self._config.resources.device_variant if self._config.HasField("resources") else ""
+        return group_variant.lower() in {v.lower() for v in device_variants}
+
+    def to_attributes(self) -> dict[str, AttributeValue]:
+        """Express this group's routing properties as worker-style attributes.
+
+        Enables the same evaluate_constraint + ConstraintIndex infrastructure
+        used for worker matching to also work for scaling group routing.
+        """
+        attrs: dict[str, AttributeValue] = {}
+        attrs[WellKnownAttribute.DEVICE_TYPE] = AttributeValue(self._get_device_type().value)
+        if self._config.HasField("resources") and self._config.resources.device_variant:
+            attrs[WellKnownAttribute.DEVICE_VARIANT] = AttributeValue(self._config.resources.device_variant.lower())
+        if self._config.HasField("resources"):
+            attrs[WellKnownAttribute.PREEMPTIBLE] = AttributeValue(str(self._config.resources.preemptible).lower())
+        region = self.region
+        if region:
+            attrs[WellKnownAttribute.REGION] = AttributeValue(region)
+        zone = self.zone
+        if zone:
+            attrs[WellKnownAttribute.ZONE] = AttributeValue(zone)
+        return attrs
+
+    def matches_constraints(self, constraints: Sequence[cluster_pb2.Constraint]) -> bool:
+        """Check if this group satisfies the given proto constraints.
+
+        Only evaluates routing constraints (device-type, device-variant,
+        preemptible, region, zone). Non-routing constraints (tpu-name, etc.)
+        and unknown constraints are scheduler-only and skipped here. CPU
+        device-type constraints are also skipped since CPU jobs match any group.
+        """
+        attrs = self.to_attributes()
+        for c in constraints:
+            if is_cpu_device_type_constraint(c):
+                continue
+            desc = CONSTRAINT_REGISTRY.get(c.key)
+            if desc is None or not desc.routing:
+                continue
+            if not evaluate_constraint(attrs.get(c.key), c):
+                return False
+        return True
 
     def _get_device_type(self) -> DeviceType:
-        """Get device type from config."""
-        accel = self._config.accelerator_type
+        """Get device type from resources."""
+        if not self._config.HasField("resources"):
+            return DeviceType.CPU
+        accel = self._config.resources.device_type
         if accel == config_pb2.ACCELERATOR_TYPE_GPU:
             return DeviceType.GPU
         elif accel == config_pb2.ACCELERATOR_TYPE_TPU:
@@ -967,7 +1008,8 @@ class ScalingGroup:
             availability_reason=availability.reason,
             blocked_until=blocked_until.to_proto(),
             scale_up_cooldown_until=cooldown_until.to_proto(),
-            slices=[slice_state_to_proto(state) for state in snapshot],
+            slices=[slice_state_to_proto(state, idle_threshold=self._idle_threshold) for state in snapshot],
+            idle_threshold_ms=self._idle_threshold.to_ms(),
         )
         for state_name, count in counts.items():
             status.slice_state_counts[state_name] = count

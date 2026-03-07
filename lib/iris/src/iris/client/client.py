@@ -42,8 +42,8 @@ from iris.cluster.controller.local import (
     make_local_cluster_config,
     wait_for_worker_registration,
 )
+from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import (
-    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -51,8 +51,7 @@ from iris.cluster.types import (
     Namespace,
     ReservationEntry,
     ResourceSpec,
-    merge_constraints,
-    validate_tpu_replicas,
+    adjust_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
@@ -319,7 +318,7 @@ class Job:
         """Wait while streaming logs from all tasks using batch log fetching.
 
         Uses a single batch RPC call per poll interval to fetch logs from all tasks,
-        rather than N individual calls. The batch API uses a global since_ms cursor
+        rather than N individual calls. The batch API uses an autoincrement id cursor
         for efficient incremental fetching.
         """
         return self._client._cluster_client.wait_for_job_with_streaming(
@@ -446,14 +445,13 @@ class NamespacedResolver:
             prefixed_name = name
 
         logger.debug("NamespacedResolver resolving: %s", prefixed_name)
-        matches = self._cluster.list_endpoints(prefix=prefixed_name)
+        matches = self._cluster.list_endpoints(prefix=prefixed_name, exact=True)
         logger.debug(
             "NamespacedResolver %s => %s",
             prefixed_name,
             [{"name": ep.name, "id": ep.endpoint_id, "address": ep.address} for ep in matches],
         )
 
-        # Filter to exact matches
         endpoints = [
             ResolvedEndpoint(
                 url=ep.address,
@@ -461,7 +459,6 @@ class NamespacedResolver:
                 metadata=dict(ep.metadata),
             )
             for ep in matches
-            if ep.name == prefixed_name
         ]
 
         return ResolveResult(name=name, endpoints=endpoints)
@@ -637,7 +634,7 @@ class IrisClient:
             raise ValueError("Job name cannot contain '/'")
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
-        validate_tpu_replicas(resources.device, replicas)
+        replicas = adjust_tpu_replicas(resources.device, replicas)
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -820,7 +817,7 @@ class IrisClient:
         include_children: bool = False,
         start: Timestamp | None = None,
         max_lines: int = 0,
-        regex: str | None = None,
+        substring: str | None = None,
         attempt_id: int = -1,
         min_level: str = "",
     ) -> list[TaskLogEntry]:
@@ -831,7 +828,7 @@ class IrisClient:
             include_children: Include logs from child jobs (job ID only)
             start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
-            regex: Regex filter for log content
+            substring: Substring filter for log content
             attempt_id: Filter to specific attempt (-1 = all attempts)
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
 
@@ -843,7 +840,7 @@ class IrisClient:
             include_children=include_children,
             since_ms=start.epoch_ms() if start else 0,
             max_total_lines=max_lines,
-            regex=regex,
+            substring=substring,
             attempt_id=attempt_id,
             min_level=min_level,
         )

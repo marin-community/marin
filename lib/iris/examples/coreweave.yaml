@@ -39,7 +39,6 @@ platform:
 
 storage:
   bundle_prefix: s3://marin-test/iris/bundles
-  log_prefix: s3://marin-test/iris/logs
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
@@ -68,13 +67,12 @@ defaults:
 scale_groups:
   # CPU general-purpose — used for data processing, orchestration, etc.
   cpu-erapids:
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 64
       ram: 256GB
-      gpu_count: 0
       disk: 1TB
+      device_type: cpu
     worker:
       attributes:
         region: US-WEST-04A
@@ -83,7 +81,6 @@ scale_groups:
     max_slices: 1  # Cost-safe default; increase for production workloads
     priority: 100
     slice_template:
-      accelerator_type: cpu
       num_vms: 1
       coreweave:
         region: US-WEST-04A
@@ -91,14 +88,14 @@ scale_groups:
 
   # 8x H100 with InfiniBand — primary training workhorse
   h100-8x:
-    accelerator_type: gpu
-    accelerator_variant: H100
     num_vms: 1
     resources:
       cpu: 128
       ram: 2048GB
-      gpu_count: 8
       disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
     worker:
       attributes:
         region: US-WEST-04A
@@ -107,8 +104,6 @@ scale_groups:
     max_slices: 1  # Cost-safe default; increase for production workloads
     priority: 50
     slice_template:
-      accelerator_type: gpu
-      accelerator_variant: H100
       num_vms: 1
       coreweave:
         region: US-WEST-04A

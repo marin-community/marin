@@ -13,24 +13,23 @@ from pathlib import Path
 import uvicorn
 
 from iris.chaos import chaos
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerRuntime
 from iris.cluster.types import JobName
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
-    DefaultEnvironmentProvider,
     EnvironmentProvider,
     HostMetricsCollector,
     build_worker_metadata,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.task_logging import FsspecLogSink, LogSink, LogSinkConfig, ProcessLogSink
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.logging import get_global_buffer, slow_log
+from iris.logging import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -53,12 +52,12 @@ class WorkerConfig:
     default_task_env: dict[str, str] = field(default_factory=dict)
     default_task_image: str | None = None
     resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
-    log_prefix: str | None = None
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(600.0))
     accelerator_type: int = 0
     accelerator_variant: str = ""
     gpu_count: int = 0
+    preemptible: bool = False
 
 
 def worker_config_from_proto(
@@ -89,7 +88,6 @@ def worker_config_from_proto(
         default_task_env=dict(proto.default_task_env),
         default_task_image=proto.default_task_image or None,
         resolve_image=resolve_image or (lambda image: image),
-        log_prefix=proto.log_prefix or None,
         poll_interval=(
             Duration.from_ms(proto.poll_interval.milliseconds)
             if proto.HasField("poll_interval")
@@ -103,6 +101,7 @@ def worker_config_from_proto(
         accelerator_type=proto.accelerator_type,
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,
+        preemptible=proto.preemptible,
     )
 
 
@@ -132,23 +131,20 @@ class Worker:
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Resolve worker metadata: explicit > environment_provider > hardware probe
-        self._inferred_log_prefix: str | None = None
         if worker_metadata is not None:
             self._worker_metadata = worker_metadata
         elif environment_provider is not None:
             self._worker_metadata = environment_provider.probe()
-            self._inferred_log_prefix = environment_provider.log_prefix()
         else:
-            env = DefaultEnvironmentProvider()
             hardware = probe_hardware()
             self._worker_metadata = build_worker_metadata(
                 hardware=hardware,
                 accelerator_type=config.accelerator_type,
                 accelerator_variant=config.accelerator_variant,
                 gpu_count_override=config.gpu_count,
+                preemptible=config.preemptible,
                 worker_attributes=config.worker_attributes,
             )
-            self._inferred_log_prefix = env.log_prefix()
 
         # Task state: maps (task_id, attempt_id) -> TaskAttempt.
         # Preserves all attempts so logs for historical attempts remain accessible.
@@ -157,7 +153,13 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        self._service = WorkerServiceImpl(self, log_buffer=get_global_buffer())
+        self._log_store = LogStore()
+        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
+        self._log_store_handler.setLevel(logging.INFO)
+        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(self._log_store_handler)
+
+        self._service = WorkerServiceImpl(self, log_store=self._log_store)
         self._dashboard = WorkerDashboard(
             self._service,
             host=config.host,
@@ -170,7 +172,6 @@ class Worker:
 
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
-        self._process_log_sink: ProcessLogSink | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -188,6 +189,7 @@ class Worker:
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
+                log_config=None,
                 timeout_keep_alive=120,
             )
         )
@@ -230,8 +232,9 @@ class Worker:
         if self._server:
             self._server.should_exit = True
         self._threads.stop()
-        if self._process_log_sink:
-            self._process_log_sink.close()
+        logging.getLogger().removeHandler(self._log_store_handler)
+        self._log_store_handler.close()
+        self._log_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
@@ -250,16 +253,10 @@ class Worker:
                     # Shutdown requested during registration
                     break
                 self._worker_id = worker_id
-                self._ensure_process_log_sink()
                 self._serve(stop_event)
         except Exception:
-            logger.exception("Worker lifecycle crashed; flushing process logs before exit")
+            logger.exception("Worker lifecycle crashed")
             raise
-        finally:
-            # Flush process logs on any exit (clean or crash) so the last log
-            # entries reach object storage before the pod is deleted.
-            if self._process_log_sink:
-                self._process_log_sink.sync()
 
     def _register(self, stop_event: threading.Event) -> str | None:
         """Register with controller. Retries until accepted or shutdown.
@@ -298,21 +295,6 @@ class Worker:
             stop_event.wait(5.0)
 
         return None
-
-    def _ensure_process_log_sink(self) -> None:
-        if self._process_log_sink:
-            return
-        prefix = self._config.log_prefix or self._inferred_log_prefix
-        if not prefix:
-            logger.warning("Process log sink disabled: log prefix not configured")
-            return
-        worker_id = self._worker_id or "unknown"
-        self._process_log_sink = ProcessLogSink(
-            prefix=prefix,
-            process_name=f"worker/{worker_id}",
-            log_buffer=get_global_buffer(),
-        )
-        logger.info("Process log sink enabled: %s", self._process_log_sink.log_path)
 
     def _resolve_address(self) -> str:
         """Resolve the address to advertise to the controller."""
@@ -382,33 +364,6 @@ class Worker:
         except Exception as e:
             # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
             logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
-
-    def create_log_sink(self, task_id_wire: str, attempt_id: int) -> LogSink:
-        """Create log sink for task logs.
-
-        Uses FsspecLogSink if IRIS_WORKER_PREFIX is configured, otherwise LocalLogSink.
-
-        Args:
-            task_id_wire: Full task ID in wire format
-            attempt_id: Attempt ID for this execution
-
-        Returns:
-            LogSink instance (FsspecLogSink or LocalLogSink)
-        """
-        config = LogSinkConfig(
-            prefix="",  # Will be set below
-            worker_id=self._worker_id or "unknown",
-            task_id=JobName.from_wire(task_id_wire),
-            attempt_id=attempt_id,
-        )
-
-        prefix = self._config.log_prefix or self._inferred_log_prefix
-        if not prefix:
-            raise ValueError(
-                "log prefix is required; set IRIS_LOG_PREFIX or run in an environment with inferrable prefix"
-            )
-        config.prefix = prefix
-        return FsspecLogSink(config)
 
     # Task management methods
 
@@ -511,7 +466,7 @@ class Worker:
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
-            log_sink_factory=lambda: self.create_log_sink(task_id.to_wire(), attempt_id),
+            log_store=self._log_store,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
@@ -573,12 +528,24 @@ class Worker:
     def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
         """Handle controller-initiated heartbeat with reconciliation.
 
-        Processes tasks_to_run and tasks_to_kill, reconciles expected_tasks against
-        actual state, and returns current running/completed tasks.
+        Processing order (sequential, not concurrent):
+        1. Submit tasks_to_run — registers each task in self._tasks
+        2. Kill tasks_to_kill — async, sets stop flag immediately
+        3. Reconcile expected_tasks — for each expected task, report its current
+           state. If not found in self._tasks, report WORKER_FAILED ("Task not
+           found on worker"). This happens when the worker has reset its state
+           (_tasks.clear() in _reset_worker_state) between heartbeats — from
+           the controller's perspective this is equivalent to a worker restart.
+        4. Kill unexpected tasks — any task in self._tasks that is NOT in
+           expected_tasks or tasks_to_run is killed (controller no longer wants it)
+
+        The ordering guarantee between steps 1 and 3 is critical: a task that
+        appears in both tasks_to_run and expected_tasks (which is always the case
+        for newly-assigned tasks) will be submitted before reconciliation checks
+        for it, so it will be found.
 
         Kill operations are performed asynchronously in daemon threads to avoid
-        blocking the heartbeat RPC. The task's should_stop flag is set immediately,
-        and the container stop/wait/force-kill sequence runs in the background.
+        blocking the heartbeat RPC.
         """
         # Reset heartbeat deadline
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
@@ -648,8 +615,13 @@ class Worker:
                             tasks.append(entry)
 
                     # Kill tasks not in expected_tasks - the controller has decided these
-                    # tasks should no longer run (e.g., job was killed, task was reassigned)
+                    # tasks should no longer run (e.g., job was killed, task was reassigned).
+                    # Include tasks_to_run in the expected set: these were just submitted
+                    # in this heartbeat and may not yet appear in expected_tasks if the
+                    # controller excludes unconfirmed tasks.
                     expected_keys = {(entry.task_id, entry.attempt_id) for entry in request.expected_tasks}
+                    for run_req in request.tasks_to_run:
+                        expected_keys.add((run_req.task_id, run_req.attempt_id))
                     tasks_to_kill: list[tuple[str, int]] = []
                     for key, task in self._tasks.items():
                         if key not in expected_keys and task.status not in self._TERMINAL_STATES:

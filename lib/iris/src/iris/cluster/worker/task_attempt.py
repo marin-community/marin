@@ -37,7 +37,8 @@ from iris.cluster.types import (
 from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.task_logging import LogSink
+from iris.cluster.log_store import LogCursor, LogStore, task_log_key
+from iris.logging import parse_log_level, str_to_log_level
 from iris.rpc import cluster_pb2, logging_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
@@ -201,9 +202,14 @@ def build_iris_env(
     user_env_vars = dict(task.request.environment.env_vars)
     if user_env_vars:
         env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
-    if task.request.constraints:
+    # Only propagate region/zone constraints to children; device constraints
+    # are re-derived from each child's own resource spec.
+    from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
+
+    inheritable = [c for c in task.request.constraints if c.key in INHERITED_CONSTRAINT_KEYS]
+    if inheritable:
         env["IRIS_JOB_CONSTRAINTS"] = json.dumps(
-            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in task.request.constraints]
+            [json_format.MessageToDict(c, preserving_proto_field_name=True) for c in inheritable]
         )
 
     # Inject allocated ports
@@ -244,15 +250,14 @@ class TaskAttempt:
         resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
         report_state: Callable[[], None],
-        log_sink_factory: Callable[[], LogSink],
+        log_store: LogStore,
         poll_interval_seconds: float = 5.0,
     ):
         """Initialize a TaskAttempt.
 
-        Construction is intentionally cheap (no I/O, no port allocation, no log
-        sink creation) so that submit_task() can return quickly on the heartbeat
-        thread.  Expensive setup (port allocation, working directory creation,
-        log sink creation) is deferred to the beginning of run().
+        Construction is intentionally cheap (no I/O, no port allocation) so
+        that submit_task() can return quickly on the heartbeat thread. Expensive
+        setup (port allocation, working directory creation) is deferred to run().
 
         Args:
             config: Immutable configuration for this attempt
@@ -267,9 +272,7 @@ class TaskAttempt:
                 (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
             port_allocator: Port allocator for releasing ports on cleanup
             report_state: Callback to report task state changes to Worker
-            log_sink_factory: Callable that creates the LogSink for this attempt.
-                Called at the start of run() to defer expensive I/O (fsspec filesystem
-                init, directory creation) off the heartbeat thread.
+            log_store: Shared LogStore for appending and querying task logs.
             poll_interval_seconds: How often to poll container status
         """
         self._bundle_provider = bundle_provider
@@ -283,8 +286,8 @@ class TaskAttempt:
         self._port_allocator = port_allocator
         self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
-        self._log_sink_factory = log_sink_factory
-        self._log_sink: LogSink | None = None
+        self._log_store = log_store
+        self._log_key = task_log_key(config.task_id, config.attempt_id)
 
         # Task identity (from config)
         self.task_id: JobName = config.task_id
@@ -320,7 +323,7 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
-        self._heartbeat_log_cursor: int = 0
+        self._heartbeat_cursor: LogCursor = log_store.cursor(self._log_key)
 
     @property
     def container_id(self) -> str | None:
@@ -329,28 +332,13 @@ class TaskAttempt:
             return self._container_handle.container_id
         return None
 
-    @property
-    def log_directory(self) -> str:
-        """Return the storage directory for this task's logs."""
-        if self._log_sink is None:
-            return ""
-        return self._log_sink.log_path
-
     def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
-        """Return recent logs from the canonical log sink."""
-        if self._log_sink is None:
-            return []
-        return self._log_sink.query_recent(max_entries=max_entries)
+        """Return recent logs for this task attempt."""
+        return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
 
     def drain_heartbeat_logs(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
-        """Drain log entries since the last heartbeat for delta forwarding."""
-        if self._log_sink is None:
-            return []
-        entries, new_cursor = self._log_sink.drain_since(self._heartbeat_log_cursor)
-        if len(entries) > max_entries:
-            entries = entries[-max_entries:]
-        self._heartbeat_log_cursor = new_cursor
-        return entries
+        """Return log entries appended since the last call, for delta forwarding."""
+        return self._heartbeat_cursor.read(max_entries=max_entries)
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
@@ -450,9 +438,8 @@ class TaskAttempt:
     def _setup(self) -> None:
         """Perform expensive setup work that was deferred from submit_task().
 
-        Allocates ports, creates the working directory, and initializes the log
-        sink.  Runs at the start of run() on the task thread so the heartbeat
-        RPC returns immediately.
+        Allocates ports and creates the working directory. Runs at the start of
+        run() on the task thread so the heartbeat RPC returns immediately.
         """
         # Allocate requested ports
         port_names = list(self.request.ports)
@@ -467,14 +454,11 @@ class TaskAttempt:
         self.workdir = self._fast_io_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
 
-        # Create log sink (may involve fsspec filesystem initialization)
-        self._log_sink = self._log_sink_factory()
-
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
 
         The lifecycle is:
-        0. Setup: allocate ports, create workdir, create log sink
+        0. Setup: allocate ports, create workdir
         1. Download bundle from GCS
         2. Resolve base image
         3. Create container handle
@@ -506,21 +490,14 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
             error_msg = format_exception_with_traceback(e)
-            if self._log_sink is not None:
-                self._log_sink.append(source="error", data=f"Infrastructure error:\n{error_msg}")
+            self._append_log(source="error", data=f"Infrastructure error:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            if self._log_sink is not None:
-                self._log_sink.append(source="error", data=f"Task failed:\n{error_msg}")
+            self._append_log(source="error", data=f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             if is_task_finished(self.status):
-                # Flush logs to storage before notifying controller, so that
-                # clients who fetch logs immediately after seeing the terminal
-                # state will find complete data on disk.
-                if self._log_sink is not None:
-                    self._log_sink.sync()
                 self._report_state()
             self._cleanup()
             logger.info(
@@ -661,9 +638,9 @@ class TaskAttempt:
 
         build_logs = self._container_handle.build()
 
-        # Capture build logs into log sink
+        # Capture build logs into log store
         for log_line in build_logs:
-            self._log_sink.append(source=log_line.source, data=log_line.data)
+            self._append_log(source=log_line.source, data=log_line.data)
 
         self.build_finished = Timestamp.now()
         if self.request.entrypoint.setup_commands:
@@ -763,7 +740,7 @@ class TaskAttempt:
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
-                        self._log_sink.append(source="error", data="Container was OOM killed by the kernel")
+                        self._append_log(source="error", data="Container was OOM killed by the kernel")
                     self.transition_to(
                         cluster_pb2.TASK_STATE_FAILED,
                         error=error,
@@ -792,11 +769,19 @@ class TaskAttempt:
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
 
+    def _append_log(self, *, source: str, data: str) -> None:
+        """Append a single log entry to the log store, parsing the level prefix if present."""
+        level_name = parse_log_level(data)
+        level = str_to_log_level(level_name) if level_name else 0
+        entry = logging_pb2.LogEntry(source=source, data=data, level=level)
+        entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
+        self._log_store.append(self._log_key, [entry])
+
     def _stream_logs(self, reader: RuntimeLogReader) -> None:
-        """Fetch new logs from container and append to log sink."""
+        """Fetch new logs from container and append to log store."""
         try:
             for log_line in reader.read():
-                self._log_sink.append(source=log_line.source, data=log_line.data)
+                self._append_log(source=log_line.source, data=log_line.data)
         except Exception:
             logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
 
@@ -813,43 +798,6 @@ class TaskAttempt:
         if self.cleanup_done:
             return
         self.cleanup_done = True
-
-        # Final log sync and metadata write
-        if is_task_finished(self.status) and self._log_sink is not None:
-            try:
-                # Write metadata
-                metadata = logging_pb2.TaskAttemptMetadata(
-                    task_id=self.task_id.to_wire(),
-                    attempt_id=self.attempt_id,
-                    worker_id=self._worker_id or "unknown",
-                    status=self.status,
-                    exit_code=self.exit_code or 0,
-                    oom_killed=self._container_handle.status().oom_killed if self._container_handle else False,
-                    error_message=self.error or "",
-                )
-
-                # Add timestamps if available
-                if self.started_at:
-                    metadata.start_time.CopyFrom(self.started_at.to_proto())
-                if self.finished_at:
-                    metadata.end_time.CopyFrom(self.finished_at.to_proto())
-
-                # Add resource usage if available
-                if self.peak_memory_mb > 0:
-                    metadata.resource_usage.CopyFrom(
-                        logging_pb2.ResourceUsage(
-                            peak_memory_bytes=self.peak_memory_mb * 1024 * 1024,
-                            cpu_seconds=0,  # Not tracked currently
-                            gpu_memory_bytes=0,  # Not tracked currently
-                        )
-                    )
-
-                self._log_sink.write_metadata(metadata)
-            except Exception as e:
-                logger.error(f"Failed to write final logs/metadata: {e}")
-
-        if self._log_sink is not None:
-            self._log_sink.close()
 
         # Clean up container handle (logs already captured in monitor loop)
         if self._container_handle:
