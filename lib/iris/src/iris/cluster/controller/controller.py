@@ -494,6 +494,12 @@ class ControllerConfig:
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
 
+    max_tasks_per_job_per_cycle: int = 4
+    """Maximum tasks from a single non-coscheduled job to consider per scheduling
+    cycle. Bounds CPU time in the scheduler when many tasks are pending, preventing
+    GIL starvation of the heartbeat thread. Coscheduled jobs are exempt (they need
+    all tasks for atomic assignment). Set to 0 for unlimited."""
+
     heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD
     """Consecutive heartbeat failures before marking worker as dead."""
 
@@ -847,9 +853,12 @@ class Controller:
 
         # Handle timeouts and reservation gates before scheduling.
         # Holder tasks participate in scheduling like normal tasks.
+        # Cap non-coscheduled tasks per job to bound scheduling CPU time.
         schedulable_task_ids: list[JobName] = []
         jobs: dict[JobName, JobRequirements] = {}
         has_reservation: set[JobName] = set()
+        tasks_per_job: dict[JobName, int] = defaultdict(int)
+        cap = self._config.max_tasks_per_job_per_cycle
         for task in pending_tasks:
             if not task.can_be_scheduled():
                 continue
@@ -863,6 +872,9 @@ class Controller:
             # Holder tasks are always schedulable (they ARE the reservation).
             if not job.is_reservation_holder and not self._is_reservation_satisfied(job):
                 continue
+            if cap > 0 and not job.is_coscheduled and tasks_per_job[task.job_id] >= cap:
+                continue
+            tasks_per_job[task.job_id] += 1
             schedulable_task_ids.append(task.task_id)
             if task.job_id not in jobs:
                 jobs[task.job_id] = job_requirements_from_job(job)

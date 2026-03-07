@@ -80,7 +80,7 @@ message FetchLogsRequest {
   string source = 1;           // Log source key
   int64 since_ms = 2;          // Only return entries after this timestamp (exclusive)
   int64 cursor = 3;            // Autoincrement id cursor (resume after this id)
-  string regex = 4;            // Regex filter on log data
+  string regex = 4;            // Substring filter on log data (matched via SQL LIKE)
   int32 max_lines = 5;         // Max entries to return (0 = default 1000)
   bool tail = 6;               // Return last N entries instead of first N
   string min_level = 7;        // Minimum log level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
@@ -713,7 +713,7 @@ message Controller {
     bool include_children = 2;       // Include child jobs (only for job IDs)
     int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
     int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
-    string regex = 5;                // Regex filter (propagated to workers)
+    string regex = 5;                // Substring filter (matched via SQL LIKE)
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
     string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
     int64 cursor = 8;               // Autoincrement id cursor for incremental polling

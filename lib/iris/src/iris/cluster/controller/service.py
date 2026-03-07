@@ -10,7 +10,6 @@ aggregated from task states.
 
 import json
 import logging
-import re
 import uuid
 from typing import Any, Protocol
 
@@ -894,24 +893,10 @@ class ControllerServiceImpl:
                         child_status.finished_at.CopyFrom(job.finished_at.to_proto())
                     child_job_statuses.append(child_status)
 
-        # Pre-compile regex filter so invalid patterns produce a clear error
-        # rather than an internal failure during iteration.
-        compiled_regex: re.Pattern[str] | None = None
-        if request.regex:
-            try:
-                compiled_regex = re.compile(request.regex)
-            except re.error as e:
-                return cluster_pb2.Controller.GetTaskLogsResponse(
-                    task_logs=[
-                        cluster_pb2.Controller.TaskLogBatch(
-                            error=f"Invalid regex filter: {e}",
-                        )
-                    ],
-                )
-
         # Build the log key or prefix for the query.
         job_wire = job_name.to_wire()
         cursor = request.cursor
+        substring_filter = request.regex  # treated as substring match (was regex, now LIKE)
 
         if job_name.is_task and requested_attempt_id >= 0:
             # Exact key: single task + single attempt
@@ -919,7 +904,7 @@ class ControllerServiceImpl:
                 task_log_key(job_name, requested_attempt_id),
                 since_ms=request.since_ms,
                 cursor=cursor,
-                regex_filter=compiled_regex,
+                substring_filter=substring_filter,
                 max_lines=max_lines,
                 min_level=request.min_level,
             )
@@ -931,19 +916,22 @@ class ControllerServiceImpl:
                 job_wire + ":",
                 cursor=cursor,
                 since_ms=request.since_ms,
-                regex_filter=compiled_regex,
+                substring_filter=substring_filter,
                 max_lines=max_lines,
                 min_level=request.min_level,
             )
         else:
-            # All tasks in a job (with or without children): prefix "job_wire/"
+            # All tasks in a job: prefix "job_wire/"
+            # When include_children is False, use shallow=True to exclude
+            # descendant job logs (only match direct task keys).
             log_result = log_store.get_logs_by_prefix(
                 job_wire + "/",
                 cursor=cursor,
                 since_ms=request.since_ms,
-                regex_filter=compiled_regex,
+                substring_filter=substring_filter,
                 max_lines=max_lines,
                 min_level=request.min_level,
+                shallow=not request.include_children,
             )
 
         truncated = max_lines > 0 and len(log_result.entries) >= max_lines
@@ -1074,19 +1062,12 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.FetchLogsResponse:
         """Fetch logs from the LogStore by key with filtering and pagination."""
-        compiled_regex = None
-        if request.regex:
-            try:
-                compiled_regex = re.compile(request.regex)
-            except re.error as e:
-                raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid regex: {e}") from e
-
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._state.log_store.get_logs(
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
-            regex_filter=compiled_regex,
+            substring_filter=request.regex,
             max_lines=max_lines,
             tail=request.tail,
             min_level=request.min_level,

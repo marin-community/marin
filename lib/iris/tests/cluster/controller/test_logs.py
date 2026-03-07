@@ -3,7 +3,6 @@
 
 """Tests for LogStore (SQLite-backed)."""
 
-import re
 import threading
 from pathlib import Path
 
@@ -50,11 +49,11 @@ def test_get_logs_tail_returns_last_n(log_store: LogStore):
     assert [e.data for e in result.entries] == [f"line-{i}" for i in range(90, 100)]
 
 
-def test_get_logs_tail_with_regex(log_store: LogStore):
+def test_get_logs_tail_with_substring_filter(log_store: LogStore):
     entries = [_make_entry(f"{'ERROR' if i % 10 == 0 else 'INFO'}: msg-{i}", epoch_ms=i) for i in range(100)]
     log_store.append(KEY, entries)
 
-    result = log_store.get_logs(KEY, max_lines=3, tail=True, regex_filter=re.compile("ERROR"))
+    result = log_store.get_logs(KEY, max_lines=3, tail=True, substring_filter="ERROR")
     assert len(result.entries) == 3
     assert all("ERROR" in e.data for e in result.entries)
     assert [e.data for e in result.entries] == ["ERROR: msg-70", "ERROR: msg-80", "ERROR: msg-90"]
@@ -232,6 +231,26 @@ def test_get_logs_by_prefix_isolation(log_store: LogStore):
     result = log_store.get_logs_by_prefix("/job/test/")
     assert len(result.entries) == 1
     assert result.entries[0].data == "test-line"
+
+
+def test_get_logs_by_prefix_shallow_excludes_children(log_store: LogStore):
+    """shallow=True excludes logs from nested/child jobs."""
+    # Direct tasks of /job/parent
+    t0 = JobName.from_wire("/job/parent/0")
+    # Child job task: /job/parent/child/0
+    child_t0 = JobName.from_wire("/job/parent/child/0")
+
+    log_store.append(task_log_key(t0, 0), [_make_entry("parent-line", epoch_ms=1)])
+    log_store.append(task_log_key(child_t0, 0), [_make_entry("child-line", epoch_ms=2)])
+
+    # Without shallow: both are returned
+    result_all = log_store.get_logs_by_prefix("/job/parent/")
+    assert len(result_all.entries) == 2
+
+    # With shallow: only direct task logs
+    result_shallow = log_store.get_logs_by_prefix("/job/parent/", shallow=True)
+    assert len(result_shallow.entries) == 1
+    assert result_shallow.entries[0].data == "parent-line"
 
 
 def test_cursor_with_since_ms(log_store: LogStore):
