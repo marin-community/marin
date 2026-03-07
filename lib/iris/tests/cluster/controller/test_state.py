@@ -2098,18 +2098,18 @@ def test_fail_heartbeat_clears_dispatch_when_worker_fails(job_request, worker_me
     )
 
 
-def test_fail_heartbeat_reverts_undelivered_assignments(job_request, worker_metadata):
-    """Undelivered task assignments are reverted to PENDING on heartbeat failure.
+def test_fail_heartbeat_requeues_dispatch_for_retry(job_request, worker_metadata):
+    """Heartbeat failure re-queues dispatches for the next heartbeat.
 
-    When heartbeat fails but worker is still below failure threshold,
-    tasks in tasks_to_run (never delivered to the worker) are reverted
-    to PENDING so the scheduler can reassign them to a reachable worker.
+    We cannot tell whether the worker received the previous heartbeat (RPC
+    timeout ≠ delivery failure), so we re-send the same RunTaskRequests.
+    If the worker did receive them, it will reject re-sends as benign
+    duplicates. If it did not, it will start them fresh.
     """
 
     state = ControllerState()
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
-    # Submit a job and assign its task to the worker
     req = job_request("job1")
     req.max_retries_preemption = 5
     tasks = submit_job(state, "j1", req)
@@ -2135,22 +2135,20 @@ def test_fail_heartbeat_reverts_undelivered_assignments(job_request, worker_meta
     # Fail heartbeat (worker stays healthy - below threshold)
     state.fail_heartbeat(snapshot, "Timeout")
 
-    # Verify worker is still healthy
     worker = state.get_worker(worker_id)
     assert worker.healthy
     assert worker.consecutive_failures == 1
 
-    # Verify undelivered task was reverted to PENDING (not requeued as dispatch)
-    assert task.state == cluster_pb2.TASK_STATE_PENDING
-    assert task.can_be_scheduled()
-
-    # Delivery failure: no budget consumed at all.
+    # Task stays ASSIGNED — we don't know if the worker received it
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
     assert task.preemption_count == 0
     assert task.failure_count == 0
 
-    # Verify dispatch was NOT requeued (task is back in scheduling queue instead)
+    # Dispatch re-queued for the next heartbeat (same attempt_id)
     pending_dispatch = state._pending_dispatch.get(worker_id)
-    assert pending_dispatch is None or len(pending_dispatch.tasks_to_run) == 0
+    assert pending_dispatch is not None
+    assert len(pending_dispatch.tasks_to_run) == 1
+    assert pending_dispatch.tasks_to_run[0].attempt_id == 0
 
 
 def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
