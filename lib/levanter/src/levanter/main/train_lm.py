@@ -26,7 +26,7 @@ from levanter.data.text import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, LmLikeExample, token_ids_array_from_lm_example
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
