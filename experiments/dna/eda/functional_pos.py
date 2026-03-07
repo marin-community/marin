@@ -46,7 +46,7 @@ TIMESCALES = ["primates", "mammals", "vertebrates"]
 TRAIN_DATASETS = {ts: f"bolinas-dna/genomes-v5-genome_set-{ts}-intervals-v1_255_128" for ts in TIMESCALES}
 
 # Single validation dataset with conservation-based uppercase/lowercase encoding
-VAL_DATASET = "bolinas-dna/genomes-v5-intervals-v1_255_255"
+VAL_DATASET = "bolinas-dna/genomes-v5-validation-intervals-v1_255_255"
 
 # =============================================================================
 # Model configs (same as perplexity_vs_downstream)
