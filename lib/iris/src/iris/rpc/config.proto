@@ -68,8 +68,8 @@ message ManualProvider {
 
 message GcpVmConfig {
   string zone = 1;
-  string machine_type = 2;      // Default: "n2-standard-4"
-  int32 boot_disk_size_gb = 3;  // Default: 50
+  string machine_type = 2;      // Required (e.g. "n2-standard-4")
+  int32 boot_disk_size_gb = 3;  // Required (in GB)
 }
 
 message ManualVmConfig {
@@ -288,8 +288,8 @@ message StorageConfig {
 // GCP-managed controller configuration
 message GcpControllerConfig {
   string zone = 1;              // Zone to create controller VM in
-  string machine_type = 2;      // Default: "n2-standard-4"
-  int32 boot_disk_size_gb = 3;  // Default: 50
+  string machine_type = 2;      // Required (e.g. "n2-standard-4")
+  int32 boot_disk_size_gb = 3;  // Required (in GB, e.g. 100)
   int32 port = 4;               // Default: 10000
 }
 

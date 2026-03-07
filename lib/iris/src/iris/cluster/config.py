@@ -154,6 +154,11 @@ def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
                     raise ValueError(
                         f"Scale group '{name}': slice_template.gcp.machine_type must be non-empty for VM mode."
                     )
+                if not sg_config.resources.disk_bytes:
+                    raise ValueError(
+                        f"Scale group '{name}': resources.disk must be specified for VM-backed GCP slices "
+                        f"(used as boot disk size)."
+                    )
                 if resources.device_count > 0:
                     raise ValueError(f"Scale group '{name}': VM-backed GCP slices currently support CPU-only resources.")
             else:

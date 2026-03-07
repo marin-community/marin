@@ -268,6 +268,8 @@ def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
     if config.gcp.mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
         if not config.gcp.machine_type:
             missing.append("gcp.machine_type")
+        if not config.disk_size_gb:
+            missing.append("disk_size_gb")
         if config.num_vms != 1:
             violations.append("GCP VM slice mode requires num_vms=1")
         if config.preemptible:
@@ -296,6 +298,10 @@ def _validate_vm_config(config: config_pb2.VmConfig) -> None:
         missing.append("name")
     if not config.gcp.zone:
         missing.append("gcp.zone")
+    if not config.gcp.machine_type:
+        missing.append("gcp.machine_type")
+    if not config.gcp.boot_disk_size_gb:
+        missing.append("gcp.boot_disk_size_gb")
     if missing:
         raise ValueError(f"VmConfig is missing required fields: {', '.join(missing)}")
 
@@ -726,8 +732,6 @@ class GcpVmSliceHandle:
 # GcpPlatform
 # ============================================================================
 
-DEFAULT_MACHINE_TYPE = "n2-standard-4"
-DEFAULT_BOOT_DISK_SIZE_GB = 50
 # pd-ssd provides ~6000 IOPS vs ~38 on pd-standard, critical for controller DB
 # and generally better for all GCE VMs. We hardcode this rather than exposing
 # it in config since it's GCP-specific and pd-ssd is the right choice.
@@ -819,8 +823,8 @@ class GcpPlatform:
         _validate_vm_config(config)
         gcp = config.gcp
         zone = gcp.zone
-        machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
-        boot_disk_size = gcp.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
+        machine_type = gcp.machine_type
+        boot_disk_size = gcp.boot_disk_size_gb
         boot_disk_type = DEFAULT_BOOT_DISK_TYPE
 
         cmd = [
@@ -998,8 +1002,8 @@ class GcpPlatform:
         gcp = config.gcp
         slice_id = _build_vm_slice_id(config.name_prefix, generate_slice_suffix())
         vm_name = slice_id
-        machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
-        boot_disk_size = config.disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
+        machine_type = gcp.machine_type
+        boot_disk_size = config.disk_size_gb
 
         labels = dict(config.labels)
         labels[self._iris_labels.iris_slice_id] = slice_id
