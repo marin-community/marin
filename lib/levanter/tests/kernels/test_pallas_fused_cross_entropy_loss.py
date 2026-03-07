@@ -146,6 +146,57 @@ def test_fused_cross_entropy_grad_matches_reference():
     assert jnp.allclose(gw_api, gw_ref, atol=grad_tol, rtol=grad_tol)
 
 
+def test_bwd_delta_supertile_soft_cap_scales_label_term():
+    x = jnp.array([[4.0, -3.0], [2.5, 3.5]], dtype=jnp.float32)
+    w_supertile = jnp.array(
+        [
+            [2.0, -1.0, 0.5, 3.0],
+            [-2.0, 3.0, -3.0, 1.5],
+        ],
+        dtype=jnp.float32,
+    )
+    labels = jnp.array([0, 2], dtype=jnp.int32)
+    dout_loss = jnp.array([1.0, 0.75], dtype=jnp.float32)
+    dout_lse = jnp.array([0.4, -0.2], dtype=jnp.float32)
+    dout_loss_plus_lse = dout_loss + dout_lse
+    logit_soft_cap = 0.7
+
+    logits_raw = jax.lax.dot_general(x, w_supertile, (((1,), (0,)), ((), ())))
+    tanh_val = jnp.tanh(logits_raw / logit_soft_cap)
+    logits = tanh_val * logit_soft_cap
+    cap_deriv = 1.0 - tanh_val**2
+    lse = jax.scipy.special.logsumexp(logits, axis=-1)
+    probs = jnp.exp(logits - lse[:, None])
+
+    expected_delta = dout_loss_plus_lse[:, None] * probs
+    expected_delta = expected_delta.at[jnp.arange(labels.shape[0]), labels].add(-dout_loss)
+    expected_delta = expected_delta * cap_deriv
+
+    wrong_delta = dout_loss_plus_lse[:, None] * probs * cap_deriv
+    wrong_delta = wrong_delta.at[jnp.arange(labels.shape[0]), labels].add(-dout_loss)
+
+    actual_delta = jax.jit(
+        lambda x_arg, labels_arg, w_arg, lse_arg, dout_sum_arg, dout_arg: (
+            pallas_tpu._linear_softmax_cross_entropy_loss_bwd_xla_delta_supertile(
+                dout_loss_plus_lse=dout_sum_arg,
+                dout_loss=dout_arg,
+                lse=lse_arg,
+                x=x_arg,
+                labels=labels_arg,
+                w_supertile=w_arg,
+                v_start=jnp.asarray(0, dtype=labels_arg.dtype),
+                v_dim=w_arg.shape[1],
+                dtype=jnp.float32,
+                logit_soft_cap=logit_soft_cap,
+                precision=None,
+            )
+        )
+    )(x, labels, w_supertile, lse, dout_loss_plus_lse, dout_loss)
+
+    assert jnp.max(jnp.abs(expected_delta - wrong_delta)) > 0.1
+    assert jnp.allclose(actual_delta, expected_delta, atol=1e-6, rtol=1e-6)
+
+
 def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     x, w, y = _make_toy_inputs()
     logsumexp_weight = 0.2
