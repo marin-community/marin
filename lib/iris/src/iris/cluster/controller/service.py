@@ -764,7 +764,7 @@ class ControllerServiceImpl:
         Endpoints are registered regardless of job state, but only become visible to clients
         (via lookup/list) when the job is executing (not in a terminal state).
         """
-        endpoint_id = str(uuid.uuid4())
+        endpoint_id = request.endpoint_id or str(uuid.uuid4())
 
         job = self._state.get_job(JobName.from_wire(request.job_id))
         if not job:

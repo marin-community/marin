@@ -5,6 +5,7 @@
 
 import logging
 import time
+import uuid
 
 from iris.cluster.client.protocol import TaskStateLogger
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
@@ -254,13 +255,19 @@ class RemoteClusterClient:
         job_id: JobName,
         metadata: dict[str, str] | None = None,
     ) -> str:
+        endpoint_id = str(uuid.uuid4())
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
             job_id=job_id.to_wire(),
             metadata=metadata or {},
+            endpoint_id=endpoint_id,
         )
-        response = self._client.register_endpoint(request)
+
+        def _call():
+            return self._client.register_endpoint(request)
+
+        response = call_with_retry("register_endpoint", _call)
         return response.endpoint_id
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
