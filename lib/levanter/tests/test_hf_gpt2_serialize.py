@@ -10,6 +10,7 @@ from typing import Optional, cast
 import equinox
 import fsspec
 import jax
+import jax.numpy as jnp
 import numpy as onp
 import pytest
 from fsspec import AbstractFileSystem
@@ -155,7 +156,7 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
 
         def compute_loss(model: LmHeadModel, input_ids):
             example = LmExample.causal(input_ids, eos_id=converter.tokenizer.eos_token_id)
-            return model.compute_next_token_loss_array(example, key=None).item()
+            return jnp.asarray(model.compute_next_token_loss_array(example, key=None))
 
         jax_compute_grad = equinox.filter_value_and_grad(compute_loss, has_aux=False)
         jax_grad: Gpt2LMHeadModel
