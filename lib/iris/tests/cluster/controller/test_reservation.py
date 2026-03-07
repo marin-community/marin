@@ -28,11 +28,13 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.events import (
     JobSubmittedEvent,
+    TaskAssignedEvent,
     TaskStateChangedEvent,
+    WorkerFailedEvent,
     WorkerRegisteredEvent,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
-from iris.cluster.controller.state import ControllerState, ControllerWorker
+from iris.cluster.controller.state import RESERVATION_HOLDER_JOB_NAME, ControllerState, ControllerWorker
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.constraints import (
     AttributeValue,
@@ -1385,3 +1387,51 @@ def test_reservation_match_user_variant_override():
     entry = _make_reservation_entry(_gpu_device("H100"), constraints=[user_constraint])
     # Worker is A100, entry device is H100, but explicit constraint allows A100
     assert _worker_matches_reservation_entry(worker, entry)
+
+
+# =============================================================================
+# Holder task worker-death handling
+# =============================================================================
+
+
+def test_holder_task_worker_death_no_failure_record():
+    """Holder tasks return to PENDING with no WORKER_FAILED record when their worker dies.
+
+    Holder tasks are virtual (never dispatched). When a worker dies, they must
+    be silently requeued — no attempt accumulation, no retry budget burn — so
+    that they can survive an arbitrary number of worker cycles without leaking
+    memory or eventually going terminal.
+    """
+    state = ControllerState()
+    request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+    holder_task = holder_tasks[0]
+
+    # Simulate multiple worker-death cycles to confirm no accumulation.
+    for cycle in range(3):
+        worker_id = _register_worker(state, f"worker-{cycle}")
+
+        # Assign the holder task to the worker (mimics what the scheduler does).
+        state.handle_event(TaskAssignedEvent(task_id=holder_task.task_id, worker_id=worker_id))
+        assert holder_task.state == cluster_pb2.TASK_STATE_ASSIGNED
+        assert holder_task.active_worker_id == worker_id
+
+        # Kill the worker — holder task must NOT go through WORKER_FAILED.
+        state.handle_event(WorkerFailedEvent(worker_id=worker_id, error="simulated crash"))
+
+        holder_task = state.get_task(holder_task.task_id)
+        assert holder_task is not None
+        assert (
+            holder_task.state == cluster_pb2.TASK_STATE_PENDING
+        ), f"cycle {cycle}: expected PENDING, got {cluster_pb2.TaskState.Name(holder_task.state)}"
+        assert holder_task.preemption_count == 0, f"cycle {cycle}: preemption_count leaked"
+        assert holder_task.failure_count == 0, f"cycle {cycle}: failure_count leaked"
+        assert (
+            len(holder_task.attempts) == 0
+        ), f"cycle {cycle}: attempt list leaked ({len(holder_task.attempts)} entries)"
+        assert holder_task.active_worker_id is None, "no active worker after death"
+        assert holder_task.can_be_scheduled(), "holder task must be schedulable again"

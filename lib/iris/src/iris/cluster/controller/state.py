@@ -302,6 +302,18 @@ class ControllerTask:
             return self.attempts[-1].worker_id
         return None
 
+    @property
+    def active_worker_id(self) -> WorkerId | None:
+        """Worker ID only when the current attempt is actively assigned/running.
+
+        Returns None if there are no attempts or the last attempt is terminal
+        (task failed or was preempted and is now waiting to retry). Use this
+        for display purposes; use worker_id for internal resource cleanup.
+        """
+        if self.attempts and not self.attempts[-1].is_terminal():
+            return self.attempts[-1].worker_id
+        return None
+
     # --- Attempt management methods ---
 
     def create_attempt(
@@ -476,6 +488,23 @@ class ControllerTask:
         if state == cluster_pb2.TASK_STATE_WORKER_FAILED:
             return self.preemption_count > self.max_retries_preemption
         return False
+
+    def release_to_pending(self) -> int:
+        """Discard the current in-flight attempt and reset to PENDING.
+
+        Used exclusively for reservation holder tasks when their assigned worker
+        dies. Because holder tasks are virtual (never dispatched), failed attempts
+        are meaningless and must not accumulate. The non-terminal attempt is
+        removed so the task can be cleanly reassigned without any failure record.
+
+        Returns:
+            The task's state before the reset, for job state accounting.
+        """
+        old_state = self.state
+        if self.current_attempt and not self.current_attempt.is_terminal():
+            self.attempts.pop()
+        self.state = cluster_pb2.TASK_STATE_PENDING
+        return old_state
 
     def can_be_scheduled(self) -> bool:
         """Check if task is ready to be scheduled.
@@ -1113,6 +1142,17 @@ class ControllerState:
             assert task.worker_id == event.worker_id
             # Skip terminal states
             if task.state in TERMINAL_TASK_STATES:
+                continue
+
+            job = self._jobs.get(task.job_id)
+            if job and job.is_reservation_holder:
+                # Holder tasks are virtual (never dispatched, no entrypoint).
+                # Discard the in-flight attempt and requeue silently — no
+                # WORKER_FAILED record, no retry budget burn, no accumulation.
+                old_state = task.release_to_pending()
+                self._requeue_task(task, txn)
+                job.on_task_transition(old_state, task.state)
+                txn.log("holder_task_released", task_id, worker_id=str(event.worker_id))
                 continue
 
             cascade_event = TaskStateChangedEvent(
