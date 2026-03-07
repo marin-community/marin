@@ -98,7 +98,11 @@ class RemoteClusterClient:
             request.coscheduling.CopyFrom(coscheduling)
         if reservation is not None:
             request.reservation.CopyFrom(reservation)
-        self._client.launch_job(request)
+
+        def _call():
+            self._client.launch_job(request)
+
+        call_with_retry(f"launch_job({job_id})", _call)
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         def _call():
@@ -239,7 +243,11 @@ class RemoteClusterClient:
 
     def terminate_job(self, job_id: JobName) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
-        self._client.terminate_job(request)
+
+        def _call():
+            self._client.terminate_job(request)
+
+        call_with_retry(f"terminate_job({job_id})", _call)
 
     def register_endpoint(
         self,
@@ -260,7 +268,11 @@ class RemoteClusterClient:
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint via RPC."""
         request = cluster_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
-        self._client.unregister_endpoint(request)
+
+        def _call():
+            self._client.unregister_endpoint(request)
+
+        call_with_retry(f"unregister_endpoint({endpoint_id})", _call)
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[cluster_pb2.Controller.Endpoint]:
         def _call():
