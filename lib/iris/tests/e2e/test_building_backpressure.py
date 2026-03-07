@@ -25,7 +25,7 @@ MAX_BUILDING = 4  # default max_building_tasks_per_worker
 @pytest.fixture
 def single_worker_cluster():
     """Single-worker cluster so building backpressure is observable."""
-    config = load_config(IRIS_ROOT / "examples" / "demo.yaml")
+    config = load_config(IRIS_ROOT / "examples" / "test.yaml")
     config.scale_groups.clear()
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"

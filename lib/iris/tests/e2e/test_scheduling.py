@@ -21,7 +21,7 @@ from .conftest import IRIS_ROOT, IrisTestCluster, assert_visible, dashboard_goto
 
 pytestmark = pytest.mark.e2e
 
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 def _make_cold_start_scaleup_config() -> config_pb2.IrisClusterConfig:

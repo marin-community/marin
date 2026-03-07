@@ -181,7 +181,7 @@ from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec
 from iris.rpc import cluster_pb2
 
 IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 TERMINAL_STATES = {
     cluster_pb2.JOB_STATE_SUCCEEDED,

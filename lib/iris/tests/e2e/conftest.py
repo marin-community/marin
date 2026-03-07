@@ -42,7 +42,7 @@ from iris.time_utils import Duration
 from .chronos import VirtualClock
 
 IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 @dataclass

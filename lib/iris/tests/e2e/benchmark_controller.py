@@ -100,7 +100,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
     Args:
         num_slices: Total number of slices to create across all groups
     """
-    config = load_config(TEST_ROOT / "examples" / "demo.yaml")
+    config = load_config(TEST_ROOT / "examples" / "test.yaml")
     config.scale_groups.clear()
 
     # Distribute slices across size categories
@@ -360,7 +360,7 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     controller handles a burst of task creation, scheduling, log streaming, and
     completion RPCs from a single source — the scenario that triggered #3062.
     """
-    config = load_config(TEST_ROOT / "examples" / "demo.yaml")
+    config = load_config(TEST_ROOT / "examples" / "test.yaml")
     config.scale_groups.clear()
 
     sg = config.scale_groups["local-cpu"]

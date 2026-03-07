@@ -210,27 +210,30 @@ def main(rounds: int = 5, delay: float = 0.5):
 def run_local(rounds: int = 5, delay: float = 0.5) -> bool:
     """Run the test with a local in-process cluster.
 
-    Bootstraps a DemoCluster and submits the main() function as a job.
+    Boots a local controller and submits the main() function as a job.
     Returns True if the job succeeded, False otherwise.
     """
-    import sys
-
-    # Import DemoCluster components (only when running locally)
+    from iris.client import IrisClient
+    from iris.cluster.config import load_config, make_local_config
+    from iris.cluster.controller.local import LocalController
     from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
     from iris.rpc import cluster_pb2
 
-    # Import from examples - adjust path since we're in scripts/
-    sys.path.insert(0, str(Path(__file__).parent.parent / "examples"))
-    from demo_cluster import DemoCluster
+    IRIS_ROOT = Path(__file__).parent.parent
+    config = load_config(IRIS_ROOT / "examples" / "test.yaml")
+    config = make_local_config(config)
 
     print(f"Starting local cluster for actor test with {rounds} rounds (delay={delay}s)...")
 
-    with DemoCluster(workspace=Path(__file__).parent.parent) as demo:
-        print(f"Controller: {demo.controller_url}")
+    controller = LocalController(config)
+    controller_url = controller.start()
+    try:
+        print(f"Controller: {controller_url}")
         print()
 
+        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
         entrypoint = Entrypoint.from_callable(main, rounds, delay)
-        job = demo.client.submit(
+        job = client.submit(
             entrypoint=entrypoint,
             name="test-actor",
             resources=ResourceSpec(cpu=1, memory="512m"),
@@ -253,6 +256,8 @@ def run_local(rounds: int = 5, delay: float = 0.5) -> bool:
         else:
             print(f"Test failed: {status.error}")
             return False
+    finally:
+        controller.stop()
 
 
 @click.command()
