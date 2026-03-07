@@ -87,9 +87,8 @@ class LogStore:
 
         self._write_lock = Lock()
         self._max_records = max_records
-        self._append_count = 0
-        self._checkpoint_interval = 50_000
-        self._since_last_checkpoint = 0
+        self._rows_since_eviction_check = 0
+        self._eviction_check_interval = max_records // 10
 
     @staticmethod
     def _make_conn(db_path: str) -> sqlite3.Connection:
@@ -110,7 +109,7 @@ class LogStore:
                 rows,
             )
             self._write_conn.commit()
-            self._post_write_maintenance(len(entries))
+            self._post_write_maintenance(len(rows))
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
         """Write log entries from multiple keys in a single transaction.
@@ -132,15 +131,12 @@ class LogStore:
             self._write_conn.commit()
             self._post_write_maintenance(len(all_rows))
 
-    def _post_write_maintenance(self, n_written: int) -> None:
-        """Run eviction and WAL truncation as needed. Must hold self._write_lock."""
-        self._append_count += n_written
-        self._since_last_checkpoint += n_written
-        if self._append_count >= self._max_records:
+    def _post_write_maintenance(self, rows_written: int) -> None:
+        """Run eviction as needed. Must hold self._write_lock."""
+        self._rows_since_eviction_check += rows_written
+        if self._rows_since_eviction_check >= self._eviction_check_interval:
             self._evict_if_needed()
-        if self._since_last_checkpoint >= self._checkpoint_interval:
-            self._write_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            self._since_last_checkpoint = 0
+            self._rows_since_eviction_check = 0
 
     def get_logs(
         self,
@@ -291,19 +287,21 @@ class LogStore:
     def _evict_if_needed(self) -> None:
         """Delete oldest rows when the total count exceeds the cap. Must hold self._write_lock.
 
-        Evicts down to max_records // 2 so we don't pay eviction cost on every
-        subsequent append.
+        Uses MAX(id) - MIN(id) as a cheap approximation of row count (autoincrement
+        IDs are nearly contiguous since we only delete from the bottom). Evicts down
+        to max_records // 2 so we don't pay eviction cost on every subsequent append.
         """
-        count = self._write_conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        target = self._max_records // 2
-        if count > self._max_records:
-            excess = count - target
-            self._write_conn.execute(
-                "DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id LIMIT ?)",
-                (excess,),
-            )
-            self._write_conn.commit()
-        self._append_count = 0
+        row = self._write_conn.execute("SELECT MIN(id), MAX(id) FROM logs").fetchone()
+        min_id, max_id = row
+        if min_id is None:
+            return
+        approx_count = max_id - min_id + 1
+        if approx_count <= self._max_records:
+            return
+        # Keep the most recent max_records // 2 rows.
+        cutoff = max_id - (self._max_records // 2)
+        self._write_conn.execute("DELETE FROM logs WHERE id <= ?", (cutoff,))
+        self._write_conn.commit()
 
 
 class LogCursor:
