@@ -99,6 +99,14 @@ def extract_error_details(error: ConnectError):
     return None
 
 
+def format_connect_error(error: ConnectError) -> str:
+    """Format a ConnectError, including server traceback if available."""
+    details = extract_error_details(error)
+    if details and details.traceback:
+        return f"{error}\n\nServer traceback:\n{details.traceback}"
+    return str(error)
+
+
 def is_retryable_error(exc: Exception) -> bool:
     """Check if an RPC error should trigger retry.
 

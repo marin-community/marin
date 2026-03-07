@@ -11,7 +11,8 @@ from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, adjust_tpu_replicas, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc.errors import call_with_retry
+from connectrpc.errors import ConnectError
+from iris.rpc.errors import call_with_retry, format_connect_error
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -192,14 +193,15 @@ class RemoteClusterClient:
                 )
                 consecutive_log_failures = 0
                 log_fetch_backoff.reset()
-            except Exception:
+            except Exception as e:
                 consecutive_log_failures += 1
+                msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
                 logger.warning(
-                    "Failed to fetch logs for %s (%d/%d), will retry",
+                    "Failed to fetch logs for %s (%d/%d), will retry:\n%s",
                     job_id,
                     consecutive_log_failures,
                     max_log_failures,
-                    exc_info=True,
+                    msg,
                 )
                 if consecutive_log_failures >= max_log_failures:
                     raise
