@@ -707,6 +707,78 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     assert seen_block_sizes == [inferred]
 
 
+def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    called = {"pallas": 0, "xla": 0}
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    vmem_error = RuntimeError(
+        "RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. " "Ran out of memory in memory space vmem."
+    )
+
+    def fake_pallas(*args, **kwargs):
+        del args, kwargs
+        called["pallas"] += 1
+        raise vmem_error
+
+    def fake_xla(x_raw, labels_raw, w_raw, **kwargs):
+        del labels_raw, w_raw, kwargs
+        called["xla"] += 1
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_pallas)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "xla", fake_xla)
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (inferred, True),
+    )
+    monkeypatch.setattr(fused_api, "_VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED", set())
+
+    with pytest.warns(RuntimeWarning, match="vmem compile OOM"):
+        fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            y,
+            w,
+            reduction=None,
+            implementation=("pallas_tpu", "xla"),
+        )
+
+    assert called["pallas"] == 1
+    assert called["xla"] == 1
+
+
+def test_pallas_tpu_non_vmem_runtime_error_still_raises(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    def fake_pallas(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("some other runtime error")
+
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_pallas)
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (inferred, True),
+    )
+
+    with pytest.raises(RuntimeError, match="some other runtime error"):
+        fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            y,
+            w,
+            reduction=None,
+            implementation="pallas_tpu",
+        )
+
+
 def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
