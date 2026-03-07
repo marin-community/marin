@@ -105,6 +105,28 @@ class LogStore:
             if self._append_count >= self._max_records:
                 self._evict_if_needed()
 
+    def append_batch(self, items: list[tuple[str, list]]) -> None:
+        """Write log entries from multiple keys in a single transaction.
+
+        Each item is (key, entries). All rows are inserted with a single
+        executemany + commit, avoiding per-key commit overhead and allowing
+        callers to release other locks before flushing logs.
+        """
+        all_rows = []
+        for key, entries in items:
+            all_rows.extend((key, e.source, e.data, e.timestamp.epoch_ms, e.level) for e in entries)
+        if not all_rows:
+            return
+        with self._write_lock:
+            self._write_conn.executemany(
+                "INSERT INTO logs (key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
+                all_rows,
+            )
+            self._write_conn.commit()
+            self._append_count += len(all_rows)
+            if self._append_count >= self._max_records:
+                self._evict_if_needed()
+
     def get_logs(
         self,
         key: str,

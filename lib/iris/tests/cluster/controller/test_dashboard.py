@@ -736,30 +736,12 @@ def test_get_worker_status_unknown_id_returns_error(client):
     assert resp.status_code != 200
 
 
-def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):
-    """Health endpoint returns status ok with worker and job counts."""
-    register_worker(state, "w1", "h1:8080", make_worker_metadata())
-    register_worker(state, "w2", "h2:8080", make_worker_metadata())
-    submit_job(state, "j1", job_request)
-
+def test_health_endpoint_returns_ok(client):
+    """Health endpoint returns a trivial ok response without querying state."""
     resp = client.get("/health")
 
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["workers"] == 2
-    assert data["jobs"] == 1
-
-
-def test_health_endpoint_empty_cluster(client):
-    """Health endpoint returns ok for empty cluster (no workers, no jobs)."""
-    resp = client.get("/health")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["workers"] == 0
-    assert data["jobs"] == 0
+    assert resp.json() == {"status": "ok"}
 
 
 # =============================================================================

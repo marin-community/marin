@@ -361,18 +361,22 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
         # Build task statuses with attempts, aggregate counts in single pass
+        tasks = self._state.get_job_tasks(job.job_id)
+
+        # Batch-fetch all referenced workers in one lock acquisition instead of
+        # acquiring the lock per task.
+        worker_ids = {t.worker_id for t in tasks if t.worker_id}
+        workers_by_id = self._state.get_workers_batch(worker_ids)
+
         task_statuses = []
         total_failure_count = 0
         total_preemption_count = 0
-        for task in self._state.get_job_tasks(job.job_id):
+        for task in tasks:
             total_failure_count += task.failure_count
             total_preemption_count += task.preemption_count
 
-            worker_address = ""
-            if task.worker_id:
-                worker = self._state.get_worker(task.worker_id)
-                if worker:
-                    worker_address = worker.address
+            worker = workers_by_id.get(task.worker_id) if task.worker_id else None
+            worker_address = worker.address if worker else ""
 
             task_statuses.append(task_to_proto(task, worker_address=worker_address))
 
@@ -658,14 +662,14 @@ class ControllerServiceImpl:
             for job in self._state.list_all_jobs():
                 tasks.extend(self._state.get_job_tasks(job.job_id))
 
+        # Batch-fetch all referenced workers in one lock acquisition.
+        worker_ids = {t.worker_id for t in tasks if t.worker_id}
+        workers_by_id = self._state.get_workers_batch(worker_ids)
+
         task_statuses = []
         for task in tasks:
-            # Look up worker address
-            worker_address = ""
-            if task.worker_id:
-                worker = self._state.get_worker(task.worker_id)
-                if worker:
-                    worker_address = worker.address
+            worker = workers_by_id.get(task.worker_id) if task.worker_id else None
+            worker_address = worker.address if worker else ""
 
             proto_task_status = task_to_proto(task, worker_address=worker_address)
 

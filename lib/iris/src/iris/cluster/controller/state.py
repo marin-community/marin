@@ -19,7 +19,7 @@ import bisect
 import logging
 from collections import Counter, deque
 from pathlib import Path
-from collections.abc import Callable
+
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
@@ -965,7 +965,9 @@ class ControllerState:
         # Priority-sorted task queue. Sorted ascending — lower keys = higher priority.
         self._task_queue: list[QueueEntry] = []
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
+        self._endpoints_by_name: dict[str, set[str]] = {}  # name -> endpoint_ids
         self._endpoints_by_task: dict[JobName, set[str]] = {}  # task_id -> endpoint_ids
+        self._endpoint_task: dict[str, JobName] = {}  # endpoint_id -> task_id (reverse of _endpoints_by_task)
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
         self._pending_dispatch: dict[WorkerId, PendingDispatch] = {}  # Buffered heartbeat dispatches
         self._log_store = LogStore(log_dir=log_dir)
@@ -1869,6 +1871,11 @@ class ControllerState:
         with self._lock:
             return self._workers.get(worker_id)
 
+    def get_workers_batch(self, worker_ids: set[WorkerId]) -> dict[WorkerId, ControllerWorker]:
+        """Look up multiple workers in a single lock acquisition."""
+        with self._lock:
+            return {wid: self._workers[wid] for wid in worker_ids if wid in self._workers}
+
     def remove_worker(self, worker_id: WorkerId) -> ControllerWorker | None:
         with self._lock:
             return self._workers.pop(worker_id, None)
@@ -1974,7 +1981,11 @@ class ControllerState:
         """Process successful heartbeat response.
 
         Updates worker health state and processes task state changes from the response.
+        Log entries are collected under the state lock but flushed to SQLite after
+        the lock is released, so disk I/O does not block scheduling or RPCs.
         """
+        pending_logs: list[tuple[str, list]] = []
+
         with self._lock:
             worker = self._workers.get(snapshot.worker_id)
             if not worker:
@@ -1996,10 +2007,9 @@ class ControllerState:
                 if not task:
                     continue
 
-                # Always ingest logs, even for finished tasks, because the final
-                # heartbeat carries the terminal state and the last log delta together.
+                # Collect log entries for batch write outside the lock.
                 if entry.log_entries and self._log_store is not None:
-                    self._log_store.append(task_log_key(task_id, entry.attempt_id), entry.log_entries)
+                    pending_logs.append((task_log_key(task_id, entry.attempt_id), entry.log_entries))
 
                 if task.is_finished():
                     continue
@@ -2028,6 +2038,10 @@ class ControllerState:
                     if entry.state == cluster_pb2.TASK_STATE_PENDING:
                         continue
                     self._process_task_state_change(task_id, entry.state, entry.attempt_id)
+
+        # Flush logs outside the state lock — disk I/O no longer blocks other threads.
+        if pending_logs and self._log_store is not None:
+            self._log_store.append_batch(pending_logs)
 
     def _process_task_state_change(
         self,
@@ -2100,38 +2114,61 @@ class ControllerState:
         """Add an endpoint, optionally associating it with a task."""
         with self._lock:
             self._endpoints[endpoint.endpoint_id] = endpoint
+            self._endpoints_by_name.setdefault(endpoint.name, set()).add(endpoint.endpoint_id)
             if task_id:
                 self._endpoints_by_task.setdefault(task_id, set()).add(endpoint.endpoint_id)
+                self._endpoint_task[endpoint.endpoint_id] = task_id
 
     def remove_endpoint(self, endpoint_id: str) -> ControllerEndpoint | None:
         with self._lock:
             endpoint = self._endpoints.pop(endpoint_id, None)
             if endpoint:
-                # Remove from task tracking
-                for task_endpoints in self._endpoints_by_task.values():
-                    task_endpoints.discard(endpoint_id)
+                # Remove from name index
+                name_set = self._endpoints_by_name.get(endpoint.name)
+                if name_set is not None:
+                    name_set.discard(endpoint_id)
+                    if not name_set:
+                        del self._endpoints_by_name[endpoint.name]
+                # Remove from task tracking via reverse index
+                task_id = self._endpoint_task.pop(endpoint_id, None)
+                if task_id is not None:
+                    task_set = self._endpoints_by_task.get(task_id)
+                    if task_set is not None:
+                        task_set.discard(endpoint_id)
+                        if not task_set:
+                            del self._endpoints_by_task[task_id]
             return endpoint
 
-    def _visible_endpoints(self, predicate: Callable[[ControllerEndpoint], bool]) -> list[ControllerEndpoint]:
-        """Return endpoints matching predicate whose jobs are in non-terminal states."""
-        results = []
-        for ep in self._endpoints.values():
-            if not predicate(ep):
-                continue
-            job = self._jobs.get(ep.job_id)
-            if job and not job.is_finished():
-                results.append(ep)
-        return results
+    def _is_endpoint_visible(self, ep: ControllerEndpoint) -> bool:
+        """An endpoint is visible when its owning job is still running."""
+        job = self._jobs.get(ep.job_id)
+        return job is not None and not job.is_finished()
 
     def lookup_endpoints(self, name: str) -> list[ControllerEndpoint]:
-        """Find endpoints by exact name match for non-terminal jobs."""
+        """Find endpoints by exact name match for non-terminal jobs. O(matches)."""
         with self._lock:
-            return self._visible_endpoints(lambda ep: ep.name == name)
+            eids = self._endpoints_by_name.get(name)
+            if not eids:
+                return []
+            return [ep for eid in eids if (ep := self._endpoints.get(eid)) is not None and self._is_endpoint_visible(ep)]
 
     def list_endpoints_by_prefix(self, prefix: str) -> list[ControllerEndpoint]:
-        """List endpoints matching a name prefix for non-terminal jobs."""
+        """List endpoints matching a name prefix for non-terminal jobs.
+
+        Still O(names) over the name index keys, but avoids the per-endpoint
+        job lookup for non-matching names. A sorted name index (e.g.
+        SortedDict) would make this O(log N + matches).
+        """
         with self._lock:
-            return self._visible_endpoints(lambda ep: ep.name.startswith(prefix))
+            results = []
+            for name, eids in self._endpoints_by_name.items():
+                if not name.startswith(prefix):
+                    continue
+                for eid in eids:
+                    ep = self._endpoints.get(eid)
+                    if ep is not None and self._is_endpoint_visible(ep):
+                        results.append(ep)
+            return results
 
     def list_all_endpoints(self) -> list[ControllerEndpoint]:
         """Return all registered endpoints."""
@@ -2155,6 +2192,13 @@ class ControllerState:
             endpoint = self._endpoints.pop(eid, None)
             if endpoint:
                 removed.append(endpoint)
+                # Clean up name index
+                name_set = self._endpoints_by_name.get(endpoint.name)
+                if name_set is not None:
+                    name_set.discard(eid)
+                    if not name_set:
+                        del self._endpoints_by_name[endpoint.name]
+            self._endpoint_task.pop(eid, None)
         self._endpoints_by_task.pop(task_id, None)
         return removed
 
