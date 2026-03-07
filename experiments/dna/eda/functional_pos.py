@@ -15,6 +15,8 @@ Each model gets two validation sets tokenized from the same HF dataset:
 - val_nonfunctional: only lowercase positions contribute to loss
 
 https://github.com/Open-Athena/bolinas-dna/issues/10
+
+Targeting us-central1 (v5p-8).
 """
 
 import dataclasses
@@ -78,9 +80,9 @@ qwen3_600m = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=MODEL_SEQ_LEN)
 
 MODEL_CONFIGS = {
     # (model_config, learning_rate, resources)
-    "6m": (qwen3_6m, 1e-3, ResourceConfig.with_tpu("v4-8")),
-    "60m": (qwen3_60m, 1e-3, ResourceConfig.with_tpu("v4-8")),
-    "600m": (qwen3_600m, 1e-3, ResourceConfig.with_tpu("v4-8")),
+    "6m": (qwen3_6m, 1e-3, ResourceConfig.with_tpu("v5p-8")),
+    "60m": (qwen3_60m, 1e-3, ResourceConfig.with_tpu("v5p-8")),
+    "600m": (qwen3_600m, 1e-3, ResourceConfig.with_tpu("v5p-8")),
 }
 
 # =============================================================================
@@ -120,7 +122,7 @@ val_nonfunctional = default_tokenize(
 # =============================================================================
 
 BASE_TRAIN_CONFIG = SimpleTrainConfig(
-    resources=ResourceConfig.with_tpu("v4-8"),  # overridden per model
+    resources=ResourceConfig.with_tpu("v5p-8"),  # overridden per model
     train_batch_size=4096,
     num_train_steps=10_000,
     learning_rate=1e-3,  # overridden per model
