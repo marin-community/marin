@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 
 from experiments.domain_phase_mix.offline_rl import evaluate_policy_three_phase_starcoder as eval_runner
 from experiments.domain_phase_mix.offline_rl.build_pooled_transition_dataset import (
@@ -84,6 +85,40 @@ def test_dedupe_history_rows_keeps_latest_entry():
     deduped = dedupe_history_rows(long_df)
     assert len(deduped) == 1
     assert float(deduped.iloc[0]["metric_value"]) == 1.5
+
+
+def test_build_wide_history_preserves_rows_without_local_run_id():
+    long_df = pd.DataFrame(
+        [
+            {
+                "wandb_run_id": "run-a",
+                "source_experiment": "x",
+                "local_run_id": None,
+                "run_name": "x/run-a",
+                "step": 100,
+                "total_tokens": None,
+                "metric_key": "train/loss",
+                "metric_value": 2.0,
+                "_scan_index": 0,
+            },
+            {
+                "wandb_run_id": "run-a",
+                "source_experiment": "x",
+                "local_run_id": None,
+                "run_name": "x/run-a",
+                "step": 100,
+                "total_tokens": None,
+                "metric_key": "eval/loss",
+                "metric_value": 2.5,
+                "_scan_index": 1,
+            },
+        ]
+    )
+    wide = build_wide_history(dedupe_history_rows(long_df))
+    assert len(wide) == 1
+    assert wide.iloc[0]["run_name"] == "x/run-a"
+    assert float(wide.iloc[0]["train/loss"]) == 2.0
+    assert float(wide.iloc[0]["eval/loss"]) == 2.5
 
 
 def test_scan_history_batch_skips_after_retry_exhaustion():
@@ -259,7 +294,7 @@ def test_policy_model_path_falls_back_to_artifact_local_full_models(tmp_path):
     assert resolved == model_path.resolve()
 
 
-def test_outcome_planner_predicts_supported_lowest_score_action(tmp_path, monkeypatch):
+def test_outcome_planner_predicts_supported_highest_q_action(tmp_path, monkeypatch):
     class _FakeBehaviorPolicy:
         def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
             return np.asarray(
@@ -271,10 +306,10 @@ def test_outcome_planner_predicts_supported_lowest_score_action(tmp_path, monkey
                 dtype=np.float32,
             )
 
-    class _FakeRewardModels:
-        def blended_stage_scores(self, frame: pd.DataFrame, action_values: np.ndarray) -> np.ndarray:
-            del frame
-            return np.asarray([3.0, 2.0, 1.0], dtype=np.float32)
+    class _FakeQModel:
+        def predict(self, inputs: np.ndarray) -> np.ndarray:
+            del inputs
+            return np.asarray([1.0, 2.0, 3.0], dtype=np.float32)
 
     artifact_dir = tmp_path / "planner_eval"
     artifact_dir.mkdir(parents=True)
@@ -306,7 +341,7 @@ def test_outcome_planner_predicts_supported_lowest_score_action(tmp_path, monkey
         lambda _: {
             "feature_keys": ("decision_index", "last_obj_bpb"),
             "action_grid": [0.1, 0.2, 0.3],
-            "reward_models": _FakeRewardModels(),
+            "q_models": {1: _FakeQModel()},
             "behavior_policy": _FakeBehaviorPolicy(),
             "support_threshold": 0.02,
         },
@@ -319,6 +354,209 @@ def test_outcome_planner_predicts_supported_lowest_score_action(tmp_path, monkey
         {"decision_index": 1.0, "last_obj_bpb": 0.9},
     )
     assert math.isclose(action, 0.3, rel_tol=0.0, abs_tol=1e-6)
+
+
+def test_outcome_planner_legacy_reward_bundle_uses_min_score(tmp_path, monkeypatch):
+    class _FakeBehaviorPolicy:
+        def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
+            return np.asarray(
+                [
+                    [0.4, 0.3, 0.3],
+                    [0.4, 0.3, 0.3],
+                    [0.4, 0.3, 0.3],
+                ],
+                dtype=np.float32,
+            )
+
+    class _FakeRewardBundle:
+        def blended_stage_scores(self, frame: pd.DataFrame, action_values: np.ndarray) -> np.ndarray:
+            del frame, action_values
+            return np.asarray([0.8, 0.1, 0.4], dtype=np.float32)
+
+    artifact_dir = tmp_path / "planner_eval_legacy"
+    artifact_dir.mkdir(parents=True)
+    artifact_path = artifact_dir / "selected_policy_artifact.json"
+    save_policy_artifact(
+        artifact_path,
+        PolicyArtifactV2(
+            kind="sklearn_outcome_planner_v2",
+            objective_metric="eval/loss",
+            state_keys=("decision_index", "last_obj_bpb"),
+            action_low=0.05,
+            action_high=0.95,
+            action_values=[0.1, 0.2, 0.3],
+            state_mean=[0.0, 1.0],
+            state_std=[1.0, 1.0],
+            reward_mean=0.0,
+            reward_std=1.0,
+            model_path="/tmp/elsewhere/planner.joblib",
+            metadata={"support_threshold": 0.02},
+        ),
+    )
+    fallback_model = artifact_dir / "full_models" / "outcome_planner" / "planner.joblib"
+    fallback_model.parent.mkdir(parents=True)
+    fallback_model.write_bytes(b"planner")
+
+    monkeypatch.setattr(
+        eval_runner.joblib,
+        "load",
+        lambda _: {
+            "feature_keys": ("decision_index", "last_obj_bpb"),
+            "action_grid": [0.1, 0.2, 0.3],
+            "reward_models": _FakeRewardBundle(),
+            "behavior_policy": _FakeBehaviorPolicy(),
+            "support_threshold": 0.02,
+        },
+    )
+    eval_runner._load_policy_artifact_cached.cache_clear()
+    eval_runner._load_outcome_planner_bundle.cache_clear()
+
+    action = eval_runner._policy_predict_action(
+        str(artifact_path),
+        {"decision_index": 1.0, "last_obj_bpb": 0.9},
+    )
+    assert math.isclose(action, 0.2, rel_tol=0.0, abs_tol=1e-6)
+
+
+def test_history_from_completed_run_uses_batched_scan_history(monkeypatch):
+    calls: list[tuple[int, int, float]] = []
+
+    def _fake_collect(run, metric_keys, history_batch_size, retry_attempts, backoff_seconds):
+        del run
+        calls.append((history_batch_size, retry_attempts, backoff_seconds))
+        assert metric_keys == ("train/loss", "eval/loss")
+        return [
+            {
+                "wandb_run_id": "run-a",
+                "source_experiment": "exp",
+                "local_run_id": 1,
+                "run_name": "exp/run-a",
+                "step": 0,
+                "total_tokens": 0.0,
+                "metric_key": "train/loss",
+                "metric_value": 3.0,
+                "_scan_index": 0,
+            },
+            {
+                "wandb_run_id": "run-a",
+                "source_experiment": "exp",
+                "local_run_id": 1,
+                "run_name": "exp/run-a",
+                "step": 0,
+                "total_tokens": 0.0,
+                "metric_key": "eval/loss",
+                "metric_value": 3.5,
+                "_scan_index": 1,
+            },
+        ]
+
+    monkeypatch.setattr(eval_runner, "collect_history_long_rows_batched", _fake_collect)
+    history = eval_runner._history_from_completed_run(object(), ("train/loss", "eval/loss"))
+    assert calls == [(eval_runner.ONLINE_HISTORY_BATCH_SIZE, 3, 2.0)]
+    assert history["train/loss"].tolist() == [3.0]
+    assert history["eval/loss"].tolist() == [3.5]
+
+
+def test_initial_policy_state_uses_decision_zero_defaults(tmp_path):
+    artifact_dir = tmp_path / "planner_eval"
+    artifact_dir.mkdir(parents=True)
+    defaults_path = artifact_dir / "decision_state_defaults.json"
+    defaults_path.write_text(
+        json.dumps(
+            {
+                "0": {
+                    "decision_index": 0.0,
+                    "num_phases_total": 3.0,
+                    "remaining_decisions": 2.0,
+                    "budget_frac_consumed": 0.0,
+                    "budget_frac_remaining": 1.0,
+                    "last_obj_bpb": 1.23,
+                    "prev_action_starcoder": 0.5,
+                }
+            }
+        )
+    )
+    artifact_path = artifact_dir / "selected_policy_artifact.json"
+    save_policy_artifact(
+        artifact_path,
+        PolicyArtifactV2(
+            kind="d3rlpy_discrete_bc_v2",
+            objective_metric="eval/loss",
+            state_keys=(
+                "decision_index",
+                "num_phases_total",
+                "remaining_decisions",
+                "budget_frac_consumed",
+                "budget_frac_remaining",
+                "last_obj_bpb",
+                "prev_action_starcoder",
+            ),
+            action_low=0.05,
+            action_high=0.95,
+            action_values=[0.05, 0.5, 0.95],
+            state_mean=[9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0],
+            state_std=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            reward_mean=0.0,
+            reward_std=1.0,
+            model_path="model.d3",
+            aux_paths={"decision_state_defaults": str(defaults_path)},
+        ),
+    )
+    eval_runner._load_policy_artifact_cached.cache_clear()
+    eval_runner._load_decision_state_defaults.cache_clear()
+
+    state = eval_runner._initial_policy_state(str(artifact_path))
+    assert state["decision_index"] == 0.0
+    assert state["last_obj_bpb"] == 1.23
+    assert state["remaining_decisions"] == 2.0
+
+
+def test_torch_discrete_iql_policy_prediction(tmp_path):
+    artifact_dir = tmp_path / "iql_eval"
+    artifact_dir.mkdir(parents=True)
+    model_path = artifact_dir / "model.pt"
+    policy_net = eval_runner._EvalIQLMLP(input_dim=2, output_dim=3, hidden_size=4)
+    with torch.no_grad():
+        for parameter in policy_net.parameters():
+            parameter.zero_()
+        last_linear = policy_net.net[-1]
+        last_linear.bias.copy_(torch.tensor([0.0, 2.0, 1.0], dtype=torch.float32))
+    torch.save(
+        {
+            "policy_state_dict": policy_net.state_dict(),
+            "q_state_dict": policy_net.state_dict(),
+            "v_state_dict": policy_net.state_dict(),
+            "input_dim": 2,
+            "action_dim": 3,
+            "hidden_size": 4,
+        },
+        model_path,
+    )
+    artifact_path = artifact_dir / "selected_policy_artifact.json"
+    save_policy_artifact(
+        artifact_path,
+        PolicyArtifactV2(
+            kind="torch_discrete_iql_v2",
+            objective_metric="eval/loss",
+            state_keys=("decision_index", "last_obj_bpb"),
+            action_low=0.05,
+            action_high=0.95,
+            action_values=[0.05, 0.5, 0.95],
+            state_mean=[0.0, 0.0],
+            state_std=[1.0, 1.0],
+            reward_mean=0.0,
+            reward_std=1.0,
+            model_path=str(model_path),
+        ),
+    )
+    eval_runner._load_policy_artifact_cached.cache_clear()
+    eval_runner._load_torch_discrete_iql_policy.cache_clear()
+
+    action = eval_runner._policy_predict_action(
+        str(artifact_path),
+        {"decision_index": 0.0, "last_obj_bpb": 1.0},
+    )
+    assert math.isclose(action, 0.5, rel_tol=0.0, abs_tol=1e-6)
 
 
 def test_cql_smoke_with_fake_backend(tmp_path):

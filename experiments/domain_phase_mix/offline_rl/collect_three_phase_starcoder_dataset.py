@@ -115,16 +115,20 @@ def build_wide_history(history_long: pd.DataFrame) -> pd.DataFrame:
             ]
         )
 
-    base_cols = ["wandb_run_id", "source_experiment", "local_run_id", "run_name", "step"]
-    total_tokens = history_long.groupby(base_cols, as_index=False)["total_tokens"].last()
+    base_cols = ["wandb_run_id", "source_experiment", "run_name", "step"]
+    metadata = history_long.groupby(base_cols, as_index=False, dropna=False).agg(
+        local_run_id=("local_run_id", "last"),
+        total_tokens=("total_tokens", "last"),
+    )
     values = history_long.pivot_table(
         index=base_cols,
         columns="metric_key",
         values="metric_value",
         aggfunc="last",
+        dropna=False,
     ).reset_index()
     values.columns.name = None
-    return values.merge(total_tokens, on=base_cols, how="left")
+    return values.merge(metadata, on=base_cols, how="left")
 
 
 def _resolve_weight_config_paths(prefix: str, source_experiment: str) -> list[str]:

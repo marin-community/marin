@@ -134,6 +134,7 @@ class PooledDatasetConfig:
 
 PolicyKindV2 = Literal[
     "sklearn_outcome_planner_v2",
+    "sklearn_dynamic_q_planner_v2",
     "torch_discrete_iql_v2",
     "d3rlpy_discrete_cql_v2",
     "d3rlpy_discrete_bc_v2",

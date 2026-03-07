@@ -17,6 +17,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from joblib import dump
+from sklearn.ensemble import HistGradientBoostingRegressor
 
 from experiments.domain_phase_mix.offline_rl.build_pooled_transition_dataset import discretize_action
 from experiments.domain_phase_mix.offline_rl.contracts import DEFAULT_OBJECTIVE_METRIC, PolicyKindV2
@@ -94,7 +95,7 @@ class FixedSchedulePolicy:
 
 
 class OutcomePlannerPolicy:
-    """Support-constrained planner using stage reward/final-objective regressors."""
+    """Support-constrained finite-horizon planner trained with backward induction."""
 
     def __init__(
         self,
@@ -102,34 +103,69 @@ class OutcomePlannerPolicy:
         name: str,
         feature_keys: tuple[str, ...],
         action_grid: np.ndarray,
-        reward_models: RewardModelBundle,
+        q_models: dict[int, HistGradientBoostingRegressor],
         behavior_policy: BehaviorPolicyModel,
         support_threshold: float,
     ):
         self.name = name
         self.feature_keys = feature_keys
         self.action_grid = action_grid
-        self.reward_models = reward_models
+        self.q_models = q_models
         self.behavior_policy = behavior_policy
         self.support_threshold = support_threshold
 
+    def _stage_q_values(self, frame: pd.DataFrame, action_values: np.ndarray) -> np.ndarray:
+        decision_index = int(frame["decision_index"].iloc[0])
+        model = self.q_models[decision_index]
+        inputs = np.concatenate(
+            [
+                frame.loc[:, list(self.feature_keys)].to_numpy(dtype=np.float32),
+                action_values.reshape(-1, 1).astype(np.float32),
+            ],
+            axis=1,
+        )
+        return model.predict(inputs).astype(np.float32)
+
+    def best_supported_actions(self, frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        outputs = np.zeros(len(frame), dtype=np.int64)
+        values = np.zeros(len(frame), dtype=np.float32)
+        for _, stage_frame in frame.groupby("decision_index", sort=False):
+            stage_positions = stage_frame.index.to_numpy(dtype=int)
+            if len(stage_positions) == 0:
+                continue
+            repeated_inputs = np.repeat(
+                stage_frame.loc[:, list(self.feature_keys)].to_numpy(dtype=np.float32),
+                len(self.action_grid),
+                axis=0,
+            )
+            repeated = pd.DataFrame(
+                repeated_inputs,
+                columns=list(self.feature_keys),
+            )
+            action_candidates = np.tile(self.action_grid, len(stage_frame)).astype(np.float32)
+            support_candidates = np.tile(np.arange(len(self.action_grid), dtype=np.int64), len(stage_frame))
+            support_matrix = self.behavior_policy.predict_proba(repeated)
+            support = support_matrix[np.arange(len(repeated)), support_candidates].reshape(
+                len(stage_frame),
+                len(self.action_grid),
+            )
+            q_values = self._stage_q_values(repeated, action_candidates).reshape(len(stage_frame), len(self.action_grid))
+
+            for local_index, global_index in enumerate(stage_positions):
+                supported = np.where(support[local_index] >= self.support_threshold)[0]
+                candidate_indices = (
+                    supported
+                    if len(supported) > 0
+                    else np.where(support[local_index] == np.max(support[local_index]))[0]
+                )
+                best_local = int(candidate_indices[np.argmax(q_values[local_index, candidate_indices])])
+                outputs[global_index] = best_local
+                values[global_index] = q_values[local_index, best_local]
+        return outputs, values
+
     def predict_action_indices(self, frame: pd.DataFrame) -> np.ndarray:
-        outputs: list[int] = []
-        for _, row in frame.reset_index(drop=True).iterrows():
-            row_frame = pd.DataFrame([row])
-            tiled = pd.concat([row_frame] * len(self.action_grid), ignore_index=True)
-            support_matrix = self.behavior_policy.predict_proba(tiled)
-            support = support_matrix[np.arange(len(self.action_grid)), np.arange(len(self.action_grid))]
-            scores = self.reward_models.blended_stage_scores(tiled, self.action_grid)
-            supported = np.where(support >= self.support_threshold)[0]
-            if len(supported) > 0:
-                candidate_indices = supported
-            else:
-                best_support = float(np.max(support))
-                candidate_indices = np.where(support == best_support)[0]
-            best_local = int(candidate_indices[np.argmin(scores[candidate_indices])])
-            outputs.append(best_local)
-        return np.asarray(outputs, dtype=np.int64)
+        outputs, _ = self.best_supported_actions(frame.reset_index(drop=True))
+        return outputs
 
 
 class D3RLPyDiscretePolicy:
@@ -241,7 +277,7 @@ class TorchDiscreteIQLPolicy:
             device=self.device,
         )
         with torch.no_grad():
-            logits = self.policy_net(states)
+            logits = self.policy_net.forward(states)
             return torch.argmax(logits, dim=1).cpu().numpy().astype(np.int64)
 
     def save(self, output_dir: Path) -> Path:
@@ -254,6 +290,7 @@ class TorchDiscreteIQLPolicy:
                 "policy_state_dict": self.policy_net.state_dict(),
                 "input_dim": int(self.q_net.net[0].in_features),
                 "action_dim": int(self.q_net.net[-1].out_features),
+                "hidden_size": int(self.q_net.net[0].out_features),
             },
             model_path,
         )
@@ -285,6 +322,99 @@ def _reward_standardize(train_rewards: pd.Series, rewards: np.ndarray) -> tuple[
     if std <= 0.0:
         std = 1.0
     return ((rewards - mean) / std).astype(np.float32), mean, std
+
+
+def _state_action_inputs(frame: pd.DataFrame, feature_keys: tuple[str, ...], action_values: np.ndarray) -> np.ndarray:
+    return np.concatenate(
+        [
+            frame.loc[:, list(feature_keys)].to_numpy(dtype=np.float32),
+            action_values.reshape(-1, 1).astype(np.float32),
+        ],
+        axis=1,
+    )
+
+
+def _select_best_supported_actions(
+    *,
+    frame: pd.DataFrame,
+    feature_keys: tuple[str, ...],
+    action_grid: np.ndarray,
+    q_models: dict[int, HistGradientBoostingRegressor],
+    behavior_policy: BehaviorPolicyModel,
+    support_threshold: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    planner = OutcomePlannerPolicy(
+        name="outcome_planner",
+        feature_keys=feature_keys,
+        action_grid=action_grid,
+        q_models=q_models,
+        behavior_policy=behavior_policy,
+        support_threshold=support_threshold,
+    )
+    return planner.best_supported_actions(frame.reset_index(drop=True))
+
+
+def train_outcome_planner(
+    frame: pd.DataFrame,
+    feature_keys: tuple[str, ...],
+    action_grid: np.ndarray,
+    behavior_policy: BehaviorPolicyModel,
+    config: OfflinePolicyBenchConfig,
+) -> OutcomePlannerPolicy:
+    """Fit a finite-horizon Q planner using backward induction on logged transitions."""
+    ordered = frame.sort_values(["episode_id", "step_in_episode"]).reset_index(drop=True)
+    next_features = ordered.groupby("episode_id", sort=False)[list(feature_keys)].shift(-1)
+    q_models: dict[int, HistGradientBoostingRegressor] = {}
+
+    for decision_index in sorted(ordered["decision_index"].unique(), reverse=True):
+        stage_frame = ordered[ordered["decision_index"] == decision_index].copy()
+        targets = stage_frame["reward_dense_raw"].to_numpy(dtype=np.float32)
+        nonterminal_index = stage_frame.index[~stage_frame["done"].to_numpy(dtype=bool)]
+        if len(nonterminal_index) > 0:
+            next_rows = next_features.loc[nonterminal_index, list(feature_keys)].copy()
+            _, continuation = _select_best_supported_actions(
+                frame=next_rows,
+                feature_keys=feature_keys,
+                action_grid=action_grid,
+                q_models=q_models,
+                behavior_policy=behavior_policy,
+                support_threshold=config.support_threshold,
+            )
+            targets[~stage_frame["done"].to_numpy(dtype=bool)] += config.gamma * continuation
+
+        model = HistGradientBoostingRegressor(
+            random_state=config.random_state + int(decision_index),
+            max_depth=4,
+            max_iter=64,
+        )
+        model.fit(
+            _state_action_inputs(
+                stage_frame,
+                feature_keys,
+                stage_frame["action_starcoder"].to_numpy(dtype=np.float32),
+            ),
+            targets,
+        )
+        q_models[int(decision_index)] = model
+
+    return OutcomePlannerPolicy(
+        name="outcome_planner",
+        feature_keys=feature_keys,
+        action_grid=action_grid,
+        q_models=q_models,
+        behavior_policy=behavior_policy,
+        support_threshold=config.support_threshold,
+    )
+
+
+def _decision_state_defaults(frame: pd.DataFrame, feature_keys: tuple[str, ...]) -> dict[str, dict[str, float]]:
+    defaults: dict[str, dict[str, float]] = {}
+    for decision_index, stage_frame in frame.groupby("decision_index", sort=True):
+        defaults[str(int(decision_index))] = {
+            feature_name: float(stage_frame[feature_name].median())
+            for feature_name in feature_keys
+        }
+    return defaults
 
 
 def _build_discrete_dataset(
@@ -498,8 +628,8 @@ def train_discrete_iql_policy(
             done = done_tensor[batch_idx]
 
             with torch.no_grad():
-                target = rew + config.gamma * (1.0 - done) * v_net(next_obs).squeeze(-1)
-            q_values = q_net(obs)
+                target = rew + config.gamma * (1.0 - done) * v_net.forward(next_obs).squeeze(-1)
+            q_values = q_net.forward(obs)
             q_taken = q_values.gather(1, act.unsqueeze(1)).squeeze(1)
             q_loss = F.mse_loss(q_taken, target)
             q_opt.zero_grad()
@@ -507,17 +637,17 @@ def train_discrete_iql_policy(
             q_opt.step()
 
             with torch.no_grad():
-                q_detached = q_net(obs).gather(1, act.unsqueeze(1)).squeeze(1)
-            v = v_net(obs).squeeze(-1)
+                q_detached = q_net.forward(obs).gather(1, act.unsqueeze(1)).squeeze(1)
+            v = v_net.forward(obs).squeeze(-1)
             v_loss = _expectile_loss(q_detached - v, tau=0.7).mean()
             v_opt.zero_grad()
             v_loss.backward()
             v_opt.step()
 
             with torch.no_grad():
-                advantage = q_net(obs).gather(1, act.unsqueeze(1)).squeeze(1) - v_net(obs).squeeze(-1)
+                advantage = q_net.forward(obs).gather(1, act.unsqueeze(1)).squeeze(1) - v_net.forward(obs).squeeze(-1)
                 weights = torch.clamp(torch.exp(advantage / 0.3), max=100.0)
-            logits = policy_net(obs)
+            logits = policy_net.forward(obs)
             bc_loss = F.cross_entropy(logits, act, reduction="none")
             p_loss = torch.mean(weights * bc_loss)
             p_opt.zero_grad()
@@ -553,6 +683,7 @@ def _policy_artifact(
     reward_std: float,
     objective_metric: str,
     metadata: dict[str, Any],
+    aux_paths: dict[str, str] | None = None,
 ) -> PolicyArtifactV2:
     return PolicyArtifactV2(
         kind=kind,
@@ -566,7 +697,7 @@ def _policy_artifact(
         reward_mean=reward_mean,
         reward_std=reward_std,
         model_path=str(model_path.resolve()),
-        aux_paths={},
+        aux_paths=aux_paths or {},
         metadata=metadata,
     )
 
@@ -705,18 +836,18 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             action_grid,
             _best_fixed_schedule(train_frame[train_frame["run_family"] == "three_phase_starcoder"]),
         )
+        outcome_planner = train_outcome_planner(
+            train_frame,
+            feature_keys,
+            action_grid,
+            behavior_policy,
+            config,
+        )
 
         fold_dir = output_dir / f"fold_{fold}"
         policies: list[ActionPolicy] = [
             best_fixed_policy,
-            OutcomePlannerPolicy(
-                name="outcome_planner",
-                feature_keys=feature_keys,
-                action_grid=action_grid,
-                reward_models=reward_models,
-                behavior_policy=behavior_policy,
-                support_threshold=config.support_threshold,
-            ),
+            outcome_planner,
             train_discrete_iql_policy(
                 train_frame,
                 feature_keys,
@@ -864,17 +995,21 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
         action_count=len(action_grid),
         random_state=config.random_state,
     )
-    full_reward_models = fit_reward_models(
+    full_outcome_planner = train_outcome_planner(
         decisions,
-        feature_keys=feature_keys,
-        random_state=config.random_state,
-        final_model_weight=config.final_model_weight,
-        reward_bonus_weight=config.reward_bonus_weight,
+        feature_keys,
+        action_grid,
+        full_behavior,
+        config,
     )
 
     full_models_dir = output_dir / "full_models"
     full_models_dir.mkdir(parents=True, exist_ok=True)
     final_artifacts: dict[str, str] = {}
+    decision_state_defaults_path = output_dir / "artifacts" / "decision_state_defaults.json"
+    decision_state_defaults_path.parent.mkdir(parents=True, exist_ok=True)
+    with decision_state_defaults_path.open("w") as f:
+        json.dump(_decision_state_defaults(decisions, feature_keys), f, indent=2, sort_keys=True)
 
     outcome_bundle_path = full_models_dir / "outcome_planner" / "planner.joblib"
     outcome_bundle_path.parent.mkdir(parents=True, exist_ok=True)
@@ -883,7 +1018,7 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             "feature_keys": feature_keys,
             "action_grid": action_grid.tolist(),
             "support_threshold": config.support_threshold,
-            "reward_models": full_reward_models,
+            "q_models": full_outcome_planner.q_models,
             "behavior_policy": full_behavior,
         },
         outcome_bundle_path,
@@ -949,6 +1084,7 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={"support_threshold": config.support_threshold},
+            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
         ),
         "discrete_iql": _policy_artifact(
             kind="torch_discrete_iql_v2",
@@ -960,6 +1096,7 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={},
+            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
         ),
         "discrete_cql": _policy_artifact(
             kind="d3rlpy_discrete_cql_v2",
@@ -971,6 +1108,7 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={},
+            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
         ),
         "discrete_bc": _policy_artifact(
             kind="d3rlpy_discrete_bc_v2",
@@ -982,6 +1120,7 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={},
+            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
         ),
     }
     if config.include_continuous_cql and "continuous_cql_ablation" in final_artifacts:
@@ -995,6 +1134,7 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={},
+            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
         )
 
     artifacts_dir = output_dir / "artifacts"

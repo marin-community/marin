@@ -22,6 +22,7 @@ import joblib
 import numpy as np
 import optax
 import pandas as pd
+import torch
 from fray.cluster import ResourceConfig
 from iris.marin_fs import marin_region
 from levanter.optim.config import LrSchedule, LrScheduleContext
@@ -33,11 +34,10 @@ from marin.utils import create_cache_tokenizer_step
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.experiment import MixtureExperiment
 from experiments.domain_phase_mix.offline_rl.build_transitions import _feature_defaults, extract_decision_state
+from experiments.domain_phase_mix.offline_rl.collect_pooled_starcoder_dataset import collect_history_long_rows_batched
 from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dataset import (
     build_wide_history,
-    collect_history_long_rows,
     dedupe_history_rows,
-    DEFAULT_HISTORY_SAMPLES,
 )
 from experiments.domain_phase_mix.offline_rl.contracts import (
     DEFAULT_OBJECTIVE_METRIC,
@@ -65,6 +65,25 @@ from experiments.domain_phase_mix.three_phase_starcoder_experiment import (
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 
 logger = logging.getLogger(__name__)
+
+ONLINE_HISTORY_BATCH_SIZE = 4
+ONLINE_HISTORY_RETRY_ATTEMPTS = 3
+ONLINE_HISTORY_BACKOFF_SECONDS = 2.0
+
+
+class _EvalIQLMLP(torch.nn.Module):
+    def __init__(self, input_dim: int, output_dim: int, hidden_size: int):
+        super().__init__()
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, hidden_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_size, hidden_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_size, output_dim),
+        )
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.net(inputs)
 
 
 @dataclass(frozen=True)
@@ -260,6 +279,42 @@ def _artifact_state_defaults(artifact: PolicyArtifactV1 | PolicyArtifactV2) -> d
     }
 
 
+def _initial_policy_state(artifact_path: str) -> dict[str, float]:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    state = _artifact_state_defaults(artifact)
+    if isinstance(artifact, PolicyArtifactV2):
+        decision_defaults = _load_decision_state_defaults(artifact_path).get("0", {})
+        state.update({key: float(value) for key, value in decision_defaults.items() if key in artifact.state_keys})
+        state.update(
+            {
+                "decision_index": 0.0,
+                "num_phases_total": 3.0,
+                "remaining_decisions": 2.0,
+                "budget_frac_consumed": 0.0,
+                "budget_frac_remaining": 1.0,
+                "global_step": 0.0,
+                "steps_since_last_eval_frac": 1.0,
+                "prev_action_starcoder": 0.5,
+                "cumulative_starcoder_exposure": 0.0,
+                "delta_prev_action": 0.0,
+            }
+        )
+        return {key: float(state[key]) for key in artifact.state_keys}
+
+    state.update(
+        {
+            "phase_index": 0.0,
+            "last_train_loss": 0.0,
+            "last_eval_loss": 0.0,
+            "last_obj_bpb": 0.0,
+            "tokens_frac": 0.0,
+            "steps_since_last_eval_frac": 1.0,
+            "prev_action_starcoder": 0.5,
+        }
+    )
+    return {key: float(state[key]) for key in artifact.state_keys}
+
+
 def _resolve_policy_model_path(artifact_path: str, model_path_str: str) -> Path:
     artifact_dir = Path(artifact_path).resolve().parent
     model_path = Path(model_path_str)
@@ -287,6 +342,19 @@ def _resolve_policy_model_path(artifact_path: str, model_path_str: str) -> Path:
     )
 
 
+def _resolve_artifact_aux_path(artifact_path: str, target_path_str: str) -> Path:
+    artifact_dir = Path(artifact_path).resolve().parent
+    target_path = Path(target_path_str)
+    if not target_path.is_absolute():
+        return (artifact_dir / target_path).resolve()
+    if target_path.exists():
+        return target_path
+    fallback = artifact_dir / target_path.name
+    if fallback.exists():
+        return fallback.resolve()
+    raise FileNotFoundError(f"Artifact aux path {target_path} does not exist near {artifact_dir}.")
+
+
 @cache
 def _load_outcome_planner_bundle(artifact_path: str) -> dict[str, Any]:
     artifact = _load_policy_artifact_cached(artifact_path)
@@ -296,11 +364,48 @@ def _load_outcome_planner_bundle(artifact_path: str) -> dict[str, Any]:
     bundle = joblib.load(model_path)
     if not isinstance(bundle, dict):
         raise TypeError(f"Expected planner bundle dict at {model_path}, found {type(bundle)!r}.")
-    required = {"feature_keys", "action_grid", "reward_models", "behavior_policy", "support_threshold"}
+    required = {"feature_keys", "action_grid", "behavior_policy", "support_threshold"}
     missing = required.difference(bundle)
     if missing:
         raise KeyError(f"Planner bundle at {model_path} is missing keys: {sorted(missing)}")
+    if "q_models" not in bundle and "reward_models" not in bundle:
+        raise KeyError(f"Planner bundle at {model_path} must contain either q_models or reward_models.")
     return bundle
+
+
+@cache
+def _load_decision_state_defaults(artifact_path: str) -> dict[str, dict[str, float]]:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2):
+        return {}
+    path = artifact.aux_paths.get("decision_state_defaults")
+    if not path:
+        return {}
+    resolved = _resolve_artifact_aux_path(artifact_path, path)
+    with resolved.open() as f:
+        payload = json.load(f)
+    return {
+        str(decision_index): {str(key): float(value) for key, value in values.items()}
+        for decision_index, values in payload.items()
+    }
+
+
+@cache
+def _load_torch_discrete_iql_policy(artifact_path: str, device: str) -> _EvalIQLMLP:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2) or artifact.kind != "torch_discrete_iql_v2":
+        raise ValueError(f"Artifact at {artifact_path} is not a torch discrete IQL policy.")
+    model_path = _resolve_policy_model_path(artifact_path, artifact.model_path)
+    checkpoint = torch.load(model_path, map_location=device)
+    hidden_size = int(checkpoint.get("hidden_size", 64))
+    policy_net = _EvalIQLMLP(
+        input_dim=int(checkpoint["input_dim"]),
+        output_dim=int(checkpoint["action_dim"]),
+        hidden_size=hidden_size,
+    ).to(device)
+    policy_net.load_state_dict(checkpoint["policy_state_dict"])
+    policy_net.eval()
+    return policy_net
 
 
 def _phase_lengths(total_steps: int, phase_end_steps: tuple[int, ...]) -> list[int]:
@@ -361,10 +466,12 @@ def _compute_exposure(actions: list[float], phase_lengths: list[int], decision_i
 
 
 def _history_from_completed_run(wb_run, metric_keys: tuple[str, ...]) -> pd.DataFrame:
-    long_rows = collect_history_long_rows(
+    long_rows = collect_history_long_rows_batched(
         wb_run,
         metric_keys=metric_keys,
-        history_samples=DEFAULT_HISTORY_SAMPLES,
+        history_batch_size=ONLINE_HISTORY_BATCH_SIZE,
+        retry_attempts=ONLINE_HISTORY_RETRY_ATTEMPTS,
+        backoff_seconds=ONLINE_HISTORY_BACKOFF_SECONDS,
     )
     long_df = dedupe_history_rows(pd.DataFrame(long_rows))
     return build_wide_history(long_df).sort_values("step").reset_index(drop=True)
@@ -460,10 +567,12 @@ def _state_from_completed_run(
         )
         return {key: float(state[key]) for key in artifact.state_keys}
 
-    long_rows = collect_history_long_rows(
+    long_rows = collect_history_long_rows_batched(
         wb_run,
         metric_keys=("train/loss", "eval/loss", objective_metric, "throughput/total_tokens"),
-        history_samples=DEFAULT_HISTORY_SAMPLES,
+        history_batch_size=ONLINE_HISTORY_BATCH_SIZE,
+        retry_attempts=ONLINE_HISTORY_RETRY_ATTEMPTS,
+        backoff_seconds=ONLINE_HISTORY_BACKOFF_SECONDS,
     )
     long_df = dedupe_history_rows(pd.DataFrame(long_rows))
     wide_df = build_wide_history(long_df)
@@ -495,12 +604,36 @@ def _policy_predict_action(artifact_path: str, state: dict[str, float], device: 
         tiled = pd.concat([planner_state] * len(action_grid), ignore_index=True)
         support_matrix = bundle["behavior_policy"].predict_proba(tiled)
         support = support_matrix[np.arange(len(action_grid)), np.arange(len(action_grid))]
-        scores = bundle["reward_models"].blended_stage_scores(tiled, action_grid)
         support_threshold = float(bundle.get("support_threshold", artifact.metadata.get("support_threshold", 0.0)))
         supported = np.where(support >= support_threshold)[0]
         candidate_indices = supported if len(supported) > 0 else np.where(support == np.max(support))[0]
+
+        if "q_models" in bundle:
+            decision_index = round(float(planner_state.iloc[0]["decision_index"]))
+            q_model = bundle["q_models"][decision_index]
+            q_inputs = np.concatenate(
+                [
+                    tiled.loc[:, list(bundle["feature_keys"])].to_numpy(dtype=np.float32),
+                    action_grid.reshape(-1, 1).astype(np.float32),
+                ],
+                axis=1,
+            )
+            scores = q_model.predict(q_inputs).astype(np.float32)
+            best_local = int(candidate_indices[np.argmax(scores[candidate_indices])])
+            return float(action_grid[best_local])
+
+        reward_models = bundle["reward_models"]
+        scores = reward_models.blended_stage_scores(tiled, action_grid)
         best_local = int(candidate_indices[np.argmin(scores[candidate_indices])])
         return float(action_grid[best_local])
+
+    if isinstance(artifact, PolicyArtifactV2) and artifact.kind == "torch_discrete_iql_v2":
+        policy_net = _load_torch_discrete_iql_policy(artifact_path, device)
+        normalized = normalize_state(state_with_defaults, artifact).reshape(1, -1)
+        inputs = torch.tensor(normalized, dtype=torch.float32, device=device)
+        with torch.no_grad():
+            action_idx = int(torch.argmax(policy_net.forward(inputs), dim=1).item())
+        return float(artifact.action_values[action_idx])
 
     normalized = normalize_state(state_with_defaults, artifact).reshape(1, -1)
     model_path = _resolve_policy_model_path(artifact_path, artifact.model_path)
@@ -593,34 +726,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
         actions = []
         run_ids = []
 
-        state = _artifact_state_defaults(artifact)
-        if isinstance(artifact, PolicyArtifactV2):
-            state.update(
-                {
-                    "decision_index": 0.0,
-                    "num_phases_total": 3.0,
-                    "remaining_decisions": 2.0,
-                    "budget_frac_consumed": 0.0,
-                    "budget_frac_remaining": 1.0,
-                    "global_step": 0.0,
-                    "steps_since_last_eval_frac": 1.0,
-                    "prev_action_starcoder": 0.5,
-                    "cumulative_starcoder_exposure": 0.0,
-                    "delta_prev_action": 0.0,
-                }
-            )
-        else:
-            state.update(
-                {
-                    "phase_index": 0.0,
-                    "last_train_loss": 0.0,
-                    "last_eval_loss": 0.0,
-                    "last_obj_bpb": 0.0,
-                    "tokens_frac": 0.0,
-                    "steps_since_last_eval_frac": 1.0,
-                    "prev_action_starcoder": 0.5,
-                }
-            )
+        state = _initial_policy_state(config.policy_artifact_path)
 
         checkpoint_path: str | None = None
         final_metric = None

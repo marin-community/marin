@@ -24,7 +24,9 @@
     0.9049999713897705,
     0.949999988079071
   ],
-  "aux_paths": {},
+  "aux_paths": {
+    "decision_state_defaults": "decision_state_defaults.json"
+  },
   "kind": "sklearn_outcome_planner_v2",
   "metadata": {
     "support_threshold": 0.02
