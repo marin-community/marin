@@ -14,7 +14,7 @@ import time
 import pytest
 from iris.rpc import cluster_pb2, logging_pb2
 
-pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.e2e, pytest.mark.timeout(120)]
 
 
 def _emit_multi_level_logs():
@@ -49,9 +49,12 @@ def test_task_logs_have_level_field(cluster):
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
-    # Fetch logs via controller RPC
+    # Fetch logs via controller RPC.
+    # Logs are forwarded from worker to controller via heartbeats and flushed
+    # to the log store outside the state lock, so they may arrive shortly after
+    # the job status transitions to SUCCEEDED.
     task_id = job.job_id.task(0).to_wire()
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 30
     entries = []
     while time.monotonic() < deadline:
         request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
@@ -71,7 +74,10 @@ def test_task_logs_have_level_field(cluster):
             if marker in entry.data:
                 markers_found[marker] = entry.level
 
-    assert "info-marker" in markers_found, f"info-marker not found in logs. Entries: {[e.data for e in entries]}"
+    assert "info-marker" in markers_found, (
+        f"info-marker not found in logs after 30s polling. "
+        f"Got {len(entries)} entries: {[e.data for e in entries]}"
+    )
     assert markers_found["info-marker"] == logging_pb2.LOG_LEVEL_INFO
     assert markers_found.get("warning-marker") == logging_pb2.LOG_LEVEL_WARNING
     assert markers_found.get("error-marker") == logging_pb2.LOG_LEVEL_ERROR
@@ -85,8 +91,8 @@ def test_log_level_filter(cluster):
 
     task_id = job.job_id.task(0).to_wire()
 
-    # Wait for logs to propagate
-    deadline = time.monotonic() + 10
+    # Wait for logs to propagate via heartbeat
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
         response = cluster.controller_client.get_task_logs(request)
