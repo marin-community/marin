@@ -482,13 +482,15 @@ class Trainer:
         hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
 
         with capture_time() as step_time:
-            if hooks_this_time:
-                result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
-                # force the loss so timing numbers are accurate. laziness isn't going to help here (i think?)
-            else:
-                result = self._maybe_save_jaxpr(
-                    "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
-                )
+            # Annotation scoped to the compiled step only (not hooks/logging below) so
+            # that GPU host-side step_num timing matches TPU device-side "Steps" semantics.
+            with jax.profiler.StepTraceAnnotation("train", step_num=int(state.step)):
+                if hooks_this_time:
+                    result = self._maybe_save_jaxpr("train_step", self._jit_train_step_fn, state, batch, batch_kwargs)
+                else:
+                    result = self._maybe_save_jaxpr(
+                        "train_step_hooks", self._jit_train_step_fn_no_hook, state, batch, batch_kwargs
+                    )
 
             loss = result.loss.item()
 
