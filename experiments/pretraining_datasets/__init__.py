@@ -39,6 +39,7 @@ from experiments.pretraining_datasets.nemotron import (
     NEMOTRON_WEIGHTS,
     downloads as nemotron_downloads,
     nemotron_mix,
+    nemotron_mix_block_shuffle,
     tokenize_nemotron,
     tokenize_nemotron_subset,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "NEMOTRON_V2_DATASETS",
     "NEMOTRON_WEIGHTS",
     "nemotron_mix",
+    "nemotron_mix_block_shuffle",
     "tokenize_dolma",
     "tokenize_dolmino",
     "tokenize_dolmino_math",
