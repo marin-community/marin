@@ -52,14 +52,13 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
         name="local-cpu",
         min_slices=num_workers,
         max_slices=num_workers,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(
             cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
-            gpu_count=0,
-            tpu_count=0,
+            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            device_count=0,
         ),
     )
     config.scale_groups["local-cpu"].CopyFrom(sg)
@@ -84,7 +83,7 @@ class E2ECluster:
             When None, a fresh temp directory is created per cluster.
         env_provider_factory: Optional factory for creating per-worker
             EnvironmentProviders. Signature: (worker_id, num_workers) -> provider.
-            Use TPUSimEnvironmentProvider for TPU simulation tests.
+            Use FixedEnvironmentProvider for TPU simulation tests.
     """
 
     def __init__(

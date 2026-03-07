@@ -1200,3 +1200,22 @@ input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 
 .resource-cell .sparkline {
   flex-shrink: 0;
 }
+
+/* === Constraint list === */
+.constraint-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.constraint-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #f6f8fa;
+  border: 1px solid #d1d9e0;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #1f2328;
+  white-space: nowrap;
+}

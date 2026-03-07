@@ -29,13 +29,13 @@ def single_worker_cluster():
     config.scale_groups.clear()
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
-    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.num_vms = 1
     sg.min_slices = 1
     sg.max_slices = 1
     sg.resources.cpu_millicores = 8000
     sg.resources.memory_bytes = 16 * 1024**3
     sg.resources.disk_bytes = 50 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.slice_template.local.SetInParent()
     config = make_local_config(config)
     with connect_cluster(config) as url:

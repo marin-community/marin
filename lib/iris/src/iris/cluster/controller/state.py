@@ -25,6 +25,7 @@ from enum import Enum
 from threading import RLock
 from typing import NamedTuple
 
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.controller.events import (
     Event,
@@ -38,12 +39,10 @@ from iris.cluster.controller.events import (
     WorkerHeartbeatFailedEvent,
     WorkerRegisteredEvent,
 )
+from iris.cluster.constraints import AttributeValue
 from iris.cluster.types import (
-    AttributeValue,
     JobName,
     WorkerId,
-    get_device_type,
-    get_device_variant,
     get_gpu_count,
     get_tpu_count,
 )
@@ -809,13 +808,19 @@ class ControllerWorker:
 
     @property
     def device_type(self) -> str:
-        """Device type from worker metadata."""
-        return get_device_type(self.metadata.device)
+        """Device type string from worker attributes."""
+        attr = self.attributes.get(WellKnownAttribute.DEVICE_TYPE)
+        if attr is not None:
+            return str(attr.value)
+        return "cpu"
 
     @property
     def device_variant(self) -> str | None:
-        """Device variant from worker metadata."""
-        return get_device_variant(self.metadata.device)
+        """Device variant string from worker attributes."""
+        attr = self.attributes.get(WellKnownAttribute.DEVICE_VARIANT)
+        if attr is not None:
+            return str(attr.value)
+        return None
 
 
 @dataclass
@@ -1944,6 +1949,13 @@ class ControllerState:
             running = []
             for tid in worker.running_tasks:
                 task = self._tasks.get(tid)
+                # Skip holder tasks — they are virtual (never dispatched to the
+                # worker), so including them in expected_tasks would cause the
+                # worker to report "not found" and trigger a worker_failed loop.
+                if task:
+                    job = self._jobs.get(task.job_id)
+                    if job and job.is_reservation_holder:
+                        continue
                 running.append(RunningTaskEntry(tid, task.current_attempt_id if task else 0))
             return HeartbeatSnapshot(
                 worker_id=worker.worker_id,

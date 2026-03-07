@@ -178,20 +178,20 @@ class AutoscalerAction(_message.Message):
     def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., action_type: _Optional[str] = ..., scale_group: _Optional[str] = ..., slice_id: _Optional[str] = ..., reason: _Optional[str] = ..., status: _Optional[str] = ...) -> None: ...
 
 class DemandEntryStatus(_message.Message):
-    __slots__ = ("task_ids", "coschedule_group_id", "accelerator_type", "accelerator_variant", "preemptible", "resources")
+    __slots__ = ("task_ids", "coschedule_group_id", "device_type", "device_variant", "preemptible", "resources")
     TASK_IDS_FIELD_NUMBER: _ClassVar[int]
     COSCHEDULE_GROUP_ID_FIELD_NUMBER: _ClassVar[int]
-    ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
-    ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
+    DEVICE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    DEVICE_VARIANT_FIELD_NUMBER: _ClassVar[int]
     PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
     task_ids: _containers.RepeatedScalarFieldContainer[str]
     coschedule_group_id: str
-    accelerator_type: _config_pb2.AcceleratorType
-    accelerator_variant: str
+    device_type: str
+    device_variant: str
     preemptible: bool
     resources: ResourceSpec
-    def __init__(self, task_ids: _Optional[_Iterable[str]] = ..., coschedule_group_id: _Optional[str] = ..., accelerator_type: _Optional[_Union[_config_pb2.AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., preemptible: _Optional[bool] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ...) -> None: ...
+    def __init__(self, task_ids: _Optional[_Iterable[str]] = ..., coschedule_group_id: _Optional[str] = ..., device_type: _Optional[str] = ..., device_variant: _Optional[str] = ..., preemptible: _Optional[bool] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ...) -> None: ...
 
 class UnmetDemand(_message.Message):
     __slots__ = ("entry", "reason")
