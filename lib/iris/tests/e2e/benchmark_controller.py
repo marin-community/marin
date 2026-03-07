@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+import httpx
 import humanfriendly
 import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
@@ -608,6 +609,195 @@ def multi_tpu(
         return
 
     run_benchmark(num_jobs=num_jobs, num_slices=num_slices)
+
+
+def _time_rpc(label: str, fn, iterations: int = 100) -> float:
+    """Time an RPC over many iterations, return p50 latency in ms."""
+    latencies = []
+    for _ in range(iterations):
+        t0 = time.monotonic()
+        fn()
+        latencies.append((time.monotonic() - t0) * 1000)
+    latencies.sort()
+    p50 = latencies[len(latencies) // 2]
+    p99 = latencies[int(len(latencies) * 0.99)]
+    total = sum(latencies)
+    print(f"  {label:<40}  p50={p50:>8.2f}ms  p99={p99:>8.2f}ms  total={total:>8.0f}ms  ({iterations} iters)")
+    return p50
+
+
+def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
+    """Stress-test controller RPC hot paths with many jobs, tasks, and endpoints.
+
+    Simulates the load pattern from 7 Zephyr jobs x512 tasks: many endpoints
+    registered via service discovery, frequent GetJobStatus and ListTasks calls,
+    and endpoint lookups (exact + prefix). Measures RPC latency to detect
+    regressions in lock contention and index performance.
+    """
+    total_tasks = num_jobs * tasks_per_job
+
+    print("\n" + "=" * 70)
+    print("Iris Controller Benchmark — RPC stress")
+    print("=" * 70)
+    print(f"  Jobs:           {num_jobs}")
+    print(f"  Tasks per job:  {tasks_per_job}")
+    print(f"  Total tasks:    {total_tasks}")
+    print(f"  Endpoints:      {total_tasks} (1 per task)")
+    print("=" * 70 + "\n")
+
+    config = _make_single_worker_config()
+
+    print("Starting local cluster...")
+    with connect_cluster(config) as url:
+        client = IrisClient.remote(url, workspace=TEST_ROOT)
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+
+        try:
+            print("Waiting for worker...")
+            _wait_for_workers(controller_client, 1, timeout=60.0)
+
+            # Submit jobs with many replicas to create many tasks.
+            print(f"Submitting {num_jobs} jobs with {tasks_per_job} replicas each...")
+            submit_start = time.monotonic()
+            jobs: list[Job] = []
+            for i in range(num_jobs):
+                job = client.submit(
+                    entrypoint=Entrypoint.from_callable(_dummy_training_task),
+                    name=f"stress-{i:04d}",
+                    resources=ResourceSpec(cpu=0, memory="64m"),
+                    replicas=tasks_per_job,
+                    environment=EnvironmentSpec(),
+                )
+                jobs.append(job)
+            submission_time = time.monotonic() - submit_start
+            print(f"  Submitted in {submission_time:.2f}s")
+
+            # Register endpoints — one per task, mimicking Fray actor registration.
+            print(f"Registering {total_tasks} endpoints...")
+            reg_start = time.monotonic()
+            endpoint_names: list[str] = []
+            for job in jobs:
+                for t in range(tasks_per_job):
+                    ep_name = f"{job.job_id}/worker-{t}"
+                    endpoint_names.append(ep_name)
+                    controller_client.register_endpoint(
+                        cluster_pb2.Controller.RegisterEndpointRequest(
+                            name=ep_name,
+                            address=f"10.0.0.{t % 256}:{10000 + t}",
+                            job_id=job.job_id.to_wire(),
+                        )
+                    )
+            reg_time = time.monotonic() - reg_start
+            print(
+                f"  Registered {len(endpoint_names)} endpoints in {reg_time:.2f}s "
+                f"({len(endpoint_names) / reg_time:.0f} eps/s)"
+            )
+
+            # Benchmark RPCs
+            print(f"\nRPC latencies ({total_tasks} tasks, {len(endpoint_names)} endpoints):")
+            print("-" * 90)
+
+            iters = 200
+
+            # Exact endpoint lookup
+            sample_name = endpoint_names[len(endpoint_names) // 2]
+            _time_rpc(
+                "ListEndpoints (exact)",
+                lambda: controller_client.list_endpoints(
+                    cluster_pb2.Controller.ListEndpointsRequest(prefix=sample_name, exact=True)
+                ),
+                iters,
+            )
+
+            # Prefix endpoint listing (all endpoints for one job)
+            sample_prefix = f"{jobs[0].job_id}/"
+            _time_rpc(
+                f"ListEndpoints (prefix, ~{tasks_per_job} results)",
+                lambda: controller_client.list_endpoints(
+                    cluster_pb2.Controller.ListEndpointsRequest(prefix=sample_prefix)
+                ),
+                iters,
+            )
+
+            # GetJobStatus for a large job
+            _time_rpc(
+                f"GetJobStatus ({tasks_per_job} tasks)",
+                lambda: controller_client.get_job_status(
+                    cluster_pb2.Controller.GetJobStatusRequest(job_id=jobs[0].job_id.to_wire())
+                ),
+                iters,
+            )
+
+            # ListTasks for one job
+            _time_rpc(
+                f"ListTasks (job filter, {tasks_per_job} tasks)",
+                lambda: controller_client.list_tasks(
+                    cluster_pb2.Controller.ListTasksRequest(job_id=jobs[0].job_id.to_wire())
+                ),
+                iters,
+            )
+
+            # ListTasks unfiltered (all tasks)
+            _time_rpc(
+                f"ListTasks (all, {total_tasks} tasks)",
+                lambda: controller_client.list_tasks(cluster_pb2.Controller.ListTasksRequest()),
+                iters,
+            )
+
+            # ListWorkers
+            _time_rpc(
+                "ListWorkers",
+                lambda: controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()),
+                iters,
+            )
+
+            # Health check
+            health_client = httpx.Client(base_url=url)
+            _time_rpc(
+                "GET /health",
+                lambda: health_client.get("/health"),
+                iters,
+            )
+            health_client.close()
+
+            print("-" * 90)
+            print()
+
+        finally:
+            controller_client.close()
+
+
+@cli.command("rpc-stress")
+@click.option("--num-jobs", type=int, default=7, help="Number of jobs to submit")
+@click.option("--tasks-per-job", type=int, default=512, help="Number of task replicas per job")
+@click.option("--profile", is_flag=True, help="Profile with py-spy (requires sudo)")
+@click.option(
+    "--profile-output",
+    type=click.Path(path_type=Path),
+    default=Path("/tmp/profiles"),
+    help="Directory for profile output (default: /tmp/profiles/)",
+)
+def rpc_stress(
+    num_jobs: int,
+    tasks_per_job: int,
+    profile: bool = False,
+    profile_output: Path | None = None,
+) -> None:
+    """Stress-test RPC hot paths with many jobs, tasks, and endpoints.
+
+    Simulates the Zephyr pattern of 7 jobs x512 tasks with endpoint
+    registration, measuring lookup/listing RPC latency under load.
+    """
+    if profile:
+        _run_with_pyspy(
+            "rpc-stress",
+            ["--num-jobs", str(num_jobs), "--tasks-per-job", str(tasks_per_job)],
+            profile_output,
+            "rpc_stress_benchmark.speedscope",
+        )
+        return
+
+    run_rpc_stress_benchmark(num_jobs=num_jobs, tasks_per_job=tasks_per_job)
 
 
 @cli.command("single-worker")

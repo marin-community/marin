@@ -768,21 +768,13 @@ class Controller(_message.Message):
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
         endpoint_id: str
         def __init__(self, endpoint_id: _Optional[str] = ...) -> None: ...
-    class LookupEndpointRequest(_message.Message):
-        __slots__ = ("name",)
-        NAME_FIELD_NUMBER: _ClassVar[int]
-        name: str
-        def __init__(self, name: _Optional[str] = ...) -> None: ...
-    class LookupEndpointResponse(_message.Message):
-        __slots__ = ("endpoint",)
-        ENDPOINT_FIELD_NUMBER: _ClassVar[int]
-        endpoint: Controller.Endpoint
-        def __init__(self, endpoint: _Optional[_Union[Controller.Endpoint, _Mapping]] = ...) -> None: ...
     class ListEndpointsRequest(_message.Message):
-        __slots__ = ("prefix",)
+        __slots__ = ("prefix", "exact")
         PREFIX_FIELD_NUMBER: _ClassVar[int]
+        EXACT_FIELD_NUMBER: _ClassVar[int]
         prefix: str
-        def __init__(self, prefix: _Optional[str] = ...) -> None: ...
+        exact: bool
+        def __init__(self, prefix: _Optional[str] = ..., exact: _Optional[bool] = ...) -> None: ...
     class ListEndpointsResponse(_message.Message):
         __slots__ = ("endpoints",)
         ENDPOINTS_FIELD_NUMBER: _ClassVar[int]

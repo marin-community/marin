@@ -361,18 +361,22 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
         # Build task statuses with attempts, aggregate counts in single pass
+        tasks = self._state.get_job_tasks(job.job_id)
+
+        # Batch-fetch all referenced workers in one lock acquisition instead of
+        # acquiring the lock per task.
+        worker_ids = {t.worker_id for t in tasks if t.worker_id}
+        workers_by_id = self._state.get_workers_batch(worker_ids)
+
         task_statuses = []
         total_failure_count = 0
         total_preemption_count = 0
-        for task in self._state.get_job_tasks(job.job_id):
+        for task in tasks:
             total_failure_count += task.failure_count
             total_preemption_count += task.preemption_count
 
-            worker_address = ""
-            if task.worker_id:
-                worker = self._state.get_worker(task.worker_id)
-                if worker:
-                    worker_address = worker.address
+            worker = workers_by_id.get(task.worker_id) if task.worker_id else None
+            worker_address = worker.address if worker else ""
 
             task_statuses.append(task_to_proto(task, worker_address=worker_address))
 
@@ -658,14 +662,14 @@ class ControllerServiceImpl:
             for job in self._state.list_all_jobs():
                 tasks.extend(self._state.get_job_tasks(job.job_id))
 
+        # Batch-fetch all referenced workers in one lock acquisition.
+        worker_ids = {t.worker_id for t in tasks if t.worker_id}
+        workers_by_id = self._state.get_workers_batch(worker_ids)
+
         task_statuses = []
         for task in tasks:
-            # Look up worker address
-            worker_address = ""
-            if task.worker_id:
-                worker = self._state.get_worker(task.worker_id)
-                if worker:
-                    worker_address = worker.address
+            worker = workers_by_id.get(task.worker_id) if task.worker_id else None
+            worker_address = worker.address if worker else ""
 
             proto_task_status = task_to_proto(task, worker_address=worker_address)
 
@@ -786,35 +790,13 @@ class ControllerServiceImpl:
         self._state.remove_endpoint(request.endpoint_id)
         return cluster_pb2.Empty()
 
-    def lookup_endpoint(
-        self,
-        request: cluster_pb2.Controller.LookupEndpointRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.LookupEndpointResponse:
-        """Look up a service endpoint by name. Only endpoints for executing jobs are returned."""
-        endpoints = self._state.lookup_endpoints(request.name)
-        if not endpoints:
-            logger.debug("Endpoint lookup found no results: name=%s", request.name)
-            return cluster_pb2.Controller.LookupEndpointResponse()
-
-        e = endpoints[0]
-        return cluster_pb2.Controller.LookupEndpointResponse(
-            endpoint=cluster_pb2.Controller.Endpoint(
-                endpoint_id=e.endpoint_id,
-                name=e.name,
-                address=e.address,
-                job_id=e.job_id.to_wire(),
-                metadata=e.metadata,
-            )
-        )
-
     def list_endpoints(
         self,
         request: cluster_pb2.Controller.ListEndpointsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix. Only endpoints for executing jobs are returned."""
-        endpoints = self._state.list_endpoints_by_prefix(request.prefix)
+        """List endpoints by name prefix (or exact name when request.exact is set)."""
+        endpoints = self._state.list_endpoints(request.prefix, exact=request.exact)
         return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[
                 cluster_pb2.Controller.Endpoint(

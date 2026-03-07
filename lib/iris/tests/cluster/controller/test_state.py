@@ -650,13 +650,13 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
     state.add_endpoint(ep, task.task_id)
 
     # Verify endpoint visible while running
-    assert len(state.lookup_endpoints("j1/actor")) == 1
+    assert len(state.list_endpoints("j1/actor", exact=True)) == 1
 
     # Task succeeds
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
 
     # Endpoint removed
-    assert state.lookup_endpoints("j1/actor") == []
+    assert state.list_endpoints("j1/actor", exact=True) == []
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
@@ -680,17 +680,17 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     state.add_endpoint(ep)
 
     # Visible while pending (task may be executing before job state updates)
-    assert len(state.lookup_endpoints("ns-1/actor")) == 1
+    assert len(state.list_endpoints("ns-1/actor", exact=True)) == 1
 
     # Still visible after transition to running
     dispatch_task(state, task, worker_id)
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
-    assert len(state.lookup_endpoints("ns-1/actor")) == 1
+    assert len(state.list_endpoints("ns-1/actor", exact=True)) == 1
 
     # Not visible after completion (terminal state)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
-    assert len(state.lookup_endpoints("ns-1/actor")) == 0
+    assert len(state.list_endpoints("ns-1/actor", exact=True)) == 0
 
 
 def test_namespace_isolation(job_request, worker_metadata):
@@ -727,11 +727,11 @@ def test_namespace_isolation(job_request, worker_metadata):
     )
 
     # Each namespace only sees its own endpoint
-    results_ns1 = state.lookup_endpoints("ns-1/actor")
+    results_ns1 = state.list_endpoints("ns-1/actor", exact=True)
     assert len(results_ns1) == 1
     assert results_ns1[0].address == "10.0.0.1:8080"
 
-    results_ns2 = state.lookup_endpoints("ns-2/actor")
+    results_ns2 = state.list_endpoints("ns-2/actor", exact=True)
     assert len(results_ns2) == 1
     assert results_ns2[0].address == "10.0.0.2:8080"
 
