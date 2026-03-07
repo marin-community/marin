@@ -10,9 +10,11 @@ timing reflects kernel/collective work rather than router noise.
 """
 
 import argparse
+import os
 import time
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -27,9 +29,30 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P, get_
 from levanter.grug import grug_moe as grug_moe_lib
 from levanter.utils.activation import ActivationFunctionEnum
 
-
 Distribution = Literal["random", "runs"]
-Kernel = Literal["legacy", "current"]
+Kernel = Literal[
+    "legacy",
+    "current",
+    "cumsum",
+    "packed_return",
+    "stream_ring",
+    "ragged_a2a",
+    "prefix_counts",
+    "vector_prefix",
+    "onehot_counts",
+    "padded_take",
+    "segment_sum",
+    "sorted_segment_sum",
+    "prefix_segment_sum",
+    "vector_sorted_segment_sum",
+    "owner_local_scatter",
+    "lax_scatter",
+    "take_segment_bwd",
+    "take_sorted_segment_bwd",
+    "owner_local_take",
+    "weight_cast",
+    "narrow_meta",
+]
 BenchPass = Literal["forward", "forward_backward"]
 
 
@@ -46,6 +69,100 @@ def _time_fn(fn: Callable, *args, warmup: int = 2, iters: int = 5) -> float:
     start = time.perf_counter()
     for _ in range(iters):
         jax.block_until_ready(compiled(*args))
+    return (time.perf_counter() - start) / iters
+
+
+def _sort_activations(
+    inputs: jax.Array,
+    sort_indices: jax.Array,
+) -> jax.Array:
+    if inputs.shape[0] != sort_indices.shape[0]:
+        raise ValueError(f"Expected matching leading dims, got {inputs.shape[0]} and {sort_indices.shape[0]}")
+    return _sort_activations_custom(inputs, sort_indices)
+
+
+@jax.custom_vjp
+def _sort_activations_custom(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
+    return inputs[sort_indices, ...]
+
+
+def _sort_activations_custom_fwd(inputs: jax.Array, sort_indices: jax.Array) -> tuple[jax.Array, jax.Array]:
+    return _sort_activations_custom(inputs, sort_indices), sort_indices
+
+
+def _sort_activations_custom_bwd(residuals: jax.Array, grads: jax.Array) -> tuple[jax.Array, None]:
+    sort_indices = residuals
+    return _sort_activations_custom(grads, jnp.argsort(sort_indices)), None
+
+
+_sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
+
+
+@jax.custom_vjp
+def _take_tokens_segment_sum(inputs: jax.Array, token_indices: jax.Array) -> jax.Array:
+    return inputs[token_indices, ...]
+
+
+def _take_tokens_segment_sum_fwd(
+    inputs: jax.Array, token_indices: jax.Array
+) -> tuple[jax.Array, tuple[jax.Array, int]]:
+    return _take_tokens_segment_sum(inputs, token_indices), (token_indices, inputs.shape[0])
+
+
+def _take_tokens_segment_sum_bwd(residuals: tuple[jax.Array, int], grads: jax.Array) -> tuple[jax.Array, None]:
+    token_indices, tokens = residuals
+    grad_inputs = jax.ops.segment_sum(grads, token_indices, num_segments=tokens, indices_are_sorted=False)
+    return grad_inputs, None
+
+
+_take_tokens_segment_sum.defvjp(_take_tokens_segment_sum_fwd, _take_tokens_segment_sum_bwd)
+
+
+@jax.custom_vjp
+def _take_tokens_sorted_segment_sum(inputs: jax.Array, token_indices: jax.Array) -> jax.Array:
+    return inputs[token_indices, ...]
+
+
+def _take_tokens_sorted_segment_sum_fwd(
+    inputs: jax.Array, token_indices: jax.Array
+) -> tuple[jax.Array, tuple[jax.Array, int]]:
+    return _take_tokens_sorted_segment_sum(inputs, token_indices), (token_indices, inputs.shape[0])
+
+
+def _take_tokens_sorted_segment_sum_bwd(residuals: tuple[jax.Array, int], grads: jax.Array) -> tuple[jax.Array, None]:
+    token_indices, tokens = residuals
+    sort_idx = jnp.argsort(token_indices)
+    token_sorted = jnp.take(token_indices, sort_idx, axis=0)
+    grads_sorted = _sort_activations(grads, sort_idx)
+    grad_inputs = jax.ops.segment_sum(grads_sorted, token_sorted, num_segments=tokens, indices_are_sorted=True)
+    return grad_inputs, None
+
+
+_take_tokens_sorted_segment_sum.defvjp(_take_tokens_sorted_segment_sum_fwd, _take_tokens_sorted_segment_sum_bwd)
+
+
+def _profile_fn(
+    fn: Callable,
+    *args,
+    warmup: int,
+    iters: int,
+    profile_dir: Path,
+    profile_name: str,
+) -> float:
+    compiled = jax.jit(fn)
+    jax.block_until_ready(compiled(*args))
+    for _ in range(warmup):
+        jax.block_until_ready(compiled(*args))
+
+    os.makedirs(profile_dir, exist_ok=True)
+    jax.profiler.start_trace(str(profile_dir), create_perfetto_link=False, create_perfetto_trace=True)
+    start = time.perf_counter()
+    try:
+        for step in range(iters):
+            with jax.profiler.StepTraceAnnotation(profile_name, step_num=step):
+                jax.block_until_ready(compiled(*args))
+    finally:
+        jax.profiler.stop_trace()
     return (time.perf_counter() - start) / iters
 
 
@@ -270,6 +387,2006 @@ def _moe_mlp_legacy(
     return out
 
 
+def _prefix_cap_counts(counts: jax.Array, *, capacity: int) -> jax.Array:
+    accepted = []
+    remaining = jnp.array(capacity, dtype=jnp.int32)
+    for expert in range(int(counts.shape[0])):
+        take = jnp.minimum(counts[expert], remaining)
+        accepted.append(take)
+        remaining = jnp.maximum(remaining - take, 0)
+    return jnp.stack(accepted, axis=0)
+
+
+def _compact_local_assignments_cumsum(
+    x_source: jax.Array,
+    token_flat: jax.Array,
+    local_expert: jax.Array,
+    local_mask: jax.Array,
+    weight_flat: jax.Array,
+    *,
+    local_experts: int,
+    local_capacity: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
+    safe_expert = jnp.where(local_mask, local_expert, 0)
+    expert_mask = local_mask[:, None] & (safe_expert[:, None] == expert_ids[None, :])
+    counts = jnp.sum(expert_mask, axis=0, dtype=jnp.int32)
+    accepted_counts = _prefix_cap_counts(counts, capacity=local_capacity)
+    dropped_local = jnp.sum(counts, dtype=jnp.int32) - jnp.sum(accepted_counts, dtype=jnp.int32)
+
+    pos_within = jnp.cumsum(expert_mask.astype(jnp.int32), axis=0) - 1
+    pos_within_local = jnp.take_along_axis(pos_within, safe_expert[:, None], axis=1).squeeze(1)
+    expert_offsets = jnp.cumsum(accepted_counts, dtype=jnp.int32) - accepted_counts
+    accepted_limit = jnp.take(accepted_counts, safe_expert, axis=0)
+    dest_pos = jnp.take(expert_offsets, safe_expert, axis=0) + pos_within_local
+    accepted_mask = local_mask & (pos_within_local < accepted_limit)
+    scatter_idx = jnp.where(accepted_mask, dest_pos, local_capacity)
+
+    token_local = jnp.zeros((local_capacity,), dtype=jnp.int32).at[scatter_idx].set(token_flat, mode="drop")
+    expert_local = jnp.zeros((local_capacity,), dtype=jnp.int32).at[scatter_idx].set(safe_expert, mode="drop")
+    weight_local = jnp.zeros((local_capacity,), dtype=weight_flat.dtype).at[scatter_idx].set(weight_flat, mode="drop")
+    x_take = jnp.take(x_source, token_flat, axis=0)
+    x_dispatch = (
+        jnp.zeros((local_capacity, x_source.shape[1]), dtype=x_source.dtype).at[scatter_idx].set(x_take, mode="drop")
+    )
+
+    group_sizes = accepted_counts.at[-1].add(local_capacity - jnp.sum(accepted_counts, dtype=jnp.int32))
+    return token_local, expert_local, weight_local.astype(x_source.dtype), x_dispatch, group_sizes, dropped_local
+
+
+def _moe_mlp_ep_ring_local_cumsum(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    with jax.named_scope("gather"):
+        x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+        selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
+        combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
+
+        tokens = x_global.shape[0]
+        topk = selected_experts_global.shape[1]
+        assignments = tokens * topk
+        expert_flat = selected_experts_global.reshape(assignments)
+        weight_flat = combine_weights_global.reshape(assignments)
+        token_flat = jnp.arange(assignments, dtype=jnp.int32) // topk
+
+        local_experts = moe_w13_local.shape[0]
+        if num_experts % local_experts != 0:
+            raise ValueError(
+                f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+            )
+
+        ep_size = num_experts // local_experts
+        local_capacity = int(np.ceil(capacity_factor * assignments / ep_size))
+        local_capacity = max(local_experts, local_capacity)
+
+        expert_axis = jax.lax.axis_index("expert")
+        expert_start = expert_axis * local_experts
+        local_expert = expert_flat - expert_start
+        local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
+
+        token_local, expert_local, weight_dispatch, x_dispatch, group_sizes, dropped_local = (
+            _compact_local_assignments_cumsum(
+                x_global,
+                token_flat,
+                local_expert,
+                local_mask,
+                weight_flat,
+                local_experts=local_experts,
+                local_capacity=local_capacity,
+            )
+        )
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+
+    with jax.named_scope("scatter"):
+        out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+        out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+    return out_local, dropped_total
+
+
+def _moe_mlp_cumsum(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        out, _ = grug_moe_lib._moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
+        return out
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    if has_expert_axis and expert_axis_size > 1:
+        shard_fn = shard_map(
+            partial(
+                _moe_mlp_ep_ring_local_cumsum,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    shard_fn = shard_map(
+        partial(
+            grug_moe_lib._moe_mlp_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        ),
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            local_expert_spec,
+            local_expert_spec,
+        ),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    return out
+
+
+def _pack_by_shard(
+    payload: jax.Array,
+    token_local: jax.Array,
+    shard_ids: jax.Array,
+    *,
+    num_shards: int,
+    capacity: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    flat_size = int(token_local.shape[0])
+    flat_pos = jnp.arange(flat_size, dtype=jnp.int32)
+
+    packed_payload = []
+    packed_tokens = []
+    packed_valid = []
+    dropped_total = jnp.array(0, dtype=jnp.int32)
+
+    for shard in range(num_shards):
+        shard_mask = shard_ids == shard
+        shard_count = jnp.sum(shard_mask, dtype=jnp.int32)
+        dropped_total = dropped_total + jnp.maximum(shard_count - capacity, 0)
+        valid = jnp.arange(capacity, dtype=jnp.int32) < shard_count
+        selection_key = jnp.where(shard_mask, flat_size - flat_pos, -1)
+        _, shard_idx = jax.lax.top_k(selection_key, capacity)
+
+        shard_payload = jnp.take(payload, shard_idx, axis=0)
+        shard_tokens = jnp.take(token_local, shard_idx, axis=0)
+        shard_payload = jnp.where(valid[:, None], shard_payload, jnp.zeros_like(shard_payload))
+        shard_tokens = jnp.where(valid, shard_tokens, 0)
+
+        packed_payload.append(shard_payload)
+        packed_tokens.append(shard_tokens)
+        packed_valid.append(valid)
+
+    return (
+        jnp.stack(packed_payload, axis=0),
+        jnp.stack(packed_tokens, axis=0),
+        jnp.stack(packed_valid, axis=0),
+        dropped_total,
+    )
+
+
+def _compact_local_assignments_topk(
+    x_source: jax.Array,
+    local_expert: jax.Array,
+    local_mask: jax.Array,
+    weight_flat: jax.Array,
+    *,
+    local_experts: int,
+    local_capacity: int,
+    topk: int,
+    ep_size: int | None = None,
+    take_fn: Callable[[jax.Array, jax.Array], jax.Array] | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    if take_fn is None:
+        take_fn = _take_with_gather
+    local_count = jnp.sum(local_mask, dtype=jnp.int32)
+    dropped_local = jnp.maximum(local_count - local_capacity, 0)
+    valid = jnp.arange(local_capacity, dtype=jnp.int32) < local_count
+    valid_weight = valid.astype(jnp.float32)
+
+    local_expert = jnp.where(local_mask, local_expert, 0)
+    assignments = int(local_expert.shape[0])
+    flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+    order_key = local_expert * assignments + flat_pos
+    max_order_key = local_experts * assignments
+    selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+    _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+    token_local = jnp.floor_divide(local_idx, topk)
+    expert_local = jnp.take(local_expert, local_idx, axis=0)
+    weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_source.dtype)
+    x_take = take_fn(x_source, token_local)
+    x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+    weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
+    expert_local = jnp.where(valid, expert_local, 0)
+    group_sizes = jnp.bincount(expert_local, weights=valid_weight, length=local_experts).astype(jnp.int32)
+    group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
+    return token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local
+
+
+def _compact_local_assignments_prefix_counts(
+    x_source: jax.Array,
+    local_expert: jax.Array,
+    local_mask: jax.Array,
+    weight_flat: jax.Array,
+    *,
+    local_experts: int,
+    local_capacity: int,
+    topk: int,
+    ep_size: int | None = None,
+    take_fn: Callable[[jax.Array, jax.Array], jax.Array] | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    if take_fn is None:
+        take_fn = _take_with_gather
+    local_expert = jnp.where(local_mask, local_expert, 0)
+    counts = jnp.bincount(local_expert, weights=local_mask.astype(jnp.int32), length=local_experts).astype(jnp.int32)
+    accepted_counts = _prefix_cap_counts(counts, capacity=local_capacity)
+    accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
+    dropped_local = jnp.sum(counts, dtype=jnp.int32) - accepted_total
+    valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
+
+    assignments = int(local_expert.shape[0])
+    flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+    order_key = local_expert * assignments + flat_pos
+    max_order_key = local_experts * assignments
+    selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+    _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+    token_local = jnp.floor_divide(local_idx, topk)
+    weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_source.dtype)
+    x_take = take_fn(x_source, token_local)
+    x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+    weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
+    group_sizes = accepted_counts.at[-1].add(local_capacity - jnp.sum(accepted_counts, dtype=jnp.int32))
+    return token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local
+
+
+def _prefix_cap_counts_vectorized(counts: jax.Array, *, capacity: int) -> jax.Array:
+    capacity_i32 = jnp.array(capacity, dtype=jnp.int32)
+    prefix_before = jnp.cumsum(counts, dtype=jnp.int32) - counts
+    remaining = jnp.maximum(capacity_i32 - prefix_before, 0)
+    return jnp.minimum(counts, remaining)
+
+
+def _compact_local_assignments_vector_prefix(
+    x_source: jax.Array,
+    local_expert: jax.Array,
+    local_mask: jax.Array,
+    weight_flat: jax.Array,
+    *,
+    local_experts: int,
+    local_capacity: int,
+    topk: int,
+    ep_size: int | None = None,
+    take_fn: Callable[[jax.Array, jax.Array], jax.Array] | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    if take_fn is None:
+        take_fn = _take_with_gather
+    local_expert = jnp.where(local_mask, local_expert, 0)
+    counts = jnp.bincount(local_expert, weights=local_mask.astype(jnp.int32), length=local_experts).astype(jnp.int32)
+    accepted_counts = _prefix_cap_counts_vectorized(counts, capacity=local_capacity)
+    accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
+    dropped_local = jnp.sum(counts, dtype=jnp.int32) - accepted_total
+    valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
+
+    assignments = int(local_expert.shape[0])
+    flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+    order_key = local_expert * assignments + flat_pos
+    max_order_key = local_experts * assignments
+    selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+    _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+    token_local = jnp.floor_divide(local_idx, topk)
+    weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_source.dtype)
+    x_take = take_fn(x_source, token_local)
+    x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+    weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
+    group_sizes = accepted_counts.at[-1].add(local_capacity - jnp.sum(accepted_counts, dtype=jnp.int32))
+    return token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local
+
+
+def _compact_local_assignments_onehot_counts(
+    x_source: jax.Array,
+    local_expert: jax.Array,
+    local_mask: jax.Array,
+    weight_flat: jax.Array,
+    *,
+    local_experts: int,
+    local_capacity: int,
+    topk: int,
+    ep_size: int | None = None,
+    take_fn: Callable[[jax.Array, jax.Array], jax.Array] | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    if take_fn is None:
+        take_fn = _take_with_gather
+    local_expert = jnp.where(local_mask, local_expert, 0)
+    expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
+    local_mask_i32 = local_mask.astype(jnp.int32)
+    counts = jnp.sum(
+        (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask_i32[:, None],
+        axis=0,
+        dtype=jnp.int32,
+    )
+    accepted_counts = _prefix_cap_counts(counts, capacity=local_capacity)
+    accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
+    dropped_local = jnp.sum(counts, dtype=jnp.int32) - accepted_total
+    valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
+
+    assignments = int(local_expert.shape[0])
+    flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+    order_key = local_expert * assignments + flat_pos
+    max_order_key = local_experts * assignments
+    selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+    _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+    token_local = jnp.floor_divide(local_idx, topk)
+    weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_source.dtype)
+    x_take = take_fn(x_source, token_local)
+    x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+    weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
+    group_sizes = accepted_counts.at[-1].add(local_capacity - jnp.sum(accepted_counts, dtype=jnp.int32))
+    return token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local
+
+
+def _compact_local_assignments_padded_take(
+    x_source: jax.Array,
+    local_expert: jax.Array,
+    local_mask: jax.Array,
+    weight_flat: jax.Array,
+    *,
+    local_experts: int,
+    local_capacity: int,
+    topk: int,
+    ep_size: int | None = None,
+    take_fn: Callable[[jax.Array, jax.Array], jax.Array] | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    local_expert = jnp.where(local_mask, local_expert, 0)
+    expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
+    local_mask_i32 = local_mask.astype(jnp.int32)
+    counts = jnp.sum(
+        (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask_i32[:, None],
+        axis=0,
+        dtype=jnp.int32,
+    )
+    accepted_counts = _prefix_cap_counts(counts, capacity=local_capacity)
+    accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
+    dropped_local = jnp.sum(counts, dtype=jnp.int32) - accepted_total
+    valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
+
+    assignments = int(local_expert.shape[0])
+    flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+    order_key = local_expert * assignments + flat_pos
+    max_order_key = local_experts * assignments
+    selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+    _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+    tokens = x_source.shape[0]
+    token_local = jnp.floor_divide(local_idx, topk)
+    token_take = jnp.where(valid, token_local, tokens)
+    weight_take = jnp.where(valid, local_idx, assignments)
+
+    zero_x = jnp.zeros((1, x_source.shape[1]), dtype=x_source.dtype)
+    x_padded = jnp.concatenate([x_source, zero_x], axis=0)
+    x_dispatch = jnp.take(x_padded, token_take, axis=0)
+
+    zero_w = jnp.zeros((1,), dtype=weight_flat.dtype)
+    weight_padded = jnp.concatenate([weight_flat, zero_w], axis=0)
+    weight_dispatch = jnp.take(weight_padded, weight_take, axis=0).astype(x_source.dtype)
+
+    group_sizes = accepted_counts.at[-1].add(local_capacity - jnp.sum(accepted_counts, dtype=jnp.int32))
+    return token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local
+
+
+def _compact_local_assignments_owner_local_take(
+    x_source: jax.Array,
+    local_expert: jax.Array,
+    local_mask: jax.Array,
+    weight_flat: jax.Array,
+    *,
+    local_experts: int,
+    local_capacity: int,
+    topk: int,
+    ep_size: int | None = None,
+    take_fn: Callable[[jax.Array, jax.Array], jax.Array] | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    if ep_size is None:
+        raise ValueError("owner_local_take requires ep_size")
+
+    local_expert = jnp.where(local_mask, local_expert, 0)
+    expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
+    local_mask_i32 = local_mask.astype(jnp.int32)
+    counts = jnp.sum(
+        (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask_i32[:, None],
+        axis=0,
+        dtype=jnp.int32,
+    )
+    accepted_counts = _prefix_cap_counts(counts, capacity=local_capacity)
+    accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
+    dropped_local = jnp.sum(counts, dtype=jnp.int32) - accepted_total
+    valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
+
+    assignments = int(local_expert.shape[0])
+    flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+    order_key = local_expert * assignments + flat_pos
+    max_order_key = local_experts * assignments
+    selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+    _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+    token_local = jnp.floor_divide(local_idx, topk)
+    weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_source.dtype)
+
+    tokens = x_source.shape[0]
+    tokens_per_shard = tokens // ep_size
+    owner = jnp.floor_divide(token_local, tokens_per_shard)
+    local_token = jnp.remainder(token_local, tokens_per_shard)
+    x_by_owner = x_source.reshape(ep_size, tokens_per_shard, x_source.shape[1])
+    x_take = x_by_owner[owner, local_token]
+    x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+    weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
+    group_sizes = accepted_counts.at[-1].add(local_capacity - jnp.sum(accepted_counts, dtype=jnp.int32))
+    return token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local
+
+
+def _scatter_with_add(
+    out_dispatch: jax.Array,
+    weight_dispatch: jax.Array,
+    token_local: jax.Array,
+    *,
+    tokens: int,
+    ep_size: int,
+) -> jax.Array:
+    out_weighted = out_dispatch * weight_dispatch[:, None]
+    out_shape = (tokens, out_weighted.shape[1])
+    return jnp.zeros(out_shape, dtype=out_weighted.dtype).at[token_local].add(out_weighted, mode="drop")
+
+
+def _scatter_with_segment_sum(
+    out_dispatch: jax.Array,
+    weight_dispatch: jax.Array,
+    token_local: jax.Array,
+    *,
+    tokens: int,
+    ep_size: int,
+) -> jax.Array:
+    out_weighted = out_dispatch * weight_dispatch[:, None]
+    return jax.ops.segment_sum(out_weighted, token_local, num_segments=tokens, indices_are_sorted=False)
+
+
+def _scatter_with_sorted_segment_sum(
+    out_dispatch: jax.Array,
+    weight_dispatch: jax.Array,
+    token_local: jax.Array,
+    *,
+    tokens: int,
+    ep_size: int,
+) -> jax.Array:
+    out_weighted = out_dispatch * weight_dispatch[:, None]
+    sort_idx = jnp.argsort(token_local)
+    token_sorted = jnp.take(token_local, sort_idx, axis=0)
+    out_sorted = _sort_activations(out_weighted, sort_idx)
+    return jax.ops.segment_sum(out_sorted, token_sorted, num_segments=tokens, indices_are_sorted=True)
+
+
+def _scatter_with_owner_local_add(
+    out_dispatch: jax.Array,
+    weight_dispatch: jax.Array,
+    token_local: jax.Array,
+    *,
+    tokens: int,
+    ep_size: int,
+) -> jax.Array:
+    out_weighted = out_dispatch * weight_dispatch[:, None]
+    tokens_per_shard = tokens // ep_size
+    owner = jnp.floor_divide(token_local, tokens_per_shard)
+    local_token = jnp.remainder(token_local, tokens_per_shard)
+    out_shape = (ep_size, tokens_per_shard, out_weighted.shape[1])
+    return jnp.zeros(out_shape, dtype=out_weighted.dtype).at[owner, local_token].add(out_weighted, mode="drop")
+
+
+def _scatter_with_lax_scatter_add(
+    out_dispatch: jax.Array,
+    weight_dispatch: jax.Array,
+    token_local: jax.Array,
+    *,
+    tokens: int,
+    ep_size: int,
+) -> jax.Array:
+    out_weighted = out_dispatch * weight_dispatch[:, None]
+    indices = token_local[:, None]
+    dnums = jax.lax.ScatterDimensionNumbers(
+        update_window_dims=(1,),
+        inserted_window_dims=(0,),
+        scatter_dims_to_operand_dims=(0,),
+    )
+    init = jnp.zeros((tokens, out_weighted.shape[1]), dtype=out_weighted.dtype)
+    return jax.lax.scatter_add(init, indices, out_weighted, dnums, indices_are_sorted=False, unique_indices=False)
+
+
+def _take_with_gather(x_source: jax.Array, token_local: jax.Array) -> jax.Array:
+    return jnp.take(x_source, token_local, axis=0)
+
+
+def _take_with_segment_sum_bwd(x_source: jax.Array, token_local: jax.Array) -> jax.Array:
+    return _take_tokens_segment_sum(x_source, token_local)
+
+
+def _take_with_sorted_segment_sum_bwd(x_source: jax.Array, token_local: jax.Array) -> jax.Array:
+    return _take_tokens_sorted_segment_sum(x_source, token_local)
+
+
+def _moe_mlp_ep_ring_local_variant(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    compact_fn: Callable[..., tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]],
+    scatter_fn: Callable[..., jax.Array],
+    take_fn: Callable[[jax.Array, jax.Array], jax.Array] = _take_with_gather,
+    gather_weight_dtype: jnp.dtype | None = None,
+    gather_expert_dtype: jnp.dtype | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    with jax.named_scope("gather"):
+        x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+        selected_gather = (
+            selected_experts_local.astype(gather_expert_dtype)
+            if gather_expert_dtype is not None
+            else selected_experts_local
+        )
+        weight_gather = (
+            combine_weights_local.astype(gather_weight_dtype)
+            if gather_weight_dtype is not None
+            else combine_weights_local
+        )
+        selected_experts_global = jax.lax.all_gather(selected_gather, "expert", tiled=True).astype(jnp.int32)
+        combine_weights_global = jax.lax.all_gather(weight_gather, "expert", tiled=True)
+
+        tokens = x_global.shape[0]
+        topk = selected_experts_global.shape[1]
+        assignments = tokens * topk
+        expert_flat = selected_experts_global.reshape(assignments)
+        weight_flat = combine_weights_global.reshape(assignments)
+
+        local_experts = moe_w13_local.shape[0]
+        if num_experts % local_experts != 0:
+            raise ValueError(
+                f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+            )
+
+        ep_size = num_experts // local_experts
+        local_capacity = int(np.ceil(capacity_factor * assignments / ep_size))
+        local_capacity = max(local_experts, local_capacity)
+
+        expert_axis = jax.lax.axis_index("expert")
+        expert_start = expert_axis * local_experts
+        local_expert = expert_flat - expert_start
+        local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
+
+        token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local = compact_fn(
+            x_global,
+            local_expert,
+            local_mask,
+            weight_flat,
+            local_experts=local_experts,
+            local_capacity=local_capacity,
+            topk=topk,
+            ep_size=ep_size,
+            take_fn=take_fn,
+        )
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+
+    with jax.named_scope("scatter"):
+        out_global = scatter_fn(
+            out_dispatch,
+            weight_dispatch,
+            token_local,
+            tokens=tokens,
+            ep_size=ep_size,
+        )
+        out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        out_local = jnp.reshape(out_local, (x_local.shape[0], x_local.shape[1]))
+        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+    return out_local, dropped_total
+
+
+def _permute_by_global_expert(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    *,
+    num_experts: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    topk = selected_experts_local.shape[1]
+    flat_selected = selected_experts_local.reshape(-1)
+    sorted_indices = jnp.argsort(flat_selected)
+    repeated_x = jnp.repeat(x_local, topk, axis=0)
+    sorted_x = _sort_activations(repeated_x, sorted_indices)
+    group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
+    return sorted_x, sorted_indices, flat_selected, group_sizes
+
+
+def _unpermute_from_global_expert(
+    intermediate: jax.Array,
+    sorted_indices: jax.Array,
+    combine_weights_local: jax.Array,
+    *,
+    tokens_per_shard: int,
+    topk: int,
+) -> jax.Array:
+    unsorted = _sort_activations(intermediate, jnp.argsort(sorted_indices))
+    reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
+    return jnp.einsum(
+        "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
+    )
+
+
+def _shard_a2a_params(
+    shard_counts: jax.Array, shard_id: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    row = shard_counts[shard_id]
+    input_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=row.dtype), row[:-1])))
+    send_sizes = row
+
+    zero_row = jnp.zeros((1, shard_counts.shape[1]), dtype=shard_counts.dtype)
+    cumulative = jnp.cumsum(jnp.concatenate((zero_row, shard_counts), axis=0), axis=0, dtype=shard_counts.dtype)
+    output_offsets = cumulative[shard_id]
+    recv_sizes = shard_counts[:, shard_id]
+    return input_offsets, send_sizes, output_offsets, recv_sizes
+
+
+def _local_permute_from_counts(
+    inputs: jax.Array,
+    global_group_sizes: jax.Array,
+    *,
+    local_expert_size: int,
+    shard_index: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    all_shard_local_sizes = jax.lax.dynamic_slice_in_dim(
+        global_group_sizes,
+        start_index=shard_index * local_expert_size,
+        slice_size=local_expert_size,
+        axis=1,
+    )
+    local_group_sizes = jnp.sum(all_shard_local_sizes, axis=0)
+    local_sizes = all_shard_local_sizes.reshape(-1)
+    total_valid = jnp.sum(local_sizes, dtype=jnp.int32)
+    segment_ends = jnp.cumsum(local_sizes, dtype=jnp.int32)
+    positions = jnp.arange(inputs.shape[0], dtype=jnp.int32)
+    segment_index = jnp.searchsorted(segment_ends, positions, side="right")
+    local_expert_ids = jnp.where(positions < total_valid, segment_index % local_expert_size, local_expert_size)
+    sorted_indices = jnp.argsort(local_expert_ids)
+    sorted_inputs = _sort_activations(inputs, sorted_indices)
+    sorted_inputs = jnp.where((jnp.arange(inputs.shape[0], dtype=jnp.int32) < total_valid)[:, None], sorted_inputs, 0)
+    group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
+    return sorted_inputs, sorted_indices, group_sizes
+
+
+def _moe_mlp_ep_ragged_a2a_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+
+    shard_id = jax.lax.axis_index("expert")
+    ep_size = num_experts // local_experts
+    tokens_per_shard = x_local.shape[0]
+    topk = selected_experts_local.shape[1]
+    assignments_per_shard = tokens_per_shard * topk
+    recv_capacity = max(local_experts, int(np.ceil(capacity_factor * assignments_per_shard)))
+
+    with jax.named_scope("dispatch"):
+        sorted_x, sorted_indices, _, group_sizes = _permute_by_global_expert(
+            x_local,
+            selected_experts_local,
+            num_experts=num_experts,
+        )
+        shard_counts = jnp.sum(group_sizes.reshape(ep_size, local_experts), axis=1).astype(jnp.int32)
+        all_shard_counts = jax.lax.all_gather(shard_counts, "expert")
+        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
+        dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
+        x_dispatched = jax.lax.ragged_all_to_all(
+            sorted_x,
+            dispatch_out_shape,
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            axis_name="expert",
+        )
+        global_group_sizes = jax.lax.all_gather(group_sizes.astype(jnp.int32), "expert")
+        x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
+            x_dispatched,
+            global_group_sizes,
+            local_expert_size=local_experts,
+            shard_index=shard_id,
+        )
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+
+    with jax.named_scope("combine"):
+        local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
+        return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
+        return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
+            all_shard_counts.T, shard_id
+        )
+        returned = jax.lax.ragged_all_to_all(
+            local_output,
+            return_out_shape,
+            return_input_offsets,
+            return_send_sizes,
+            return_output_offsets,
+            return_recv_sizes,
+            axis_name="expert",
+        )
+        out_local = _unpermute_from_global_expert(
+            returned,
+            sorted_indices,
+            combine_weights_local,
+            tokens_per_shard=tokens_per_shard,
+            topk=topk,
+        ).astype(x_local.dtype)
+        dropped_total = jnp.array(0, dtype=jnp.int32)
+    return out_local, dropped_total
+
+
+def _moe_mlp_ragged_a2a(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        out, _ = grug_moe_lib._moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
+        return out
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    if has_expert_axis and expert_axis_size > 1:
+        shard_fn = shard_map(
+            partial(
+                _moe_mlp_ep_ragged_a2a_local,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    shard_fn = shard_map(
+        partial(
+            grug_moe_lib._moe_mlp_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        ),
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            local_expert_spec,
+            local_expert_spec,
+        ),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    return out
+
+
+def _moe_mlp_ep_ring_local_prefix_counts(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_prefix_counts,
+        scatter_fn=_scatter_with_add,
+    )
+
+
+def _moe_mlp_ep_ring_local_vector_prefix(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_vector_prefix,
+        scatter_fn=_scatter_with_add,
+    )
+
+
+def _moe_mlp_ep_ring_local_onehot_counts(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_onehot_counts,
+        scatter_fn=_scatter_with_add,
+    )
+
+
+def _moe_mlp_ep_ring_local_padded_take(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_padded_take,
+        scatter_fn=_scatter_with_add,
+    )
+
+
+def _moe_mlp_ep_ring_local_segment_sum(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_topk,
+        scatter_fn=_scatter_with_segment_sum,
+    )
+
+
+def _moe_mlp_ep_ring_local_sorted_segment_sum(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_topk,
+        scatter_fn=_scatter_with_sorted_segment_sum,
+    )
+
+
+def _moe_mlp_ep_ring_local_prefix_segment_sum(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_prefix_counts,
+        scatter_fn=_scatter_with_segment_sum,
+    )
+
+
+def _moe_mlp_ep_ring_local_vector_sorted_segment_sum(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_vector_prefix,
+        scatter_fn=_scatter_with_sorted_segment_sum,
+    )
+
+
+def _moe_mlp_ep_ring_local_owner_local_scatter(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_onehot_counts,
+        scatter_fn=_scatter_with_owner_local_add,
+    )
+
+
+def _moe_mlp_ep_ring_local_lax_scatter(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_onehot_counts,
+        scatter_fn=_scatter_with_lax_scatter_add,
+    )
+
+
+def _moe_mlp_ep_ring_local_take_segment_bwd(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_onehot_counts,
+        scatter_fn=_scatter_with_add,
+        take_fn=_take_with_segment_sum_bwd,
+    )
+
+
+def _moe_mlp_ep_ring_local_take_sorted_segment_bwd(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_onehot_counts,
+        scatter_fn=_scatter_with_add,
+        take_fn=_take_with_sorted_segment_sum_bwd,
+    )
+
+
+def _moe_mlp_ep_ring_local_owner_local_take(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_owner_local_take,
+        scatter_fn=_scatter_with_add,
+    )
+
+
+def _moe_mlp_ep_ring_local_weight_cast(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_prefix_counts,
+        scatter_fn=_scatter_with_add,
+        gather_weight_dtype=x_local.dtype,
+    )
+
+
+def _moe_mlp_ep_ring_local_narrow_meta(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    return _moe_mlp_ep_ring_local_variant(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        compact_fn=_compact_local_assignments_prefix_counts,
+        scatter_fn=_scatter_with_add,
+        gather_weight_dtype=x_local.dtype,
+        gather_expert_dtype=jnp.uint16,
+    )
+
+
+def _moe_mlp_ring_variant(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    local_ring_fn: Callable[..., tuple[jax.Array, jax.Array]],
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        out, _ = grug_moe_lib._moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
+        return out
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    if has_expert_axis and expert_axis_size > 1:
+        shard_fn = shard_map(
+            partial(
+                local_ring_fn,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    shard_fn = shard_map(
+        partial(
+            grug_moe_lib._moe_mlp_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        ),
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            local_expert_spec,
+            local_expert_spec,
+        ),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    return out
+
+
+def _moe_mlp_prefix_counts(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_prefix_counts,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_vector_prefix(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_vector_prefix,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_onehot_counts(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_onehot_counts,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_padded_take(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_padded_take,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_segment_sum(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_segment_sum,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_sorted_segment_sum(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_sorted_segment_sum,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_prefix_segment_sum(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_prefix_segment_sum,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_vector_sorted_segment_sum(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_vector_sorted_segment_sum,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_owner_local_scatter(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_owner_local_scatter,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_lax_scatter(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_lax_scatter,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_take_segment_bwd(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_take_segment_bwd,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_take_sorted_segment_bwd(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_take_sorted_segment_bwd,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_owner_local_take(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_owner_local_take,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_weight_cast(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_weight_cast,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_narrow_meta(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    return _moe_mlp_ring_variant(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        local_ring_fn=_moe_mlp_ep_ring_local_narrow_meta,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_ep_ring_local_packed_return(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    with jax.named_scope("gather"):
+        x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+        selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
+        combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
+
+        tokens = x_global.shape[0]
+        topk = selected_experts_global.shape[1]
+        assignments = tokens * topk
+        expert_flat = selected_experts_global.reshape(assignments)
+        weight_flat = combine_weights_global.reshape(assignments)
+        token_flat = jnp.arange(assignments, dtype=jnp.int32) // topk
+
+        local_experts = moe_w13_local.shape[0]
+        if num_experts % local_experts != 0:
+            raise ValueError(
+                f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+            )
+
+        ep_size = num_experts // local_experts
+        local_capacity = int(np.ceil(capacity_factor * assignments / ep_size))
+        local_capacity = max(local_experts, local_capacity)
+
+        expert_axis = jax.lax.axis_index("expert")
+        expert_start = expert_axis * local_experts
+        local_expert = expert_flat - expert_start
+        local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
+        local_count = jnp.sum(local_mask, dtype=jnp.int32)
+        dropped_local = jnp.maximum(local_count - local_capacity, 0)
+        valid = jnp.arange(local_capacity, dtype=jnp.int32) < local_count
+        valid_weight = valid.astype(jnp.float32)
+
+        local_expert = jnp.where(local_mask, local_expert, 0)
+        flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+        order_key = local_expert * assignments + flat_pos
+        max_order_key = local_experts * assignments
+        selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+        _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+        token_local = jnp.take(token_flat, local_idx, axis=0)
+        expert_local = jnp.take(local_expert, local_idx, axis=0)
+        weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
+
+        x_take = jnp.take(x_global, token_local, axis=0)
+        x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+        weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
+        expert_local = jnp.where(valid, expert_local, 0)
+
+    group_sizes = jnp.bincount(expert_local, weights=valid_weight, length=local_experts).astype(jnp.int32)
+    group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+
+    with jax.named_scope("scatter"):
+        tokens_per_shard = x_local.shape[0]
+        owner_shard = token_local // tokens_per_shard
+        owner_token = token_local % tokens_per_shard
+        out_weighted = out_dispatch * weight_dispatch[:, None]
+        per_owner_capacity = max(1, int(np.ceil(capacity_factor * local_capacity / ep_size)))
+        packed_out, packed_token, packed_valid, dropped_return = _pack_by_shard(
+            out_weighted,
+            owner_token,
+            owner_shard,
+            num_shards=ep_size,
+            capacity=per_owner_capacity,
+        )
+
+        returned_out = jax.lax.all_to_all(packed_out, "expert", split_axis=0, concat_axis=0, tiled=False)
+        returned_token = jax.lax.all_to_all(packed_token, "expert", split_axis=0, concat_axis=0, tiled=False)
+        returned_valid = jax.lax.all_to_all(packed_valid, "expert", split_axis=0, concat_axis=0, tiled=False)
+
+        out_local = (
+            jnp.zeros_like(x_local)
+            .at[returned_token]
+            .add(
+                jnp.where(returned_valid[..., None], returned_out, jnp.zeros_like(returned_out)),
+                mode="drop",
+            )
+        )
+        dropped_total = jax.lax.psum(dropped_local + dropped_return, ("data", "expert"))
+    return out_local, dropped_total
+
+
+def _moe_mlp_ep_stream_ring_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+
+    ep_size = num_experts // local_experts
+    expert_axis = jax.lax.axis_index("expert")
+    expert_start = expert_axis * local_experts
+
+    tokens_per_chunk = x_local.shape[0]
+    topk = selected_experts_local.shape[1]
+    assignments_per_chunk = tokens_per_chunk * topk
+    local_capacity = int(np.ceil(capacity_factor * assignments_per_chunk / ep_size))
+    local_capacity = max(local_experts, local_capacity)
+
+    next_perm = [(src, (src + 1) % ep_size) for src in range(ep_size)]
+
+    def ring_step(carry, _):
+        x_chunk, selected_chunk, weight_chunk, out_chunk, dropped_acc = carry
+
+        expert_flat = selected_chunk.reshape(assignments_per_chunk)
+        weight_flat = weight_chunk.reshape(assignments_per_chunk)
+        local_expert = expert_flat - expert_start
+        local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
+
+        token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local = _compact_local_assignments_topk(
+            x_chunk,
+            local_expert,
+            local_mask,
+            weight_flat,
+            local_experts=local_experts,
+            local_capacity=local_capacity,
+            topk=topk,
+        )
+
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+        out_chunk = out_chunk.at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+
+        return (
+            jax.lax.ppermute(x_chunk, "expert", next_perm),
+            jax.lax.ppermute(selected_chunk, "expert", next_perm),
+            jax.lax.ppermute(weight_chunk, "expert", next_perm),
+            jax.lax.ppermute(out_chunk, "expert", next_perm),
+            dropped_acc + dropped_local,
+        ), None
+
+    init_carry = (
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        jnp.zeros_like(x_local),
+        jnp.array(0, dtype=jnp.int32),
+    )
+    final_carry, _ = jax.lax.scan(ring_step, init_carry, xs=None, length=ep_size)
+    _, _, _, out_local, dropped_local_total = final_carry
+    dropped_total = jax.lax.psum(dropped_local_total, ("data", "expert"))
+    return out_local, dropped_total
+
+
+def _moe_mlp_stream_ring(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        out, _ = grug_moe_lib._moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
+        return out
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    if has_expert_axis and expert_axis_size > 1:
+        shard_fn = shard_map(
+            partial(
+                _moe_mlp_ep_stream_ring_local,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    shard_fn = shard_map(
+        partial(
+            grug_moe_lib._moe_mlp_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        ),
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            local_expert_spec,
+            local_expert_spec,
+        ),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    return out
+
+
+def _moe_mlp_packed_return(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        out, _ = grug_moe_lib._moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
+        return out
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    if has_expert_axis and expert_axis_size > 1:
+        shard_fn = shard_map(
+            partial(
+                _moe_mlp_ep_ring_local_packed_return,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    shard_fn = shard_map(
+        partial(
+            grug_moe_lib._moe_mlp_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        ),
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            local_expert_spec,
+            local_expert_spec,
+        ),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    return out
+
+
 def _make_mesh(ep_size: int) -> Mesh:
     devices = jax.devices()
     if not devices:
@@ -339,6 +2456,158 @@ def _forward(
             w_down,
             activation=ActivationFunctionEnum.silu,
         )
+    elif kernel == "cumsum":
+        routed = _moe_mlp_cumsum(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "packed_return":
+        routed = _moe_mlp_packed_return(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "stream_ring":
+        routed = _moe_mlp_stream_ring(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "ragged_a2a":
+        routed = _moe_mlp_ragged_a2a(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "prefix_counts":
+        routed = _moe_mlp_prefix_counts(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "vector_prefix":
+        routed = _moe_mlp_vector_prefix(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "onehot_counts":
+        routed = _moe_mlp_onehot_counts(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "padded_take":
+        routed = _moe_mlp_padded_take(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "segment_sum":
+        routed = _moe_mlp_segment_sum(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "sorted_segment_sum":
+        routed = _moe_mlp_sorted_segment_sum(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "prefix_segment_sum":
+        routed = _moe_mlp_prefix_segment_sum(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "vector_sorted_segment_sum":
+        routed = _moe_mlp_vector_sorted_segment_sum(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "owner_local_scatter":
+        routed = _moe_mlp_owner_local_scatter(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "lax_scatter":
+        routed = _moe_mlp_lax_scatter(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "take_segment_bwd":
+        routed = _moe_mlp_take_segment_bwd(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "take_sorted_segment_bwd":
+        routed = _moe_mlp_take_sorted_segment_bwd(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "owner_local_take":
+        routed = _moe_mlp_owner_local_take(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "weight_cast":
+        routed = _moe_mlp_weight_cast(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "narrow_meta":
+        routed = _moe_mlp_narrow_meta(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
     else:
         raise ValueError(f"Unknown kernel: {kernel}")
 
@@ -395,13 +2664,41 @@ def main() -> None:
     parser.add_argument("--run-alpha", type=float, default=0.98)
     parser.add_argument("--run-noise-scale", type=float, default=0.35)
     parser.add_argument("--bench-pass", choices=["forward", "forward_backward"], default="forward_backward")
-    parser.add_argument("--kernel", choices=["legacy", "current", "both"], default="both")
+    parser.add_argument(
+        "--kernel",
+        choices=[
+            "legacy",
+            "current",
+            "cumsum",
+            "packed_return",
+            "stream_ring",
+            "ragged_a2a",
+            "prefix_counts",
+            "vector_prefix",
+            "onehot_counts",
+            "padded_take",
+            "segment_sum",
+            "sorted_segment_sum",
+            "prefix_segment_sum",
+            "vector_sorted_segment_sum",
+            "owner_local_scatter",
+            "lax_scatter",
+            "take_segment_bwd",
+            "take_sorted_segment_bwd",
+            "owner_local_take",
+            "weight_cast",
+            "narrow_meta",
+            "both",
+        ],
+        default="both",
+    )
     parser.add_argument("--ep-list", type=str, default="1,2,4,8")
     parser.add_argument("--capacity-factor", type=float, default=grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iters", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--check-equivalence", action="store_true")
+    parser.add_argument("--profile-root", type=Path, default=None)
     args = parser.parse_args()
 
     if args.coordinator_address is not None or args.num_processes is not None or args.process_id is not None:
@@ -418,6 +2715,14 @@ def main() -> None:
     dtype = jnp.dtype(args.dtype)
     eps = [int(tok.strip()) for tok in args.ep_list.split(",") if tok.strip()]
     kernels: list[Kernel] = ["legacy", "current"] if args.kernel == "both" else [args.kernel]
+
+    if args.profile_root is not None:
+        if len(eps) != 1:
+            raise ValueError("--profile-root requires exactly one EP value in --ep-list")
+        if len(kernels) != 1:
+            raise ValueError("--profile-root requires exactly one kernel via --kernel")
+        if args.check_equivalence:
+            raise ValueError("--profile-root cannot be combined with --check-equivalence")
 
     key = jax.random.PRNGKey(args.seed)
     key_x, key_router, key_w13, key_w2, key_sw13, key_sw2 = jax.random.split(key, 6)
@@ -477,7 +2782,7 @@ def main() -> None:
                     shared_w2_sharded,
                 )
                 out_max_abs = float(jnp.max(jnp.abs(legacy_out.astype(jnp.float32) - current_out.astype(jnp.float32))))
-                (_, legacy_grads) = jax.jit(_loss_and_grads, static_argnums=0)(
+                _, legacy_grads = jax.jit(_loss_and_grads, static_argnums=0)(
                     "legacy",
                     x_sharded,
                     selected_sharded,
@@ -487,7 +2792,7 @@ def main() -> None:
                     shared_w13_sharded,
                     shared_w2_sharded,
                 )
-                (_, current_grads) = jax.jit(_loss_and_grads, static_argnums=0)(
+                _, current_grads = jax.jit(_loss_and_grads, static_argnums=0)(
                     "current",
                     x_sharded,
                     selected_sharded,
@@ -503,38 +2808,73 @@ def main() -> None:
             for kernel in kernels:
                 forward_fn = partial(_forward, kernel)
                 grad_fn = partial(_loss_and_grads, kernel)
+                profile_name = f"moe_{kernel}_ep{ep_size}_{args.bench_pass}"
                 if args.bench_pass == "forward":
-                    dt = _time_fn(
-                        forward_fn,
-                        x_sharded,
-                        selected_sharded,
-                        weights_sharded,
-                        w13_sharded,
-                        w2_sharded,
-                        shared_w13_sharded,
-                        shared_w2_sharded,
-                        warmup=args.warmup,
-                        iters=args.iters,
-                    )
+                    if args.profile_root is not None:
+                        dt = _profile_fn(
+                            forward_fn,
+                            x_sharded,
+                            selected_sharded,
+                            weights_sharded,
+                            w13_sharded,
+                            w2_sharded,
+                            shared_w13_sharded,
+                            shared_w2_sharded,
+                            warmup=args.warmup,
+                            iters=args.iters,
+                            profile_dir=args.profile_root,
+                            profile_name=profile_name,
+                        )
+                    else:
+                        dt = _time_fn(
+                            forward_fn,
+                            x_sharded,
+                            selected_sharded,
+                            weights_sharded,
+                            w13_sharded,
+                            w2_sharded,
+                            shared_w13_sharded,
+                            shared_w2_sharded,
+                            warmup=args.warmup,
+                            iters=args.iters,
+                        )
                 else:
-                    dt = _time_fn(
-                        grad_fn,
-                        x_sharded,
-                        selected_sharded,
-                        weights_sharded,
-                        w13_sharded,
-                        w2_sharded,
-                        shared_w13_sharded,
-                        shared_w2_sharded,
-                        warmup=args.warmup,
-                        iters=args.iters,
-                    )
+                    if args.profile_root is not None:
+                        dt = _profile_fn(
+                            grad_fn,
+                            x_sharded,
+                            selected_sharded,
+                            weights_sharded,
+                            w13_sharded,
+                            w2_sharded,
+                            shared_w13_sharded,
+                            shared_w2_sharded,
+                            warmup=args.warmup,
+                            iters=args.iters,
+                            profile_dir=args.profile_root,
+                            profile_name=profile_name,
+                        )
+                    else:
+                        dt = _time_fn(
+                            grad_fn,
+                            x_sharded,
+                            selected_sharded,
+                            weights_sharded,
+                            w13_sharded,
+                            w2_sharded,
+                            shared_w13_sharded,
+                            shared_w2_sharded,
+                            warmup=args.warmup,
+                            iters=args.iters,
+                        )
 
                 _print0(
                     "RESULT "
                     f"kernel={kernel} ep={ep_size} pass={args.bench_pass} "
                     f"time_s={dt:.6f} tokens_per_s={args.tokens / dt:.2f}"
                 )
+                if args.profile_root is not None:
+                    _print0(f"PROFILE kernel={kernel} ep={ep_size} dir={args.profile_root}")
 
 
 if __name__ == "__main__":
