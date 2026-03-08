@@ -590,3 +590,349 @@ The revised plan should be:
 That keeps the project aligned with the repo’s style: simple first, deterministic first, copy-first, and only as much infrastructure as the evidence justifies.
 
 It also keeps the research claim honest: the project is about understanding what makes tokenization work for non-symbolic autoregressive modeling, with JPEG as a controlled probe.
+
+
+## Detailed Implementation Steps
+
+This section is additive to the plan above. It is intended to turn the current plan into an execution checklist without changing the framing or decisions already captured.
+
+### Step 0: Freeze The V0 Decisions In A Short Design Note
+
+Before writing experiment code, add a short V0 design note, either at the top of `experiments/jpeg_tokenizer/README.md` or as a sibling markdown file, that locks:
+
+- the initial corpus,
+- image resolution,
+- color mode (`Y` or `RGB`),
+- JPEG encoding settings,
+- the first `K` for coefficient truncation,
+- the variant names,
+- the first model size,
+- the initial evaluation metrics.
+
+The point is to avoid drifting defaults across scripts and copied variants.
+
+### Step 1: Create The Base Experiment Tree
+
+Create `experiments/jpeg_tokenizer/base/` with the same top-level split as grug:
+
+- `tokenizers.py`
+- `data.py`
+- `model.py`
+- `train.py`
+- `launch.py`
+- `eval.py`
+
+Add a minimal `README.md` in `experiments/jpeg_tokenizer/` that explains:
+
+- the research question,
+- the three initial tokenizer families,
+- which directory is canonical,
+- how variants are expected to be created.
+
+### Step 2: Implement Deterministic Canonical JPEG Preprocessing
+
+In `experiments/jpeg_tokenizer/base/tokenizers.py` or a small local helper module if the file becomes too long:
+
+- decode images deterministically,
+- resize/crop to the chosen fixed resolution,
+- convert to the chosen color mode,
+- encode to JPEG with fixed quality/subsampling/tables,
+- strip metadata,
+- return canonical JPEG bytes.
+
+Add one small helper that computes a stable checksum for the canonical bytes so later scripts can detect accidental drift.
+
+Exit criterion:
+
+- running canonicalization twice on the same image yields identical bytes.
+
+### Step 3: Build A Phase-0 Inspection Script
+
+Add `scripts/jpeg_tokenizer/inspect_representations.py`.
+
+That script should:
+
+- load a small sample,
+- canonicalize each image,
+- emit bytes, symbols, and coefficient token streams,
+- record sequence length distributions,
+- record value ranges and approximate vocab sizes,
+- write summary stats to disk,
+- optionally dump a small set of decoded or reconstructed examples for sanity checking.
+
+The script should answer the open Phase 0 questions already listed in the plan instead of introducing new ones.
+
+Concrete outputs to write:
+
+- `stats/bytes.json`
+- `stats/symbols.json`
+- `stats/coeffs.json`
+- one short markdown summary of the decisions taken from those numbers
+
+### Step 4: Lock The Exact Token Encodings
+
+Once the inspection script runs on a representative sample, freeze one explicit encoding for each tokenizer family.
+
+For bytes:
+
+- reserve special token ids,
+- decide whether to model the full file or scan payload only,
+- keep this fixed across all early runs.
+
+For symbols:
+
+- decide the exact emitted units,
+- fix one bounded representation for amplitudes,
+- do not add compatibility branches for alternate encodings.
+
+For coefficients:
+
+- fix block order,
+- fix zigzag order,
+- fix `K`,
+- fix how out-of-range values are handled.
+
+Add comments describing the encoding as a whole, not line-by-line commentary.
+
+### Step 5: Build A Precomputed Token Store
+
+Do not make the training loop responsible for tokenization.
+
+Add a builder script, for example `scripts/jpeg_tokenizer/build_token_store.py`, that:
+
+- reads source images,
+- canonicalizes them,
+- tokenizes them into one chosen family,
+- writes token sequences to a random-access store,
+- writes a manifest with split, example id, token count, and checksum,
+- can be rerun deterministically.
+
+For the first pass, a simple indexable store is enough. The store only needs to support:
+
+- `len(dataset)`,
+- fetch by integer index,
+- optional small-batch fetch,
+- reproducible train/validation splits.
+
+Only move to a Levanter cache if this simple store proves operationally weak.
+
+### Step 6: Implement A Thin Dataset Adapter
+
+In `experiments/jpeg_tokenizer/base/data.py`:
+
+- add a small dataset class that reads precomputed token sequences by index,
+- keep it finite and indexable,
+- expose it through `AsyncDataset` or a synchronous dataset wrapped with `as_async_dataset()`,
+- adapt it to Levanter LM examples.
+
+Keep the first implementation boring. The job of the dataset layer is only:
+
+- read precomputed sequences,
+- shape them into LM-ready training examples,
+- preserve deterministic ordering when shuffle is disabled.
+
+Do not mix tokenization, augmentation, and training-window construction unless Phase 0 data forces that choice.
+
+### Step 7: Wire `LmDataConfig` Through `DirectDatasetComponent`
+
+Use the existing repo-native path first.
+
+The first training config should:
+
+- use `tokenizer="passthrough"`,
+- set `vocab_size` explicitly,
+- pass train and validation datasets through `DirectDatasetComponent`,
+- enable shuffle using the standard Levanter controls.
+
+This keeps the project aligned with Levanter’s expected data surface and minimizes custom training code.
+
+### Step 8: Copy The Grug Model And Train Stack
+
+Populate `experiments/jpeg_tokenizer/base/model.py`, `train.py`, and `launch.py` by copying the corresponding grug files and simplifying only where needed.
+
+Keep:
+
+- explicit config dataclasses,
+- standard eval wiring,
+- checkpoint/resume behavior,
+- ordinary trainer settings and logging.
+
+Avoid:
+
+- new framework layers,
+- reusable tokenizer registries,
+- early generalization for future modalities.
+
+The first baseline model should be small enough for quick iteration and shared across the three tokenizer families unless one family clearly needs a different sequence length.
+
+### Step 9: Train Only The Coefficient Baseline First
+
+Before forking bytes or symbols:
+
+- get one coefficient-only run to train end to end,
+- verify loss decreases,
+- verify evaluation runs,
+- verify a resumed run continues cleanly,
+- verify the token store and launch config are deterministic enough to reproduce the run setup.
+
+This step is the gate for the rest of the project. If coefficient tokens do not give a stable baseline, the rest of the ladder is much harder to interpret.
+
+### Step 10: Fork Variants By Copying, Not Abstracting
+
+Once `base/` works:
+
+- copy `base/` to `bytes/`,
+- copy `base/` to `symbols/`,
+- keep the changes local to tokenization, vocab size, and sequence-length-related settings,
+- avoid adding shared abstraction unless the same code is duplicated enough to be genuinely painful.
+
+If a later model or train-loop change wins for all variants, upstream that specific change back into `base/`.
+
+### Step 11: Add Focused Evaluation Helpers
+
+In `experiments/jpeg_tokenizer/base/eval.py`, implement helpers for:
+
+- teacher-forced loss,
+- normalized likelihood-style comparisons,
+- sequence length summaries,
+- decode-validity rate,
+- small perturbation experiments.
+
+Keep the first evaluation stack directly tied to the research question. A metric belongs in v0 if it helps distinguish:
+
+- prefix usefulness,
+- hidden-state burden,
+- rollout brittleness.
+
+### Step 12: Build The Stability Harness
+
+Add one script or evaluation entry point that:
+
+- takes a prefix,
+- perturbs one token or one local region,
+- continues rollout,
+- measures downstream degradation.
+
+The important contrast cases are:
+
+- local corruption in coefficient space,
+- syntax corruption in symbol space,
+- desynchronization in byte space.
+
+The output should be tabular first. Fancy demos can come later.
+
+### Step 13: Add Integration-Style Tests
+
+Create tests that validate externally visible behavior rather than internals.
+
+Minimum useful tests:
+
+- canonical preprocessing is deterministic,
+- tokenization is stable for a fixed input,
+- token-store indexing returns the expected sequence,
+- dataset length and batching are correct,
+- decode-validity checks behave correctly on both valid and intentionally corrupted inputs.
+
+Prefer tiny fixed fixtures over large sample-based tests.
+
+### Step 14: Define The First Comparison Run Matrix
+
+Before launching many runs, freeze one small matrix:
+
+- `base/coeffs`
+- `bytes/`
+- `symbols/`
+
+Keep matched as much as practical on:
+
+- model family,
+- optimizer,
+- batch size,
+- training budget,
+- validation cadence.
+
+Allow sequence length and vocab size to differ where the representation demands it, but document those differences explicitly in the run notes.
+
+### Step 15: Only Then Revisit Infrastructure
+
+After the first three variants have:
+
+- trained,
+- evaluated,
+- and gone through perturbation analysis,
+
+reassess whether you actually need:
+
+- Levanter cache construction,
+- WebDataset raw shards,
+- more elaborate preprocessing orchestration,
+- RVQ or codebook variants.
+
+If the direct random-access path is working, keep it. Additional infrastructure needs to earn its place by clarifying results or materially reducing operational pain.
+
+### Suggested Near-Term Execution Order
+
+If starting implementation tomorrow, the order should be:
+
+1. freeze V0 decisions in a short note,
+2. create `experiments/jpeg_tokenizer/base/`,
+3. implement canonical JPEG preprocessing,
+4. write the Phase 0 inspection script,
+5. lock the token encodings,
+6. build the precomputed token store,
+7. wire `DirectDatasetComponent`,
+8. copy the grug model/train/launch stack,
+9. get the coefficient baseline training,
+10. fork bytes and symbols,
+11. add perturbation and rollout evaluation,
+12. decide whether any heavier infrastructure is justified.
+
+### Practical File-Level Checklist
+
+`experiments/jpeg_tokenizer/base/tokenizers.py`
+
+- canonical JPEG conversion
+- bytes tokenizer
+- symbols tokenizer
+- coefficient tokenizer
+- representation-level comments
+
+`experiments/jpeg_tokenizer/base/data.py`
+
+- token-store reader
+- dataset adapter
+- `LmDataConfig` builder or helper
+
+`experiments/jpeg_tokenizer/base/model.py`
+
+- copied grug-ish decoder-only model config
+- explicit `vocab_size` and `max_seq_len`
+
+`experiments/jpeg_tokenizer/base/train.py`
+
+- copied train loop
+- eval hooks
+- logging and checkpoint wiring
+
+`experiments/jpeg_tokenizer/base/launch.py`
+
+- one minimal `ExecutorStep`
+- small default run config
+
+`experiments/jpeg_tokenizer/base/eval.py`
+
+- decode-validity checks
+- perturbation helpers
+- comparison metrics
+
+`scripts/jpeg_tokenizer/inspect_representations.py`
+
+- Phase 0 stats and decision support
+
+`scripts/jpeg_tokenizer/build_token_store.py`
+
+- deterministic precompute path
+
+### Final Guardrail
+
+When in doubt, prefer the change that makes the tokenizer comparison cleaner rather than the system more ambitious. The project wins by producing a crisp answer about autoregressive tokenization properties, not by accumulating image-modeling machinery.
