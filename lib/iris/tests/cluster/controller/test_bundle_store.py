@@ -5,7 +5,6 @@
 
 import hashlib
 
-from connectrpc.errors import ConnectError
 import pytest
 
 from iris.cluster.bundle import BundleStore
@@ -40,5 +39,5 @@ def test_get_zip_reads_stored_bytes(store):
 
 
 def test_get_zip_missing_raises_not_found(store):
-    with pytest.raises(ConnectError, match="Bundle not found"):
+    with pytest.raises(FileNotFoundError, match="Bundle not found"):
         store.get_zip("a" * 64)

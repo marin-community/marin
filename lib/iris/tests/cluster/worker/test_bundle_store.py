@@ -8,7 +8,6 @@ import io
 import zipfile
 
 import pytest
-from connectrpc.errors import ConnectError
 
 from iris.cluster.bundle import BundleStore
 
@@ -70,7 +69,7 @@ def test_prefetch_hash_verification_failure(monkeypatch, store):
         return _FakeResponse(bad_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
-    with pytest.raises(ConnectError, match="Bundle hash mismatch"):
+    with pytest.raises(ValueError, match="Bundle hash mismatch"):
         store.prefetch_bundle(wrong_id)
 
 
@@ -82,7 +81,7 @@ def test_lru_eviction_by_item_count(store):
         bundles.append((bundle_id, bundle_zip))
         store.write_zip(bundle_zip)
 
-    with pytest.raises(ConnectError, match="Bundle not found"):
+    with pytest.raises(FileNotFoundError, match="Bundle not found"):
         store.get_zip(bundles[0][0])
     assert store.get_zip(bundles[1][0]) == bundles[1][1]
     assert store.get_zip(bundles[2][0]) == bundles[2][1]

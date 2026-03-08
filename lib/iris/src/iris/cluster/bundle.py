@@ -16,16 +16,13 @@ import zipfile
 from pathlib import Path
 from urllib.request import urlopen
 
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
-
 _BUNDLE_ID_RE = r"^[0-9a-f]{64}$"
 
 
 def validate_bundle_id(bundle_id: str) -> None:
     """Validate a bundle identifier."""
     if not re.fullmatch(_BUNDLE_ID_RE, bundle_id):
-        raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid bundle_id: {bundle_id!r}")
+        raise ValueError(f"Invalid bundle_id: {bundle_id!r}")
 
 
 def bundle_id_for_zip(blob: bytes) -> str:
@@ -124,7 +121,7 @@ class BundleStore:
                 (bundle_id,),
             ).fetchone()
             if row is None:
-                raise ConnectError(Code.NOT_FOUND, f"Bundle not found: {bundle_id}")
+                raise FileNotFoundError(f"Bundle not found: {bundle_id}")
             self._conn.execute(
                 "UPDATE bundles SET last_access_ms = ? WHERE bundle_id = ?",
                 (self._now_ms(), bundle_id),
@@ -138,29 +135,22 @@ class BundleStore:
         try:
             self.get_zip(bundle_id)
             return
-        except ConnectError as e:
-            if e.code != Code.NOT_FOUND:
-                raise
+        except FileNotFoundError:
+            pass
 
         if not self._controller_address:
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Bundle {bundle_id} is not cached and controller address is not configured",
-            )
+            raise RuntimeError(f"Bundle {bundle_id} is not cached and controller address is not configured")
 
         url = f"{self._controller_address}/bundles/{bundle_id}.zip"
         try:
             with urlopen(url, timeout=120) as resp:
                 blob = resp.read()
         except Exception as e:
-            raise ConnectError(Code.UNAVAILABLE, f"Failed to fetch bundle {bundle_id}: {e}") from e
+            raise RuntimeError(f"Failed to fetch bundle {bundle_id}: {e}") from e
 
         actual = bundle_id_for_zip(blob)
         if actual != bundle_id:
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Bundle hash mismatch while fetching {bundle_id}: got {actual}",
-            )
+            raise ValueError(f"Bundle hash mismatch while fetching {bundle_id}: got {actual}")
         self.write_zip(blob)
 
     def extract_bundle_to(self, bundle_id: str, dest: Path) -> None:
