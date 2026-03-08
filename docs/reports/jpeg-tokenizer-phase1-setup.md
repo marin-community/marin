@@ -68,5 +68,22 @@ already synced successfully.
 
 ## Next Step
 
-Build the `K=8` coefficient token store in `eu-west4` and submit the smallest safe `K=8` smoke run on `v6e-8` to
-measure the sequence-length and memory step-up before spending another full trial.
+The `K=8` smoke has now also completed successfully:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260308-094432`
+- W&B run:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-smoke`
+- Final status:
+  `SUCCEEDED`
+- Eval loss trajectory:
+  `8.549 -> 4.446 -> 4.124`
+- Final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-smoke-c2bc8c/checkpoints/step-96`
+
+This establishes that `8192`-token coefficient sequences are viable on `v6e-8` at batch size `128`.
+
+## Next Step
+
+Launch the first longer `K=8` trial at the proven safe batch size and compare its `1000`-step eval against the
+completed `K=4` baseline.

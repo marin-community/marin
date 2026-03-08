@@ -124,3 +124,29 @@
   - optimization is stable and the final eval is close to the best mid-run eval, so this config is good enough to use as the reference point for the next ablation
   - there is still background Ray worker churn on unrelated nodes plus two non-fatal warnings: the `draccus` config-artifact dump failure and a final W&B `BrokenPipeError` during process teardown
 - Next action: build and mirror the `K=8` coefficient store, then launch the smallest safe `K=8` smoke run on `v6e-8`.
+
+### 2026-03-09 01:55 - K=8 smoke succeeded on v6e-8
+
+- Hypothesis: doubling coefficient retention to `K=8` should still fit and train on `v6e-8` if the batch size is reduced enough.
+- Command:
+  - `uv run python scripts/jpeg_tokenizer/build_coeff_token_store.py --k 8 --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k8_v0`
+  - `gsutil -m rsync -r artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k8_v0 gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_v0`
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k8-smoke"]'`
+- Config:
+  - token store: `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_v0`
+  - model max sequence length: `8192`
+  - batch size: `128`
+  - steps: `96`
+  - eval every `48` steps
+- Result:
+  - Ray job: `ray-run-dlwh-launch-20260308-094432`
+  - W&B run: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-smoke`
+  - terminal status: `SUCCEEDED`
+  - eval loss: `8.549 -> 4.446 -> 4.124`
+  - final checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-smoke-c2bc8c/checkpoints/step-96`
+  - executor wall time: `321.72s`
+- Interpretation:
+  - `K=8` is operationally viable on the same TPU shape without any new infrastructure work
+  - the safe batch point is at least `128`, which is enough to proceed to a longer run and compare learning dynamics against the completed `K=4` baseline
+  - the same two non-fatal warnings remain: `draccus` config-artifact serialization and W&B teardown `BrokenPipeError`
+- Next action: launch a longer `K=8` trial with the same batch shape and compare the `1000`-step eval against the `K=4` reference.
