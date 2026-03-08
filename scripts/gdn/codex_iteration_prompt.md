@@ -5,10 +5,9 @@ Iteration metadata:
 - Starting commit: {{HEAD_SHA}}
 
 Primary objective:
-- Reach major end-to-end speedups and push MFU toward ~50%.
-- This is still the architecture/kernel-design phase, not fine-grained tuning.
-- Favor bold, high-upside kernel redesigns over safe micro-optimizations.
-- Prioritize the training chunk path (`chunk_gated_delta_rule` / flash train kernels) over decode/recurrent paths.
+- Reach major end-to-end train-step speedups and push MFU toward ~50%.
+- The current evidence says the main bottleneck is no longer just kernel math. It is the lowered train-path control structure around the kernels.
+- Optimize the training chunk path (`chunk_gated_delta_rule` / flash train kernels) first.
 
 Repo context:
 - Kernel implementation: `lib/levanter/src/levanter/layers/gated_deltanet.py`
@@ -19,105 +18,108 @@ Repo context:
 - Reference code: `~/Projects/Work/Marin/flash-linear-attention/fla/ops/gated_delta_rule/`
 - Pallas docs: <https://docs.jax.dev/en/latest/pallas/tpu/index.html>
 
+Current diagnosis to optimize against:
+- Multiple recent variants cut train-path forward/backward `shard_map/pallas_call` closed-call time by ~40-52%.
+- End-to-end throughput still regressed because device-side `while` grew to about `31.5-31.7 ms`.
+- Treat that as the dominant failure mode unless new evidence disproves it.
+- A candidate that halves closed-call time but worsens train-path control flow is not a win.
+
 Required behavior for this iteration:
-1. Read the latest entries in the running log and identify the dominant current bottleneck from traces.
-2. Generate a shortlist of 3 candidate optimizations with estimated upside and risk.
-3. Select **exactly one** macro-move category from `docs/recipes/optimize_gdn_pallas_tpu.md` (“The Macro Move Menu”).
-   - The candidate you implement must clearly fit that category.
-   - If you cannot justify a macro-move, stop and record why.
-4. Select 1 concrete candidate with high expected impact (target >=10% MFU gain, or clear path to many-fold speedup if successful).
-5. Implement the selected change in code.
-6. Validate correctness on TPU by running GDN tests.
+1. Read the latest entries in the running log and identify the current train-path control bottleneck.
+2. Generate a shortlist of 3 candidates with estimated upside and implementation risk.
+3. Select exactly one macro-move category from `docs/recipes/optimize_gdn_pallas_tpu.md`.
+4. Prefer a control-structure move over a kernel-math move unless you can explain why the control-shell evidence does not apply.
+5. Implement one concrete high-upside candidate.
+6. Validate correctness on TPU.
 7. Launch a lightweight profiled training run on TPU.
-8. Download trace/profiler artifact, analyze before/after hotspots, update the running log, and commit exactly one commit.
+8. Analyze the profile, update the running log with structured hotspot metrics, and commit exactly one commit.
 
 Session directives:
 - If this prompt includes an extra "Session directives for this codex-loop run" block, treat it as mandatory guidance for this run.
 
+Macro-move category (pick ONE per iteration):
+
+High priority control-structure moves:
+- `L` Associative chunk summaries / chunk-level affine scan to reduce or remove train-path serial scan shells.
+- `M` XLA-first outer train path with Pallas only as leaf chunk kernels.
+- `N` Backward tape-contract redesign: compressed summaries, new remat/checkpoint boundaries, or another backward structure that reduces scanned residual state.
+- `O` Control arm / reduced-Pallas benchmark branch to test whether the current train-path abstraction boundary is fundamentally wrong.
+
+Secondary moves (only when nested inside a new outer structure or explicitly justified):
+- `E` V-tiling / shared-K precompute.
+- `H` Shared-RHS matmul batching.
+- `G` Ct^2 exp-diff reformulation.
+- `I` Prepare+recurrent fusion.
+- `J` Ct/Seg sweep.
+
+Deprioritized unless you explain why the new control-flow diagnosis does not apply:
+- standalone kernel-local wins that preserve the same train-path `scan` / `while` shell,
+- runtime branchy hot-path variants,
+- more iterations whose only visible success metric is lower closed-call time.
+
 Major-bet requirement:
-- The optimization must materially change kernel structure, launch structure, or algorithmic decomposition.
-- Equivalent mathematical reformulations are allowed (including reformulations that avoid explicit triangular inversion) if end-to-end semantics remain correct and performance improves.
+- The optimization must materially change algorithmic decomposition, outer train-path orchestration, backward tape structure, or the lowering-visible control structure.
+- Equivalent mathematical reformulations are allowed if semantics remain correct and end-to-end training improves.
 - At least one of these must be true:
-  - fewer/larger Pallas custom calls per training step (reduce launch overhead),
-  - more useful work per kernel (higher arithmetic intensity),
-  - changed dataflow/layout/tiling that increases MXU utilization,
-  - replaced sequential dependencies with more parallel blockwise/associative structure.
-  - directly reduced end-to-end training-step time in the chunked train path.
+  - fewer device-side loop/control-flow regions in the hot train path,
+  - less scanned residual state in backward,
+  - chunk summaries that compose more associatively / in parallel,
+  - outer train-path orchestration shifted toward XLA instead of Pallas/custom-VJP scaffolding,
+  - direct reduction in end-to-end train-step time without a compensating `while`/`conditional` increase.
 
 Disallowed as a standalone iteration:
-- only tweaking scalar constants (unroll/chunk/segment/batch) with no structural kernel changes,
-- only toggling config flags/checkpointing/remat,
-- only log formatting or measurement plumbing.
-- only optimizing recurrent/decode-only code paths with no measurable train-step impact.
+- only tweaking scalar constants,
+- only toggling config flags/checkpointing/remat with no train-path structural change,
+- only reducing forward/backward closed-call time while leaving control-flow overhead worse,
+- only logging/plumbing changes.
 
-Escalation rule:
-- If measured MFU gain is <3% and dominant hotspot is unchanged, mark the attempt as low-impact in the log and set the next hypothesis to a more radical design (not another small tuning step).
+Hot-path control-flow checklist (answer this in your writeup):
+- Does this candidate add or preserve a hot-path `lax.scan`?
+- Does it add a hot-path `lax.cond` / runtime dispatch?
+- Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+- If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+
+Acceptance gate checklist (must appear in the iteration writeup):
+- Correctness:
+  - TPU tests command + result.
+- Perf:
+  - Forward closed-call `... ms -> ... ms`.
+  - Backward closed-call `... ms -> ... ms`.
+  - `while: ... ms -> ... ms`.
+  - `conditional: ... ms -> ... ms`.
+  - `Kernel budget: ... ms -> ... ms`.
+  - `Control budget: ... ms -> ... ms`.
+  - `Train-path budget: ... ms -> ... ms`.
+  - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration` deltas.
+- Governance:
+  - If `while` or `conditional` grows materially and MFU does not improve strongly, revert.
+  - If train-path budget worsens, do not treat the candidate as promising even if closed-call time improved.
 
 Failed-attempt handling:
-- If the profile run fails (for example OOM/infra errors) or the change regresses meaningfully, do not leave speculative code changes uncommitted in the tree.
-- Either:
-  - revert the failed code attempt and record `Commit: none (failed attempt)`, or
-  - keep only clearly justified scaffolding that is necessary for the next planned attempt and commit it with explicit rationale.
-- Never leave `Commit: (pending)` or `Commit: this commit` in a newly-added log entry; use the exact commit SHA.
-
-Retry budget (anti-spin):
-- For any identical failing TPU test/profile command (same command + same dominant failure signature), retry at most **once**.
-- If the same failure repeats after one retry, treat it as deterministic for this iteration:
-  - revert speculative code changes,
-  - log the iteration as failed/infra-blocked with exact failure details,
-  - move to the next iteration.
-- Do not loop indefinitely on presumed flakiness.
+- If the profile run fails, correctness fails deterministically, or control-flow overhead dominates and MFU regresses, do not leave speculative code changes in the tree.
+- Revert the failed code attempt and log the exact failure mode.
+- Never leave `Commit: (pending)` or `Commit: this commit` in a new log entry.
 
 Constraints:
 - TPU-only optimization target.
 - No backward-compatibility shims/fallback hacks.
 - Do not relax test tolerances.
-- If blocked on infra/transient cluster issues, document blocker + exact failing command in the running log and stop without speculative code changes.
-- Probe runs that intentionally relax correctness (for bottleneck attribution) must be clearly labeled as probe/ablation and must not be promoted as champions.
+- If blocked on infra, document the blocker with exact commands and stop without speculative code changes.
 
 Preferred commands:
-- `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
-- `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-wait`
-- `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-sync`
-- `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 <job_id> --show-logs --tail 400`
+- `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
+- `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-sync`
+- `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+- `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-wait`
 - `uv run python scripts/gdn/gdnctl.py lint-log`
 
 Artifact guidance:
 - Prefer `perfetto_trace.json.gz` / `trace.json.gz` artifacts by default.
-- Only pull `.xplane.pb` artifacts when you will actually run XProf analysis.
+- Only pull `.xplane.pb` artifacts when you will actually use XProf.
 
 Definition of done:
-- One high-impact optimization committed, tests green, one profiled run completed, running log updated with:
+- One high-upside structural attempt committed, tests green, one profiled run completed, running log updated with:
   - measured MFU/tokens/sec deltas,
-  - top hotspots before/after,
-  - why this change did or did not unlock large speedup,
+  - explicit control-flow and kernel budgets,
+  - why the change did or did not remove the train-path control bottleneck,
   - next bold hypothesis.
-
-Macro-move forcing function:
-- If your shortlist contains only “small” changes (tweaks to unroll/chunk/segment, removing a reshape, changing a constant), discard it and restart step (2).
-- Pick exactly one headline direction and execute it end-to-end.
-- Diversity requirement:
-  - Do not repeat the same macro move as the previous iteration unless there is a clearly new algorithmic variant and you state why prior evidence does not apply.
-  - If a macro move has produced two consecutive `<3%`-gain outcomes (including regressions/infra-blocked retries), place it on cooldown and pick a different macro move.
-
-Priority order for current phase:
-1. **I**: Fuse segmented forward prepare+recurrent, reusing heavy intermediates once.
-2. **J**: Sweep `Ct`/`Seg` for new kernels (`Ct in {64,96,128}`, `Seg in {8,16,32}`) with a compact benchmark table.
-3. **E**: V-tiling with shared-K precompute.
-4. **H**: Batch matmuls by stacking left operands that share the same right operand.
-5. **G**: Eliminate Ct^2 exponentials in `exp_diff` using centered outer-product exp (cooldown unless a materially new formulation is proposed).
-
-Deprioritized unless new evidence appears:
-- A/B-only micro-edits already explored heavily.
-- D full-sequence lane-sensitive variants that do not change heavy inner-kernel work.
-- F solve-only decompositions that reintroduce expensive backward transpose-solve behavior.
-
-Acceptance gate checklist (must appear in iteration writeup):
-- Correctness:
-  - TPU tests command + result.
-- Perf:
-  - Forward and backward `shard_map/pallas_call` deltas.
-  - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration` deltas.
-  - For Macro G, explicit note on `exp` operation reduction (IR/trace-derived).
-- Governance:
-  - If MFU gain <3% and dominant hotspot is unchanged, revert and escalate to a different macro move.

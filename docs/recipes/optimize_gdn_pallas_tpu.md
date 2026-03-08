@@ -15,6 +15,29 @@ Current phase goal:
 - Treat small tuning wins as secondary; prioritize architecture/kernel redesigns first.
 - Optimize training throughput first; prioritize `chunk_gated_delta_rule` hotspots over decode-only paths.
 
+## Current diagnosis (March 2026)
+
+Recent evidence changes the optimization target:
+
+- Multiple structurally different variants reduced train-path forward/backward `shard_map/pallas_call`
+  closed-call buckets by roughly `40-52%`.
+- End-to-end training still regressed because a device-side `while` bucket around `31.5-31.7 ms`
+  appeared or became dominant.
+- That means the limiting factor is now the lowered train-path control structure around the kernels,
+  not only the math inside the kernels.
+
+What to do differently now:
+
+- Treat `closed-call` reductions as **necessary but not sufficient**.
+- Evaluate every candidate in terms of:
+  - `Kernel budget = forward_closed_call_ms + backward_closed_call_ms`
+  - `Control budget = while_ms + conditional_ms`
+  - `Train-path budget = kernel_budget + control_budget`
+- A candidate is promising only if train-path budget improves or if there is a strong end-to-end MFU win
+  that clearly dominates any control-flow regression.
+- Do not spend primary iteration budget on more kernel-local H/J/E/I/G-style work unless it is nested
+  inside a new outer train-path structure or explicitly removes the `while`/`conditional` bottleneck.
+
 The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://github.com/marin-community/marin/issues/1884#issuecomment-3714287157), updated January 6, 2026):
 - strict lower-triangular inversion is expensive on TPU; sequential dependencies hurt MXU occupancy,
 - dynamic slicing inside Pallas TPU kernels is not available, forcing static indexing and segmented loop structures.
@@ -181,6 +204,62 @@ Idea:
 Risk:
 - High algorithmic complexity. Attempt only after G/H/I are fully explored.
 
+## Current high-priority macro moves (post-control-flow diagnosis)
+
+These moves supersede the previous priority order for upcoming iterations.
+
+### L) Associative chunk summaries / affine scan reformulation
+Target: stop expressing training as a large serial scan over chunk kernels plus tapes.
+
+Idea:
+- Summarize each chunk as an affine update on recurrent state, e.g. `S_out = A_chunk(S_in) + B_chunk`.
+- Compose chunk summaries associatively and compute chunk-start states with a prefix-style scan
+  rather than a large lowered train-path `WhileOp`.
+
+Why:
+- The repeated `while ~31.6 ms` regressions indicate the serial train shell is now the wall.
+- If chunk summaries can be composed in parallel, that attacks the actual bottleneck layer.
+
+### M) XLA-first outer train path with Pallas only as leaf kernels
+Target: move outer train-path orchestration out of custom-VJP/scan-heavy Pallas scaffolding.
+
+Idea:
+- Keep Pallas for chunk-local dense work where it clearly helps.
+- Express outer state propagation, orchestration, and backward structure in XLA/JAX arrays.
+- Avoid making Pallas/custom VJP responsible for the whole train-path program skeleton.
+
+Why:
+- Current evidence suggests the train-shell lowering is the bottleneck, not just the chunk microkernels.
+
+### N) Backward tape-contract redesign
+Target: reduce scanned residual state in reverse mode.
+
+Idea:
+- Replace large per-segment tape tuples with compressed chunk summaries, recomputation/remat,
+  or a mathematically equivalent backward contract that threads less state through the reverse scan.
+
+Constraint:
+- Do not do a tape-only bandwidth tweak in isolation. Pair it with a real outer control-structure change.
+
+### O) Reduced-Pallas / XLA control arm
+Target: test whether the current train-path abstraction boundary is fundamentally wrong.
+
+Idea:
+- Build a control branch that uses fewer or no custom Pallas calls in the training path.
+- Compare end-to-end train MFU directly against the current champion using the same validation profile.
+
+Why:
+- This is the quickest way to validate whether the pure-Pallas train shell is boxing the search in.
+
+## Current priority order
+
+1. `L` associative chunk summaries / scan reformulation
+2. `M` XLA-first outer train path
+3. `N` backward tape-contract redesign
+4. `O` reduced-Pallas / XLA control arm
+5. `E/H/G/I/J` only when nested inside one of the above or when they explicitly suppress
+   the train-path `while` / `conditional` buckets
+
 ## Measurement: avoid “trace-only” optimization
 
 XProf traces are essential for hotspot attribution, but the loop also needs a **stable numeric score**
@@ -194,6 +273,22 @@ If you add a new microbenchmark script/command, keep it:
 - deterministic (fixed PRNG),
 - short (<30s wall),
 - printing a single parseable line like `GDN_BENCH p50_ms=... mean_ms=...`.
+
+### Structured hotspot reporting
+
+Every iteration writeup should include these exact categories when available:
+
+- `Forward closed-call`
+- `Backward closed-call`
+- `while`
+- `conditional`
+- `Kernel budget`
+- `Control budget`
+- `Train-path budget`
+
+The unattended harness now parses these fields from the hillclimb log and uses them for
+promotion/rejection policy. If they are missing, the harness loses visibility into the
+real train-path bottleneck.
 
 ## Infra Added For This Loop
 - `scripts/gdn/gdnctl.py`: one CLI for tests, profile submission, Ray wait/logs, HF trace downloads, and unattended Codex loops.

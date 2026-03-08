@@ -5,9 +5,10 @@ Training chunk-kernel focus for this session:
 
 Scope priorities:
 
-1) Reduce dominant train-path `custom-call` time in `gated_deltanet.py` callsites tied to flash chunk forward/backward.
-2) Prefer structural kernel/dataflow changes over scalar tuning and config-only tweaks.
-3) Keep correctness and deployability for the target train config unless this run is explicitly marked as a probe/ablation.
+1) Reduce total train-path budget, not just inner `custom-call` time.
+2) Track both kernel-local cost and control-flow cost (`while`, `conditional`) in every profile comparison.
+3) Prefer structural train-path changes over scalar tuning and config-only tweaks.
+4) Keep correctness and deployability for the target train config unless this run is explicitly marked as a probe/ablation.
 
 Probe policy:
 

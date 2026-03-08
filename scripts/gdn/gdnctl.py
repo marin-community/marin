@@ -58,6 +58,9 @@ SESSION_DIRECTIVE_PRESET_FILES = {
     "expdiff-outer-product": REPO_ROOT / "scripts/gdn/session_directives/expdiff-outer-product.md",
     "matmul-batching": REPO_ROOT / "scripts/gdn/session_directives/matmul-batching.md",
     "macro-coverage-pivot": REPO_ROOT / "scripts/gdn/session_directives/macro-coverage-pivot.md",
+    "control-structure-pivot": REPO_ROOT / "scripts/gdn/session_directives/control-structure-pivot.md",
+    "associative-summaries": REPO_ROOT / "scripts/gdn/session_directives/associative-summaries.md",
+    "xla-first-train-path": REPO_ROOT / "scripts/gdn/session_directives/xla-first-train-path.md",
 }
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
@@ -81,6 +84,10 @@ GIT_TRANSIENT_ERROR_RE = re.compile(
 )
 WANDB_RUN_URL_RE = re.compile(r"https://wandb\.ai/(?P<entity>[^/\s]+)/(?P<project>[^/\s]+)/runs/(?P<run_id>[^/\s?#]+)")
 ITERATION_HEADING_RE = re.compile(r"^### Iteration (?P<num>\d+)(?P<suffix>[A-Za-z]*)\b")
+ITERATION_MS_DELTA_RE = re.compile(
+    r"^\s*-\s+(?P<label>.+?):\s*`(?P<before>[+\-]?(?:\d+(?:\.\d*)?|\.\d+))\s*ms\s*->\s*"
+    r"(?P<after>[+\-]?(?:\d+(?:\.\d*)?|\.\d+))\s*ms`"
+)
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -598,9 +605,114 @@ def _collect_profile_metrics(
     }
 
 
+def _iteration_blocks(lines: Sequence[str]) -> list[tuple[int, int, str]]:
+    blocks: list[tuple[int, int, str]] = []
+    start_idx: int | None = None
+    heading = ""
+    for idx, line in enumerate(lines):
+        if not line.startswith("### Iteration "):
+            continue
+        if start_idx is not None:
+            blocks.append((start_idx, idx, heading))
+        start_idx = idx
+        heading = line.strip()
+    if start_idx is not None:
+        blocks.append((start_idx, len(lines), heading))
+    return blocks
+
+
+def _normalize_iteration_metric_label(label: str) -> str | None:
+    normalized = label.lower().replace("`", "").replace("*", "").strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    if "forward closed-call" in normalized:
+        return "forward_closed_call_ms"
+    if "backward closed-call" in normalized:
+        return "backward_closed_call_ms"
+    if normalized.startswith("while"):
+        return "while_ms"
+    if normalized.startswith("conditional"):
+        return "conditional_ms"
+    if normalized.startswith("kernel budget"):
+        return "kernel_budget_ms"
+    if normalized.startswith("control budget"):
+        return "control_budget_ms"
+    if normalized.startswith("train-path budget"):
+        return "train_path_budget_ms"
+    if normalized.startswith("shard_map"):
+        return "shard_map_ms"
+    if normalized.startswith("all-gather"):
+        return "all_gather_ms"
+    return None
+
+
+def _parse_iteration_hotspot_metrics(lines: Sequence[str]) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for line in lines:
+        match = ITERATION_MS_DELTA_RE.match(line)
+        if match is None:
+            continue
+        metric_key = _normalize_iteration_metric_label(match.group("label"))
+        if metric_key is None:
+            continue
+        before = float(match.group("before"))
+        after = float(match.group("after"))
+        metrics[metric_key] = after
+        prefix = metric_key[: -len("_ms")] if metric_key.endswith("_ms") else metric_key
+        metrics[f"{prefix}_before_ms"] = before
+        metrics[f"{prefix}_delta_ms"] = after - before
+
+    forward = _coerce_float(metrics.get("forward_closed_call_ms"))
+    backward = _coerce_float(metrics.get("backward_closed_call_ms"))
+    if "kernel_budget_ms" not in metrics and (forward is not None or backward is not None):
+        metrics["kernel_budget_ms"] = (forward or 0.0) + (backward or 0.0)
+
+    while_ms = _coerce_float(metrics.get("while_ms"))
+    conditional_ms = _coerce_float(metrics.get("conditional_ms"))
+    if "control_budget_ms" not in metrics and (while_ms is not None or conditional_ms is not None):
+        metrics["control_budget_ms"] = (while_ms or 0.0) + (conditional_ms or 0.0)
+
+    kernel_budget = _coerce_float(metrics.get("kernel_budget_ms"))
+    control_budget = _coerce_float(metrics.get("control_budget_ms"))
+    if "train_path_budget_ms" not in metrics and kernel_budget is not None and control_budget is not None:
+        metrics["train_path_budget_ms"] = kernel_budget + control_budget
+
+    return metrics
+
+
+def _latest_iteration_hotspot_context(log_path: Path) -> dict[str, object]:
+    if not log_path.exists():
+        return {"warnings": [f"hillclimb log not found: {log_path}"]}
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    blocks = _iteration_blocks(lines)
+    if not blocks:
+        return {"warnings": [f"no iteration entries found in hillclimb log: {log_path}"]}
+
+    current_start, current_end, current_heading = blocks[-1]
+    current_metrics = _parse_iteration_hotspot_metrics(lines[current_start:current_end])
+    previous_metrics: dict[str, float] = {}
+    previous_heading: str | None = None
+    if len(blocks) >= 2:
+        prev_start, prev_end, prev_heading = blocks[-2]
+        previous_metrics = _parse_iteration_hotspot_metrics(lines[prev_start:prev_end])
+        previous_heading = prev_heading
+
+    warnings: list[str] = []
+    if not current_metrics:
+        warnings.append(f"latest hillclimb entry had no parseable hotspot metrics: {current_heading}")
+
+    return {
+        "hotspot_metrics": current_metrics,
+        "hotspot_heading": current_heading,
+        "hotspot_baseline_metrics": previous_metrics,
+        "hotspot_baseline_heading": previous_heading,
+        "warnings": warnings,
+    }
+
+
 def _load_perf_state(path: Path) -> dict[str, object]:
     if not path.exists():
-        return {"version": 1, "champion": None, "history": []}
+        return {"version": 2, "champion": None, "history": []}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -608,15 +720,15 @@ def _load_perf_state(path: Path) -> dict[str, object]:
             f"[gdnctl] WARNING: could not parse perf state {path}: {exc!r}. Reinitializing.",
             file=sys.stderr,
         )
-        return {"version": 1, "champion": None, "history": []}
+        return {"version": 2, "champion": None, "history": []}
 
     if not isinstance(data, dict):
-        return {"version": 1, "champion": None, "history": []}
+        return {"version": 2, "champion": None, "history": []}
     if "history" not in data or not isinstance(data["history"], list):
         data["history"] = []
     if "champion" not in data:
         data["champion"] = None
-    data["version"] = 1
+    data["version"] = 2
     return data
 
 
@@ -631,6 +743,84 @@ def _percent_delta(candidate: float, baseline: float) -> float:
             return 0.0
         return float("inf") if candidate > 0 else float("-inf")
     return ((candidate - baseline) / abs(baseline)) * 100.0
+
+
+def _latest_hotspot_metrics_from_history(history: Sequence[object]) -> dict[str, object]:
+    for entry in reversed(history):
+        if not isinstance(entry, dict):
+            continue
+        hotspot_metrics = entry.get("hotspot_metrics")
+        if isinstance(hotspot_metrics, dict) and hotspot_metrics:
+            return hotspot_metrics
+    return {}
+
+
+def _resolve_hotspot_baseline(
+    *,
+    validation_info: dict[str, object],
+    champion: dict[str, object] | None,
+    history: Sequence[object],
+) -> tuple[dict[str, object], str]:
+    baseline = validation_info.get("hotspot_baseline_metrics")
+    if isinstance(baseline, dict) and baseline:
+        return baseline, "previous-log-entry"
+
+    if champion is not None:
+        champion_hotspots = champion.get("hotspot_metrics")
+        if isinstance(champion_hotspots, dict) and champion_hotspots:
+            return champion_hotspots, "champion"
+
+    latest_history = _latest_hotspot_metrics_from_history(history)
+    if latest_history:
+        return latest_history, "history"
+
+    return {}, "unavailable"
+
+
+def _evaluate_control_flow_gate(
+    args: argparse.Namespace,
+    *,
+    metric_delta_pct: float,
+    candidate_hotspots: dict[str, object],
+    baseline_hotspots: dict[str, object],
+) -> list[str]:
+    if metric_delta_pct >= args.perf_control_gate_override_pct:
+        return []
+
+    reasons: list[str] = []
+
+    candidate_while = _coerce_float(candidate_hotspots.get("while_ms"))
+    baseline_while = _coerce_float(baseline_hotspots.get("while_ms"))
+    if candidate_while is not None and baseline_while is not None:
+        while_increase = candidate_while - baseline_while
+        if while_increase > args.perf_max_while_increase_ms:
+            reasons.append(
+                f"`while_ms` increased by {while_increase:.3f} ms ({baseline_while:.3f} -> {candidate_while:.3f})"
+            )
+
+    candidate_conditional = _coerce_float(candidate_hotspots.get("conditional_ms"))
+    baseline_conditional = _coerce_float(baseline_hotspots.get("conditional_ms"))
+    if candidate_conditional is not None:
+        baseline_conditional = baseline_conditional or 0.0
+        if (
+            candidate_conditional >= args.perf_new_conditional_ms
+            and (candidate_conditional - baseline_conditional) > args.perf_new_conditional_ms
+        ):
+            reasons.append(
+                f"`conditional_ms` became a new large bucket ({baseline_conditional:.3f} -> {candidate_conditional:.3f})"
+            )
+
+    candidate_train = _coerce_float(candidate_hotspots.get("train_path_budget_ms"))
+    baseline_train = _coerce_float(baseline_hotspots.get("train_path_budget_ms"))
+    if candidate_train is not None and baseline_train is not None:
+        train_increase = candidate_train - baseline_train
+        if train_increase > args.perf_max_train_path_budget_increase_ms:
+            reasons.append(
+                f"`train_path_budget_ms` increased by {train_increase:.3f} ms "
+                f"({baseline_train:.3f} -> {candidate_train:.3f})"
+            )
+
+    return reasons
 
 
 def _revert_single_commit(workdir: Path, *, commit_sha: str) -> tuple[bool, str]:
@@ -674,6 +864,14 @@ def _apply_performance_policy(
     metric_points = metric_points_obj if isinstance(metric_points_obj, dict) else {}
     warnings_obj = validation_info.get("warnings")
     warnings = warnings_obj if isinstance(warnings_obj, list) else []
+    hotspot_metrics_obj = validation_info.get("hotspot_metrics")
+    hotspot_metrics = hotspot_metrics_obj if isinstance(hotspot_metrics_obj, dict) else {}
+    hotspot_heading_obj = validation_info.get("hotspot_heading")
+    hotspot_heading = str(hotspot_heading_obj) if isinstance(hotspot_heading_obj, str) else None
+    hotspot_baseline_heading_obj = validation_info.get("hotspot_baseline_heading")
+    hotspot_baseline_heading = (
+        str(hotspot_baseline_heading_obj) if isinstance(hotspot_baseline_heading_obj, str) else None
+    )
 
     for warning in warnings:
         print(f"[gdnctl] WARNING: {warning}", file=sys.stderr)
@@ -709,6 +907,9 @@ def _apply_performance_policy(
         "metric_source": metric_source,
         "metric_points": metric_points,
         "metrics": metrics,
+        "hotspot_metrics": hotspot_metrics,
+        "hotspot_heading": hotspot_heading,
+        "hotspot_baseline_heading": hotspot_baseline_heading,
         "run_url": run_url,
         "timestamp_unix": time.time(),
     }
@@ -741,6 +942,54 @@ def _apply_performance_policy(
 
     delta_pct = _percent_delta(metric_value, champion_value)
     candidate_record["delta_vs_champion_pct"] = delta_pct
+
+    hotspot_baseline, hotspot_baseline_source = _resolve_hotspot_baseline(
+        validation_info=validation_info,
+        champion=champion,
+        history=history,
+    )
+    candidate_record["hotspot_baseline_source"] = hotspot_baseline_source
+    if hotspot_baseline:
+        candidate_record["hotspot_baseline_metrics"] = hotspot_baseline
+
+    control_gate_reasons = _evaluate_control_flow_gate(
+        args,
+        metric_delta_pct=delta_pct,
+        candidate_hotspots=hotspot_metrics,
+        baseline_hotspots=hotspot_baseline,
+    )
+    if control_gate_reasons:
+        candidate_record["decision"] = "control_flow_regression"
+        candidate_record["control_gate_reasons"] = control_gate_reasons
+        history.append(candidate_record)
+        state["history"] = history
+        _save_perf_state(perf_state_path, state)
+
+        print(
+            "[gdnctl] performance control-flow gate triggered:",
+            file=sys.stderr,
+        )
+        for reason in control_gate_reasons:
+            print(f"[gdnctl]   - {reason}", file=sys.stderr)
+
+        if args.perf_regression_policy.startswith("revert"):
+            reverted, reason = _revert_single_commit(workdir, commit_sha=commit_sha)
+            if not reverted:
+                print(f"[gdnctl] {reason}", file=sys.stderr)
+                return False, True, 1
+            print(
+                "[gdnctl] control-flow-regressive commit reverted successfully; champion remains "
+                f"{str(champion.get('commit', 'unknown'))[:12]}."
+            )
+            if args.perf_regression_policy == "revert-continue":
+                return True, False, 0
+            return True, True, 0
+
+        if args.perf_regression_policy == "continue":
+            return True, False, 0
+        if args.perf_regression_policy == "count-failure":
+            return True, True, 0
+        return False, True, 1
 
     if delta_pct >= args.perf_min_improvement_pct:
         candidate_record["decision"] = "promoted"
@@ -1433,6 +1682,20 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         f"- Promote champion only when improvement >= {args.perf_min_improvement_pct:.3f}%.\n"
         f"- Regression threshold: {args.perf_max_regression_pct:.3f}% below champion.\n"
         f"- Regression policy: `{args.perf_regression_policy}`\n"
+        "- Structured hotspot metrics are mandatory in the iteration writeup:\n"
+        "  - `Forward closed-call ...`\n"
+        "  - `Backward closed-call ...`\n"
+        "  - `while: <before> ms -> <after> ms`\n"
+        "  - `conditional: <before> ms -> <after> ms`\n"
+        "  - `Kernel budget: <before> ms -> <after> ms`\n"
+        "  - `Control budget: <before> ms -> <after> ms`\n"
+        "  - `Train-path budget: <before> ms -> <after> ms`\n"
+        "- Hard control-flow gate: reject candidates when `while_ms` grows by > "
+        f"{args.perf_max_while_increase_ms:.3f} ms or `train_path_budget_ms` grows by > "
+        f"{args.perf_max_train_path_budget_increase_ms:.3f} ms unless "
+        f"`{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
+        f"- Reject candidates when a new `conditional_ms` bucket >= {args.perf_new_conditional_ms:.3f} ms appears, "
+        f"unless `{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
         f"- State file: `{perf_state_path}`"
         f"{window_line}"
     )
@@ -2523,6 +2786,7 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
     base_session_directives = _load_session_directives(args)
     log_dir = Path(args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
+    hillclimb_log_path = Path(args.hillclimb_log_file).resolve()
     perf_state_path = (
         Path(args.perf_state_file).resolve() if args.perf_state_file else (log_dir / "perf_state.json").resolve()
     )
@@ -2588,6 +2852,14 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
     if args.perf_max_regression_pct < 0:
         raise SystemExit("[gdnctl] --perf-max-regression-pct must be >= 0.")
+    if args.perf_max_while_increase_ms < 0:
+        raise SystemExit("[gdnctl] --perf-max-while-increase-ms must be >= 0.")
+    if args.perf_new_conditional_ms < 0:
+        raise SystemExit("[gdnctl] --perf-new-conditional-ms must be >= 0.")
+    if args.perf_max_train_path_budget_increase_ms < 0:
+        raise SystemExit("[gdnctl] --perf-max-train-path-budget-increase-ms must be >= 0.")
+    if args.perf_control_gate_override_pct < 0:
+        raise SystemExit("[gdnctl] --perf-control-gate-override-pct must be >= 0.")
     if args.perf_history_step_start < 0:
         raise SystemExit("[gdnctl] --perf-history-step-start must be >= 0.")
     if args.perf_history_step_end < args.perf_history_step_start:
@@ -2771,10 +3043,24 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                                 return 3
                         continue
 
-                    if _stamp_last_log_commit_placeholder(DEFAULT_HILLCLIMB_LOG, commit_sha=head_after):
+                    if _stamp_last_log_commit_placeholder(hillclimb_log_path, commit_sha=head_after):
                         print(
                             f"[gdnctl] stamped last hill-climb log entry with commit {head_after[:12]}",
                         )
+
+                    hotspot_context = _latest_iteration_hotspot_context(hillclimb_log_path)
+                    hotspot_warnings_obj = hotspot_context.get("warnings")
+                    hotspot_warnings = hotspot_warnings_obj if isinstance(hotspot_warnings_obj, list) else []
+                    for warning in hotspot_warnings:
+                        print(f"[gdnctl] WARNING: {warning}", file=sys.stderr)
+                    validation_info = {
+                        **validation_info,
+                        "hotspot_metrics": hotspot_context.get("hotspot_metrics", {}),
+                        "hotspot_heading": hotspot_context.get("hotspot_heading"),
+                        "hotspot_baseline_metrics": hotspot_context.get("hotspot_baseline_metrics", {}),
+                        "hotspot_baseline_heading": hotspot_context.get("hotspot_baseline_heading"),
+                        "warnings": [*(validation_info.get("warnings", []) or []), *hotspot_warnings],
+                    }
 
                     perf_ok, perf_count_failure, perf_rc = _apply_performance_policy(
                         args,
@@ -3249,6 +3535,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="W&B project used when discovering/fetching profile summaries.",
     )
     codex_loop.add_argument(
+        "--perf-max-while-increase-ms",
+        type=float,
+        default=5.0,
+        help="Reject candidates when `while_ms` grows by more than this unless overridden by a large metric win.",
+    )
+    codex_loop.add_argument(
+        "--perf-new-conditional-ms",
+        type=float,
+        default=5.0,
+        help="Reject candidates when a new `conditional_ms` bucket at or above this size appears.",
+    )
+    codex_loop.add_argument(
+        "--perf-max-train-path-budget-increase-ms",
+        type=float,
+        default=5.0,
+        help="Reject candidates when `train_path_budget_ms` grows by more than this unless overridden.",
+    )
+    codex_loop.add_argument(
+        "--perf-control-gate-override-pct",
+        type=float,
+        default=5.0,
+        help="Minimum primary-metric gain required to override control-flow regression gates.",
+    )
+    codex_loop.add_argument(
         "--post-check-policy",
         choices=["fail", "count-failure", "continue"],
         default="fail",
@@ -3294,6 +3604,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sleep interval between retry attempts for codex/post-check commands.",
     )
     codex_loop.add_argument("--log-dir", default=str(REPO_ROOT / ".agents/logs/gdn_codex_loop"))
+    codex_loop.add_argument(
+        "--hillclimb-log-file",
+        default=str(DEFAULT_HILLCLIMB_LOG),
+        help="Hillclimb markdown log parsed for structured hotspot metrics and commit stamping.",
+    )
     codex_loop.add_argument("--allow-dirty", action="store_true", help="Allow starting from a dirty tree")
     codex_loop.add_argument(
         "--dirty-policy",

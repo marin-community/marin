@@ -51,7 +51,8 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --reasoning-effort xhigh \
   --resilient \
   --directive-preset training-chunk-kernel-focus \
-  --directive-preset triangular-inversion \
+  --directive-preset control-structure-pivot \
+  --directive-preset macro-coverage-pivot \
   --dirty-policy stash \
   --no-commit-policy count-failure
 ```
@@ -89,9 +90,15 @@ Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
 - session directive presets:
   - `training-chunk-kernel-focus` -> `scripts/gdn/session_directives/training-chunk-kernel-focus.md`
-  - `triangular-inversion` -> `scripts/gdn/session_directives/triangular-inversion.md`
+  - `control-structure-pivot` -> `scripts/gdn/session_directives/control-structure-pivot.md`
+  - `macro-coverage-pivot` -> `scripts/gdn/session_directives/macro-coverage-pivot.md`
+  - `associative-summaries` -> `scripts/gdn/session_directives/associative-summaries.md`
+  - `xla-first-train-path` -> `scripts/gdn/session_directives/xla-first-train-path.md`
 
 The default prompt is aggressive by design:
+- prioritizes train-path control-structure moves over more kernel-local closed-call wins,
+- tracks `while` / `conditional` overhead in addition to MFU,
+- rejects candidates that worsen control-flow budget unless the end-to-end gain is large,
 - prioritizes high-upside kernel redesigns over small tuning,
 - disallows standalone scalar-only tweaks,
 - requires hotspot-driven escalation when gains are small.
