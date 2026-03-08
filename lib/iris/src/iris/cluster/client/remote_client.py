@@ -251,16 +251,15 @@ class RemoteClusterClient:
         self,
         name: str,
         address: str,
-        job_id: JobName,
+        task_id: JobName,
+        attempt_id: int = 0,
         metadata: dict[str, str] | None = None,
     ) -> str:
-        # The service expects a task_id in the job_id field so it can
-        # associate the endpoint with the specific task for retry cleanup.
-        # For backward compatibility, a plain job_id is also accepted.
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
-            job_id=job_id.to_wire(),
+            task_id=task_id.to_wire(),
+            attempt_id=attempt_id,
             metadata=metadata or {},
         )
         response = self._client.register_endpoint(request)

@@ -46,7 +46,7 @@ def _register_endpoint_job(prefix):
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=endpoint_name,
             address="localhost:5000",
-            job_id=info.task_id.to_wire(),
+            task_id=info.task_id.to_wire(),
             metadata={"type": "actor"},
         )
         response = client.register_endpoint(request)
@@ -92,7 +92,7 @@ def _register_multiple_endpoints(ns1_prefix, ns2_prefix):
             request = cluster_pb2.Controller.RegisterEndpointRequest(
                 name=name,
                 address=addr,
-                job_id=info.task_id.to_wire(),
+                task_id=info.task_id.to_wire(),
             )
             client.register_endpoint(request)
 
@@ -235,7 +235,7 @@ def _register_and_hold(prefix):
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=f"{prefix}/dashboard-check",
             address="localhost:9999",
-            job_id=info.task_id.to_wire(),
+            task_id=info.task_id.to_wire(),
             metadata={"purpose": "dashboard-test"},
         )
         client.register_endpoint(request)

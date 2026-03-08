@@ -228,12 +228,17 @@ def _snapshot_endpoint(
     endpoint: ControllerEndpoint,
     task_id: JobName | None = None,
 ) -> snapshot_pb2.EndpointSnapshot:
+    # Derive job_id from the endpoint's task_id for the snapshot.
+    try:
+        job_id, _ = endpoint.task_id.require_task()
+    except ValueError:
+        job_id = endpoint.task_id
     snap = snapshot_pb2.EndpointSnapshot(
         endpoint_id=endpoint.endpoint_id,
         name=endpoint.name,
         address=endpoint.address,
-        job_id=str(endpoint.job_id),
-        task_id=str(task_id) if task_id else "",
+        job_id=str(job_id),
+        task_id=str(endpoint.task_id),
     )
     for k, v in endpoint.metadata.items():
         snap.metadata[k] = v
@@ -425,12 +430,16 @@ def _restore_worker(snap: snapshot_pb2.WorkerSnapshot) -> ControllerWorker:
 
 def _restore_endpoint(snap: snapshot_pb2.EndpointSnapshot) -> tuple[ControllerEndpoint, JobName | None]:
     """Restore an endpoint and its task association from a snapshot."""
-    task_id = JobName.from_string(snap.task_id) if snap.task_id else None
+    # Prefer task_id from snapshot; fall back to job_id for older snapshots.
+    if snap.task_id:
+        task_id = JobName.from_string(snap.task_id)
+    else:
+        task_id = JobName.from_string(snap.job_id)
     endpoint = ControllerEndpoint(
         endpoint_id=snap.endpoint_id,
         name=snap.name,
         address=snap.address,
-        job_id=JobName.from_string(snap.job_id),
+        task_id=task_id,
         metadata=dict(snap.metadata),
         registered_at=Timestamp.from_proto(snap.registered_at),
     )

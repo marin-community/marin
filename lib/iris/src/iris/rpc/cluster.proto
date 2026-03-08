@@ -634,17 +634,16 @@ message Controller {
     string endpoint_id = 1;
     string name = 2;                 // Full prefixed name: "abc123/my-actor"
     string address = 3;              // host:port
-    string job_id = 4;
+    string task_id = 4;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 5;
   }
 
   message RegisterEndpointRequest {
     string name = 1;                 // Full prefixed name: "abc123/my-actor"
     string address = 2;
-    string job_id = 3;              // Deprecated: use task_id instead
+    string task_id = 3;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 4;
-    string task_id = 5;             // Wire-format task ID (e.g. "/user/job/0")
-    int32 attempt_id = 6;           // Attempt number for stale endpoint cleanup
+    int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
   }
 
   message RegisterEndpointResponse {

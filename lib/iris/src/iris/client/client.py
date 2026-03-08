@@ -376,11 +376,13 @@ class NamespacedEndpointRegistry:
         self,
         cluster: ClusterClient,
         namespace: Namespace,
-        job_id: JobName,
+        task_id: JobName,
+        attempt_id: int = 0,
     ):
         self._cluster = cluster
         self._namespace = namespace
-        self._job_id = job_id
+        self._task_id = task_id
+        self._attempt_id = attempt_id
 
     def register(
         self,
@@ -406,7 +408,8 @@ class NamespacedEndpointRegistry:
         return self._cluster.register_endpoint(
             name=prefixed_name,
             address=address,
-            job_id=self._job_id,
+            task_id=self._task_id,
+            attempt_id=self._attempt_id,
             metadata=metadata,
         )
 
@@ -908,23 +911,21 @@ class IrisContext:
     def registry(self) -> NamespacedEndpointRegistry:
         """Endpoint registry for this job context. Creates on demand.
 
-        Passes the task_id (not job_id) so the controller can associate
-        endpoints with the specific task for retry cleanup.
+        Passes the task_id so the controller can associate endpoints with
+        the specific task for retry cleanup.
 
         Raises:
-            RuntimeError: If no client is available
+            RuntimeError: If no client or task_id is available
         """
         if self.client is None:
             raise RuntimeError("No client available - ensure controller_address is set")
-        if self.job_id is None:
-            raise RuntimeError("No job id available - ensure IrisContext is initialized from a job")
-        # Pass task_id so the controller associates the endpoint with the
-        # specific task.  Fall back to job_id for contexts without a task.
-        endpoint_owner = self.task_id or self.job_id
+        if self.task_id is None:
+            raise RuntimeError("No task_id available - ensure IrisContext is initialized from a task")
         return NamespacedEndpointRegistry(
             self.client._cluster_client,
             self.namespace,
-            endpoint_owner,
+            self.task_id,
+            self.attempt_id,
         )
 
     @property

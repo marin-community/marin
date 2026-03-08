@@ -786,7 +786,7 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         """Register a service endpoint.
 
-        The ``job_id`` field carries the calling task's wire-format task ID
+        The ``task_id`` field carries the calling task's wire-format task ID
         (e.g. ``/user/job/0``).  The endpoint is associated with the owning
         task so that retry cleanup removes stale endpoints from earlier
         attempts.
@@ -797,27 +797,18 @@ class ControllerServiceImpl:
         """
         endpoint_id = str(uuid.uuid4())
 
-        # Derive task_id and job_id from the wire ID passed by the caller.
-        # Callers send their task_id (e.g. "/user/job/0"); we look up the
-        # parent job.  Fall back to treating the value as a job_id for
-        # backward compatibility.
-        wire_id = JobName.from_wire(request.job_id)
-        task_id: JobName | None = None
-        try:
-            job_id, _task_index = wire_id.require_task()
-            task_id = wire_id
-        except ValueError:
-            job_id = wire_id
+        task_id = JobName.from_wire(request.task_id)
+        job_id, _task_index = task_id.require_task()
 
         job = self._state.get_job(job_id)
         if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.task_id} not found")
 
         endpoint = ControllerEndpoint(
             endpoint_id=endpoint_id,
             name=request.name,
             address=request.address,
-            job_id=job_id,
+            task_id=task_id,
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
         )
@@ -848,7 +839,7 @@ class ControllerServiceImpl:
                     endpoint_id=e.endpoint_id,
                     name=e.name,
                     address=e.address,
-                    job_id=e.job_id.to_wire(),
+                    task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
                 )
                 for e in endpoints
