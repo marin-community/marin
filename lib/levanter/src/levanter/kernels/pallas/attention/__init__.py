@@ -3,7 +3,7 @@
 
 """Pallas kernels for attention."""
 
-from .pallas_mosaic import DEFAULT_MASK_VALUE, BlockSizes, mha
+from .api import DEFAULT_MASK_VALUE, BlockSizes, mha
 from .tuned_block_sizes import (
     AttentionBlockSizes,
     DEFAULT_DEVICE_KEY,
