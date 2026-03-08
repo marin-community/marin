@@ -172,6 +172,18 @@ def build_env_string(env_dict: dict[str, str]) -> str:
     return " ".join(env_parts)
 
 
+def build_env_exports(env_dict: dict[str, str]) -> str:
+    """Build export statements for environment variables."""
+    if not env_dict:
+        return ""
+
+    lines = []
+    for key, value in env_dict.items():
+        lines.append(f"export {key}={shlex.quote(value)}")
+
+    return "\n".join(lines)
+
+
 def build_ssh_command(
     host_alias: str,
     command: str,
@@ -183,7 +195,7 @@ def build_ssh_command(
     Always wraps the user command in bash -c for consistent shell behavior.
     User should NOT include 'bash -c' in their command - this will raise an error.
     """
-    env_string = build_env_string(env_dict or {})
+    env_exports = build_env_exports(env_dict or {})
 
     # Error if user tries to use bash -c themselves
     if command.strip().startswith("bash -c"):
@@ -194,21 +206,21 @@ def build_ssh_command(
             f"instead of: execute -- {command}"
         )
 
-    # Always wrap user command in bash -c for consistent shell behavior
-    remote_cmd_parts = [
-        "exec bash -c",
-        shlex.quote(
-            f"""
-            set -e
-            trap 'jobs -p | xargs -r kill' EXIT HUP INT TERM
-            source $HOME/.local/bin/env
-            cd {shlex.quote(working_dir)}
-            {env_string} exec bash -c {shlex.quote(command)}
-        """
-        ),
+    # Build the script that runs inside a single bash -c.
+    # The user command is inlined directly — no inner bash -c — to avoid
+    # nested-quoting issues with shlex.quote inside shlex.quote.
+    script_lines = [
+        "set -e",
+        "trap 'jobs -p | xargs -r kill' EXIT HUP INT TERM",
+        "source $HOME/.local/bin/env",
+        f"cd {shlex.quote(working_dir)}",
     ]
+    if env_exports:
+        script_lines.append(env_exports)
+    script_lines.append(command)
 
-    remote_cmd = " ".join(remote_cmd_parts)
+    script = "\n".join(script_lines)
+    remote_cmd = f"exec bash -c {shlex.quote(script)}"
 
     return ["ssh", "-t", host_alias, remote_cmd]
 
@@ -377,12 +389,13 @@ def add_ssh_host_config(
 
     host_alias = f"dev-tpu-{tpu_name}"
 
+    identity_line = f"    IdentityFile {gce_key_path}\n" if gce_key_path.exists() else ""
     ssh_config_entry = f"""
 # BEGIN_DEV_TPU_{tpu_name.upper()}
 Host {host_alias}
     HostName {ip_address}
     HostKeyAlias compute.{hostname}
-    StrictHostKeyChecking no
+{identity_line}    StrictHostKeyChecking no
     CheckHostIP no
     User {username}
 # END_DEV_TPU_{tpu_name.upper()}
@@ -788,7 +801,7 @@ def execute(ctx, command, username, sync_path, no_sync, env, forward_all_env):
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
-    command_str = shlex.join(command)
+    command_str = " ".join(command)
     ssh_cmd = build_ssh_command(host_alias, command_str, env_dict)
 
     print(f"Running: {ssh_cmd}")
@@ -938,7 +951,7 @@ def watch(ctx, command, username, sync_path, debounce, env, forward_all_env):
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
-    command_str = shlex.join(command)
+    command_str = " ".join(command)
 
     process_mgr = RemoteProcessManager(host_alias, command_str, sync_path, env_dict)
     atexit.register(process_mgr.kill)  # ensure we clean up on exit

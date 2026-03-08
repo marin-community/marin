@@ -421,16 +421,49 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
     try:
         # Initialize Ray if requested
+        ray_client_ctx = None
+        ray_init_succeeded = False
         if config.ray_init and len(clusters) == 1:
             import ray
 
             cluster_name = next(iter(clusters.keys()))
             api_port = port_mappings[cluster_name].api_port
-            ray.init(address=f"ray://localhost:{api_port}", runtime_env={"working_dir": "."})
+            init_kwargs = {
+                "address": f"ray://localhost:{api_port}",
+                "runtime_env": {"working_dir": "."},
+            }
+            try:
+                ray.init(**init_kwargs)
+                ray_init_succeeded = True
+            except ValueError as err:
+                # Reconnect paths can leave a Ray Client connection resident in-process.
+                # Retry with allow_multiple so we can proceed and then explicitly disconnect.
+                if "allow_multiple=True" in str(err):
+                    logger.warning(
+                        "Ray client already connected in-process; retrying ray.init with allow_multiple=True."
+                    )
+                    ray_client_ctx = ray.init(allow_multiple=True, **init_kwargs)
+                    ray_init_succeeded = True
+                else:
+                    raise
 
         yield connection
 
     finally:
+        if config.ray_init and len(clusters) == 1 and ray_init_succeeded:
+            import ray
+
+            if ray_client_ctx is not None and hasattr(ray_client_ctx, "disconnect"):
+                try:
+                    ray_client_ctx.disconnect()
+                except Exception:
+                    logger.debug("Failed to disconnect allow_multiple Ray client context.", exc_info=True)
+            elif ray.is_initialized():
+                try:
+                    ray.shutdown()
+                except Exception:
+                    logger.debug("Failed to shutdown Ray client during dashboard cleanup.", exc_info=True)
+
         # Cleanup
         if connection.proxy:
             connection.proxy.stop()
