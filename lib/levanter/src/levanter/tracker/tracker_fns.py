@@ -3,6 +3,7 @@
 
 import contextlib
 import dataclasses
+import json
 import logging
 import os
 import tempfile
@@ -32,6 +33,12 @@ _global_tracker: Optional["Tracker"] = None
 _has_logged_missing_tracker = False
 
 LoggableValue: typing.TypeAlias = Scalar | jax.Array | str | dict | Histogram
+
+
+def _sanitize_hparams_for_yaml(hparams_dict: dict[str, Any]) -> dict[str, Any]:
+    """Convert arbitrary hyperparameters into a YAML-safe plain-Python payload."""
+
+    return json.loads(json.dumps(hparams_dict, default=str))
 
 
 def _log_missing_tracker_once() -> None:
@@ -205,8 +212,9 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "config.yaml")
             try:
+                safe_hparams_dict = _sanitize_hparams_for_yaml(hparams_dict)
                 with open(config_path, "w") as f:
-                    yaml.safe_dump(hparams_dict, f, sort_keys=False)
+                    yaml.safe_dump(safe_hparams_dict, f, sort_keys=False)
                     name = config_name or "config.yaml"
                     _global_tracker.log_artifact(config_path, name=name, type="config")
             except Exception:  # noqa

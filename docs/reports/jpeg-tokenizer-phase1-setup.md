@@ -135,3 +135,26 @@ The `K=8` trial is still active and has already progressed well beyond initial b
 In parallel, executor-side log noise from config serialization has been fixed locally in
 `marin.utilities.json_encoder`, so newly launched runs should no longer emit large warning blocks for dataclass
 configs and `PartitionSpec` values.
+
+## K16 Smoke Result
+
+The `K=16` smoke has now completed successfully:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260308-101439`
+- W&B run:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k16-smoke`
+- Final status:
+  `SUCCEEDED`
+- Eval loss trajectory:
+  `8.620 -> 3.612 -> 3.435`
+- Final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k16-smoke-276795/checkpoints/step-64`
+
+This is enough to say that `16384`-token coefficient sequences are operationally viable on `v6e-8` at batch size `64`.
+
+## K8 Reliability Note
+
+The original `K=8` trial has now been interrupted multiple times by TPU preemptions and has restarted from scratch after
+at least one resume because no checkpoint had landed before the node died. The next `K=8` trial should therefore use a
+much shorter checkpoint interval instead of the original 10-minute save cadence.

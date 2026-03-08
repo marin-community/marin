@@ -227,3 +227,24 @@
   - `K=16` has not yet proven trainer bring-up, so launching a full `K=16` trial now would be premature
   - the next submitted runs should have much cleaner executor logs because the local encoder fix is independent of model code
 - Next action: commit the encoder cleanup, then keep monitoring the two active jobs rather than adding more parallel experiments.
+
+### 2026-03-09 04:00 - K=16 smoke succeeded; K=8 trial needs denser checkpoints
+
+- Hypothesis: `K=16` only needed a smoke to establish operational feasibility, while the `K=8` trial needs more frequent checkpoints because preemptions are erasing useful progress.
+- Command:
+  - monitoring via `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a ...`
+  - local validation:
+    - `uv run --with pytest python -m pytest -o addopts='' lib/levanter/tests/test_tracker.py`
+    - `uv run --with pytest python -m pytest -o addopts='' tests/test_jpeg_tokenizer_scaffold.py tests/execution/test_json_encoder.py`
+- Result:
+  - `K=16` smoke `ray-run-dlwh-launch-20260308-101439` finished successfully
+  - W&B run: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k16-smoke`
+  - eval loss trajectory: `8.620 -> 3.612 -> 3.435`
+  - final checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k16-smoke-276795/checkpoints/step-64`
+  - `K=8` trial `ray-run-dlwh-launch-20260308-095441` suffered another preemption, resumed on a new worker, and restarted from scratch because no checkpoint was available
+  - latest observed `K=8` resume reached step `81/2000` again with the same early loss pattern
+- Interpretation:
+  - `K=16` is clearly operational on `v6e-8` at batch size `64`
+  - the current `K=8` trial configuration is not resilient enough for preemptible slices; continuing unchanged is likely to waste more TPU time
+  - the right immediate fix is denser checkpointing rather than changing model hyperparameters
+- Next action: commit the tracker+checkpointing hardening, stop the degraded `K=8` trial, and relaunch a fresh retry with 2-minute checkpoints under a new run id.

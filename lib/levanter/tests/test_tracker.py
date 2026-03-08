@@ -126,3 +126,21 @@ def test_log_configuration_logs_artifact_for_future_annotations_dataclass():
     artifact = tracker.metrics["artifact"]
     assert artifact["name"] == "config.yaml"
     assert artifact["type"] == "config"
+
+
+def test_log_configuration_stringifies_yaml_unsafe_values(caplog):
+    @dataclasses.dataclass
+    class OpaqueConfig:
+        run_id: str
+        payload: object
+
+    tracker = DictTracker()
+
+    with caplog.at_level("WARNING"):
+        with levanter.tracker.current_tracker(tracker):
+            levanter.tracker.log_configuration(OpaqueConfig(run_id="jpeg-tokenizer-k16-smoke", payload=object()))
+
+    artifact = tracker.metrics["artifact"]
+    assert artifact["name"] == "config.yaml"
+    assert artifact["type"] == "config"
+    assert "Failed to dump config to yaml" not in caplog.text

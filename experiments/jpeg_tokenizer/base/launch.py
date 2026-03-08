@@ -44,6 +44,8 @@ class JpegTokenizerLaunchConfig:
     mp: str
     tracker: TrackerConfig
     optimizer: OptimizerConfig
+    checkpoint_minutes: int = 10
+    checkpoint_keep_every_steps: int = 1_000
     jpeg_trainer: JpegTrainerConfig = field(default_factory=JpegTrainerConfig)
     eval: JpegEvalConfig | None = field(default_factory=JpegEvalConfig)
 
@@ -95,8 +97,8 @@ def run_jpeg_tokenizer_trial(config: JpegTokenizerLaunchConfig) -> None:
         checkpointer=CheckpointerConfig(
             base_path=f"{config.output_path}/checkpoints",
             append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            save_interval=timedelta(minutes=config.checkpoint_minutes),
+            keep=[{"every": config.checkpoint_keep_every_steps}],
         ),
     )
 
@@ -124,6 +126,7 @@ RESOLVED_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-k4-smoke")
 RESOLVED_RUN_ID = _resolve_run_id("jpeg-tokenizer-k4-trial")
 RESOLVED_K8_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-k8-smoke")
 RESOLVED_K8_RUN_ID = _resolve_run_id("jpeg-tokenizer-k8-trial")
+RESOLVED_K8_RETRY_RUN_ID = _resolve_run_id("jpeg-tokenizer-k8-trial-r2")
 RESOLVED_K16_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-k16-smoke")
 
 coeff_k4_smoke = ExecutorStep(
@@ -140,6 +143,8 @@ coeff_k4_smoke = ExecutorStep(
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=DEFAULT_JPEG_TOKENIZER_SMOKE_TRACKER,
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
         optimizer=versioned(
             AdamConfig(
                 learning_rate=3e-3,
@@ -184,6 +189,8 @@ coeff_k4_trial = ExecutorStep(
         seed=versioned(0),
         mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=DEFAULT_JPEG_TOKENIZER_TRACKER,
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
         optimizer=versioned(
             AdamConfig(
                 learning_rate=3e-3,
@@ -231,6 +238,8 @@ coeff_k8_smoke = ExecutorStep(
             group="tokexplore-jpeg-tokenizer-k8-smoke",
             tags=["jpeg-tokenizer", "coeff-k8", "smoke"],
         ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
         optimizer=versioned(
             AdamConfig(
                 learning_rate=3e-3,
@@ -278,6 +287,57 @@ coeff_k8_trial = ExecutorStep(
             group="tokexplore-jpeg-tokenizer-k8",
             tags=["jpeg-tokenizer", "coeff-k8", "baseline"],
         ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=1_000,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=32,
+                steps_per_eval=1_000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
+coeff_k8_trial_retry = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-k8-trial-r2",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(dataclasses.replace(JPEG_TOKENIZER_V0_MODEL, max_seq_len=8_192)),
+        token_store_path=str(DEFAULT_COEFF_K8_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_K8_RETRY_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(2_000),
+        batch_size=versioned(128),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-k8",
+            tags=["jpeg-tokenizer", "coeff-k8", "baseline", "retry"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
         optimizer=versioned(
             AdamConfig(
                 learning_rate=3e-3,
@@ -325,6 +385,8 @@ coeff_k16_smoke = ExecutorStep(
             group="tokexplore-jpeg-tokenizer-k16-smoke",
             tags=["jpeg-tokenizer", "coeff-k16", "smoke"],
         ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
         optimizer=versioned(
             AdamConfig(
                 learning_rate=3e-3,
@@ -358,7 +420,7 @@ coeff_k16_smoke = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[coeff_k4_smoke, coeff_k4_trial, coeff_k8_smoke, coeff_k8_trial, coeff_k16_smoke],
+        steps=[coeff_k4_smoke, coeff_k4_trial, coeff_k8_smoke, coeff_k8_trial, coeff_k8_trial_retry, coeff_k16_smoke],
         description="JPEG tokenizer coefficient runs on Imagenette token stores.",
     )
 
@@ -370,6 +432,7 @@ __all__ = [
     "DEFAULT_JPEG_TOKENIZER_SMOKE_TRACKER",
     "DEFAULT_JPEG_TOKENIZER_TRACKER",
     "DEFAULT_TPU_TYPE",
+    "RESOLVED_K8_RETRY_RUN_ID",
     "RESOLVED_K8_RUN_ID",
     "RESOLVED_K8_SMOKE_RUN_ID",
     "RESOLVED_K16_SMOKE_RUN_ID",
@@ -381,6 +444,7 @@ __all__ = [
     "coeff_k4_trial",
     "coeff_k8_smoke",
     "coeff_k8_trial",
+    "coeff_k8_trial_retry",
     "coeff_k16_smoke",
     "run_jpeg_tokenizer_trial",
 ]
