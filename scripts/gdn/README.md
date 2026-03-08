@@ -58,6 +58,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
 
 By default, `codex-loop` hides noisy `file update:` / `diff --git` blocks from Codex output. Use `--show-file-updates` to display them.
 By default, `codex-loop` enforces a per-iteration TPU validation gate: tests + one profile run before the iteration can complete.
+By default, `codex-loop` now runs `codex exec --ephemeral` so unattended loops do not flood the Codex app session/thread database. Use `--no-codex-ephemeral` only when you intentionally want loop sessions persisted for manual debugging/resume.
 
 To allocate and hold a dev TPU for the whole loop session:
 ```bash

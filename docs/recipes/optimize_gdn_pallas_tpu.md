@@ -323,6 +323,7 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
 
 Notes:
 - Use `--codex-profile <profile-name>` if you have a Codex CLI profile for `gpt-5.3-codex` / high reasoning settings.
+- `codex-loop` defaults to `codex exec --ephemeral` so long unattended runs do not persist thousands of loop-created Codex sessions/threads into the app database. Opt out with `--no-codex-ephemeral` only when you explicitly need saved sessions for debugging or resume.
 - By default, `codex-loop` stops if an iteration does not create a new commit.
 - Use `--allow-dirty` or `--allow-no-commit` only when intentionally debugging the loop harness.
 - The default iteration prompt (`scripts/gdn/codex_iteration_prompt.md`) is intentionally aggressive; keep it aligned with this policy.

@@ -680,7 +680,7 @@ def _apply_performance_policy(
 
     if metric_value is None:
         print(
-            "[gdnctl] required performance metric is unavailable after validation profile: " f"{args.perf_metric}",
+            f"[gdnctl] required performance metric is unavailable after validation profile: {args.perf_metric}",
             file=sys.stderr,
         )
         if args.perf_regression_policy.startswith("revert"):
@@ -865,8 +865,7 @@ def _try_reacquire_managed_dev_tpu(args: argparse.Namespace, *, reason: str) -> 
     if now - last_attempt < min_retry_interval:
         remaining = min_retry_interval - (now - last_attempt)
         print(
-            "[gdnctl] managed dev TPU re-acquire is rate-limited; skipping for "
-            f"{remaining:.1f}s (reason={reason}).",
+            f"[gdnctl] managed dev TPU re-acquire is rate-limited; skipping for {remaining:.1f}s (reason={reason}).",
             file=sys.stderr,
         )
         return False
@@ -892,8 +891,7 @@ def _try_reacquire_managed_dev_tpu(args: argparse.Namespace, *, reason: str) -> 
         for cluster in clusters:
             allocate_cmd = _build_dev_tpu_allocate_cmd(args, cluster=cluster)
             print(
-                "[gdnctl] managed dev TPU re-acquire attempt "
-                f"{attempt}/{attempts} on cluster {cluster}",
+                f"[gdnctl] managed dev TPU re-acquire attempt {attempt}/{attempts} on cluster {cluster}",
                 file=sys.stderr,
             )
             _echo_cmd(allocate_cmd)
@@ -922,8 +920,7 @@ def _try_reacquire_managed_dev_tpu(args: argparse.Namespace, *, reason: str) -> 
                     args._managed_dev_tpu_pump_thread = pump_thread
                     args._managed_dev_tpu_allocation_log = str(allocation_log)
                     print(
-                        "[gdnctl] managed dev TPU re-acquire is active: "
-                        f"dev-tpu-{args.dev_tpu_name} (cluster {cluster})"
+                        f"[gdnctl] managed dev TPU re-acquire is active: dev-tpu-{args.dev_tpu_name} (cluster {cluster})"
                     )
                     return True
 
@@ -958,15 +955,13 @@ def _try_reacquire_managed_dev_tpu(args: argparse.Namespace, *, reason: str) -> 
 
         if attempt < attempts and args.dev_tpu_allocate_retry_sleep > 0:
             print(
-                "[gdnctl] retrying managed dev TPU re-acquire in "
-                f"{args.dev_tpu_allocate_retry_sleep:.1f}s",
+                f"[gdnctl] retrying managed dev TPU re-acquire in {args.dev_tpu_allocate_retry_sleep:.1f}s",
                 file=sys.stderr,
             )
             time.sleep(args.dev_tpu_allocate_retry_sleep)
 
     print(
-        "[gdnctl] managed dev TPU re-acquire failed; continuing with Ray fallback.\n"
-        + (last_error or ""),
+        "[gdnctl] managed dev TPU re-acquire failed; continuing with Ray fallback.\n" + (last_error or ""),
         file=sys.stderr,
     )
     return False
@@ -1029,7 +1024,7 @@ def _hold_dev_tpu_for_loop(
                     args.active_dev_tpu_cluster = cluster
                     args._managed_dev_tpu_proc = proc
                     args._managed_dev_tpu_pump_thread = pump_thread
-                    print("[gdnctl] dev TPU allocation is active: " f"dev-tpu-{args.dev_tpu_name} (cluster {cluster})")
+                    print(f"[gdnctl] dev TPU allocation is active: dev-tpu-{args.dev_tpu_name} (cluster {cluster})")
                     try:
                         yield
                     finally:
@@ -1078,7 +1073,7 @@ def _hold_dev_tpu_for_loop(
 
         if attempt < args.dev_tpu_allocate_attempts and args.dev_tpu_allocate_retry_sleep > 0:
             print(
-                "[gdnctl] retrying managed dev TPU allocation in " f"{args.dev_tpu_allocate_retry_sleep:.1f}s",
+                f"[gdnctl] retrying managed dev TPU allocation in {args.dev_tpu_allocate_retry_sleep:.1f}s",
                 file=sys.stderr,
             )
             time.sleep(args.dev_tpu_allocate_retry_sleep)
@@ -1086,7 +1081,7 @@ def _hold_dev_tpu_for_loop(
     error_message = last_error or "[gdnctl] managed dev TPU allocation failed without diagnostic output."
     if args.hold_dev_tpu_policy == "best-effort":
         print(
-            "[gdnctl] WARNING: managed dev TPU allocation failed; continuing without held dev TPU.\n" f"{error_message}",
+            f"[gdnctl] WARNING: managed dev TPU allocation failed; continuing without held dev TPU.\n{error_message}",
             file=sys.stderr,
         )
         yield
@@ -1232,8 +1227,7 @@ def _restore_stash_tree(cwd: Path, *, stash_ref: str, stash_message: str) -> boo
 
     if proc.returncode != 0:
         print(
-            "[gdnctl] stash restore failed; stash was kept for manual recovery "
-            f"({stash_ref}, message={stash_message}).",
+            f"[gdnctl] stash restore failed; stash was kept for manual recovery ({stash_ref}, message={stash_message}).",
             file=sys.stderr,
         )
         return False
@@ -1245,7 +1239,7 @@ def _restore_stash_tree(cwd: Path, *, stash_ref: str, stash_message: str) -> boo
         print(f"[gdnctl] {drop_output}", file=sink)
     if drop_proc.returncode != 0:
         print(
-            "[gdnctl] WARNING: stash was applied but could not be dropped automatically " f"({stash_ref}).",
+            f"[gdnctl] WARNING: stash was applied but could not be dropped automatically ({stash_ref}).",
             file=sys.stderr,
         )
         return False
@@ -1300,8 +1294,7 @@ def _clean_worktree_for_iteration(
                     )
             if not restored and args.stash_restore_policy == "fail":
                 raise RuntimeError(
-                    "[gdnctl] Failed to restore stashed dirty tree. "
-                    "Resolve stash conflicts manually before continuing."
+                    "[gdnctl] Failed to restore stashed dirty tree. Resolve stash conflicts manually before continuing."
                 )
 
 
@@ -1629,11 +1622,11 @@ def _profile_command_lines(
     else:
         lines.append("uv sync")
     lines.append(
-        "uv pip install --python .venv/bin/python " f"--index-url {shlex.quote(TORCH_CPU_INDEX)} --force-reinstall torch"
+        f"uv pip install --python .venv/bin/python --index-url {shlex.quote(TORCH_CPU_INDEX)} --force-reinstall torch"
     )
     lines.append("(uv pip uninstall --python .venv/bin/python torchvision || true)")
     lines.append(
-        ".venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile " f"{shlex.join(profile_args)}"
+        f".venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile {shlex.join(profile_args)}"
     )
     return lines
 
@@ -1862,6 +1855,39 @@ def _format_prompt(
     )
 
 
+def _build_codex_exec_cmd(
+    *,
+    codex_bin: str,
+    workdir: Path,
+    message_path: Path,
+    args: argparse.Namespace,
+    search_supported: bool,
+) -> list[str]:
+    cmd = [
+        codex_bin,
+        "exec",
+        "-C",
+        str(workdir),
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-o",
+        str(message_path),
+    ]
+
+    if getattr(args, "codex_ephemeral", True):
+        cmd.append("--ephemeral")
+    if args.model:
+        cmd += ["-m", args.model]
+    if args.reasoning_effort:
+        cmd += ["-c", f"model_reasoning_effort={json.dumps(args.reasoning_effort)}"]
+    if args.codex_profile:
+        cmd += ["-p", args.codex_profile]
+    if args.search and search_supported:
+        cmd.append("--search")
+
+    cmd.append("-")
+    return cmd
+
+
 def _run_post_checks(cwd: Path, commands: Sequence[str]) -> None:
     for command in commands:
         _run(["bash", "-lc", command], cwd=cwd)
@@ -1883,7 +1909,7 @@ def _run_post_checks_with_retries(
                 if attempt > retries:
                     return False, exc.returncode or 1
                 print(
-                    "[gdnctl] post-check failed " f"(attempt {attempt}/{retries + 1}) for command: {command}",
+                    f"[gdnctl] post-check failed (attempt {attempt}/{retries + 1}) for command: {command}",
                     file=sys.stderr,
                 )
                 if retry_sleep_seconds > 0:
@@ -2064,7 +2090,7 @@ def _run_validation_ray_test_once(args: argparse.Namespace, *, cluster: str) -> 
     if proc.returncode != 0 and "No cluster config found for region" in combined:
         _validation_bad_ray_clusters(args).add(cluster)
         print(
-            "[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: " f"{cluster}",
+            f"[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: {cluster}",
             file=sys.stderr,
         )
         return proc.returncode, False
@@ -2160,7 +2186,7 @@ def _run_validation_ray_profile_once(
     if rc != 0 and "No cluster config found for region" in combined:
         _validation_bad_ray_clusters(args).add(cluster)
         print(
-            "[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: " f"{cluster}",
+            f"[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: {cluster}",
             file=sys.stderr,
         )
         return rc, False, combined
@@ -2171,6 +2197,7 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
     profile_prefix = f"{args.validation_profile_run_name_prefix}_iter{iteration:03d}"
     active_cluster = getattr(args, "active_dev_tpu_cluster", None)
     if args.dev_tpu_name and active_cluster is not None:
+
         def _run_on_cluster(cluster: str) -> tuple[int, str]:
             dev_profile_args = argparse.Namespace(
                 cluster=cluster,
@@ -2221,7 +2248,11 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             if retry_cluster is not None:
                 rc, output_text = _run_on_cluster(retry_cluster)
                 if rc == 0:
-                    return 0, True, _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix)
+                    return (
+                        0,
+                        True,
+                        _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix),
+                    )
         print(
             "[gdnctl] validation profile failed on held dev TPU; trying Ray fallback.",
             file=sys.stderr,
@@ -2280,7 +2311,7 @@ def _run_validation_gate_for_iteration(
                 return False, rc, {}
             if args.validation_retry_sleep > 0:
                 print(
-                    "[gdnctl] validation tests failed; waiting " f"{args.validation_retry_sleep:.1f}s before retry.",
+                    f"[gdnctl] validation tests failed; waiting {args.validation_retry_sleep:.1f}s before retry.",
                     file=sys.stderr,
                 )
                 time.sleep(args.validation_retry_sleep)
@@ -2299,7 +2330,7 @@ def _run_validation_gate_for_iteration(
             return False, rc, validation_info
         if args.validation_retry_sleep > 0:
             print(
-                "[gdnctl] validation profile failed; waiting " f"{args.validation_retry_sleep:.1f}s before retry.",
+                f"[gdnctl] validation profile failed; waiting {args.validation_retry_sleep:.1f}s before retry.",
                 file=sys.stderr,
             )
             time.sleep(args.validation_retry_sleep)
@@ -2620,26 +2651,13 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
                     prompt_path = log_dir / f"iteration-{iteration:03d}-prompt.txt"
                     prompt_path.write_text(prompt, encoding="utf-8")
 
-                    cmd = [
-                        codex_bin,
-                        "exec",
-                        "-C",
-                        str(workdir),
-                        "--dangerously-bypass-approvals-and-sandbox",
-                        "-o",
-                        str(message_path),
-                    ]
-
-                    if args.model:
-                        cmd += ["-m", args.model]
-                    if args.reasoning_effort:
-                        cmd += ["-c", f"model_reasoning_effort={json.dumps(args.reasoning_effort)}"]
-                    if args.codex_profile:
-                        cmd += ["-p", args.codex_profile]
-                    if args.search and search_supported:
-                        cmd.append("--search")
-
-                    cmd.append("-")
+                    cmd = _build_codex_exec_cmd(
+                        codex_bin=codex_bin,
+                        workdir=workdir,
+                        message_path=message_path,
+                        args=args,
+                        search_supported=search_supported,
+                    )
 
                     codex_attempts = args.codex_retries + 1
                     rc = 1
@@ -2737,7 +2755,7 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
                     if _stamp_last_log_commit_placeholder(DEFAULT_HILLCLIMB_LOG, commit_sha=head_after):
                         print(
-                            "[gdnctl] stamped last hill-climb log entry with commit " f"{head_after[:12]}",
+                            f"[gdnctl] stamped last hill-climb log entry with commit {head_after[:12]}",
                         )
 
                     perf_ok, perf_count_failure, perf_rc = _apply_performance_policy(
@@ -2942,6 +2960,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reasoning effort passed as `model_reasoning_effort` config override.",
     )
     codex_loop.add_argument("--codex-profile", default=None, help="Codex CLI profile")
+    codex_loop.add_argument(
+        "--codex-ephemeral",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Run `codex exec` with `--ephemeral` so unattended loops do not persist thousands of "
+            "Codex sessions/threads into the app state. Disable only when you explicitly want loop "
+            "sessions saved for manual resume/debugging."
+        ),
+    )
     codex_loop.add_argument("--search", action="store_true", help="Enable Codex web search tool")
     codex_loop.add_argument(
         "--show-file-updates",
