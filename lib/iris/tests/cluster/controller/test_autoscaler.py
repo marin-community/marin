@@ -3658,56 +3658,40 @@ class TestScaleUpRateLimiting:
 class TestCheckCoschedulingFeasibility:
     """Tests for Autoscaler.check_coscheduling_feasibility()."""
 
-    def test_feasible_when_group_size_matches(self):
-        """Returns None when a matching group has the right num_vms."""
-        config = make_scale_group_config(name="group-8", max_slices=5, num_vms=8)
-        group = ScalingGroup(config, make_mock_platform())
-        autoscaler = make_autoscaler({"group-8": group})
+    def _make_constraints(self):
+        return make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
 
-        constraints = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
-        result = autoscaler.check_coscheduling_feasibility(8, constraints)
-        assert result is None
+    def test_feasible_exact_match(self):
+        """Replicas == num_vms is feasible."""
+        config = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
+        autoscaler = make_autoscaler({"group-4": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.check_coscheduling_feasibility(4, self._make_constraints()) is None
 
-    def test_infeasible_when_group_size_mismatches(self):
-        """Returns error when no matching group has the right num_vms."""
-        config = make_scale_group_config(name="group-16", max_slices=5, num_vms=16)
-        group = ScalingGroup(config, make_mock_platform())
-        autoscaler = make_autoscaler({"group-16": group})
+    def test_feasible_exact_multiple(self):
+        """Replicas that are an exact multiple of num_vms are feasible (e.g. 8 replicas on 4-VM group)."""
+        config = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
+        autoscaler = make_autoscaler({"group-4": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.check_coscheduling_feasibility(8, self._make_constraints()) is None
 
-        constraints = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
-        result = autoscaler.check_coscheduling_feasibility(8, constraints)
+    def test_infeasible_not_a_multiple(self):
+        """Replicas that aren't a multiple of any group's num_vms are rejected."""
+        config = make_scale_group_config(name="group-3", max_slices=5, num_vms=3)
+        autoscaler = make_autoscaler({"group-3": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.check_coscheduling_feasibility(8, self._make_constraints())
         assert result is not None
         assert "8" in result
-        assert "group-16" in result
 
-    def test_infeasible_when_no_group_matches_constraints(self):
+    def test_infeasible_no_group_matches_constraints(self):
         """Returns error when no group matches the device constraints."""
         config = make_scale_group_config(
             name="gpu-group", max_slices=5, num_vms=8, accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU
         )
-        group = ScalingGroup(config, make_mock_platform())
-        autoscaler = make_autoscaler({"gpu-group": group})
-
-        # TPU constraints won't match GPU group
-        constraints = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
-        result = autoscaler.check_coscheduling_feasibility(8, constraints)
+        autoscaler = make_autoscaler({"gpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.check_coscheduling_feasibility(8, self._make_constraints())
         assert result is not None
         assert "no scaling group matches" in result
-
-    def test_feasible_with_multiple_groups_one_matching(self):
-        """Returns None when at least one matching group has the right size."""
-        config_4 = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
-        config_8 = make_scale_group_config(name="group-8", max_slices=5, num_vms=8)
-        group_4 = ScalingGroup(config_4, make_mock_platform())
-        group_8 = ScalingGroup(config_8, make_mock_platform())
-        autoscaler = make_autoscaler({"group-4": group_4, "group-8": group_8})
-
-        constraints = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
-        result = autoscaler.check_coscheduling_feasibility(8, constraints)
-        assert result is None
 
     def test_no_groups_returns_none(self):
         """Returns None when there are no groups (no validation possible)."""
         autoscaler = make_autoscaler({})
-        result = autoscaler.check_coscheduling_feasibility(8, [])
-        assert result is None
+        assert autoscaler.check_coscheduling_feasibility(8, []) is None

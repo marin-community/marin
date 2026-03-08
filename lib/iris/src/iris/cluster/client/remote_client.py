@@ -100,48 +100,10 @@ class RemoteClusterClient:
         if reservation is not None:
             request.reservation.CopyFrom(reservation)
 
-        # Pre-flight check: reject coscheduled jobs that can never be scheduled.
-        # Query the autoscaler for group sizes so we fail fast on the client side
-        # rather than waiting for the controller to reject the job.
-        if coscheduling is not None and replicas > 1:
-            self._validate_coscheduling(replicas, request.constraints)
-
         def _call():
             self._client.launch_job(request)
 
         call_with_retry(f"launch_job({job_id})", _call)
-
-    def _validate_coscheduling(
-        self,
-        replicas: int,
-        constraints: list[cluster_pb2.Constraint] | None,
-    ) -> None:
-        """Validate that a coscheduled job can be scheduled by some scaling group.
-
-        Queries the autoscaler status for group sizes and raises ValueError if
-        no group has num_vms matching the requested replica count.
-        """
-        try:
-            status = self.get_autoscaler_status()
-        except Exception:
-            # If we can't reach the autoscaler, let the controller validate.
-            logger.debug("Could not query autoscaler status for pre-flight coscheduling check, skipping")
-            return
-
-        if not status.status.groups:
-            return
-
-        group_sizes: dict[str, int] = {}
-        for group in status.status.groups:
-            group_sizes[group.name] = group.config.num_vms
-
-        if any(num_vms == replicas for num_vms in group_sizes.values()):
-            return
-
-        raise ValueError(
-            f"Job is unschedulable: requires {replicas} coscheduled replicas but no "
-            f"scaling group has that size. Available group sizes: {group_sizes}"
-        )
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         def _call():

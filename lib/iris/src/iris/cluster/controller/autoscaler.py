@@ -1162,6 +1162,9 @@ class Autoscaler:
     ) -> str | None:
         """Check if a coscheduled job with the given replicas can ever be scheduled.
 
+        A coscheduled job is feasible when its replica count is an exact multiple of
+        some matching group's num_vms (e.g. 4 VMs can serve 4, 8, 12, ... replicas).
+
         Returns None if feasible, or a human-readable error message if no scaling
         group can accommodate the replica count.
         """
@@ -1178,13 +1181,14 @@ class Autoscaler:
         if not matching_groups:
             return f"no scaling group matches the job constraints; " f"available groups: {[g.name for g in groups]}"
 
-        if any(g.num_vms == replicas for g in matching_groups):
+        if any(replicas % g.num_vms == 0 for g in matching_groups):
             return None
 
         group_sizes = {g.name: g.num_vms for g in matching_groups}
         return (
             f"job requires {replicas} coscheduled replicas but no matching scaling group "
-            f"has that size; matching group sizes: {group_sizes}"
+            f"has a compatible size (replicas must be an exact multiple of num_vms); "
+            f"matching group sizes: {group_sizes}"
         )
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
