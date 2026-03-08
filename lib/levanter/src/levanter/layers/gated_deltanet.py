@@ -3591,86 +3591,110 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
     # g_cum per chunk (outside pallas)
     gcum_c = jnp.cumsum(g_c, axis=-1)  # (B,H,n_chunks_pad,Ct)
 
-    # segment view: (B,H,n_segments,seg,Ct,*)
-    q_s = q_c.reshape(B, H, n_segments, seg, Ct, K_pad)
-    k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
-    v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
-    g_s = gcum_c.reshape(B, H, n_segments, seg, Ct)
-    b_s = b_c.reshape(B, H, n_segments, seg, Ct)
-    vpseudo_s = v_pseudo_chunks.reshape(B, H, n_segments, seg, Ct, V_pad)
-    kcum_s = k_cumdecay_chunks.reshape(B, H, n_segments, seg, Ct, K_pad)
-    solve_transform_s = solve_transform_chunks.reshape(B, H, n_segments, seg, Ct, Ct)
-    dO_s = dO_c.reshape(B, H, n_segments, seg, Ct, V_pad)
-    Sprev_s = chunk_starts.reshape(B, H, n_segments, seg, K_pad, V_pad)
-
-    # time-major segments
-    q_tm = jnp.moveaxis(q_s, 2, 0)
-    k_tm = jnp.moveaxis(k_s, 2, 0)
-    v_tm = jnp.moveaxis(v_s, 2, 0)
-    g_tm = jnp.moveaxis(g_s, 2, 0)
-    b_tm = jnp.moveaxis(b_s, 2, 0)
-    vpseudo_tm = jnp.moveaxis(vpseudo_s, 2, 0)
-    kcum_tm = jnp.moveaxis(kcum_s, 2, 0)
-    solve_transform_tm = jnp.moveaxis(solve_transform_s, 2, 0)
-    dO_tm = jnp.moveaxis(dO_s, 2, 0)
-    Sprev_tm = jnp.moveaxis(Sprev_s, 2, 0)
-
     dS_next0 = jnp.pad(dS_final, ((0, 0), (0, 0), (0, K_pad - dk), (0, V_pad - dv)))
+    use_fullseq_bwd = (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE) and (n_chunks_pad > 0)
 
-    def seg_bwd(dS_next, seg_inputs):
-        q_seg, k_seg, v_seg, g_seg, b_seg, vpseudo_seg, kcum_seg, solve_transform_seg, dO_seg, Sprev_seg = seg_inputs
-        dq, dk, dv, dg, db, dS_start = _gdn_chunk_segment_bwd_pallas(
-            q_seg,
-            k_seg,
-            v_seg,
-            g_seg,
-            b_seg,
-            vpseudo_seg,
-            kcum_seg,
-            solve_transform_seg,
-            Sprev_seg,
-            dO_seg,
-            dS_next,
-            Seg=seg,
+    if use_fullseq_bwd:
+        # Collapse the outer reverse segment scan into one full-sequence pallas launch.
+        # This removes a host-visible lax.scan shell from the hot backward train path.
+        dq_c, dk_c, dv_c, dg_c, db_c, dS0 = _gdn_chunk_segment_bwd_pallas(
+            q_c,
+            k_c,
+            v_c,
+            gcum_c,
+            b_c,
+            v_pseudo_chunks,
+            k_cumdecay_chunks,
+            solve_transform_chunks,
+            chunk_starts,
+            dO_c,
+            dS_next0,
+            Seg=n_chunks_pad,
             Ct=Ct,
             K_pad=K_pad,
             V_pad=V_pad,
         )
-        return dS_start, (dq, dk, dv, dg, db)
+    else:
+        # Keep the validated segmented fallback for tiny-head configs and empty sequences.
+        q_s = q_c.reshape(B, H, n_segments, seg, Ct, K_pad)
+        k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
+        v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
+        g_s = gcum_c.reshape(B, H, n_segments, seg, Ct)
+        b_s = b_c.reshape(B, H, n_segments, seg, Ct)
+        vpseudo_s = v_pseudo_chunks.reshape(B, H, n_segments, seg, Ct, V_pad)
+        kcum_s = k_cumdecay_chunks.reshape(B, H, n_segments, seg, Ct, K_pad)
+        solve_transform_s = solve_transform_chunks.reshape(B, H, n_segments, seg, Ct, Ct)
+        dO_s = dO_c.reshape(B, H, n_segments, seg, Ct, V_pad)
+        Sprev_s = chunk_starts.reshape(B, H, n_segments, seg, K_pad, V_pad)
 
-    seg_inputs_rev = (
-        q_tm[::-1],
-        k_tm[::-1],
-        v_tm[::-1],
-        g_tm[::-1],
-        b_tm[::-1],
-        vpseudo_tm[::-1],
-        kcum_tm[::-1],
-        solve_transform_tm[::-1],
-        dO_tm[::-1],
-        Sprev_tm[::-1],
-    )
-    dS0, grads_rev = lax.scan(
-        seg_bwd,
-        dS_next0,
-        seg_inputs_rev,
-        length=n_segments,
-        unroll=_GDN_SEGMENT_SCAN_UNROLL,
-    )
-    grads = jax.tree_util.tree_map(lambda x: x[::-1], grads_rev)
+        # time-major segments
+        q_tm = jnp.moveaxis(q_s, 2, 0)
+        k_tm = jnp.moveaxis(k_s, 2, 0)
+        v_tm = jnp.moveaxis(v_s, 2, 0)
+        g_tm = jnp.moveaxis(g_s, 2, 0)
+        b_tm = jnp.moveaxis(b_s, 2, 0)
+        vpseudo_tm = jnp.moveaxis(vpseudo_s, 2, 0)
+        kcum_tm = jnp.moveaxis(kcum_s, 2, 0)
+        solve_transform_tm = jnp.moveaxis(solve_transform_s, 2, 0)
+        dO_tm = jnp.moveaxis(dO_s, 2, 0)
+        Sprev_tm = jnp.moveaxis(Sprev_s, 2, 0)
 
-    dq_seg, dk_seg, dv_seg, dg_seg, db_seg = grads  # each: (n_segments,B,H,seg,Ct,...)
+        def seg_bwd(dS_next, seg_inputs):
+            q_seg, k_seg, v_seg, g_seg, b_seg, vpseudo_seg, kcum_seg, solve_transform_seg, dO_seg, Sprev_seg = (
+                seg_inputs
+            )
+            dq, dk, dv, dg, db, dS_start = _gdn_chunk_segment_bwd_pallas(
+                q_seg,
+                k_seg,
+                v_seg,
+                g_seg,
+                b_seg,
+                vpseudo_seg,
+                kcum_seg,
+                solve_transform_seg,
+                Sprev_seg,
+                dO_seg,
+                dS_next,
+                Seg=seg,
+                Ct=Ct,
+                K_pad=K_pad,
+                V_pad=V_pad,
+            )
+            return dS_start, (dq, dk, dv, dg, db)
 
-    def pack_chunks(x):
-        # (n_segments,B,H,seg,...) -> (B,H,n_segments,seg,...) -> (B,H,n_chunks_pad,...)
-        x = jnp.transpose(x, (1, 2, 0, 3) + tuple(range(4, x.ndim)))
-        return x.reshape(B, H, n_chunks_pad, *x.shape[4:])
+        seg_inputs_rev = (
+            q_tm[::-1],
+            k_tm[::-1],
+            v_tm[::-1],
+            g_tm[::-1],
+            b_tm[::-1],
+            vpseudo_tm[::-1],
+            kcum_tm[::-1],
+            solve_transform_tm[::-1],
+            dO_tm[::-1],
+            Sprev_tm[::-1],
+        )
+        dS0, grads_rev = lax.scan(
+            seg_bwd,
+            dS_next0,
+            seg_inputs_rev,
+            length=n_segments,
+            unroll=_GDN_SEGMENT_SCAN_UNROLL,
+        )
+        grads = jax.tree_util.tree_map(lambda x: x[::-1], grads_rev)
 
-    dq_c = pack_chunks(dq_seg)  # (B,H,n_chunks_pad,Ct,K_pad)
-    dk_c = pack_chunks(dk_seg)
-    dv_c = pack_chunks(dv_seg)
-    dg_c = pack_chunks(dg_seg)  # (B,H,n_chunks_pad,Ct)
-    db_c = pack_chunks(db_seg)
+        dq_seg, dk_seg, dv_seg, dg_seg, db_seg = grads  # each: (n_segments,B,H,seg,Ct,...)
+
+        def pack_chunks(x):
+            # (n_segments,B,H,seg,...) -> (B,H,n_segments,seg,...) -> (B,H,n_chunks_pad,...)
+            x = jnp.transpose(x, (1, 2, 0, 3) + tuple(range(4, x.ndim)))
+            return x.reshape(B, H, n_chunks_pad, *x.shape[4:])
+
+        dq_c = pack_chunks(dq_seg)  # (B,H,n_chunks_pad,Ct,K_pad)
+        dk_c = pack_chunks(dk_seg)
+        dv_c = pack_chunks(dv_seg)
+        dg_c = pack_chunks(dg_seg)  # (B,H,n_chunks_pad,Ct)
+        db_c = pack_chunks(db_seg)
 
     # drop Ct padding and chunk padding, flatten tokens, trim to original
     dq_flat = dq_c[:, :, :, :C, :].reshape(B, H, Lpad, K_pad)[:, :, :L, :dk]

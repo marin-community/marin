@@ -4023,3 +4023,111 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated but regressive**. This new Macro-E `Vb=32` variant satisfied the control-flow constraint (`while` remained effectively flat), but the same dominant train `shard_map/custom-call` hotspots got slower and end-to-end throughput regressed.
 - Next bold hypothesis:
   - Escalate to **Macro Move I** with a more radical train launch/dataflow redesign that removes duplicated train-path closed-call work without increasing the `while` bucket.
+
+### Iteration 64 - Macro Move N / collapse train backward segment scan into one full-sequence Pallas call (validated, improved vs carry-in)
+
+- Coverage slot: N
+- Why this attacks the train-path control bottleneck:
+  - The previous train backward path kept a host-visible reverse `lax.scan` over segments in `_chunk_gated_delta_rule_flash_pallas_bwd`, which lowers to a hot `WhileOp` shell.
+  - This attempt removes that reverse segment scan for MXU train dims by running one full-sequence backward Pallas call (`Seg=n_chunks_pad`) and keeping only tiny-dim fallback on the old scan path.
+- Hot-path scan/cond status:
+  - Hot-path `lax.scan`: removed on target train dims (`K_pad>=128` and `V_pad>=128`); preserved only for tiny-head fallback.
+  - Hot-path `lax.cond` / runtime dispatch: no new runtime branch added; only a static shape-gated branch for fallback.
+
+- Codex loop iteration: 1 / 10
+- Date: 2026-03-08T12:03:49Z
+- Starting commit: `e514aa914adf31af49c2832709b7c6bc2045f996`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/run-gdn_iter04_macroE_vtile32_sharedk_130m_ch128_seg16_20st-a6a22c-profiler-v0/plugins/profile/2026_03_08_11_03_02/perfetto_trace.json.gz`):
+  - Forward closed-call: `22.228 ms` (`gated_deltanet.py:2524`)
+  - Backward closed-call: `15.621 ms` (`gated_deltanet.py:4045`)
+  - while: `31.616 ms`
+  - conditional: `0.010 ms`
+  - Kernel budget: `37.849 ms`
+  - Control budget: `31.626 ms`
+  - Train-path budget: `69.475 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro N (selected):** full-sequence backward launch (`Seg=n_chunks_pad`) to remove reverse segment scan shell (`+5-12%`, medium/high risk).
+  2. **Macro L:** chunk affine summaries + prefix-composed start states for forward/backward shell reduction (`+8-20%`, high algorithmic risk).
+  3. **Macro M:** XLA-first backward orchestration with Pallas as leaf chunk kernels (`+4-12%`, medium/high integration risk).
+
+- Selected macro-move category: **N) Backward tape-contract redesign tied to control-structure change**.
+
+- Change summary:
+  - `lib/levanter/src/levanter/layers/gated_deltanet.py`
+    - In `_chunk_gated_delta_rule_flash_pallas_bwd`, added MXU train-path full-sequence backward branch:
+      - `use_fullseq_bwd = (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE) and (n_chunks_pad > 0)`.
+      - Calls `_gdn_chunk_segment_bwd_pallas(..., Seg=n_chunks_pad, ...)` once for the whole chunk axis.
+      - Removes outer reverse `lax.scan` shell on target train dims.
+    - Preserved validated segmented reverse-scan fallback for tiny-head/empty-sequence regimes.
+  - `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
+    - Infra unblocker for this commit: replaced stale `SimpleTrainConfig` profiler fields (`profiler_start_step`, `profiler_num_steps`) with `ProfilerConfig(enabled/start_step/num_steps)`.
+    - This was required to complete mandatory TPU profiling at this commit.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`, managed dev TPU):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - first two runs hit single near-threshold parity flakes (`max abs ~2.4e-5` then `~1.48e-5`) in `test_gdn_layer_backward_matches_hf`.
+    - third identical retry (same command/signature) passed cleanly: `87 passed, 2 skipped`.
+
+- Profile run (managed dev TPU):
+  - initial command failed due stale profiler field wiring in `tiny_profile.py`; fixed in this iteration as above.
+  - successful command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_iter01_macroN_fullseq_bwd --marin-prefix gs://marin-us-east5`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_iter01_macroN_fullseq_bwd_130m_ch128_seg16_20steps-083c41`
+  - W&B profiler artifact:
+    - `run-gdn_iter01_macroN_fullseq_bwd_130m_ch128_seg16_20steps-083c41-profiler:v0`
+  - downloaded trace:
+    - `.profiles/wandb/iter01_macroN_profile_v2/plugins/profile/2026_03_08_11_53_56/perfetto_trace.json.gz`
+
+- Hotspot metrics (profile-summary `hot_op_limit=5000`, avg-duration-per-occurrence):
+  - Forward closed-call: `22.228 ms -> 20.661 ms`
+    - source: `gated_deltanet.py:2524 -> 2504`
+  - Backward closed-call: `15.621 ms -> 13.130 ms`
+    - source: `gated_deltanet.py:4045 -> 4016`
+  - while: `31.616 ms -> 31.600 ms`
+  - conditional: `0.010 ms -> 0.010 ms`
+  - Kernel budget: `37.849 ms -> 33.791 ms`
+  - Control budget: `31.626 ms -> 31.610 ms`
+  - Train-path budget: `69.475 ms -> 65.401 ms`
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - vs carry-in baseline run (`gdn_iter04_macroE_vtile32_sharedk_130m_ch128_seg16_20st-a6a22c`):
+    - `throughput/mfu`: `5.239284 -> 5.466698` (`+4.34%`)
+    - `throughput/tokens_per_second`: `169489.850 -> 176846.635` (`+4.34%`)
+    - `throughput/duration`: `0.193333s -> 0.185290s` (`-4.16%`)
+  - vs active champion from `.agents/logs/gdn_codex_loop/perf_state.json` (`throughput/mfu=5.748507`): `-4.90%`.
+
+- Hot-path control-flow checklist:
+  - Where is hot-path `while` / `conditional` coming from now?
+    - In this trace, remaining `while` is dominated by fused CE lowering loops (`fused_cross_entropy_loss/xla.py` + `reference.py`), not by GDN backward segment `lax.scan`.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - It removes the train-path reverse segment `lax.scan` for target MXU dims; fallback scan remains only for tiny dims.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No new runtime conditional in the target path.
+  - Why should this not lower to the same losing `WhileOp`/`Conditional` pattern?
+    - Segment-wise backward traversal moved inside one Pallas launch; the previous outer JAX scan shell is no longer in the target train lowering.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> final retry `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `22.228 ms -> 20.661 ms`.
+    - Backward closed-call `15.621 ms -> 13.130 ms`.
+    - `while: 31.616 ms -> 31.600 ms`.
+    - `conditional: 0.010 ms -> 0.010 ms`.
+    - `Kernel budget: 37.849 ms -> 33.791 ms`.
+    - `Control budget: 31.626 ms -> 31.610 ms`.
+    - `Train-path budget: 69.475 ms -> 65.401 ms`.
+    - `throughput/mfu +4.34%`, `throughput/tokens_per_second +4.34%`, `throughput/duration -4.16%` vs carry-in baseline.
+  - Governance:
+    - `while` and `train_path_budget` both improved (hard control-flow gate passed).
+    - Candidate improved strongly vs carry-in baseline but remains below current champion MFU; keep as non-champion structural progress.
+
+- Assessment: **validated and promising vs carry-in baseline**. This Macro-N backward structural change materially reduced forward/backward closed-call and total train-path budget without increasing control-flow overhead.
+- Next bold hypothesis:
+  - Combine this backward shell collapse with a Macro-L chunk-summary/prefix state propagation redesign in forward so both train-path kernels and control shell are reduced in one decomposition.

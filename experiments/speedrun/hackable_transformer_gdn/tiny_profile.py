@@ -25,11 +25,11 @@ import dataclasses
 import os
 
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfilerConfig
 
 from experiments.defaults import default_train
 from experiments.speedrun.hackable_transformer_gdn.hackable_transformer_gdn import build_run
 from marin.execution.executor import executor_main
-
 
 _SAFE_BATCH_SIZE_BY_SIZE: dict[str, int] = {
     "130m": 8,
@@ -84,13 +84,26 @@ if __name__ == "__main__":
     if segment_size_override is not None:
         model_cfg = dataclasses.replace(model_cfg, gdn_segment_size=segment_size_override)
 
+    base_profiler = base_cfg.train_config.profiler
+    profiler_cfg = (
+        dataclasses.replace(
+            base_profiler,
+            enabled=True,
+            start_step=profile_start_step,
+            num_steps=profile_num_steps,
+            perfetto_link=False,
+        )
+        if isinstance(base_profiler, ProfilerConfig)
+        else ProfilerConfig(
+            enabled=True, start_step=profile_start_step, num_steps=profile_num_steps, perfetto_link=False
+        )
+    )
+
     train_cfg = dataclasses.replace(
         base_cfg.train_config,
         resources=ResourceConfig.with_tpu(tpu_variant),
         num_train_steps=num_steps,
-        profiler=True,
-        profiler_start_step=profile_start_step,
-        profiler_num_steps=profile_num_steps,
+        profiler=profiler_cfg,
         steps_per_hf_export=-1,
     )
     train_cfg = dataclasses.replace(train_cfg, train_batch_size=batch_size_override)
