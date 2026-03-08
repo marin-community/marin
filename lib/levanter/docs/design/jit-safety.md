@@ -1,6 +1,6 @@
 # JIT Safety Rules
 
-Any method inside an `equinox.Module`, any function decorated with `jax.jit` or one of its variants (e.g. `eqx.filter_jit`, `jax.named_jit`), and any helpers they call must follow these rules.
+Any method inside an `equinox.Module`, any function decorated with `jax.jit` or one of its variants (e.g. `eqx.filter_jit`, `haliax.named_jit`), and any helpers they call must follow these rules.
 
 ## Rules
 
