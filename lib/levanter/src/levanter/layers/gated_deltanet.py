@@ -56,7 +56,10 @@ if _GDN_TRIANGULAR_SOLVE_PROBE not in {"off", "identity", "first_order"}:
     )
 _GDN_CHUNK_FLASH_BACKEND = os.environ.get("GDN_CHUNK_FLASH_BACKEND", "pallas").strip().lower()
 if _GDN_CHUNK_FLASH_BACKEND not in {"pallas", "xla"}:
-    raise ValueError("GDN_CHUNK_FLASH_BACKEND must be one of: pallas, xla. " f"Got {_GDN_CHUNK_FLASH_BACKEND!r}.")
+    raise ValueError(
+        "GDN_CHUNK_FLASH_BACKEND must be one of: pallas, xla. "
+        f"Got {_GDN_CHUNK_FLASH_BACKEND!r}."
+    )
 
 
 def _dbg(tag: str, arr):
@@ -2159,100 +2162,6 @@ def _gdn_chunk_fullseq_recurrent_fwd_pallas(
         return _local_call(q_bhncK, k_bhncK, g_cum_bhnc, v_pseudo_bhncV, k_cumdecay_bhncK, S_prev_bhKV)
 
 
-def _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
-    q_bhncK: jnp.ndarray,
-    k_bhncK: jnp.ndarray,
-    g_cum_bhnc: jnp.ndarray,
-    v_pseudo_bhncV: jnp.ndarray,
-    k_cumdecay_bhncK: jnp.ndarray,
-    S_prev_bhKV: jnp.ndarray,
-    *,
-    N_chunks: int,
-    Ct: int,
-    K_pad: int,
-    V_pad: int,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Forward recurrent apply via associative chunk summaries.
-
-    Each chunk is summarized as an affine map on recurrent state:
-      S_out = A_chunk @ S_in + B_chunk
-    and chunk prefixes are composed with `lax.associative_scan`.
-    This keeps Pallas at the leaf prepare kernel while moving train-shell
-    state propagation to XLA.
-    """
-    B, H = q_bhncK.shape[0], q_bhncK.shape[1]
-    if N_chunks == 0:
-        out_empty = jnp.zeros((B, H, 0, Ct, V_pad), dtype=jnp.float32)
-        starts_empty = jnp.zeros((B, H, 0, K_pad, V_pad), dtype=jnp.float32)
-        return out_empty, S_prev_bhKV.astype(jnp.float32), starts_empty
-
-    q_f = q_bhncK.astype(jnp.float32, copy=False)
-    k_f = k_bhncK.astype(jnp.float32, copy=False)
-    g_cum_f = g_cum_bhnc.astype(jnp.float32, copy=False)
-    v_pseudo_f = v_pseudo_bhncV.astype(jnp.float32, copy=False)
-    k_cum_f = k_cumdecay_bhncK.astype(jnp.float32, copy=False)
-    S0 = S_prev_bhKV.astype(jnp.float32, copy=False)
-
-    g_tail = g_cum_f[..., -1]
-    decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
-    decay_w = jnp.exp(jnp.clip(g_tail[..., None] - g_cum_f, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
-    k_w = k_f * decay_w[..., None]
-
-    summary_linear = jnp.einsum("bhnck,bhncl->bhnkl", k_w, k_cum_f, precision=lax.Precision.HIGHEST)
-    summary_bias = jnp.einsum("bhnck,bhncv->bhnkv", k_w, v_pseudo_f, precision=lax.Precision.HIGHEST)
-
-    eye_k = jnp.eye(K_pad, dtype=jnp.float32)
-    summary_a = decay_tail[..., None, None] * eye_k - summary_linear
-    summary_b = summary_bias
-
-    summary_a_tm = jnp.moveaxis(summary_a, 2, 0)
-    summary_b_tm = jnp.moveaxis(summary_b, 2, 0)
-
-    def _compose_affine(left, right):
-        a_l, b_l = left
-        a_r, b_r = right
-        a = jnp.einsum("...ik,...kj->...ij", a_r, a_l, precision=lax.Precision.HIGHEST)
-        b = jnp.einsum("...ik,...kv->...iv", a_r, b_l, precision=lax.Precision.HIGHEST) + b_r
-        return a, b
-
-    prefix_a_tm, prefix_b_tm = lax.associative_scan(_compose_affine, (summary_a_tm, summary_b_tm), axis=0)
-    prefix_a = jnp.moveaxis(prefix_a_tm, 0, 2)
-    prefix_b = jnp.moveaxis(prefix_b_tm, 0, 2)
-
-    prefix_identity = jnp.broadcast_to(eye_k, (B, H, 1, K_pad, K_pad))
-    prefix_zero = jnp.zeros((B, H, 1, K_pad, V_pad), dtype=jnp.float32)
-    prefix_a_exclusive = jnp.concatenate((prefix_identity, prefix_a[:, :, :-1, :, :]), axis=2)
-    prefix_b_exclusive = jnp.concatenate((prefix_zero, prefix_b[:, :, :-1, :, :]), axis=2)
-
-    chunk_starts = (
-        jnp.einsum("bhnij,bhjk->bhnik", prefix_a_exclusive, S0, precision=lax.Precision.HIGHEST) + prefix_b_exclusive
-    )
-    S_final = (
-        jnp.einsum("bhij,bhjk->bhik", prefix_a[:, :, -1, :, :], S0, precision=lax.Precision.HIGHEST)
-        + prefix_b[:, :, -1, :, :]
-    )
-
-    g_cum_cl = jnp.clip(g_cum_f, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    exp_g = jnp.exp(g_cum_cl)
-    q_scaled = q_f * exp_g[..., None]
-    inter = jnp.einsum("bhnck,bhnkv->bhncv", q_scaled, chunk_starts, precision=lax.Precision.HIGHEST)
-
-    v_prime = jnp.einsum("bhnck,bhnkv->bhncv", k_cum_f, chunk_starts, precision=lax.Precision.HIGHEST)
-    v_new = v_pseudo_f - v_prime
-
-    qk = jnp.einsum("bhnik,bhnjk->bhnij", q_f, k_f, precision=lax.Precision.HIGHEST)
-    g_row = g_cum_f[..., :, None]
-    g_col = g_cum_f[..., None, :]
-    diff = g_row - g_col
-    exp_diff = jnp.exp(jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
-    causal_mask = jnp.tril(jnp.ones((Ct, Ct), dtype=jnp.float32))
-    attn = qk * exp_diff * causal_mask
-    intra = jnp.einsum("bhnij,bhnjv->bhniv", attn, v_new, precision=lax.Precision.HIGHEST)
-
-    out = inter + intra
-    return out, S_final, chunk_starts
-
-
 def _in_specs_chunk_segment_fwd_fused_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
     """Fused segmented forward specs with backward tape outputs."""
 
@@ -3416,7 +3325,7 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
             V_pad=V_pad,
         )
 
-        out_bhncv, S_final, chunk_starts_bh_all = _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
+        out_bhncv, S_final, chunk_starts_bh_all = _gdn_chunk_fullseq_recurrent_fwd_pallas(
             q_c,
             k_c,
             g_cum,
