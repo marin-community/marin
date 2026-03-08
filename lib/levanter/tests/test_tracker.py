@@ -11,6 +11,7 @@ import yaml
 
 import levanter.tracker
 from levanter.tracker import CompositeTracker, TrackerConfig
+from levanter.tracker.tracker import DictTracker
 
 
 def test_tracker_plugin_stuff_works():
@@ -100,3 +101,28 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
         tracker_fns.log_configuration({"metric": 1.0})
 
     assert not caught
+
+
+def test_log_configuration_logs_artifact_for_future_annotations_dataclass():
+    namespace: dict[str, object] = {}
+    exec(
+        (
+            "from __future__ import annotations\n"
+            "import dataclasses\n"
+            "@dataclasses.dataclass\n"
+            "class ExampleConfig:\n"
+            "    run_id: str\n"
+            "    steps: int\n"
+        ),
+        namespace,
+    )
+    ExampleConfig = namespace["ExampleConfig"]
+    tracker = DictTracker()
+
+    with levanter.tracker.current_tracker(tracker):
+        levanter.tracker.log_configuration(ExampleConfig(run_id="jpeg-tokenizer-k8-trial", steps=2000))
+
+    assert tracker.metrics["hparams"] == {"run_id": "jpeg-tokenizer-k8-trial", "steps": 2000}
+    artifact = tracker.metrics["artifact"]
+    assert artifact["name"] == "config.yaml"
+    assert artifact["type"] == "config"

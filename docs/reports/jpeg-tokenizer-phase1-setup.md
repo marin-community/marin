@@ -62,9 +62,10 @@ This note records the first runnable training setup for the `K=4` coefficient ba
 - Wall time:
   `2778.14s`
 
-The `K=4` coefficient baseline is now proven on the production Ray + TPU path. The main remaining warnings are
-non-fatal tracker/config-artifact serialization noise and a W&B `BrokenPipeError` during shutdown after the run had
-already synced successfully.
+The `K=4` coefficient baseline is now proven on the production Ray + TPU path. The previous tracker/config-artifact
+serialization warning has since been fixed locally by switching artifact dumping to YAML over the already-materialized
+hyperparameter dict. The remaining known nuisance is a W&B `BrokenPipeError` during shutdown after the run had already
+synced successfully.
 
 ## Next Step
 
@@ -85,5 +86,19 @@ This establishes that `8192`-token coefficient sequences are viable on `v6e-8` a
 
 ## Next Step
 
-Launch the first longer `K=8` trial at the proven safe batch size and compare its `1000`-step eval against the
-completed `K=4` baseline.
+The `K=8` longer trial is now active:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260308-095441`
+- W&B run:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-trial`
+- Current status:
+  `RUNNING`
+- Recovery note:
+  the run survived one TPU slice preemption, resumed on a replacement worker, and continued training under the same
+  W&B run ID.
+
+## Next Step
+
+Let the `K=8` trial finish, then compare its terminal eval against `K=4` and decide whether the next bounded rung
+should be a `K=16` smoke or a width/depth adjustment at `K=8`.

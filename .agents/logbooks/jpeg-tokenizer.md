@@ -150,3 +150,35 @@
   - the safe batch point is at least `128`, which is enough to proceed to a longer run and compare learning dynamics against the completed `K=4` baseline
   - the same two non-fatal warnings remain: `draccus` config-artifact serialization and W&B teardown `BrokenPipeError`
 - Next action: launch a longer `K=8` trial with the same batch shape and compare the `1000`-step eval against the `K=4` reference.
+
+### 2026-03-09 03:10 - K=8 trial recovered after one preemption
+
+- Hypothesis: the active `K=8` trial should resume cleanly after a single TPU slice preemption, so the right response is to monitor rather than resubmit.
+- Command:
+  - `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a list-jobs`
+  - `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a job-logs -n 260 ray-run-dlwh-launch-20260308-095441`
+- Config: `tokexplore/jpeg-tokenizer-k8-trial`, `v6e-8`, batch size `128`, output path `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-69fd6d`.
+- Result:
+  - Ray job `ray-run-dlwh-launch-20260308-095441` remained `RUNNING`
+  - one TPU worker on `10.164.3.247` died and Fray reported `Preempted 1 times. Continuing to retry.`
+  - the run resumed on a new worker `10.164.2.175` under the same W&B run `jpeg-tokenizer-k8-trial`
+  - resumed progress reached startup eval loss `8.547` and train step `81/2000` with loss `4.98`
+- Interpretation:
+  - the retry path is good enough for this scale of experiment, so an immediate resubmit would only waste time and compute
+  - the more actionable cleanup item was the repeated config-artifact warning, not the transient preemption itself
+- Next action: fix the tracker config-artifact dump so subsequent failures are easier to read, then prepare the `K=16` rung.
+
+### 2026-03-09 03:20 - Tracker config-artifact dump fixed locally
+
+- Hypothesis: the repeated `draccus` warning comes from dataclasses defined with postponed annotations, so dumping the already-materialized hyperparameter dict to YAML should preserve the artifact without touching run behavior.
+- Command:
+  - `uv run --with pytest python -m pytest -o addopts='' lib/levanter/tests/test_tracker.py`
+  - `uv run --with pytest python -m pytest -o addopts='' tests/test_jpeg_tokenizer_scaffold.py`
+- Config: switched `levanter.tracker.log_configuration(...)` artifact serialization to YAML over `hparams_to_dict(...)`, and added a regression test for a dataclass created under `from __future__ import annotations`.
+- Result:
+  - local tests passed
+  - the config artifact path is now independent of `draccus.dump(...)` and no longer depends on resolved dataclass field types
+- Interpretation:
+  - future tokenizer runs should stop emitting the false-positive config-artifact stack trace
+  - this is a global cleanup in Levanter, not just a JPEG-specific workaround
+- Next action: commit the tracker fix, then build the `K=16` coefficient store and add a smoke step only if the artifact size still looks modest.

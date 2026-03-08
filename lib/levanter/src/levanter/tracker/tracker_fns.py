@@ -11,8 +11,8 @@ import warnings
 from contextlib import AbstractContextManager
 from typing import Any, Literal, Optional
 
-import draccus
 import jax
+import yaml
 from jaxtyping import Scalar
 
 from levanter.tracker import CompositeTracker, Tracker
@@ -206,7 +206,7 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
             config_path = os.path.join(tmpdir, "config.yaml")
             try:
                 with open(config_path, "w") as f:
-                    draccus.dump(hparams, f, encoding="utf-8")
+                    yaml.safe_dump(hparams_dict, f, sort_keys=False)
                     name = config_name or "config.yaml"
                     _global_tracker.log_artifact(config_path, name=name, type="config")
             except Exception:  # noqa
