@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Profiling E2E tests: py-spy CPU profiling and thread dumps via ProfileTask RPC.
+"""Profiling E2E tests: py-spy CPU profiling via ProfileTask RPC.
 
 Migrated from tests/cluster/test_e2e.py::TestProfiling.
 """
@@ -102,42 +102,3 @@ def test_profile_nonexistent_task(cluster):
     )
     with pytest.raises(ConnectError):
         cluster.controller_client.profile_task(request, timeout_ms=5000)
-
-
-def test_thread_dump(cluster):
-    """Thread dump returns text data with thread info."""
-
-    def slow_task():
-        end = time.monotonic() + 5
-        while time.monotonic() < end:
-            sum(range(1000))
-
-    job = cluster.submit(slow_task, name="thread-dump-test")
-    task_id = _wait_for_task_running(cluster, job)
-
-    request = cluster_pb2.ProfileTaskRequest(
-        target=task_id,
-        profile_type=cluster_pb2.ProfileType(threads=cluster_pb2.ThreadsProfile()),
-    )
-    response = cluster.controller_client.profile_task(request, timeout_ms=5000)
-
-    assert len(response.profile_data) > 0
-    assert not response.error
-    text = response.profile_data.decode("utf-8")
-    assert "Thread" in text
-
-    cluster.wait(job, timeout=30)
-
-
-def test_system_process_thread_dump(cluster):
-    """Thread dump of /system/process returns controller thread info."""
-    request = cluster_pb2.ProfileTaskRequest(
-        target="/system/process",
-        profile_type=cluster_pb2.ProfileType(threads=cluster_pb2.ThreadsProfile()),
-    )
-    response = cluster.controller_client.profile_task(request, timeout_ms=5000)
-
-    assert len(response.profile_data) > 0
-    assert not response.error
-    text = response.profile_data.decode("utf-8")
-    assert "Thread" in text

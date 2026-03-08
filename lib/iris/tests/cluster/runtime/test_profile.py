@@ -10,12 +10,9 @@ not on pass-through of constructor arguments.
 import pytest
 
 from iris.cluster.runtime.profile import (
-    SYSTEM_PROCESS_TARGET,
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
-    build_pyspy_dump_cmd,
-    is_system_target,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
@@ -136,35 +133,3 @@ def test_memray_transform_stats_includes_json_flag():
 
     assert "stats" in cmd
     assert "--json" in cmd
-
-
-# ---------------------------------------------------------------------------
-# build_pyspy_dump_cmd: verify CLI flag structure
-# ---------------------------------------------------------------------------
-
-
-def test_build_pyspy_dump_cmd_structure():
-    cmd = build_pyspy_dump_cmd(pid="42", py_spy_bin="py-spy")
-    assert cmd == ["py-spy", "dump", "--pid", "42"]
-
-
-def test_build_pyspy_dump_cmd_custom_binary():
-    cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="/app/.venv/bin/py-spy")
-    assert cmd[0] == "/app/.venv/bin/py-spy"
-    assert "--pid" in cmd
-    assert "1" in cmd
-
-
-# ---------------------------------------------------------------------------
-# is_system_target / SYSTEM_PROCESS_TARGET
-# ---------------------------------------------------------------------------
-
-
-def test_is_system_target_matches_system_process():
-    assert is_system_target(SYSTEM_PROCESS_TARGET)
-    assert is_system_target("/system/process")
-
-
-def test_is_system_target_rejects_task_targets():
-    assert not is_system_target("/job/my-job/task/0")
-    assert not is_system_target("/job/my-job/task/0:1")
