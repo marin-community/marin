@@ -248,6 +248,38 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
 
 
+def test_functional_moe_mlp_sparsecore_requires_tpu():
+    tokens = 16
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 8
+    topk = 2
+
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(7),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+
+    if jax.default_backend() == "tpu":
+        pytest.skip("CPU/GPU-only guard test")
+
+    with pytest.raises(ValueError, match="requires TPU backend"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=ActivationFunctionEnum.silu,
+            mesh=None,
+            dispatch_implementation="sparsecore",
+        )
+
+
 def test_moe_mlp_reports_positive_drop_count_in_ep_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
