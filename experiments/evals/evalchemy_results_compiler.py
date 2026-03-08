@@ -278,6 +278,21 @@ def compile_evalchemy_results_fn(config: dict) -> None:
 
     logger.info(f"Compiled results saved to: {results_file}")
 
+    # Validate that all expected seeds are present before averaging.
+    # This prevents stale compiles where the compile step runs before all
+    # seed tasks have finished writing results.
+    if seeds_config:
+        actual_seeds = sorted(df["seed"].dropna().unique().tolist())
+        expected_seeds = sorted(seeds_config)
+        if actual_seeds != expected_seeds:
+            missing = set(expected_seeds) - set(actual_seeds)
+            raise ValueError(
+                f"Compile found seeds {actual_seeds} but expected {expected_seeds}. "
+                f"Missing seeds: {missing}. "
+                f"This likely means some seed tasks haven't finished yet."
+            )
+        logger.info(f"All {len(expected_seeds)} expected seeds present: {actual_seeds}")
+
     # Compute averaged results across seeds
     averaged = _compute_averaged_results(df)
     if averaged is None:
