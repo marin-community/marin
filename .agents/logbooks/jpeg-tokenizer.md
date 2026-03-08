@@ -267,3 +267,25 @@
   - the earlier `K=8` failure mode is resolved: preemptions should no longer erase the whole run
   - `K=16` is ready for the same end-to-end comparison treatment as `K=4` and `K=8`
 - Next action: validate the new launch surface, commit the milestone, and submit `tokexplore/jpeg-tokenizer-k16-trial` on `marin-eu-west4-a`.
+
+### 2026-03-09 04:25 - K=16 trial submitted; K=8 retry remains healthy
+
+- Hypothesis: with `K=8` now writing durable checkpoints every few minutes, the best parallel use of cluster time is to leave it running and queue the full `K=16` trial on the same regional cluster.
+- Command:
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k16-trial"]'`
+  - monitoring via `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a ...`
+- Config:
+  - new run: `tokexplore/jpeg-tokenizer-k16-trial`
+  - output path: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k16-trial-a39c10`
+  - batch size: `64`
+  - steps: `2000`
+  - checkpoint policy: every `2` minutes, keep every `500` steps
+- Result:
+  - submitted Ray job: `ray-run-dlwh-launch-20260308-104918`
+  - the executor and Fray dispatch path completed cleanly for `grug-train-jpeg-tokenizer-k16-trial`
+  - as of the latest check, the job is controller-`RUNNING` but has not yet reached trainer/W&B startup, which points to scheduler/capacity delay rather than a code failure
+  - meanwhile the active `K=8` retry advanced through steps `635`, `703`, and `772`, with durable checkpoints at steps `639` and `777`
+- Interpretation:
+  - `K=8` is now behaving like a real baseline instead of a brittle smoke continuation
+  - `K=16` launch code is good; the remaining variable is TPU allocation latency on `marin-eu-west4-a`
+- Next action: leave both jobs in place and continue monitoring for either `K=8` eval at step `1000` or `K=16` trainer startup.

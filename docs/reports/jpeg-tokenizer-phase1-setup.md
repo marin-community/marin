@@ -197,3 +197,29 @@ The next rung is now prepared as a full baseline run:
   every `2` minutes, keep every `500` steps
 
 This keeps the `K=16` trial on the same comparison shape as the completed `K=4` baseline and the active `K=8` retry.
+
+## Active Monitoring
+
+The current live state is:
+
+- `K=8` retry job:
+  `ray-run-dlwh-launch-20260308-103217`
+- `K=8` W&B run:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-trial-r2`
+- Latest observed `K=8` progress:
+  step `772/2000` with train loss `3.61`
+- Latest observed `K=8` durable checkpoints:
+  `step-639` and `step-777`
+
+This is the first `K=8` run that is clearly surviving the preemptible environment without losing the useful part of the
+training curve.
+
+- `K=16` trial job:
+  `ray-run-dlwh-launch-20260308-104918`
+- `K=16` output path:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k16-trial-a39c10`
+- Current `K=16` status:
+  controller `RUNNING`, executor launched, Fray dispatch completed, trainer/W&B startup not yet observed
+
+At this point the likely blocker for `K=16` is TPU scheduling latency rather than a launch-surface bug, so the right
+action is to leave it queued and keep monitoring rather than resubmitting.
