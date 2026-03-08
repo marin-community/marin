@@ -2120,8 +2120,11 @@ class ControllerState:
             - Worker resource metrics updated
 
         If the response carries ``worker_healthy=False``, the worker is
-        immediately marked as failed (tasks cascade to WORKER_FAILED) and
-        ``HeartbeatAction.WORKER_FAILED`` is returned.
+        immediately marked as failed under the same lock acquisition (tasks
+        cascade to WORKER_FAILED) and ``HeartbeatAction.WORKER_FAILED`` is
+        returned. The health check is performed before the worker is marked
+        healthy, so no scheduling cycle can assign new work to an unhealthy
+        worker.
 
         Updates worker health state and processes task state changes from the response.
         Log entries are collected under the state lock but flushed to SQLite after
@@ -2133,6 +2136,25 @@ class ControllerState:
             worker = self._workers.get(snapshot.worker_id)
             if not worker:
                 return HeartbeatAction.OK  # Worker removed while heartbeat in flight
+
+            # Check worker health before marking it as available. If the worker
+            # reported itself unhealthy we must handle it under this same lock
+            # acquisition so no scheduling cycle can see the worker as healthy.
+            if not response.worker_healthy:
+                health_error = response.health_error or "worker reported unhealthy"
+                logger.warning(
+                    "Worker %s reported unhealthy: %s",
+                    snapshot.worker_id,
+                    health_error,
+                )
+                event = WorkerFailedEvent(
+                    worker_id=snapshot.worker_id,
+                    error=f"health check failed: {health_error}",
+                )
+                txn = TransactionLog(event=event)
+                self._on_worker_failed(txn, event)
+                self._transactions.append(txn)
+                return HeartbeatAction.WORKER_FAILED
 
             worker.last_heartbeat = Timestamp.now()
             worker.healthy = True
@@ -2185,26 +2207,6 @@ class ControllerState:
         # Flush logs outside the state lock — disk I/O no longer blocks other threads.
         if pending_logs and self._log_store is not None:
             self._log_store.append_batch(pending_logs)
-
-        # After processing task states, check if worker reported itself unhealthy.
-        if not response.worker_healthy:
-            health_error = response.health_error or "worker reported unhealthy"
-            logger.warning(
-                "Worker %s reported unhealthy: %s",
-                snapshot.worker_id,
-                health_error,
-            )
-            with self._lock:
-                worker = self._workers.get(snapshot.worker_id)
-                if worker:
-                    event = WorkerFailedEvent(
-                        worker_id=snapshot.worker_id,
-                        error=f"health check failed: {health_error}",
-                    )
-                    txn = TransactionLog(event=event)
-                    self._on_worker_failed(txn, event)
-                    self._transactions.append(txn)
-            return HeartbeatAction.WORKER_FAILED
 
         return HeartbeatAction.OK
 
