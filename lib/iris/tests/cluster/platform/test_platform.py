@@ -328,13 +328,14 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
 
 
 def test_gcp_build_vm_slice_id_bounds_and_normalizes():
+    suffix = "20260307-1755-a3b1c9d2"
     slice_id = _build_vm_slice_id(
         "smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
-        1772123761944,
+        suffix,
     )
     assert len(slice_id) <= 63
     assert "_" not in slice_id
-    assert slice_id.endswith("-1772123761944")
+    assert slice_id.endswith(f"-{suffix}")
 
 
 def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():

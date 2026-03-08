@@ -49,6 +49,7 @@ from iris.cluster.platform.base import (
     WorkerStatus,
     default_stop_all,
     find_free_port,
+    generate_slice_suffix,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
@@ -386,7 +387,7 @@ class LocalPlatform:
         that register with the controller (E2E mode). Otherwise creates in-memory
         stubs (unit test mode).
         """
-        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
         num_vms = config.num_vms or 1
 
         if self._controller_address is not None:

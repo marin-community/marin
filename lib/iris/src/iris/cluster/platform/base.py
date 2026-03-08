@@ -28,9 +28,11 @@ provider's view of resources, distinct from the Iris lifecycle states in vm.prot
 
 from __future__ import annotations
 
+import datetime
 import logging
 import socket
 import threading
+import uuid
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
@@ -41,6 +43,19 @@ from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+
+def generate_slice_suffix() -> str:
+    """Generate a human-readable, unique suffix for slice IDs.
+
+    Returns a string like ``20260307-1755-a3b1c9d2`` (date-HHMM-uuid8).
+    The 8-char UUID suffix guarantees uniqueness even when multiple slices
+    are created within the same minute.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    short_uuid = uuid.uuid4().hex[:8]
+    return f"{now.strftime('%Y%m%d-%H%M')}-{short_uuid}"
+
 
 # ============================================================================
 # Label Keys
