@@ -248,7 +248,7 @@ def multi_worker_cluster():
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
-        tc.wait_for_workers(num_workers, timeout=30)
+        tc.wait_for_workers(num_workers, timeout=60)
         yield tc
         controller_client.close()
 

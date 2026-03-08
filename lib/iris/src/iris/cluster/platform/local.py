@@ -495,7 +495,7 @@ class LocalPlatform:
             wc = WorkerConfig(
                 host="127.0.0.1",
                 port=worker_port,
-                cache_dir=self._cache_path,
+                cache_dir=self._cache_path / worker_id,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
                 default_task_image="process-runtime-unused",
@@ -575,6 +575,8 @@ class LocalPlatform:
 
     def shutdown(self) -> None:
         """Stop all worker threads. Critical for clean test teardown."""
+        for s in self._slices.values():
+            s.terminate()
         self._threads.stop(timeout=Duration.from_seconds(5.0))
         self._slices.clear()
         self._vms.clear()
