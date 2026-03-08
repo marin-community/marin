@@ -86,3 +86,21 @@
   - checkpoint written to `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k4-smoke-3cabe7/checkpoints/step-128`
 - Interpretation: the basic K=4 coefficient pipeline is now healthy on the production path. Remaining warning is the non-fatal `draccus` config-artifact dump issue in tracker setup.
 - Next action: launch the `tokexplore/jpeg-tokenizer-k4-trial` baseline and monitor early progress.
+
+### 2026-03-09 00:00 - Trial baseline launched and training
+
+- Hypothesis: the longer `K=4` baseline should follow the same path as the smoke run and reach stable optimization without additional infra-specific fixes.
+- Command:
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k4-trial"]'`
+- Config: `v6e-8`, batch size `512`, `2000` train steps, eval every `1000` steps, `compute_bpb=False`.
+- Result so far:
+  - Ray job: `ray-run-dlwh-launch-20260308-085237`
+  - W&B run: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k4-trial`
+  - initial eval loss: `8.476`
+  - train progress snapshots:
+    - `3/2000`, loss `8.48`
+    - `49/2000`, loss `6.01`
+    - `96/2000`, loss `5.62`
+    - `143/2000`, loss `5.31`
+- Interpretation: the longer baseline is past bring-up and optimizing normally. The remaining known issue is still the non-fatal tracker config-artifact dump warning.
+- Next action: leave the trial running and inspect the first scheduled eval at step `1000`.
