@@ -183,6 +183,14 @@ class AutoscalerProtocol(Protocol):
         """Get info for a specific VM."""
         ...
 
+    def check_coscheduling_feasibility(
+        self,
+        replicas: int,
+        constraints: list[cluster_pb2.Constraint],
+    ) -> str | None:
+        """Check if a coscheduled job can be scheduled. Returns error message or None."""
+        ...
+
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
         """Get initialization log for a VM."""
         ...
@@ -338,6 +346,22 @@ class ControllerServiceImpl:
         # Explicit user constraints for canonical keys (device-type,
         # device-variant, etc.) replace auto-generated ones.
         request = _inject_resource_constraints(request)
+
+        # Reject coscheduled jobs that can never be scheduled: if no scaling
+        # group has num_vms matching the replica count, the job would sit in
+        # the queue forever.
+        if request.HasField("coscheduling"):
+            autoscaler = self._controller.autoscaler
+            if autoscaler is not None:
+                error = autoscaler.check_coscheduling_feasibility(
+                    replicas=request.replicas,
+                    constraints=list(request.constraints),
+                )
+                if error:
+                    raise ConnectError(
+                        Code.FAILED_PRECONDITION,
+                        f"Job is unschedulable: {error}",
+                    )
 
         # Submit job via event API
         self._state.handle_event(

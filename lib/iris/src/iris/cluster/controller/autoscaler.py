@@ -1155,6 +1155,38 @@ class Autoscaler:
             return "\n".join(lines[-tail:])
         return log
 
+    def check_coscheduling_feasibility(
+        self,
+        replicas: int,
+        constraints: list[cluster_pb2.Constraint],
+    ) -> str | None:
+        """Check if a coscheduled job with the given replicas can ever be scheduled.
+
+        Returns None if feasible, or a human-readable error message if no scaling
+        group can accommodate the replica count.
+        """
+        groups = list(self._groups.values())
+        if not groups:
+            return None
+
+        group_attrs = {g.name: g.to_attributes() for g in groups}
+        group_index = ConstraintIndex.build(group_attrs)
+        routing_cs = routing_constraints(constraints)
+        matching_names = group_index.matching_entities(routing_cs)
+        matching_groups = [g for g in groups if g.name in matching_names]
+
+        if not matching_groups:
+            return f"no scaling group matches the job constraints; " f"available groups: {[g.name for g in groups]}"
+
+        if any(g.num_vms == replicas for g in matching_groups):
+            return None
+
+        group_sizes = {g.name: g.num_vms for g in matching_groups}
+        return (
+            f"job requires {replicas} coscheduled replicas but no matching scaling group "
+            f"has that size; matching group sizes: {group_sizes}"
+        )
+
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
         status = vm_pb2.AutoscalerStatus(
