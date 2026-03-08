@@ -43,6 +43,7 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
+from iris.cluster.runtime.profile import run_pyspy_dump
 from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, ContainerStats, ContainerStatus, RuntimeLogReader
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
@@ -479,18 +480,20 @@ class ProcessContainerHandle:
         )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
 
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
 
-        # Dispatch to CPU or memory profiling
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            pid = str(self._container._process.pid)
+            return run_pyspy_dump(pid)
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
             return self._profile_memory(duration_seconds, profile_type.memory)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
     def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""

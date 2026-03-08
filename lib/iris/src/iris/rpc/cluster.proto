@@ -53,18 +53,28 @@ message MemoryProfile {
   bool leaks = 2;       // Focus on potential memory leaks
 }
 
+// Thread dump configuration (no additional options needed)
+message ThreadsProfile {}
+
 // Profile type selector
 message ProfileType {
   oneof profiler {
     CpuProfile cpu = 1;
     MemoryProfile memory = 2;
+    ThreadsProfile threads = 3;
   }
 }
 
 message ProfileTaskRequest {
-  string task_id = 1;
+  // Target to profile. Accepts either:
+  //   /job/name/task/0             - task (uses current/latest attempt)
+  //   /job/name/task/0:attempt_id  - specific task attempt (optional)
+  //   /system/process              - the local process (worker or controller)
+  string target = 4;
   int32 duration_seconds = 2;   // How long to sample (default: 10)
   ProfileType profile_type = 3;
+
+  reserved 1;  // was task_id, replaced by target
 }
 
 message ProfileTaskResponse {
