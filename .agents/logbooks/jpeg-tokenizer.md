@@ -51,3 +51,19 @@
 - Result: discovered and fixed a script-entrypoint import hazard where local `tokenizers.py` shadowed the third-party `tokenizers` package; renamed the module to `jpeg_codecs.py`.
 - Interpretation: the launch surface is now safe to execute as a standalone script under Ray runtime packaging.
 - Next action: validate tests/pre-commit, commit the launch milestone, then submit the smoke run to `marin-eu-west4-a`.
+
+### 2026-03-08 22:30 - Cluster bring-up failures and fixes
+
+- Hypothesis: once the launch surface is clean, the K=4 smoke run should at least reach TPU-local trainer initialization.
+- Command:
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -- python experiments/jpeg_tokenizer/base/launch.py ...`
+- Config: `tokexplore/jpeg-tokenizer-k4-smoke`, `v6e-8`, regional `gs://marin-eu-west4` prefix, mirrored token store.
+- Result:
+  - first submit failed with Ray request `413` because local `artifacts/` were being uploaded with the working directory
+  - added `.rayignore` for `artifacts/`
+  - second submit failed before execution because `--run_only` must be passed as a list value, not a bare string
+  - corrected submit syntax and reached executor startup
+  - third run failed during TPU dispatch because `DirectDatasetComponent` datasets were embedded in the Ray payload and were not serializable
+  - refactored JPEG training config so the token-store path is serialized, while `LmDataConfig` is built inside the TPU-local entrypoint
+- Interpretation: the pipeline now matches the actual execution boundary. The remaining test is a fresh cluster smoke submit from the worker-side token-store path.
+- Next action: commit the worker-side materialization fix and rerun `tokexplore/jpeg-tokenizer-k4-smoke`.

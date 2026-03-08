@@ -79,7 +79,6 @@ def build_coeff_k4_data_config(store_path: str = DEFAULT_COEFF_K4_STORE_PATH) ->
 def run_jpeg_tokenizer_trial(config: JpegTokenizerLaunchConfig) -> None:
     """Run a JPEG tokenizer trial once a direct dataset has been prepared."""
 
-    data_config = build_coeff_k4_data_config(config.token_store_path)
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -101,7 +100,7 @@ def run_jpeg_tokenizer_trial(config: JpegTokenizerLaunchConfig) -> None:
 
     run_config = JpegRunConfig(
         model=config.model,
-        data=data_config,
+        token_store_path=config.token_store_path,
         resources=config.resources,
         optimizer=config.optimizer,
         trainer=dataclasses.replace(config.jpeg_trainer, trainer=trainer),

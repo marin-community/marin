@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import cloudpickle
 import json
 import logging
 import uuid
@@ -233,7 +234,6 @@ def test_file_backed_token_store_runs_one_training_step(tmp_path):
     }
     write_token_store(store_dir, metadata=metadata, split_tokens=split_tokens, split_records=split_records)
 
-    data_config = build_passthrough_lm_data_config_from_store(store_dir=store_dir)
     logger_name = f"test_jpeg_store_run_{uuid.uuid4().hex}"
     stream = StringIO()
     handler = logging.StreamHandler(stream)
@@ -266,7 +266,7 @@ def test_file_backed_token_store_runs_one_training_step(tmp_path):
                 num_kv_heads=2,
                 max_seq_len=seq_len,
             ),
-            data=data_config,
+            token_store_path=str(store_dir),
             resources=ResourceConfig.with_cpu(),
             optimizer=AdamConfig(learning_rate=1e-3),
             trainer=JpegTrainerConfig(trainer=trainer_config, log_every=1),
@@ -279,6 +279,7 @@ def test_file_backed_token_store_runs_one_training_step(tmp_path):
                 compute_bpb=False,
             ),
         )
+        assert cloudpickle.dumps(run_config)
         run_jpeg_tokenizer(run_config)
     finally:
         logger.removeHandler(handler)
