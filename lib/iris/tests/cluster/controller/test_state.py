@@ -1374,6 +1374,7 @@ def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
     log_entry.timestamp.epoch_ms = 1000
 
     response = cluster_pb2.HeartbeatResponse(
+        worker_healthy=True,
         tasks=[
             cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=task.task_id.to_wire(),
@@ -1381,7 +1382,7 @@ def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
                 state=cluster_pb2.TASK_STATE_RUNNING,
                 log_entries=[log_entry],
             )
-        ]
+        ],
     )
     state.complete_heartbeat(snapshot, response)
 
@@ -1409,6 +1410,7 @@ def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata)
         entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
         entry.timestamp.epoch_ms = 1000 + i
         response = cluster_pb2.HeartbeatResponse(
+            worker_healthy=True,
             tasks=[
                 cluster_pb2.Controller.WorkerTaskStatus(
                     task_id=task.task_id.to_wire(),
@@ -1416,7 +1418,7 @@ def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata)
                     state=cluster_pb2.TASK_STATE_RUNNING,
                     log_entries=[entry],
                 )
-            ]
+            ],
         )
         state.complete_heartbeat(snapshot, response)
 
@@ -2166,6 +2168,7 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
 
     # Create a mock response with completed task
     response = cluster_pb2.HeartbeatResponse(
+        worker_healthy=True,
         tasks=[
             cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=tasks[0].task_id.to_wire(),
@@ -2173,7 +2176,7 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
                 exit_code=0,
                 attempt_id=0,
             )
-        ]
+        ],
     )
 
     # Complete heartbeat

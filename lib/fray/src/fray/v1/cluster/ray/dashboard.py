@@ -235,7 +235,7 @@ def create_ssh_proxy_chain(
     # Build SSH command with all port forwards
     ssh_cmd = [
         "ssh",
-        "-tt",
+        "-N",
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
@@ -244,6 +244,8 @@ def create_ssh_proxy_chain(
         "IdentitiesOnly=yes",
         "-o",
         "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=60",
         "-i",
         os.path.expanduser("~/.ssh/marin_ray_cluster.pem"),
     ]
@@ -287,13 +289,14 @@ def create_ssh_proxy_chain(
     if not cluster_to_use:
         raise RuntimeError("No reachable cluster found with external IP")
 
-    ssh_cmd.extend([f"ray@{cluster_to_use.external_ip}", "while true; do sleep 86400; done"])
+    ssh_cmd.append(f"ray@{cluster_to_use.external_ip}")
     logger.info(f"Creating SSH proxy chain through {cluster_to_use.cluster_name}")
     logger.info(f"Tunneling to {len(clusters)} clusters. Port mapping: {port_mappings}")
 
     return subprocess.Popen(
         ssh_cmd,
         stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
         env={**os.environ, "TERM": "dumb"},
     )
 

@@ -52,7 +52,7 @@ def test_profile_running_task(cluster):
     task_id = _wait_for_task_running(cluster, job)
 
     request = cluster_pb2.ProfileTaskRequest(
-        task_id=task_id,
+        target=task_id,
         duration_seconds=1,
         profile_type=cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH)),
     )
@@ -82,7 +82,7 @@ def test_profile_formats(cluster):
     ]
     for name, fmt in cpu_formats:
         request = cluster_pb2.ProfileTaskRequest(
-            task_id=task_id,
+            target=task_id,
             duration_seconds=1,
             profile_type=cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=fmt)),
         )
@@ -96,7 +96,7 @@ def test_profile_formats(cluster):
 def test_profile_nonexistent_task(cluster):
     """Profiling a non-existent task returns an error."""
     request = cluster_pb2.ProfileTaskRequest(
-        task_id="/nonexistent/task/0",
+        target="/nonexistent/task/0",
         duration_seconds=1,
         profile_type=cluster_pb2.ProfileType(cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.FLAMEGRAPH)),
     )

@@ -69,7 +69,7 @@ Finally, to launch an experiment, use [`ray_run.py`](https://github.com/marin-co
 launches jobs to the Ray cluster:
 
 ```bash
-python marin/run/ray_run.py -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py -- python experiments/hello_world.py
 ```
 
 This script ensure that:
