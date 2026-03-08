@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import Literal, Optional, cast, overload
 
 import jax
@@ -12,10 +13,23 @@ from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
 from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
 
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
+_FUSED_CE_IMPLEMENTATION_ENV = "LEVANTER_FUSED_CE_IMPLEMENTATION"
+_FUSED_CE_ALLOWED_IMPLEMENTATIONS = frozenset({"auto", "xla", "reference", "pallas_tpu", "pallas_gpu"})
+
+
+def _resolve_fused_ce_implementation_override() -> Implementation | None:
+    raw = os.environ.get(_FUSED_CE_IMPLEMENTATION_ENV, "").strip().lower()
+    if raw in {"", "auto"}:
+        return None
+    if raw not in _FUSED_CE_ALLOWED_IMPLEMENTATIONS:
+        allowed = ", ".join(sorted(_FUSED_CE_ALLOWED_IMPLEMENTATIONS))
+        raise ValueError(f"{_FUSED_CE_IMPLEMENTATION_ENV} must be one of: {allowed}. Got {raw!r}.")
+    return cast(Implementation, raw)
 
 
 def maybe_fused_next_token_loss(
@@ -263,6 +277,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
+            implementation=_resolve_fused_ce_implementation_override(),
             return_argmax=return_argmax,
         )
         if return_argmax:

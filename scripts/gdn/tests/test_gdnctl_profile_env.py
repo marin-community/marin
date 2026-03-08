@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -23,6 +23,32 @@ def test_parse_profile_env_parses_key_value_pairs() -> None:
         ("WANDB_MODE", "offline"),
         ("EMPTY_VALUE", ""),
     ]
+
+
+def test_append_profile_env_includes_ce_override_only_when_requested() -> None:
+    base_args = argparse.Namespace(
+        wandb_mode="online",
+        size="130m",
+        num_steps=20,
+        profile_start_step=2,
+        profile_num_steps=6,
+        run_name_prefix="demo",
+        tpu="v5p-8",
+        batch_size=8,
+        chunk_size=None,
+        segment_size=None,
+        profile_env=[],
+    )
+
+    cmd = ["execute"]
+    args = argparse.Namespace(**vars(base_args), ce_implementation="pallas_tpu")
+    gdnctl._append_profile_env(cmd, args)
+    assert f"{gdnctl.FUSED_CE_IMPLEMENTATION_ENV}=pallas_tpu" in cmd
+
+    cmd_auto = ["execute"]
+    args_auto = argparse.Namespace(**vars(base_args), ce_implementation="auto")
+    gdnctl._append_profile_env(cmd_auto, args_auto)
+    assert not any(item.startswith(f"{gdnctl.FUSED_CE_IMPLEMENTATION_ENV}=") for item in cmd_auto)
 
 
 @pytest.mark.parametrize(

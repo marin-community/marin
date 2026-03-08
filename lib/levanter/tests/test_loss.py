@@ -16,9 +16,9 @@ from haliax import NamedArray
 
 # Import the functions from your module
 # Replace 'your_module' with the actual module name where your functions are defined
+import levanter.models.loss as loss_module
 from levanter.models.loss import cross_entropy_loss_and_log_normalizers, fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.jax_utils import key_iterator
-
 
 Batch = hax.Axis("batch", size=2)
 Seq = hax.Axis("seq", size=3)
@@ -123,6 +123,58 @@ def test_fused_loss_returns_argmax(test_data):
 
     assert hax.all(hax.isclose(loss_block, loss_full, atol=1e-3, rtol=1e-3))
     assert hax.all(argmax_block == argmax_full)
+
+
+def test_fused_loss_honors_env_implementation_override(monkeypatch: pytest.MonkeyPatch, test_data) -> None:
+    pred_embeddings, pred_lm_head, true_ids = test_data
+    captured: dict[str, object] = {}
+
+    def _fake_kernel(x, labels, w, **kwargs):
+        captured["implementation"] = kwargs.get("implementation")
+        return jnp.zeros((x.shape[0],), dtype=jnp.float32)
+
+    monkeypatch.setenv("LEVANTER_FUSED_CE_IMPLEMENTATION", "pallas_tpu")
+    monkeypatch.setattr(loss_module, "fused_cross_entropy_loss_and_logsumexp_penalty_kernel", _fake_kernel)
+
+    fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
+        Contract=Embed,
+        Label=Vocab,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.0,
+        block_size=8,
+        dtype=pred_embeddings.dtype,
+    )
+
+    assert captured["implementation"] == "pallas_tpu"
+
+
+def test_fused_loss_uses_auto_when_env_override_is_unset(monkeypatch: pytest.MonkeyPatch, test_data) -> None:
+    pred_embeddings, pred_lm_head, true_ids = test_data
+    captured: dict[str, object] = {}
+
+    def _fake_kernel(x, labels, w, **kwargs):
+        captured["implementation"] = kwargs.get("implementation")
+        return jnp.zeros((x.shape[0],), dtype=jnp.float32)
+
+    monkeypatch.delenv("LEVANTER_FUSED_CE_IMPLEMENTATION", raising=False)
+    monkeypatch.setattr(loss_module, "fused_cross_entropy_loss_and_logsumexp_penalty_kernel", _fake_kernel)
+
+    fused_cross_entropy_loss_and_logsumexp_penalty(
+        pred_embeddings,
+        pred_lm_head,
+        Contract=Embed,
+        Label=Vocab,
+        target_y=true_ids,
+        reduction=None,
+        logsumexp_weight=0.0,
+        block_size=8,
+        dtype=pred_embeddings.dtype,
+    )
+
+    assert captured["implementation"] is None
 
 
 def test_single_block(test_data):

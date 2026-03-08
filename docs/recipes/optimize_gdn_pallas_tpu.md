@@ -37,6 +37,28 @@ What to do differently now:
   that clearly dominates any control-flow regression.
 - Do not spend primary iteration budget on more kernel-local H/J/E/I/G-style work unless it is nested
   inside a new outer train-path structure or explicitly removes the `while`/`conditional` bottleneck.
+- After Iterations 64-66, also treat fused cross-entropy backend selection as a first-class bottleneck split.
+- If residual `while` is still CE/XLA-attributed, do not keep spending mainline budget on standalone GDN-local work.
+
+## CE-first pivot (March 2026)
+
+Latest evidence:
+
+- Iteration 64 produced a real GDN-side structural win:
+  - forward closed-call `22.228 -> 20.661 ms`
+  - backward closed-call `15.621 -> 13.130 ms`
+  - kernel budget `37.849 -> 33.791 ms`
+  - train-path budget `69.475 -> 65.401 ms`
+- Iteration 65 then produced only `+0.26%` MFU with residual `while` staying flat around `31.6 ms`.
+- Iteration 66 changed the outer train shell and still regressed slightly while the same `while` remained.
+- Recent validated runs explicitly logged:
+  - `Fused cross-entropy selected implementation: xla`
+
+Interpretation:
+
+- the remaining wall is no longer primarily inside the GDN train shell,
+- the residual `while` is likely at least partly a CE/XLA backend-selection issue,
+- the next budget should go first to CE/backend A/B and Macro O/M style control-arm work.
 
 The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://github.com/marin-community/marin/issues/1884#issuecomment-3714287157), updated January 6, 2026):
 - strict lower-triangular inversion is expensive on TPU; sequential dependencies hurt MXU occupancy,
@@ -208,6 +230,19 @@ Risk:
 
 These moves supersede the previous priority order for upcoming iterations.
 
+### P) Force and benchmark TPU Pallas CE on the real train run
+Target: determine whether the residual `while ~31.6 ms` is mostly a CE/XLA backend issue.
+
+Required matrix:
+- champion code + CE default
+- champion code + CE forced `pallas_tpu`
+- current head + CE default
+- current head + CE forced `pallas_tpu`
+
+Implementation note:
+- use `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` to force the TPU Pallas CE path.
+- profile the exact same train run; do not rely on microbenchmarks only.
+
 ### L) Associative chunk summaries / affine scan reformulation
 Target: stop expressing training as a large serial scan over chunk kernels plus tapes.
 
@@ -253,11 +288,12 @@ Why:
 
 ## Current priority order
 
-1. `L` associative chunk summaries / scan reformulation
-2. `M` XLA-first outer train path
-3. `N` backward tape-contract redesign
-4. `O` reduced-Pallas / XLA control arm
-5. `E/H/G/I/J` only when nested inside one of the above or when they explicitly suppress
+1. `P` CE backend forcing / A-B benchmark
+2. `O` reduced-Pallas / XLA control arm
+3. `M` XLA-first outer train path
+4. `N` backward tape-contract redesign inside `M`/`O`
+5. `L` associative summaries only when paired with `M`/`O` or when CE is no longer the dominant unresolved bottleneck
+6. `E/H/G/I/J` only when nested inside one of the above or when they explicitly suppress
    the train-path `while` / `conditional` buckets
 
 ## Measurement: avoid “trace-only” optimization

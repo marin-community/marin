@@ -7,8 +7,9 @@ Scope priorities:
 
 1) Reduce total train-path budget, not just inner `custom-call` time.
 2) Track both kernel-local cost and control-flow cost (`while`, `conditional`) in every profile comparison.
-3) Prefer structural train-path changes over scalar tuning and config-only tweaks.
-4) Keep correctness and deployability for the target train config unless this run is explicitly marked as a probe/ablation.
+3) Track fused CE backend selection in every profiled run; if residual `while` is CE/XLA-attributed, treat CE as part of the main bottleneck split.
+4) Prefer CE/backend and outer-structure changes over scalar tuning and config-only tweaks.
+5) Keep correctness and deployability for the target train config unless this run is explicitly marked as a probe/ablation.
 
 Probe policy:
 

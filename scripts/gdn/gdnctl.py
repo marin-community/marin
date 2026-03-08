@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Gated DeltaNet TPU iteration utilities.
@@ -51,6 +51,7 @@ DEFAULT_MODERN_TPU_FAMILIES = ("v5p", "v5e", "v6e")
 
 SESSION_DIRECTIVE_PRESET_FILES = {
     "training-chunk-kernel-focus": REPO_ROOT / "scripts/gdn/session_directives/training-chunk-kernel-focus.md",
+    "ce-backend-priority": REPO_ROOT / "scripts/gdn/session_directives/ce-backend-priority.md",
     "triangular-inversion": REPO_ROOT / "scripts/gdn/session_directives/triangular-inversion.md",
     "tpu-layout-and-dtypes": REPO_ROOT / "scripts/gdn/session_directives/tpu-layout-and-dtypes.md",
     "emit-pipeline-fullseq": REPO_ROOT / "scripts/gdn/session_directives/emit-pipeline-fullseq.md",
@@ -88,6 +89,9 @@ ITERATION_MS_DELTA_RE = re.compile(
     r"^\s*-\s+(?P<label>.+?):\s*`(?P<before>[+\-]?(?:\d+(?:\.\d*)?|\.\d+))\s*ms\s*->\s*"
     r"(?P<after>[+\-]?(?:\d+(?:\.\d*)?|\.\d+))\s*ms`"
 )
+FUSED_CE_SELECTED_RE = re.compile(r"Fused cross-entropy selected implementation:\s*(?P<impl>\S+)")
+FUSED_CE_IMPLEMENTATION_ENV = "LEVANTER_FUSED_CE_IMPLEMENTATION"
+FUSED_CE_IMPLEMENTATION_CHOICES = ("auto", "xla", "reference", "pallas_tpu", "pallas_gpu")
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -360,6 +364,21 @@ def _extract_metric_from_text(text: str, metric_key: str) -> float | None:
         return None
 
 
+def _extract_ce_backend_selected(text: str) -> str | None:
+    matches = list(FUSED_CE_SELECTED_RE.finditer(text))
+    if not matches:
+        return None
+    return matches[-1].group("impl")
+
+
+def _normalize_ce_implementation(value: str | None) -> str:
+    normalized = (value or "auto").strip().lower()
+    if normalized not in FUSED_CE_IMPLEMENTATION_CHOICES:
+        allowed = ", ".join(FUSED_CE_IMPLEMENTATION_CHOICES)
+        raise SystemExit(f"[gdnctl] invalid CE implementation {value!r}; expected one of: {allowed}")
+    return normalized
+
+
 def _resolve_wandb_run_for_url(run_url: str) -> tuple[object | None, str | None]:
     match = WANDB_RUN_URL_RE.search(run_url)
     if match is None:
@@ -525,6 +544,8 @@ def _collect_profile_metrics(
 ) -> dict[str, object]:
     metric_keys = [args.perf_metric, "throughput/mfu", "throughput/tokens_per_second", "throughput/duration"]
     metric_keys = [key for key in dict.fromkeys(metric_keys) if key]
+    ce_backend_selected = _extract_ce_backend_selected(output_text)
+    requested_ce_impl = _normalize_ce_implementation(getattr(args, "ce_implementation", "auto"))
 
     run_url = _extract_last_wandb_run_url(output_text)
     warnings: list[str] = []
@@ -601,8 +622,25 @@ def _collect_profile_metrics(
         "metrics": metrics,
         "metric_source": metric_source,
         "metric_points": metric_points,
+        "ce_backend_selected": ce_backend_selected,
+        "ce_requested_implementation": requested_ce_impl,
         "warnings": warnings,
     }
+
+
+def _profile_metric_args(args: argparse.Namespace, *, ce_implementation: str) -> argparse.Namespace:
+    return argparse.Namespace(
+        perf_metric=args.perf_metric,
+        perf_aggregation=args.perf_aggregation,
+        perf_history_step_start=args.perf_history_step_start,
+        perf_history_step_end=args.perf_history_step_end,
+        perf_history_aggregation=args.perf_history_aggregation,
+        perf_history_min_points=args.perf_history_min_points,
+        perf_wandb_entity=args.perf_wandb_entity,
+        perf_wandb_project=args.perf_wandb_project,
+        validation_profile_wandb_mode=args.validation_profile_wandb_mode,
+        ce_implementation=ce_implementation,
+    )
 
 
 def _iteration_blocks(lines: Sequence[str]) -> list[tuple[int, int, str]]:
@@ -624,6 +662,10 @@ def _iteration_blocks(lines: Sequence[str]) -> list[tuple[int, int, str]]:
 def _normalize_iteration_metric_label(label: str) -> str | None:
     normalized = label.lower().replace("`", "").replace("*", "").strip()
     normalized = re.sub(r"\s+", " ", normalized)
+    if normalized.startswith("ce-attributed while") or normalized.startswith("ce attributed while"):
+        return "ce_attributed_while_ms"
+    if normalized.startswith("ce control budget"):
+        return "ce_control_budget_ms"
     if "forward closed-call" in normalized:
         return "forward_closed_call_ms"
     if "backward closed-call" in normalized:
@@ -864,6 +906,12 @@ def _apply_performance_policy(
     metric_points = metric_points_obj if isinstance(metric_points_obj, dict) else {}
     warnings_obj = validation_info.get("warnings")
     warnings = warnings_obj if isinstance(warnings_obj, list) else []
+    ce_backend_selected_obj = validation_info.get("ce_backend_selected")
+    ce_backend_selected = str(ce_backend_selected_obj) if isinstance(ce_backend_selected_obj, str) else None
+    ce_requested_impl_obj = validation_info.get("ce_requested_implementation")
+    ce_requested_implementation = str(ce_requested_impl_obj) if isinstance(ce_requested_impl_obj, str) else None
+    ce_ab_compare_obj = validation_info.get("ce_ab_compare")
+    ce_ab_compare = ce_ab_compare_obj if isinstance(ce_ab_compare_obj, dict) else None
     hotspot_metrics_obj = validation_info.get("hotspot_metrics")
     hotspot_metrics = hotspot_metrics_obj if isinstance(hotspot_metrics_obj, dict) else {}
     hotspot_heading_obj = validation_info.get("hotspot_heading")
@@ -875,6 +923,23 @@ def _apply_performance_policy(
 
     for warning in warnings:
         print(f"[gdnctl] WARNING: {warning}", file=sys.stderr)
+    if ce_backend_selected is not None:
+        requested_text = ce_requested_implementation or "auto"
+        print(f"[gdnctl] validation profile fused CE backend: selected={ce_backend_selected} requested={requested_text}")
+    if ce_ab_compare is not None:
+        compare_selected = ce_ab_compare.get("ce_backend_selected")
+        compare_requested = ce_ab_compare.get("ce_requested_implementation")
+        compare_metrics = ce_ab_compare.get("metrics")
+        compare_metric_value = None
+        if isinstance(compare_metrics, dict):
+            compare_metric_value = _coerce_float(compare_metrics.get(args.perf_metric))
+        if compare_selected is not None:
+            details = f"selected={compare_selected}"
+            if compare_requested is not None:
+                details += f" requested={compare_requested}"
+            if compare_metric_value is not None:
+                details += f" {args.perf_metric}={compare_metric_value:.6g}"
+            print(f"[gdnctl] validation profile CE compare run: {details}")
 
     if metric_value is None:
         print(
@@ -906,6 +971,9 @@ def _apply_performance_policy(
         "metric_value": metric_value,
         "metric_source": metric_source,
         "metric_points": metric_points,
+        "ce_backend_selected": ce_backend_selected,
+        "ce_requested_implementation": ce_requested_implementation,
+        "ce_ab_compare": ce_ab_compare,
         "metrics": metrics,
         "hotspot_metrics": hotspot_metrics,
         "hotspot_heading": hotspot_heading,
@@ -1664,6 +1732,23 @@ def _validation_gate_session_directive(args: argparse.Namespace) -> str:
     )
 
 
+def _ce_backend_session_directive(args: argparse.Namespace) -> str:
+    primary_impl = _normalize_ce_implementation(args.validation_profile_ce_implementation)
+    compare_impl = _normalize_ce_implementation(args.validation_profile_ce_compare_implementation)
+    return (
+        "Cross-entropy backend evidence is now first-class for this run.\n\n"
+        "- Treat residual `while` as potentially CE/XLA-attributed unless trace evidence says otherwise.\n"
+        f"- Primary validation profile CE implementation request: `{primary_impl}`.\n"
+        f"- Secondary CE compare profile request: `{compare_impl}`.\n"
+        "- Every iteration writeup must record:\n"
+        "  - `CE backend selected: <impl>`\n"
+        "  - whether the change class is `CE backend`, `outer control structure`, or `inner kernel math`\n"
+        "  - whether the candidate should be rejected if `while_ms` remains flat.\n"
+        "- If CE backend remains `xla` and `while_ms` stays large, the next iteration should be CE/backend, Macro O, "
+        "or Macro M rather than another inner-kernel-only attempt."
+    )
+
+
 def _performance_policy_session_directive(args: argparse.Namespace, *, perf_state_path: Path) -> str:
     window_line = ""
     if args.perf_aggregation == "history-window":
@@ -1687,15 +1772,23 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - `Backward closed-call ...`\n"
         "  - `while: <before> ms -> <after> ms`\n"
         "  - `conditional: <before> ms -> <after> ms`\n"
+        "  - `CE backend selected: <impl>`\n"
+        "  - `CE-attributed while: <before> ms -> <after> ms` when trace attribution can isolate it\n"
         "  - `Kernel budget: <before> ms -> <after> ms`\n"
         "  - `Control budget: <before> ms -> <after> ms`\n"
         "  - `Train-path budget: <before> ms -> <after> ms`\n"
+        "- Classification is mandatory in the iteration writeup:\n"
+        "  - `Change class: CE backend | outer control structure | inner kernel math`\n"
+        "  - `Expected effect on while_ms: ...`\n"
+        "  - `Reject if while_ms remains flat? yes/no + why`\n"
         "- Hard control-flow gate: reject candidates when `while_ms` grows by > "
         f"{args.perf_max_while_increase_ms:.3f} ms or `train_path_budget_ms` grows by > "
         f"{args.perf_max_train_path_budget_increase_ms:.3f} ms unless "
         f"`{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
         f"- Reject candidates when a new `conditional_ms` bucket >= {args.perf_new_conditional_ms:.3f} ms appears, "
         f"unless `{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
+        f"- Validation profile CE implementation request: `{args.validation_profile_ce_implementation}`.\n"
+        f"- Validation profile CE compare implementation: `{args.validation_profile_ce_compare_implementation}`.\n"
         f"- State file: `{perf_state_path}`"
         f"{window_line}"
     )
@@ -1944,6 +2037,9 @@ def _append_profile_env(cmd: list[str], args: argparse.Namespace) -> None:
         cmd += ["-e", f"GDN_PROFILE_CHUNK_SIZE={args.chunk_size}"]
     if args.segment_size is not None:
         cmd += ["-e", f"GDN_PROFILE_SEGMENT_SIZE={args.segment_size}"]
+    ce_implementation = _normalize_ce_implementation(getattr(args, "ce_implementation", "auto"))
+    if ce_implementation != "auto":
+        cmd += ["-e", f"{FUSED_CE_IMPLEMENTATION_ENV}={ce_implementation}"]
     extra_env = _parse_profile_env(getattr(args, "profile_env", []))
     for key, value in extra_env:
         cmd += ["-e", f"{key}={value}"]
@@ -2433,6 +2529,7 @@ def _run_validation_ray_profile_once(
     *,
     cluster: str,
     run_name_prefix: str,
+    ce_implementation: str,
 ) -> tuple[int, bool, str]:
     cmd = [
         *RAY_RUN,
@@ -2453,6 +2550,7 @@ def _run_validation_ray_profile_once(
         chunk_size=args.validation_profile_chunk_size,
         segment_size=args.validation_profile_segment_size,
         profile_env=args.validation_profile_env,
+        ce_implementation=ce_implementation,
     )
     _append_profile_env(cmd, profile_env_args)
 
@@ -2476,10 +2574,12 @@ def _run_validation_ray_profile_once(
 
 def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) -> tuple[int, bool, dict[str, object]]:
     profile_prefix = f"{args.validation_profile_run_name_prefix}_iter{iteration:03d}"
+    primary_ce_impl = _normalize_ce_implementation(args.validation_profile_ce_implementation)
+    compare_ce_impl = _normalize_ce_implementation(args.validation_profile_ce_compare_implementation)
     active_cluster = getattr(args, "active_dev_tpu_cluster", None)
     if args.dev_tpu_name and active_cluster is not None:
 
-        def _run_on_cluster(cluster: str) -> tuple[int, str]:
+        def _run_on_cluster(cluster: str, *, run_name_prefix: str, ce_implementation: str) -> tuple[int, str]:
             dev_profile_args = argparse.Namespace(
                 cluster=cluster,
                 tpu_name=args.dev_tpu_name,
@@ -2497,6 +2597,7 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
                 marin_prefix=args.validation_profile_marin_prefix,
                 dry_run=args.validation_profile_dry_run,
                 no_sync=args.validation_dev_no_sync,
+                ce_implementation=ce_implementation,
             )
             cmd = [
                 *DEV_TPU,
@@ -2521,19 +2622,63 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             cmd += ["--", " && ".join(profile_cmd_lines)]
             return _run_command_with_output(cmd)
 
-        rc, output_text = _run_on_cluster(active_cluster)
+        rc, output_text = _run_on_cluster(
+            active_cluster,
+            run_name_prefix=profile_prefix,
+            ce_implementation=primary_ce_impl,
+        )
         if rc == 0:
-            return 0, True, _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix)
+            primary_info = _collect_profile_metrics(
+                _profile_metric_args(args, ce_implementation=primary_ce_impl),
+                output_text=output_text,
+                profile_prefix=profile_prefix,
+            )
+            if compare_ce_impl != "auto":
+                compare_prefix = f"{profile_prefix}_ce_{compare_ce_impl}"
+                compare_rc, compare_output = _run_on_cluster(
+                    active_cluster,
+                    run_name_prefix=compare_prefix,
+                    ce_implementation=compare_ce_impl,
+                )
+                if compare_rc != 0:
+                    return compare_rc, True, primary_info
+                compare_info = _collect_profile_metrics(
+                    _profile_metric_args(args, ce_implementation=compare_ce_impl),
+                    output_text=compare_output,
+                    profile_prefix=compare_prefix,
+                )
+                primary_info["ce_ab_compare"] = compare_info
+            return 0, True, primary_info
         if _try_reacquire_managed_dev_tpu(args, reason="validation profile failed on held dev TPU"):
             retry_cluster = getattr(args, "active_dev_tpu_cluster", None)
             if retry_cluster is not None:
-                rc, output_text = _run_on_cluster(retry_cluster)
+                rc, output_text = _run_on_cluster(
+                    retry_cluster,
+                    run_name_prefix=profile_prefix,
+                    ce_implementation=primary_ce_impl,
+                )
                 if rc == 0:
-                    return (
-                        0,
-                        True,
-                        _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix),
+                    primary_info = _collect_profile_metrics(
+                        _profile_metric_args(args, ce_implementation=primary_ce_impl),
+                        output_text=output_text,
+                        profile_prefix=profile_prefix,
                     )
+                    if compare_ce_impl != "auto":
+                        compare_prefix = f"{profile_prefix}_ce_{compare_ce_impl}"
+                        compare_rc, compare_output = _run_on_cluster(
+                            retry_cluster,
+                            run_name_prefix=compare_prefix,
+                            ce_implementation=compare_ce_impl,
+                        )
+                        if compare_rc != 0:
+                            return compare_rc, True, primary_info
+                        compare_info = _collect_profile_metrics(
+                            _profile_metric_args(args, ce_implementation=compare_ce_impl),
+                            output_text=compare_output,
+                            profile_prefix=compare_prefix,
+                        )
+                        primary_info["ce_ab_compare"] = compare_info
+                    return (0, True, primary_info)
         print(
             "[gdnctl] validation profile failed on held dev TPU; trying Ray fallback.",
             file=sys.stderr,
@@ -2555,14 +2700,44 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             args,
             cluster=cluster,
             run_name_prefix=profile_prefix,
+            ce_implementation=primary_ce_impl,
         )
         if rc == 0:
-            return 0, True, _collect_profile_metrics(args, output_text=output_text, profile_prefix=profile_prefix)
+            primary_info = _collect_profile_metrics(
+                _profile_metric_args(args, ce_implementation=primary_ce_impl),
+                output_text=output_text,
+                profile_prefix=profile_prefix,
+            )
+            if compare_ce_impl != "auto":
+                compare_prefix = f"{profile_prefix}_ce_{compare_ce_impl}"
+                compare_rc, compare_retryable, compare_output = _run_validation_ray_profile_once(
+                    args,
+                    cluster=cluster,
+                    run_name_prefix=compare_prefix,
+                    ce_implementation=compare_ce_impl,
+                )
+                if compare_rc != 0:
+                    return compare_rc, retryable or compare_retryable, primary_info
+                compare_info = _collect_profile_metrics(
+                    _profile_metric_args(args, ce_implementation=compare_ce_impl),
+                    output_text=compare_output,
+                    profile_prefix=compare_prefix,
+                )
+                primary_info["ce_ab_compare"] = compare_info
+            return 0, True, primary_info
         last_rc = rc
         last_output = output_text
         retryable = retryable or cluster_retryable
     if last_output:
-        return last_rc, retryable, _collect_profile_metrics(args, output_text=last_output, profile_prefix=profile_prefix)
+        return (
+            last_rc,
+            retryable,
+            _collect_profile_metrics(
+                _profile_metric_args(args, ce_implementation=primary_ce_impl),
+                output_text=last_output,
+                profile_prefix=profile_prefix,
+            ),
+        )
     return last_rc, retryable, {"profile_prefix": profile_prefix}
 
 
@@ -2908,6 +3083,7 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
             )
         if args.validation_mode in {"required", "profile-only"}:
             session_directives.append(_validation_gate_session_directive(args))
+            session_directives.append(_ce_backend_session_directive(args))
         if args.perf_mode == "required":
             session_directives.append(_performance_policy_session_directive(args, perf_state_path=perf_state_path))
         if session_directives:
@@ -3147,6 +3323,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Extra profile env var override in KEY=VALUE form (repeatable).",
     )
+    dev_profile.add_argument(
+        "--ce-implementation",
+        choices=FUSED_CE_IMPLEMENTATION_CHOICES,
+        default="auto",
+        help="Requested fused cross-entropy implementation for the profiled run.",
+    )
     dev_profile.add_argument("--run-name-prefix", default="gdn_tinyprof", help="Run name prefix")
     dev_profile.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     dev_profile.add_argument(
@@ -3178,6 +3360,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Extra profile env var override in KEY=VALUE form (repeatable).",
+    )
+    ray_profile.add_argument(
+        "--ce-implementation",
+        choices=FUSED_CE_IMPLEMENTATION_CHOICES,
+        default="auto",
+        help="Requested fused cross-entropy implementation for the profiled run.",
     )
     ray_profile.add_argument("--run-name-prefix", default="gdn_tinyprof", help="Run name prefix")
     ray_profile.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
@@ -3435,6 +3623,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Extra profile env var override for validation profile runs in KEY=VALUE form (repeatable).",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-ce-implementation",
+        choices=FUSED_CE_IMPLEMENTATION_CHOICES,
+        default="auto",
+        help="Requested fused cross-entropy implementation for the primary validation profile run.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-ce-compare-implementation",
+        choices=FUSED_CE_IMPLEMENTATION_CHOICES,
+        default="pallas_tpu",
+        help=(
+            "Optional second CE implementation profiled for A/B comparison each iteration. "
+            "Set to `auto` to disable the compare run."
+        ),
     )
     codex_loop.add_argument(
         "--validation-profile-run-name-prefix",

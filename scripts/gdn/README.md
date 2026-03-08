@@ -28,6 +28,11 @@ Run lightweight profile on an allocated dev TPU:
 uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-sync
 ```
 
+Run the same profile with TPU Pallas CE forced:
+```bash
+uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --no-sync
+```
+
 Wait for a profile job:
 ```bash
 uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 <job_id> --show-logs
@@ -51,8 +56,10 @@ uv run python scripts/gdn/gdnctl.py codex-loop \
   --reasoning-effort xhigh \
   --resilient \
   --directive-preset training-chunk-kernel-focus \
+  --directive-preset ce-backend-priority \
   --directive-preset control-structure-pivot \
   --directive-preset macro-coverage-pivot \
+  --validation-profile-ce-compare-implementation pallas_tpu \
   --dirty-policy stash \
   --no-commit-policy count-failure
 ```
@@ -90,12 +97,14 @@ Prompt template used by the loop:
 - `scripts/gdn/codex_iteration_prompt.md`
 - session directive presets:
   - `training-chunk-kernel-focus` -> `scripts/gdn/session_directives/training-chunk-kernel-focus.md`
+  - `ce-backend-priority` -> `scripts/gdn/session_directives/ce-backend-priority.md`
   - `control-structure-pivot` -> `scripts/gdn/session_directives/control-structure-pivot.md`
   - `macro-coverage-pivot` -> `scripts/gdn/session_directives/macro-coverage-pivot.md`
   - `associative-summaries` -> `scripts/gdn/session_directives/associative-summaries.md`
   - `xla-first-train-path` -> `scripts/gdn/session_directives/xla-first-train-path.md`
 
 The default prompt is aggressive by design:
+- treats fused CE backend selection as a first-class bottleneck split,
 - prioritizes train-path control-structure moves over more kernel-local closed-call wins,
 - tracks `while` / `conditional` overhead in addition to MFU,
 - rejects candidates that worsen control-flow budget unless the end-to-end gain is large,

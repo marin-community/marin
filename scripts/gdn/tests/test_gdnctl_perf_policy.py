@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -235,6 +235,48 @@ def test_latest_iteration_hotspot_context_parses_structured_metrics(tmp_path: Pa
     assert current["control_budget_ms"] == 31.5
     assert current["train_path_budget_ms"] == 62.5
     assert baseline["train_path_budget_ms"] == 33.0
+
+
+def test_latest_iteration_hotspot_context_parses_ce_hotspot_metrics(tmp_path: Path) -> None:
+    log_path = tmp_path / "hillclimb.md"
+    log_path.write_text(
+        "\n".join(
+            [
+                "### Iteration 12 - Candidate",
+                "- `CE-attributed while`: `31.600 ms -> 28.500 ms`",
+                "- `CE control budget`: `31.600 ms -> 28.510 ms`",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    context = gdnctl._latest_iteration_hotspot_context(log_path)
+    current = context["hotspot_metrics"]
+    assert current["ce_attributed_while_ms"] == 28.5
+    assert current["ce_control_budget_ms"] == 28.51
+
+
+def test_collect_profile_metrics_parses_ce_backend_selection() -> None:
+    args = argparse.Namespace(
+        perf_metric="throughput/mfu",
+        perf_aggregation="summary",
+        perf_history_step_start=10,
+        perf_history_step_end=18,
+        perf_history_aggregation="median",
+        perf_history_min_points=5,
+        perf_wandb_entity="marin-community",
+        perf_wandb_project="marin",
+        validation_profile_wandb_mode="offline",
+        ce_implementation="pallas_tpu",
+    )
+    info = gdnctl._collect_profile_metrics(
+        args,
+        output_text="INFO Fused cross-entropy selected implementation: pallas_tpu\nthroughput/mfu=5.1\n",
+        profile_prefix="demo",
+    )
+    assert info["ce_backend_selected"] == "pallas_tpu"
+    assert info["ce_requested_implementation"] == "pallas_tpu"
 
 
 def test_perf_policy_reverts_candidate_when_while_growth_outweighs_small_metric_gain(tmp_path: Path) -> None:
