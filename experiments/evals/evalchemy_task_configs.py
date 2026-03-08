@@ -56,7 +56,7 @@ AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23", task_kwa
 
 MATH500 = EvalTaskConfig(name="MATH500", num_fewshot=0, task_alias="MATH500")
 HMMT = EvalTaskConfig(name="HMMT", num_fewshot=0, task_alias="HMMT", task_kwargs={"n_repeat": 1})
-OLYMPIADBENCH = EvalTaskConfig(name="OlympiadBench", num_fewshot=0, task_alias="OlympiadBench", task_kwargs={"n_repeat": 1})
+OLYMPIADBENCH = EvalTaskConfig(name="OlympiadBench", num_fewshot=0, task_alias="OlympiadBench")
 
 # =============================================================================
 # Code tasks
