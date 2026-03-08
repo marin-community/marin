@@ -24,6 +24,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -528,6 +529,47 @@ def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Jupyter notebooks", 0)
 
 
+def check_markdown_precommit_invocation(files: list[pathlib.Path], fix: bool) -> int:
+    md_files = [f for f in files if f.suffix == ".md"]
+    if not md_files:
+        return 0
+
+    pattern = re.compile(r"\buv run(?:\s+python)?\s+(?:\./)?infra/pre-commit\.py\b")
+    bad_refs: list[tuple[pathlib.Path, int, str]] = []
+
+    for file_path in md_files:
+        try:
+            with open(file_path) as f:
+                lines = f.readlines()
+        except Exception:
+            continue
+
+        updated_lines = lines.copy()
+        file_changed = False
+        for i, line in enumerate(lines):
+            if not pattern.search(line):
+                continue
+            bad_refs.append((file_path, i + 1, line.rstrip("\n")))
+            if fix:
+                new_line = pattern.sub("./infra/pre-commit.py", line)
+                if new_line != line:
+                    updated_lines[i] = new_line
+                    file_changed = True
+
+        if fix and file_changed:
+            with open(file_path, "w") as f:
+                f.writelines(updated_lines)
+
+    if bad_refs:
+        buf = io.StringIO()
+        buf.write("Use ./infra/pre-commit.py directly in docs; do not prefix with uv/python:\n")
+        for path, line_no, line in bad_refs:
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}:{line_no}: {line}\n")
+        return _record("Markdown pre-commit command", 1, buf.getvalue())
+
+    return _record("Markdown pre-commit command", 0)
+
+
 def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
@@ -600,6 +642,12 @@ PRECOMMIT_CONFIGS = [
         patterns=["**/*.ipynb"],
         checks=[
             check_notebooks,
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["**/*.md"],
+        checks=[
+            check_markdown_precommit_invocation,
         ],
     ),
 ]
