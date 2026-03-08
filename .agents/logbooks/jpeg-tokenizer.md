@@ -309,3 +309,20 @@
   - the next blocker is a real resume bug, now fixed locally
   - `K=16` should stay paused until `K=8` resumes cleanly from the committed fix
 - Next action: commit the resume fix, stop the buggy live `K=8` retry, and relaunch it from the saved `step-1000` checkpoint.
+
+### 2026-03-09 05:12 - Fixed K=8 retry relaunched; cluster is capacity-bound
+
+- Hypothesis: with the resume bug fixed in `198523e81`, the correct next move is to replace the buggy live retry with a fresh submission using the same run id and checkpoint path.
+- Command:
+  - `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a stop-job ray-run-dlwh-launch-20260308-103217`
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k8-trial-r2"]'`
+- Result:
+  - old buggy retry stop requested: `ray-run-dlwh-launch-20260308-103217`
+  - new fixed retry submitted: `ray-run-dlwh-launch-20260308-110836`
+  - executor step reused the same output path `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd`
+  - current cluster signal is not another resume failure; it is scheduler pressure:
+    `No available node types can fulfill resource requests ... TPU-v6e-8-head`
+- Interpretation:
+  - the next gating factor is TPU availability on `marin-eu-west4-a`, not checkpoint correctness
+  - further stop/resubmit churn is unlikely to improve anything while the cluster is resource-constrained
+- Next action: leave the fixed `K=8` retry queued, keep `K=16` stopped, and resume monitoring once capacity is available.

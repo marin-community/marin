@@ -251,3 +251,24 @@ Validation for the fix passed with:
 To keep the cluster focused on the half-finished baseline while fixing the resume path, the queued `K=16` trial
 `ray-run-dlwh-launch-20260308-104918` was intentionally stopped. The next correct move is to relaunch the `K=8` retry
 from fixed code so it can resume from `step-1000` instead of wasting TPU time restarting from zero.
+
+## Fixed K8 Relaunch
+
+That relaunch has now happened:
+
+- old buggy retry stop requested:
+  `ray-run-dlwh-launch-20260308-103217`
+- new fixed retry job:
+  `ray-run-dlwh-launch-20260308-110836`
+- code commit:
+  `198523e81`
+- reused output path:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd`
+
+The new blocker is not another resume bug. The current scheduler message is:
+
+- `No available node types can fulfill resource requests ... TPU-v6e-8-head`
+
+So the fixed retry is now waiting on TPU capacity rather than failing in the training code. That is the right place to
+pause: `K=16` stays stopped, the fixed `K=8` retry stays queued, and no more submission churn is warranted until the
+cluster can actually allocate a slice.
