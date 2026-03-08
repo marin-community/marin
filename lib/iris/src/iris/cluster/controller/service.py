@@ -35,6 +35,7 @@ from iris.cluster.controller.state import (
     ControllerWorker,
 )
 from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
+from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -954,19 +955,38 @@ class ControllerServiceImpl:
         request: cluster_pb2.ProfileTaskRequest,
         ctx: RequestContext,
     ) -> cluster_pb2.ProfileTaskResponse:
-        """Profile a running task by proxying to its worker."""
+        """Profile a running task or system process.
+
+        Target routing:
+        - /system/process with threads: handled locally (controller thread dump)
+        - /system/process with cpu/memory: not yet supported
+        - /job/.../task/N: proxied to the task's worker
+        """
+        # Handle controller-local targets: profile the controller process itself
+        if is_system_target(request.target):
+            if not request.HasField("profile_type"):
+                raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+            try:
+                duration = request.duration_seconds or 10
+                data = profile_local_process(duration, request.profile_type)
+                return cluster_pb2.ProfileTaskResponse(profile_data=data)
+            except Exception as e:
+                return cluster_pb2.ProfileTaskResponse(error=str(e))
+
+        # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
-            task_name = JobName.from_wire(request.task_id)
+            parsed = parse_profile_target(request.target)
+            task_name = JobName.from_wire(parsed.task_id)
             task_name.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         task = self._state.get_task(task_name)
         if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 
         worker_id = task.worker_id
         if not worker_id:
-            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not assigned to a worker")
 
         worker = self._state.get_worker(worker_id)
         if not worker or not worker.healthy:

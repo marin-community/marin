@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-transport-https \
     openssh-client \
     git \
+    lldb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Google Cloud SDK (required for TPU management via gcloud)
@@ -47,6 +48,10 @@ RUN uv sync --no-install-project
 # Copy source and install the project
 COPY src/ ./src/
 RUN uv sync
+
+# Install profiling tools (py-spy for CPU/thread profiling, memray for memory profiling).
+# These are needed for /system/process profiling on the controller.
+RUN uv pip install py-spy memray
 
 # Default cache directory
 RUN mkdir -p /var/cache/iris
