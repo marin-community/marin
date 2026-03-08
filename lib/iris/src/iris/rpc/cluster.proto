@@ -643,6 +643,7 @@ message Controller {
     string address = 2;
     string job_id = 3;
     map<string, string> metadata = 4;
+    string task_id = 5;              // Optional task ID for cleanup on retry/termination
   }
 
   message RegisterEndpointResponse {

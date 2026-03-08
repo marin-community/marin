@@ -6,6 +6,7 @@
 import logging
 import time
 
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.client.protocol import TaskStateLogger
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, adjust_tpu_replicas, is_job_finished
@@ -254,11 +255,17 @@ class RemoteClusterClient:
         job_id: JobName,
         metadata: dict[str, str] | None = None,
     ) -> str:
+        task_id = ""
+        job_info = get_job_info()
+        if job_info is not None and job_info.job_id == job_id:
+            task_id = job_info.task_id.to_wire()
+
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
             job_id=job_id.to_wire(),
             metadata=metadata or {},
+            task_id=task_id,
         )
         response = self._client.register_endpoint(request)
         return response.endpoint_id

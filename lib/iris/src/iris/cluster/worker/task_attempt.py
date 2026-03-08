@@ -334,7 +334,9 @@ class TaskAttempt:
 
     def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
         """Return recent logs for this task attempt."""
-        return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
+        if max_entries > 0:
+            return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries).entries
+        return self._log_store.get_logs(self._log_key).entries
 
     def drain_heartbeat_logs(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
         """Return log entries appended since the last call, for delta forwarding."""

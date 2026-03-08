@@ -2130,7 +2130,8 @@ class ControllerState:
         Log entries are collected under the state lock but flushed to SQLite after
         the lock is released, so disk I/O does not block scheduling or RPCs.
         """
-        pending_logs: list[tuple[str, list]] = []
+        pending_append_logs: list[tuple[str, list]] = []
+        pending_replace_logs: list[tuple[str, list]] = []
 
         with self._lock:
             worker = self._workers.get(snapshot.worker_id)
@@ -2174,7 +2175,11 @@ class ControllerState:
 
                 # Collect log entries for batch write outside the lock.
                 if entry.log_entries and self._log_store is not None:
-                    pending_logs.append((task_log_key(task_id, entry.attempt_id), entry.log_entries))
+                    log_key = task_log_key(task_id, entry.attempt_id)
+                    if entry.state in TERMINAL_TASK_STATES:
+                        pending_replace_logs.append((log_key, entry.log_entries))
+                    else:
+                        pending_append_logs.append((log_key, entry.log_entries))
 
                 if task.is_finished():
                     continue
@@ -2205,8 +2210,11 @@ class ControllerState:
                     self._process_task_state_change(task_id, entry.state, entry.attempt_id)
 
         # Flush logs outside the state lock — disk I/O no longer blocks other threads.
-        if pending_logs and self._log_store is not None:
-            self._log_store.append_batch(pending_logs)
+        if self._log_store is not None:
+            if pending_append_logs:
+                self._log_store.append_batch(pending_append_logs)
+            if pending_replace_logs:
+                self._log_store.replace_batch(pending_replace_logs)
 
         return HeartbeatAction.OK
 

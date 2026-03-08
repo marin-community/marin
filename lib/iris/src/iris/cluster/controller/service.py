@@ -50,6 +50,29 @@ DEFAULT_MAX_TOTAL_LINES = 10000
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
+
+def _resolve_endpoint_task_id(
+    state: ControllerState,
+    job: ControllerJob,
+    request: cluster_pb2.Controller.RegisterEndpointRequest,
+) -> JobName | None:
+    """Resolve the task that owns a registered endpoint, when possible."""
+    if request.task_id:
+        task_id = JobName.from_wire(request.task_id)
+        if task_id.parent != job.job_id:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Endpoint task {request.task_id} does not belong to job {request.job_id}",
+            )
+        return task_id
+
+    tasks = state.get_job_tasks(job.job_id)
+    if len(tasks) == 1:
+        return tasks[0].task_id
+
+    return None
+
+
 TERMINAL_USER_JOB_STATES = frozenset(
     {
         cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -780,7 +803,8 @@ class ControllerServiceImpl:
             registered_at=Timestamp.now(),
         )
 
-        self._state.add_endpoint(endpoint)
+        task_id = _resolve_endpoint_task_id(self._state, job, request)
+        self._state.add_endpoint(endpoint, task_id=task_id)
 
         return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 

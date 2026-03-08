@@ -747,7 +747,7 @@ class Controller(_message.Message):
         metadata: _containers.ScalarMap[str, str]
         def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
     class RegisterEndpointRequest(_message.Message):
-        __slots__ = ("name", "address", "job_id", "metadata")
+        __slots__ = ("name", "address", "job_id", "metadata", "task_id")
         class MetadataEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -759,11 +759,13 @@ class Controller(_message.Message):
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
         name: str
         address: str
         job_id: str
         metadata: _containers.ScalarMap[str, str]
-        def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+        task_id: str
+        def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., task_id: _Optional[str] = ...) -> None: ...
     class RegisterEndpointResponse(_message.Message):
         __slots__ = ("endpoint_id",)
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]

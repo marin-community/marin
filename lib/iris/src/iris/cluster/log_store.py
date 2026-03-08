@@ -131,6 +131,27 @@ class LogStore:
             self._write_conn.commit()
             self._post_write_maintenance(len(all_rows))
 
+    def replace_batch(self, items: list[tuple[str, list]]) -> None:
+        """Replace complete log streams for multiple keys in a single transaction."""
+        if not items:
+            return
+
+        with self._write_lock:
+            for key, _entries in items:
+                self._write_conn.execute("DELETE FROM logs WHERE key = ?", (key,))
+
+            all_rows = []
+            for key, entries in items:
+                all_rows.extend((key, e.source, e.data, e.timestamp.epoch_ms, e.level) for e in entries)
+
+            if all_rows:
+                self._write_conn.executemany(
+                    "INSERT INTO logs (key, source, data, epoch_ms, level) VALUES (?, ?, ?, ?, ?)",
+                    all_rows,
+                )
+            self._write_conn.commit()
+            self._post_write_maintenance(len(all_rows))
+
     def _post_write_maintenance(self, rows_written: int) -> None:
         """Run eviction as needed. Must hold self._write_lock."""
         self._rows_since_eviction_check += rows_written
