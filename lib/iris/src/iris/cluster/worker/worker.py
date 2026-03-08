@@ -233,6 +233,8 @@ class Worker:
         if self._server:
             self._server.should_exit = True
         self._threads.stop()
+        if self._controller_client:
+            self._controller_client.close()
         logging.getLogger().removeHandler(self._log_store_handler)
         self._log_store_handler.close()
         self._log_store.close()

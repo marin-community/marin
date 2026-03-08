@@ -472,6 +472,7 @@ class WorkerStubFactory(Protocol):
 
     def get_stub(self, address: str) -> WorkerServiceClientSync: ...
     def evict(self, address: str) -> None: ...
+    def close(self) -> None: ...
 
 
 class RpcWorkerStubFactory:
@@ -496,7 +497,16 @@ class RpcWorkerStubFactory:
 
     def evict(self, address: str) -> None:
         with self._lock:
-            self._stubs.pop(address, None)
+            stub = self._stubs.pop(address, None)
+        if stub is not None:
+            stub.close()
+
+    def close(self) -> None:
+        with self._lock:
+            stubs = list(self._stubs.values())
+            self._stubs.clear()
+        for stub in stubs:
+            stub.close()
 
 
 @dataclass
@@ -732,6 +742,7 @@ class Controller:
             self._autoscaler.shutdown()
 
         self._threads.stop()
+        self.stub_factory.close()
 
         # Remove log handler before closing the log store to avoid
         # sqlite3.ProgrammingError spam from late log records.

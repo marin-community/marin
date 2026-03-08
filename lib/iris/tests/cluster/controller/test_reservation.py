@@ -168,6 +168,9 @@ class FakeStubFactory:
     def evict(self, address: str) -> None:
         pass
 
+    def close(self) -> None:
+        pass
+
 
 def _make_controller() -> Controller:
     """Create a Controller with minimal config for unit testing."""
