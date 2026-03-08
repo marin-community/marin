@@ -289,3 +289,23 @@
   - `K=8` is now behaving like a real baseline instead of a brittle smoke continuation
   - `K=16` launch code is good; the remaining variable is TPU allocation latency on `marin-eu-west4-a`
 - Next action: leave both jobs in place and continue monitoring for either `K=8` eval at step `1000` or `K=16` trainer startup.
+
+### 2026-03-09 05:05 - K=8 resume bug found; K16 de-prioritized
+
+- Hypothesis: once the `K=8` retry survives to a durable `step-1000` checkpoint, the remaining risk shifts from preemption loss to correctness of the resume path itself.
+- Command:
+  - monitoring via `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a ...`
+  - local fix + validation in `experiments/grug/base/train.py`
+- Result:
+  - `K=8` reached `step-1000`, wrote `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd/checkpoints/step-1000`, and recorded eval loss `3.428`
+  - after a TPU preemption, the replacement worker on `10.164.0.3` discovered `step-1000` and logged `Loading checkpoint from .../step-1000`
+  - the same worker then incorrectly logged `Checkpoint not found at ... Starting from scratch.`
+  - root cause: the grug resume path was swallowing any downstream `FileNotFoundError` from `load_checkpoint(...)` and treating it as "no checkpoint exists", even after checkpoint discovery had succeeded
+  - local fix: split checkpoint discovery from restore in `experiments/grug/base/train.py` so only the no-checkpoint case is soft-failed; restore-time file errors now propagate
+  - validation: targeted pytest passed for the new regression covering this exact failure mode
+  - to reduce contention while fixing the real blocker, the queued `K=16` trial `ray-run-dlwh-launch-20260308-104918` was intentionally stopped
+- Interpretation:
+  - the checkpoint cadence problem is solved
+  - the next blocker is a real resume bug, now fixed locally
+  - `K=16` should stay paused until `K=8` resumes cleanly from the committed fix
+- Next action: commit the resume fix, stop the buggy live `K=8` retry, and relaunch it from the saved `step-1000` checkpoint.

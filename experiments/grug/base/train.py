@@ -24,7 +24,7 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text import GrugLmExample, LmDataConfig
@@ -243,6 +243,45 @@ def initial_state(
     )
 
 
+def _maybe_load_state_from_checkpoint(
+    *,
+    state: GrugTrainState,
+    trainer: TrainerConfig,
+    run_id: str,
+    mesh: Mesh,
+) -> GrugTrainState:
+    """Resume from the latest checkpoint when configured, otherwise return the initial state."""
+
+    checkpointer = trainer.checkpointer.create(run_id)
+    checkpoint_path = trainer.load_checkpoint_path
+    if checkpoint_path is None and checkpointer is not None:
+        checkpoint_path = trainer.checkpointer.expanded_path(run_id)
+
+    if checkpoint_path is None:
+        if trainer.load_checkpoint:
+            raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
+        return state
+
+    if trainer.load_checkpoint is False:
+        return state
+
+    latest_checkpoint = discover_latest_checkpoint(checkpoint_path)
+    if latest_checkpoint is None:
+        if trainer.load_checkpoint is True:
+            raise FileNotFoundError(f"Could not find checkpoint at {checkpoint_path}")
+        logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+        return state
+
+    return load_checkpoint(
+        state,
+        latest_checkpoint,
+        discover_latest=False,
+        axis_mapping=None,
+        mesh=mesh,
+        allow_partial=trainer.allow_partial_checkpoint,
+    )
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -368,26 +407,7 @@ def _run_grug_local_impl(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        checkpoint_path = trainer.load_checkpoint_path
-        if checkpoint_path is None and checkpointer is not None:
-            checkpoint_path = trainer.checkpointer.expanded_path(run_id)
-        if checkpoint_path is None:
-            if trainer.load_checkpoint:
-                raise FileNotFoundError("load_checkpoint=True but no checkpoint path is configured.")
-        elif trainer.load_checkpoint is not False:
-            try:
-                state = load_checkpoint(
-                    state,
-                    checkpoint_path,
-                    discover_latest=True,
-                    axis_mapping=None,
-                    mesh=mesh,
-                    allow_partial=trainer.allow_partial_checkpoint,
-                )
-            except FileNotFoundError:
-                if trainer.load_checkpoint is True:
-                    raise
-                logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+        state = _maybe_load_state_from_checkpoint(state=state, trainer=trainer, run_id=run_id, mesh=mesh)
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 

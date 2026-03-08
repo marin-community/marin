@@ -231,3 +231,45 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
+
+
+def test_grug_base_resume_missing_checkpoint_data_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    train_module = importlib.import_module("experiments.grug.base.train")
+
+    trainer_config = TrainerConfig(
+        id="test-grug-base-resume",
+        num_train_steps=1,
+        train_batch_size=1,
+        tracker=JsonLoggerConfig(logger_name=f"test_grug_resume_{uuid.uuid4().hex}"),
+        require_accelerator=False,
+        use_explicit_mesh_axes=True,
+        distributed=DistributedConfig(initialize_jax_distributed=False),
+        ray=RayConfig(auto_start_cluster=False),
+        log_dir=tmp_path / "logs",
+        checkpointer=CheckpointerConfig(base_path=str(tmp_path / "checkpoints")),
+    )
+    state = train_module.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params={"value": jnp.array(1.0, dtype=jnp.float32)},
+        opt_state=(),
+        ema_params={"value": jnp.array(1.0, dtype=jnp.float32)},
+    )
+
+    monkeypatch.setattr(
+        train_module,
+        "discover_latest_checkpoint",
+        lambda checkpoint_path: str(tmp_path / "checkpoints" / "step-1000"),
+    )
+
+    def _raise_missing_leaf(*args, **kwargs):
+        raise FileNotFoundError("missing tensor leaf")
+
+    monkeypatch.setattr(train_module, "load_checkpoint", _raise_missing_leaf)
+
+    with pytest.raises(FileNotFoundError, match="missing tensor leaf"):
+        train_module._maybe_load_state_from_checkpoint(
+            state=state,
+            trainer=trainer_config,
+            run_id="test-grug-base-resume",
+            mesh=jax.sharding.Mesh(jax.devices(), ("data",)),
+        )

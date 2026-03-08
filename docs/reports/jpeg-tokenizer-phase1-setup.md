@@ -223,3 +223,31 @@ training curve.
 
 At this point the likely blocker for `K=16` is TPU scheduling latency rather than a launch-surface bug, so the right
 action is to leave it queued and keep monitoring rather than resubmitting.
+
+## Resume Bug And Mitigation
+
+The next failure was not another infra-only preemption issue. The active `K=8` retry successfully:
+
+- reached `step-1000`
+- wrote checkpoint `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd/checkpoints/step-1000`
+- recorded eval loss `3.428`
+
+But after the following TPU preemption, the replacement worker:
+
+- discovered `step-1000`
+- logged `Loading checkpoint from .../step-1000`
+- then immediately fell through to `Starting from scratch`
+
+That exposed a bug in [train.py](/Users/dlwh/.codex/worktrees/1bd2/marin/experiments/grug/base/train.py): the grug
+resume path was catching any downstream `FileNotFoundError` from `load_checkpoint(...)` and treating it as "no
+checkpoint exists", even after checkpoint discovery had already succeeded. The local fix now resolves checkpoint
+discovery first and only soft-fails when no checkpoint is present at all; restore-time file errors now surface instead
+of silently resetting the run.
+
+Validation for the fix passed with:
+
+- `uv run --with pytest python -m pytest -o addopts='' tests/test_grug_variant_contracts.py -k 'resume_missing_checkpoint_data_raises or grug_base_run_emits_expected_metrics_with_json_tracker'`
+
+To keep the cluster focused on the half-finished baseline while fixing the resume path, the queued `K=16` trial
+`ray-run-dlwh-launch-20260308-104918` was intentionally stopped. The next correct move is to relaunch the `K=8` retry
+from fixed code so it can resume from `step-1000` instead of wasting TPU time restarting from zero.
