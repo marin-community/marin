@@ -314,10 +314,10 @@ def _make_train_step(
     return train_step
 
 
-def _run_grug_local(config: GrugRunConfig) -> None:
-    """Entry point for the grug template training loop."""
+def _run_grug_local_impl(config: GrugRunConfig) -> None:
+    """Run the grug training loop after trainer initialization."""
+
     trainer = config.trainer.trainer
-    trainer.initialize()
     levanter.tracker.log_configuration(config)
 
     run_id = trainer.id
@@ -488,6 +488,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
+
+
+def _run_grug_local(config: GrugRunConfig) -> None:
+    """Entry point for the grug template training loop."""
+    trainer = config.trainer.trainer
+    trainer.initialize()
+    _run_grug_local_impl(config)
 
 
 def run_grug(config: GrugRunConfig) -> None:

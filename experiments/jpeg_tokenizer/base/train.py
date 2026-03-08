@@ -20,7 +20,7 @@ from experiments.grug.base.train import (
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
-    _run_grug_local,
+    _run_grug_local_impl,
     build_tagged_evaluator,
     build_train_dataset,
     build_train_loader,
@@ -49,6 +49,8 @@ class JpegRunConfig:
 
 
 def _run_jpeg_local(config: JpegRunConfig) -> None:
+    trainer = config.trainer.trainer
+    trainer.initialize()
     grug_config = GrugRunConfig(
         model=config.model,
         data=build_passthrough_lm_data_config_from_store(store_dir=config.token_store_path),
@@ -57,7 +59,7 @@ def _run_jpeg_local(config: JpegRunConfig) -> None:
         trainer=config.trainer,
         eval=config.eval,
     )
-    _run_grug_local(grug_config)
+    _run_grug_local_impl(grug_config)
 
 
 def run_jpeg_tokenizer(config: JpegRunConfig) -> None:
