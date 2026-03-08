@@ -4235,3 +4235,142 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated but regressive**. This Macro-M attempt changed outer decomposition as intended, but did not reduce the dominant control-shell burden and regressed end-to-end throughput.
 - Next bold hypothesis:
   - Execute **Macro Move O** next as a reduced-Pallas/XLA control arm benchmark to directly test whether the remaining train-shell abstraction boundary is still the limiting factor.
+
+### Iteration 67 - Macro Move P / TPU CE backend default pivot to `pallas_tpu`-first (validated, strong win)
+
+- Coverage slot: P
+- Why this attacks the train-path control bottleneck:
+  - The carried-in train path still had dominant `while ~31.6 ms`, and the baseline trace attributes that `while` to fused CE on XLA/reference (`fused_cross_entropy_loss/{xla.py,reference.py}`).
+  - This candidate changes TPU `auto` CE backend selection so real training prefers `pallas_tpu` first (with `xla` fallback), directly targeting the CE-attributed control bucket.
+- Hot-path scan/cond status:
+  - Hot-path `lax.scan`: preserved in the GDN train shell (no new scan added).
+  - Hot-path `lax.cond` / runtime dispatch: no new runtime branch added.
+- Change class: `CE backend`
+
+- Codex loop iteration: 3 / 10
+- Date: 2026-03-08T18:21:31Z
+- Starting commit: `2cc4c70e622026567ceb423fc9baf2de21f8a432`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/run-gdn_iter03_macroM_xla_outer_assoc_130m_ch128_seg16_20st-b77efb-profiler-v0/plugins/profile/2026_03_08_14_18_29/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - Forward closed-call: `20.661 ms` (`gated_deltanet.py:2596`)
+  - Backward closed-call: `13.130 ms` (`gated_deltanet.py:4128`)
+  - while: `31.645 ms`
+  - conditional: `0.010 ms`
+  - CE-attributed while: `31.645 ms` (`xla.py:230` + `reference.py:139`)
+  - Kernel budget: `33.791 ms`
+  - Control budget: `31.655 ms`
+  - Train-path budget: `65.446 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro P (selected):** TPU `auto` CE default to `("pallas_tpu", "xla")` (`+6-15%`, medium risk).
+  2. **Macro O:** reduced-Pallas/XLA control arm benchmark for outer train shell (`+3-10%`, medium/high integration risk).
+  3. **Macro M:** XLA-first outer train-path retry now that CE is split explicitly (`+2-8%`, high integration risk).
+
+- Selected macro-move category: **P) CE backend forcing / A-B benchmark on real train run**.
+
+- Expected effect on while_ms: major drop, because CE lowering should move from XLA/reference (`while`-heavy) to TPU Pallas CE.
+- Reject if while_ms remains flat? **Yes.** This move is only justified if CE-attributed control time falls materially.
+
+- Change summary:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/api.py`
+    - `_default_implementations()` now prefers `pallas_tpu` first on TPU when available, with `xla` retained in fallback order.
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - Added TPU-default ordering tests:
+      - prefers `("pallas_tpu", "xla")` when TPU Pallas implementation exists,
+      - falls back to `("xla",)` when `pallas_tpu` is unavailable.
+
+- Correctness checks:
+  - Local focused checks:
+    - `uv run pytest -q lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -k "default_implementations or default_implementation_on_cpu_skips_expected_tpu_warning"` -> `3 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_loss.py -k "fused_loss_honors_env_implementation_override or fused_loss_uses_auto_when_env_override_is_unset"` -> `2 passed`.
+  - TPU validation (`tests=both`, managed dev TPU):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - run 1 hit the known near-threshold parity flake in `test_gdn_layer_backward_matches_hf[False]` (`max abs 1.36028975e-05` vs `atol=1e-5`).
+    - run 2 (same command/signature) passed: `87 passed, 2 skipped`.
+
+- Profile runs (managed dev TPU):
+  - Primary (`CE request=auto`):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation auto --run-name-prefix gdn_iter03_macroP_ce_auto --marin-prefix gs://marin-us-east5 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_iter03_macroP_ce_auto_130m_ch128_seg16_20steps-c4bf85`
+    - profiler artifact: `run-gdn_iter03_macroP_ce_auto_130m_ch128_seg16_20steps-c4bf85-profiler:v0`
+    - downloaded trace: `artifacts/run-gdn_iter03_macroP_ce_auto_130m_ch128_seg16_20steps-c4bf85-profiler-v0/plugins/profile/2026_03_08_18_12_35/perfetto_trace.json.gz`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+  - Secondary compare (`CE request=pallas_tpu`):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --run-name-prefix gdn_iter03_macroP_ce_pallas --marin-prefix gs://marin-us-east5 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_iter03_macroP_ce_pallas_130m_ch128_seg16_20steps-07a479`
+    - profiler artifact: `run-gdn_iter03_macroP_ce_pallas_130m_ch128_seg16_20steps-07a479-profiler:v0`
+    - downloaded trace: `artifacts/run-gdn_iter03_macroP_ce_pallas_130m_ch128_seg16_20steps-07a479-profiler-v0/plugins/profile/2026_03_08_18_16_28/perfetto_trace.json.gz`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+
+- Hotspot metrics (primary `auto` profile vs carried-in baseline, TPU:0 XLA Ops `pid=3, tid=3`):
+  - CE backend selected: `pallas_tpu`
+  - CE-attributed while: `31.645 ms -> 10.150 ms`
+  - Forward closed-call: `20.661 ms -> 20.663 ms`
+    - source: `gated_deltanet.py:2596 -> 2504`
+  - Backward closed-call: `13.130 ms -> 13.126 ms`
+    - source: `gated_deltanet.py:4128 -> 4016`
+  - while: `31.645 ms -> 10.150 ms`
+  - conditional: `0.010 ms -> 0.026 ms`
+  - Kernel budget: `33.791 ms -> 33.789 ms`
+  - Control budget: `31.655 ms -> 10.176 ms`
+  - Train-path budget: `65.446 ms -> 43.965 ms`
+
+- Secondary CE compare snapshot (`pallas_tpu` request):
+  - CE backend selected: `pallas_tpu`
+  - CE-attributed while: `31.645 ms -> 10.139 ms`
+  - Forward closed-call: `20.661 ms -> 20.663 ms`
+  - Backward closed-call: `13.130 ms -> 13.126 ms`
+  - while: `31.645 ms -> 10.139 ms`
+  - conditional: `0.010 ms -> 0.026 ms`
+  - Kernel budget: `33.791 ms -> 33.789 ms`
+  - Control budget: `31.655 ms -> 10.165 ms`
+  - Train-path budget: `65.446 ms -> 43.954 ms`
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - Primary `auto` vs carried-in baseline (`gdn_iter01_macroN_fullseq_bwd_130m_ch128_seg16_20steps-083c41`):
+    - `throughput/mfu`: `5.466698 -> 6.061863` (`+10.89%`)
+    - `throughput/tokens_per_second`: `176846.635 -> 196100.108` (`+10.89%`)
+    - `throughput/duration`: `0.185290s -> 0.167098s` (`-9.82%`)
+  - Secondary compare (`pallas_tpu` request) vs carried-in baseline:
+    - `throughput/mfu`: `5.466698 -> 6.037664` (`+10.44%`)
+    - `throughput/tokens_per_second`: `176846.635 -> 195317.282` (`+10.44%`)
+    - `throughput/duration`: `0.185290s -> 0.167768s` (`-9.46%`)
+  - vs active champion from `.agents/logs/gdn_codex_loop/perf_state.json` (`throughput/mfu=5.748507`):
+    - primary `auto`: `+5.45%`
+    - compare `pallas_tpu`: `+5.03%`
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - Baseline `while` was CE-attributed to `fused_cross_entropy_loss/xla.py` and `reference.py`; after this change, residual `while` is CE-attributed to `pallas_tpu.py` and is much smaller.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - Preserves the existing train-path scan shell; does not add a new scan.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The move changes CE backend selection only; it does not introduce new control-flow structures, and measured `while` drops by >21 ms.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - Recent evidence isolated CE/XLA as the unresolved control bottleneck; this move directly addresses that source before further outer-shell redesign.
+  - Is the residual `while` still CE-attributed in this design?
+    - Yes, but now to TPU Pallas CE and at a much smaller cost (`~10.15 ms`).
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> retry pass `87 passed, 2 skipped`.
+  - Perf:
+    - `CE backend selected: pallas_tpu`.
+    - `CE-attributed while: 31.645 ms -> 10.150 ms`.
+    - Forward closed-call `20.661 ms -> 20.663 ms`.
+    - Backward closed-call `13.130 ms -> 13.126 ms`.
+    - `while: 31.645 ms -> 10.150 ms`.
+    - `conditional: 0.010 ms -> 0.026 ms`.
+    - `Kernel budget: 33.791 ms -> 33.789 ms`.
+    - `Control budget: 31.655 ms -> 10.176 ms`.
+    - `Train-path budget: 65.446 ms -> 43.965 ms`.
+    - `throughput/mfu +10.89%`, `throughput/tokens_per_second +10.89%`, `throughput/duration -9.82%` (primary auto run).
+  - Governance:
+    - `while` dropped materially and train-path budget improved by `-21.481 ms`; no control-flow regression gate triggered.
+    - CE backend is not `xla` on TPU `auto`; this resolves the dominant CE/XLA attribution split for the current train path.
+    - Throughput improvement exceeds promotion threshold (`>=0.250%`) and control-gate override threshold (`>=5.000%`).
+
+- Assessment: **validated and high-impact**. This Macro-P CE backend pivot removes most of the dominant CE-attributed `while` bucket and yields a major train-step throughput gain without regressing GDN forward/backward closed-call cost.
+- Next bold hypothesis:
+  - Execute **Macro O** reduced-Pallas/XLA control-arm benchmarking next to test remaining outer train-shell ceiling now that CE/XLA control cost has been largely removed.
