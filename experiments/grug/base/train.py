@@ -275,6 +275,7 @@ def _maybe_load_state_from_checkpoint(
     return load_checkpoint(
         state,
         latest_checkpoint,
+        subpath="train_state",
         discover_latest=False,
         axis_mapping=None,
         mesh=mesh,

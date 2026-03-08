@@ -262,6 +262,7 @@ def test_grug_base_resume_missing_checkpoint_data_raises(tmp_path: Path, monkeyp
     )
 
     def _raise_missing_leaf(*args, **kwargs):
+        assert kwargs["subpath"] == "train_state"
         raise FileNotFoundError("missing tensor leaf")
 
     monkeypatch.setattr(train_module, "load_checkpoint", _raise_missing_leaf)
