@@ -19,6 +19,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
 from levanter.data.mixture import MixtureDataset
@@ -73,17 +74,8 @@ class TrainLmConfig:
     log_entropy: bool = False
 
 
-_TOKENIZER_GCS_OVERRIDES = {
-    "meta-llama/Meta-Llama-3.1-8B": "gs://marin-us-central2/tokenizers/llama-3.1-8b",
-}
-
-
 def main(config: TrainLmConfig):
-    from levanter.compat.hf_checkpoints import load_tokenizer
-
-    tokenizer_path = config.data.tokenizer
-    tokenizer_path = _TOKENIZER_GCS_OVERRIDES.get(tokenizer_path, tokenizer_path)
-    tokenizer = load_tokenizer(tokenizer_path)
+    tokenizer = config.data.the_tokenizer
 
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
     # I recommend skipping it for now
@@ -118,9 +110,18 @@ def main(config: TrainLmConfig):
 
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
+    returns_model_overwrites = getattr(config.model, "equilibrium_lb_objective", None) == "article_original"
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
+        if returns_model_overwrites and hasattr(model, "compute_next_token_loss_with_state_updates"):
+            return model.compute_next_token_loss_with_state_updates(
+                example,
+                key=key,
+                logsumexp_weight=config.z_loss_weight,
+            )
         return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+
+    loss_function._returns_model_overwrites = returns_model_overwrites  # type: ignore[attr-defined]
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
@@ -173,6 +174,7 @@ def main(config: TrainLmConfig):
             config.trainer.batch_schedule,
             key=data_key,
         )
+        install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)

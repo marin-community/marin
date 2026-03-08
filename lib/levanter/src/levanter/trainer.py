@@ -53,6 +53,7 @@ import levanter.tracker
 import levanter.tracker.wandb
 import levanter.utils.logging
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
@@ -190,14 +191,19 @@ class WrappedLossFunction:
 
     Handles casting & executing in the proper axis mapping.
 
-    Always returns (loss, wrapped_metrics_dict). The user loss function
-    may return `Metric` objects or floats. Floats are automatically coerced to Metrics
-    based on their name.
+    Returns a `(loss, aux)` pair suitable for `eqx.filter_value_and_grad(..., has_aux=True)`.
+    The aux payload is either:
+    - `wrapped_metrics_dict`, or
+    - `(wrapped_metrics_dict, model_overwrites)`
+
+    The user loss function may return `Metric` objects or floats. Floats are automatically
+    coerced to Metrics based on their name.
     """
 
     _raw_fn: ComputeLossFunction
     _mp: jmp.Policy
     _compute_axis_mapping: ResourceMapping
+    _returns_model_overwrites: bool
 
     def __init__(
         self,
@@ -214,22 +220,31 @@ class WrappedLossFunction:
         self._raw_fn = raw_fn
         self._mp = mp
         self._compute_axis_mapping = compute_axis_mapping
+        self._returns_model_overwrites = bool(getattr(raw_fn, "_returns_model_overwrites", False))
 
-    def __call__(self, model, *batch, **batch_kwargs) -> Tuple[Scalar, Dict[str, Metric]]:
+    @property
+    def returns_model_overwrites(self) -> bool:
+        return self._returns_model_overwrites
+
+    def __call__(self, model, *batch, **batch_kwargs) -> Tuple[Scalar, Any]:
         """
         Call the loss function with model casting and axis mapping.
-        Always returns (loss, wrapped_metrics) where metrics are Metric objects.
+        Returns `(loss, aux)` where metrics are Metric objects.
         """
         with hax.axis_mapping(self._compute_axis_mapping):
             model = self._mp.cast_to_compute(model)
             result = self._raw_fn(model, *batch, **batch_kwargs)
 
-        if isinstance(result, tuple) and len(result) == 2:
-            loss, metrics = result
+        model_overwrites = None
+        if isinstance(result, tuple):
+            if len(result) == 3:
+                loss, metrics, model_overwrites = result
+            elif len(result) == 2:
+                loss, metrics = result
+            else:
+                raise ValueError(f"Expected loss result tuple of len 2 or 3, got len {len(result)}")
         else:
-            # Treat scalar return as (loss, {})
-            loss = result
-            metrics = {}
+            loss, metrics = result, {}
 
         if not isinstance(metrics, dict):
             raise ValueError(f"Expected metrics to be dict, got {type(metrics)}")
@@ -243,7 +258,8 @@ class WrappedLossFunction:
                 # Infer type from name and wrap
                 wrapped_metrics[key] = auto_metric_from_name(key, value)
 
-        return _ensure_scalar(loss.mean()), wrapped_metrics
+        aux = wrapped_metrics if model_overwrites is None else (wrapped_metrics, model_overwrites)
+        return _ensure_scalar(loss.mean()), aux
 
 
 class Trainer:
@@ -276,10 +292,17 @@ class Trainer:
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
-        if isinstance(config.tracker, Sequence):
-            self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
-        else:
-            self.tracker = config.tracker.init(self.run_id)
+
+        # Use existing global tracker if available (e.g., from levanter.initialize()),
+        # otherwise create a new one. This avoids calling wandb.init() twice.
+        try:
+            self.tracker = levanter.tracker.current_tracker()
+        except RuntimeError:
+            # No global tracker set, create one
+            if isinstance(config.tracker, Sequence):
+                self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
+            else:
+                self.tracker = config.tracker.init(self.run_id)
 
         self._cmanagers = []
 
@@ -558,27 +581,25 @@ class Trainer:
         self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
-        self.add_hook(checkpointer.on_step, every=1)  # checkpointer manages its own frequency
+
+        def checkpoint_hook(info):
+            checkpointer.on_step(tree=info.state.saveable_state, step=info.step)
+
+        self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
         # Add watch callback if configured
         if self.config.watch.is_enabled:
             self.add_hook(self.config.watch.build(), every=self.config.watch.interval)
 
-        if self.config.profiler:
-            profile_path = self.config.log_dir / self.run_id / "profiler"
-            total_prof_steps = self.config.profiler_num_steps
-            if total_prof_steps + self.config.profiler_start_step > self.config.num_train_steps:
-                logger.warning(
-                    f"Adjusting profiler_total_steps from {total_prof_steps} to"
-                    f" {self.config.num_train_steps - self.config.profiler_start_step}"
-                )
-                total_prof_steps = self.config.num_train_steps - self.config.profiler_start_step
+        profiler = self.config.profiler
+        total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
+        if profiler.is_enabled and total_prof_steps > 0:
             self.add_hook(
                 callbacks.profile(
-                    str(profile_path),
-                    self.config.profiler_start_step,
+                    str(self.config.log_dir / self.run_id / "profiler"),
+                    profiler.start_step,
                     total_prof_steps,
-                    self.config.profiler_perfetto_link,
+                    profiler.perfetto_link,
                 ),
                 every=1,
             )
@@ -656,7 +677,7 @@ class Trainer:
         model = inference_mode(state.model, False)
 
         # Returns (loss, grads, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
-        loss, grads, wrapped_metrics = self._compute_gradients_microbatched(
+        loss, grads, wrapped_metrics, model_overwrites = self._compute_gradients_microbatched(
             self.loss_fn, model, *batch, **batch_kwargs, key=key
         )
 
@@ -666,11 +687,19 @@ class Trainer:
             with hax.axis_mapping(self.compute_axis_mapping):
                 model = self.mp.cast_to_compute(model)
                 result = self._raw_loss_function(model, *batch, **batch_kwargs, key=key)
-                # result is (loss, metrics) tuple
-                loss_for_opt, _metrics = result
+                if isinstance(result, tuple):
+                    loss_for_opt = result[0]
+                else:
+                    loss_for_opt = result
                 return loss_for_opt.scalar()
 
-        new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
+        new_state, updates = state.take_step(
+            grads,
+            obj_fun=obj_fun,
+            loss=loss,
+            key=new_key,
+            model_overwrites=model_overwrites,
+        )
         new_state = hax.shard(new_state, self.parameter_axis_mapping)
 
         hook_infos = None
@@ -693,18 +722,20 @@ class Trainer:
 
     def _compute_gradients_microbatched(
         self, loss_fn: WrappedLossFunction, model: M, *batch, **batch_kwargs
-    ) -> Tuple[Scalar, M, Dict[str, Metric]]:
+    ) -> Tuple[Scalar, M, Dict[str, Metric], Any]:
         """
         Compute gradients, optionally with microbatching.
-        Returns (loss, grads, dict[str, Metric]).
+        Returns `(loss, grads, metrics, model_overwrites)`.
         """
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
 
-        # loss_fn always returns (loss, metrics), so has_aux=True
+        # loss_fn returns `(loss, aux)` where aux is metrics or `(metrics, model_overwrites)`.
         grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
 
         mbs = self.config.microbatch_size
         if mbs is not None:
+            if loss_fn.returns_model_overwrites and mbs < Batch.size:
+                raise ValueError("microbatching does not support loss functions that return model overwrites")
             grad_fn = microbatched(
                 grad_fn,
                 Batch,
@@ -714,9 +745,17 @@ class Trainer:
             )
 
         with hax.axis_mapping(self.compute_axis_mapping):
-            (loss, metrics), grads = grad_fn(model, *batch, **batch_kwargs)
+            (loss, aux), grads = grad_fn(model, *batch, **batch_kwargs)
 
-        return loss, grads, metrics
+        model_overwrites = None
+        if isinstance(aux, tuple):
+            if len(aux) != 2:
+                raise ValueError(f"Expected aux tuple of len 2, got len {len(aux)}")
+            metrics, model_overwrites = aux
+        else:
+            metrics = aux
+
+        return loss, grads, metrics, model_overwrites
 
     def write_artifact(self, name: str, artifact: Any, type: Optional[str] = None):
         """Saves an artifact to disk (in the run dir) and logs it to the tracker."""
@@ -775,12 +814,7 @@ class TrainerConfig:
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
-
-    # TODO: refactor callbacks
-    profiler: bool = False
-    profiler_start_step: int = 5
-    profiler_num_steps: int = 100
-    profiler_perfetto_link: bool = False
+    profiler: ProfilerConfig = ProfilerConfig()
 
     log_jaxprs: bool = True
     """Whether to log the jaxpr of the training step. This is useful for debugging and understanding the model."""

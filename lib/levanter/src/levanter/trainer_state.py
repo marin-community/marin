@@ -10,7 +10,13 @@ import jax
 import jmp
 
 import haliax
-from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
+from haliax.quantization import (
+    OverwriteWithGradient,
+    QuantizationConfig,
+    apply_updates,
+    partition_for_grad_overwrite,
+    quantize_linear_layers,
+)
 from haliax.types import IntScalar, Scalar
 from jax import numpy as jnp
 from jax._src.random import PRNGKey
@@ -38,6 +44,21 @@ def _ensure_int_is_array(x):
         return jnp.array(x)
     else:
         return x
+
+
+def _merge_model_overwrites(grad_overwrites, explicit_overwrites):
+    if explicit_overwrites is None:
+        return grad_overwrites
+
+    def is_leaf(x):
+        return x is None or isinstance(x, (OverwriteWithGradient, haliax.NamedArray))
+
+    return jax.tree_util.tree_map(
+        lambda explicit, grad: explicit if explicit is not None else grad,
+        explicit_overwrites,
+        grad_overwrites,
+        is_leaf=is_leaf,
+    )
 
 
 class TrainerState(eqx.Module, Generic[M]):
@@ -141,6 +162,7 @@ class TrainerState(eqx.Module, Generic[M]):
         obj_fun: Callable[[M], Scalar] | None = None,
         loss: float | None = None,
         key: PRNGKey,
+        model_overwrites: PyTree | None = None,
     ) -> tuple[S, M]:
         assert isinstance(self, TrainerState)  # make mypy happy
         model, opt_state, updates = take_train_step(
@@ -151,6 +173,7 @@ class TrainerState(eqx.Module, Generic[M]):
             obj_fun=obj_fun,
             loss=loss,
             is_trainable=self.is_trainable,
+            model_overwrites=model_overwrites,
         )
 
         if self.model_averaging is not None:
@@ -195,7 +218,6 @@ def _partition_trainable_params(model, filter):
     Returns:
         trainable, non-trainable
     """
-
     filter = make_floating_point_trainable_filter(filter)
     return eqx.partition(model, filter, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
 
@@ -214,7 +236,6 @@ def cast_params_by_trainability(model, mp, is_trainable):
     Casts the parameters of a model to the appropriate precision based on the is_trainable filter spec.
     Trainable parameters are cast to param precision, non-trainable parameters are cast to compute precision.
     """
-
     trainable, non_trainable = _partition_trainable_params(model, is_trainable)
     trainable = mp.cast_to_param(trainable)
     non_trainable = mp.cast_to_compute(non_trainable)
@@ -244,6 +265,7 @@ def take_train_step(
     obj_fun: Optional[Callable[[M], Scalar]] = None,
     loss: Optional[float] = None,
     is_trainable: FilterTree = True,
+    model_overwrites: PyTree | None = None,
 ) -> tuple[M, OptState, M]:
     """
 
@@ -260,12 +282,12 @@ def take_train_step(
 
     """
     train_grads = trainables_only(grads, is_trainable)
-    overwrites, train_grads = partition_for_grad_overwrite(train_grads)
+    grad_overwrites, train_grads = partition_for_grad_overwrite(train_grads)
     trainable_model = trainables_only(model, is_trainable)
     _, trainable_model = partition_for_grad_overwrite(trainable_model)
 
     updates, opt_state = optimizer.update(train_grads, opt_state, params=trainable_model, obj_fn=obj_fun, loss=loss)
-    model = apply_updates(model, updates, overwrites)
+    model = apply_updates(model, updates, _merge_model_overwrites(grad_overwrites, model_overwrites))
 
     return model, opt_state, updates
 

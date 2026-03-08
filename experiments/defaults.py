@@ -1,16 +1,5 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 This file represents the best practices for each stage of the pipeline.
@@ -25,12 +14,13 @@ from functools import lru_cache
 from typing import Any
 
 import jmp
+from fray.v2 import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, TextLmDatasetFormat
+from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, PreferenceLmDataConfig, TextLmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -38,7 +28,6 @@ from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
 
 from experiments.evals.task_configs import (
@@ -47,8 +36,10 @@ from experiments.evals.task_configs import (
 )
 from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
+from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.utils.mesh import MeshConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
@@ -64,16 +55,55 @@ from marin.processing.tokenize import (
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
+    get_vocab_size_for_tokenizer,
     lm_data_config,
     tokenize,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
 from marin.training.training import (
+    TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
+    run_levanter_train_dpo,
     run_levanter_train_lm,
 )
 
 logger = logging.getLogger("ray")
+
+
+def _truncate_wandb_name(name: str) -> str:
+    """Truncate a run name to fit WANDB's 64-character limit, preserving the trailing suffix."""
+    if len(name) <= 64:
+        return name
+    old_name = name
+    if "-" not in name:
+        name = name[:64]
+    else:
+        prefix, suffix = name.rsplit("-", 1)
+        if len(suffix) >= 64:
+            suffix = suffix[:64]
+            name = suffix
+        else:
+            name = prefix[: 63 - len(suffix)] + "-" + suffix
+    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+    return name
+
+
+def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int) -> int | None:
+    """Resolve the HF export step interval: None means same as checkpoint, -1 means disabled."""
+    if steps_per_hf_export is None:
+        return steps_per_export
+    if steps_per_hf_export == -1:
+        return None
+    return steps_per_hf_export
+
+
+def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) -> int:
+    """Resolve and validate the training sequence length against the model's max."""
+    actual = unwrap_versioned_value(model_config)
+    train_length = train_seq_len or actual.max_seq_len
+    if train_length > actual.max_seq_len:
+        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual.max_seq_len}.")
+    return train_length
 
 
 def default_download(
@@ -178,6 +208,14 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
+        resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+        pip_dependency_groups=["cpu"],
+        env_vars={
+            "TRANSFORMERS_NO_TORCH": "1",
+            "TRANSFORMERS_NO_TORCHVISION": "1",
+            "USE_TORCH": "0",
+            "TORCH_DISABLE_GLOBAL_DEPS": "1",
+        },
     )
 
 
@@ -218,11 +256,7 @@ def simulated_epoching_train(
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
-    # Use explicit training length rather than inferring from the model
-    actual_model_config = unwrap_versioned_value(model_config)
-    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
-    if train_length > actual_model_config.max_seq_len:
-        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
+    train_length = _validate_train_length(train_config.train_seq_len, model_config)
 
     # Calculate the experiment token budget
     experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
@@ -253,9 +287,8 @@ def default_train(
     wandb_group: str | None = None,
     wandb_project: str | None = None,
     override_output_path: str | None = None,
-    checkpointer_save_interval: timedelta = timedelta(minutes=10),
-    checkpointer_keep: Sequence[dict] | None = None,
-    checkpointer_delete_old_temp_checkpoints: bool = True,
+    checkpointer_save_interval: timedelta | None = None,
+    checkpointer_keep: list[dict] | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -270,11 +303,10 @@ def default_train(
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
-        wandb_project: Optional W&B project. If unset, defaults to $WANDB_PROJECT, falling back to "marin".
-        checkpointer_save_interval: How often to save temporary checkpoints (time-based).
-        checkpointer_keep: Step-based checkpoint retention policy. If unset, defaults to keeping one checkpoint every
-            `train_config.steps_per_export` steps. Set to [] to disable permanent (step-based) checkpoints entirely.
-        checkpointer_delete_old_temp_checkpoints: If True, delete old temporary checkpoints when saving a new one.
+        wandb_project: Optional W&B project name. Defaults to "marin" when unset.
+        checkpointer_save_interval: Optional override for the checkpointer time-based save interval.
+        checkpointer_keep: Optional override for the checkpointer step-based keep policies. Passing an empty list keeps
+            only time-based (temporary) checkpoints.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -285,44 +317,15 @@ def default_train(
 
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
-    if not wandb_group:
-        wandb_group = None
-    if wandb_project is None:
-        wandb_project = os.environ.get("WANDB_PROJECT", "marin")
 
-    def _truncate_wandb_display_name(s: str, *, max_len: int = 64, keep_end: int = 20) -> str:
-        """Truncate a W&B display name while preserving the (usually-unique) suffix.
-
-        W&B display names have a 64 character limit. We preserve the final characters so suffixes like timestamps or git
-        SHAs remain visible and (crucially) unique.
-        """
-
-        if len(s) <= max_len:
-            return s
-
-        keep_end = min(keep_end, max_len - 2)
-        prefix_len = max_len - keep_end - 1
-        return f"{s[:prefix_len]}~{s[-keep_end:]}"
-
-    resolved_wandb_name = wandb_name
-    if resolved_wandb_name is not None and len(resolved_wandb_name) > 64:
-        old_wandb_name = resolved_wandb_name
-        resolved_wandb_name = _truncate_wandb_display_name(resolved_wandb_name)
-        logger.warning(
-            f"Truncated wandb_name from {old_wandb_name} to {resolved_wandb_name} to fit within WANDB limits."
-        )
+    name = _truncate_wandb_name(name)
 
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
     else:
         harness_config = None
 
-    if train_config.steps_per_hf_export is None:
-        steps_per_export_hf = steps_per_export
-    elif train_config.steps_per_hf_export == -1:
-        steps_per_export_hf = None
-    else:
-        steps_per_export_hf = train_config.steps_per_hf_export
+    steps_per_export_hf = _resolve_hf_export_steps(train_config.steps_per_hf_export, steps_per_export)
 
     model_averaging = None
     if train_config.ema_beta is not None:
@@ -336,7 +339,7 @@ def default_train(
         per_device_eval_parallelism = train_config.per_device_eval_parallelism
 
     schedule = BatchSchedule(unwrap_versioned_value(train_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
+    total_examples = schedule.global_data_offset_by_step(unwrap_versioned_value(train_config.num_train_steps))
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
     hf_checkpoint_path_to_load_from = train_config.initialize_from_hf
@@ -344,22 +347,18 @@ def default_train(
     if hf_checkpoint_path_to_load_from is not None and checkpoint_path_to_load_from is not None:
         raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
 
-    # Create the inner config
-    actual_model_config = unwrap_versioned_value(model_config)
-    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
-    if train_length > actual_model_config.max_seq_len:
-        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
+    train_length = _validate_train_length(train_config.train_seq_len, model_config)
 
     inner_config = TrainLmConfig(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                entity=os.environ.get("WANDB_ENTITY"),
-                project=wandb_project,
-                name=resolved_wandb_name,
+                project=wandb_project or "marin",
+                name=wandb_name,
                 tags=[*tags],
                 group=wandb_group,
                 mode=os.environ.get("WANDB_MODE"),
+                replicate_path=this_output_path(),
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
@@ -367,9 +366,8 @@ def default_train(
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
-                save_interval=checkpointer_save_interval,
-                keep=([dict(every=steps_per_export)] if checkpointer_keep is None else list(checkpointer_keep)),
-                delete_old_temp_checkpoints=checkpointer_delete_old_temp_checkpoints,
+                save_interval=checkpointer_save_interval or timedelta(minutes=10),
+                keep=checkpointer_keep if checkpointer_keep is not None else [dict(every=steps_per_export)],
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(
@@ -388,8 +386,6 @@ def default_train(
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
             profiler=train_config.profiler,
-            profiler_start_step=train_config.profiler_start_step,
-            profiler_num_steps=train_config.profiler_num_steps,
             use_explicit_mesh_axes=train_config.explicit_mesh_axes,
         ),
         initialize_from_checkpoint_path=(
@@ -449,8 +445,8 @@ def default_train(
         name=os.path.join("checkpoints", name),
         description=(
             f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
-            f"{train_config.num_train_steps} (steps) * "
-            f"{train_config.train_batch_size} (batch_size) * "
+            f"{unwrap_versioned_value(train_config.num_train_steps)} (steps) * "
+            f"{unwrap_versioned_value(train_config.train_batch_size)} (batch_size) * "
             f"{train_length} (train_seq_len) "
             f"= {total_examples * train_length} tokens."
         ),
@@ -534,21 +530,134 @@ def default_sft(
     )
 
 
-_TOKENIZER_GCS_OVERRIDES = {
-    "meta-llama/Meta-Llama-3.1-8B": "gs://marin-us-central2/tokenizers/llama-3.1-8b",
-}
+def default_dpo(
+    name: str,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_config: LlamaConfig,
+    dpo_config: SimpleDPOConfig,
+    tags: Sequence[str] = (),
+    override_output_path: str | None = None,
+) -> ExecutorStep:
+    """
+    Creates an ExecutorStep for DPO fine-tuning.
 
+    Args:
+        name: The name of the training run, forms the basis of the output path.
+        tokenized: The tokenized preference data to train on.
+        model_config: Levanter LlamaConfig for the model architecture to train.
+        dpo_config: Configuration for the DPO training process.
+        tags: Additional tags for WandB logging. Default: ().
+        override_output_path: Optional override for executor output path.
+    """
+    if "dpo" not in tags:
+        tags = [*tags, "dpo"]
 
-@lru_cache
-def _cached_load_tokenizer(tokenizer_name: str):
-    tokenizer_name = _TOKENIZER_GCS_OVERRIDES.get(tokenizer_name, tokenizer_name)
-    return load_tokenizer(tokenizer_name)
+    initialize_from_hf = dpo_config.initialize_from_hf
+
+    if initialize_from_hf is None:
+        initialize_from_hf = (
+            dpo_config.model_name_or_path is not None and dpo_config.initialize_from_checkpoint_path is None
+        )
+    elif initialize_from_hf is True and dpo_config.model_name_or_path is None:
+        raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
+    elif initialize_from_hf is False and dpo_config.initialize_from_checkpoint_path is None:
+        raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
+
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation=False)
+    preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
+    preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
+    vocab_size = _get_vocab_size(preference_data)
+
+    name = _truncate_wandb_name(name)
+
+    steps_per_export = dpo_config.steps_per_checkpoint
+    steps_per_export_hf = _resolve_hf_export_steps(dpo_config.steps_per_hf_export, steps_per_export)
+
+    train_length = _validate_train_length(dpo_config.train_seq_len, model_config)
+
+    schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
+    total_examples = schedule.global_data_offset_by_step(dpo_config.num_train_steps)
+
+    reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
+    if reference_model_path is None:
+        raise ValueError("reference_model_path must be set for DPO training.")
+
+    inner_config = TrainDpoConfig(
+        data=preference_data,
+        trainer=TrainerConfig(
+            tracker=WandbConfig(
+                project=dpo_config.wandb_project or "marin",
+                tags=[*tags],
+                mode=os.environ.get("WANDB_MODE"),
+            ),
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            train_batch_size=dpo_config.train_batch_size,
+            num_train_steps=dpo_config.num_train_steps,
+            steps_per_eval=dpo_config.steps_per_eval,
+            checkpointer=CheckpointerConfig(
+                save_interval=timedelta(minutes=10),
+                keep=[dict(every=steps_per_export)],
+            ),
+            model_averaging=None,
+            mesh=MeshConfig(
+                compute_mapping={
+                    "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                    "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                }
+            ),
+            allow_partial_checkpoint=dpo_config.allow_partial_checkpoint,
+            allow_nondivisible_batch_size=True,
+            quantization=QuantizationConfig(int8=dpo_config.int8) if dpo_config.int8 else None,
+            initialize_from=None,
+        ),
+        initialize_from_checkpoint_path=dpo_config.initialize_from_checkpoint_path,
+        initialize_from_hf=dpo_config.model_name_or_path if initialize_from_hf else False,
+        train_seq_len=train_length,
+        model=model_config,
+        optimizer=AdamConfig(
+            learning_rate=dpo_config.learning_rate,
+            weight_decay=dpo_config.weight_decay,
+            warmup=dpo_config.warmup,
+            decay=dpo_config.cooldown,
+            lr_schedule=dpo_config.lr_schedule,
+            min_lr_ratio=dpo_config.min_lr_ratio,
+            max_grad_norm=dpo_config.max_grad_norm,
+        ),
+        reference_model_path=reference_model_path,
+        reference_is_hf=dpo_config.reference_is_hf,
+        beta=dpo_config.beta,
+        validation_split_fraction=dpo_config.validation_split_fraction,
+        hf_save_steps=steps_per_export_hf,
+        hf_save_dtype=dpo_config.hf_save_dtype,
+        data_seed=dpo_config.seed,
+    )
+
+    config = TrainDpoOnPodConfig(
+        train_config=inner_config,
+        resources=dpo_config.resources,
+        output_path=this_output_path(),
+    )
+
+    model_config = unwrap_versioned_value(model_config)
+
+    return ExecutorStep(
+        name=os.path.join("checkpoints", name),
+        description=(
+            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"{dpo_config.num_train_steps} (steps) * "
+            f"{dpo_config.train_batch_size} (batch_size) * "
+            f"{train_length} (train_seq_len) "
+            f"= {total_examples * train_length} tokens."
+        ),
+        fn=run_levanter_train_dpo,
+        config=config,
+        override_output_path=override_output_path,
+    )
 
 
 def _get_vocab_size(pretraining_data):
     tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    vocab_size = _cached_load_tokenizer(tokenizer).vocab_size
-    return vocab_size
+    return get_vocab_size_for_tokenizer(tokenizer)
 
 
 def _prepare_data_config(
@@ -573,7 +682,6 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
-            permutation_type="feistel",
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures

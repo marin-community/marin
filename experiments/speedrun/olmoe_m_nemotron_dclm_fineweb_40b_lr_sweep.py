@@ -1,30 +1,44 @@
 # Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
 
 """
-OLMoE-M LR sweep on the Nemotron+DCLM+FineWeb mixture (fixed token budget).
+OLMoE-M AdamC sweep on configurable Nemotron-family datasets (fixed token budget).
 
 This mirrors `experiments/speedrun/olmoe_s_dclm10b_moe_vs_dense_lr_sweep.py`, but:
-- uses the composite Nemotron+DCLM+FineWeb mixture (tokenized) from `olmoe_1b7b_nemotron_40b.py`
+- uses tokenized datasets from `olmoe_1b7b_nemotron_40b.py`:
+  - `nemotron_cc` (full Nemotron-CC)
+  - `nemotron_dclm_fineweb_10b` (composite Nemotron+DCLM+FineWeb mixture)
 - runs OLMoE-M geometry (16 experts, top-2 routing)
-- compares 4 MoE variants across 4 learning-rate multipliers:
+- compares 6 MoE variants across 4 learning rates:
   1) `olmoe_m` (vanilla)
   2) `olmoe_m_bilinear` (bilinear expert MLPs; SwiGLU -> (W1 x) * (W3 x))
   3) `olmoe_m_stab2` (two stability measures):
      - auxiliary-free load balancing (ALF-LB)
      - fp32 router compute
-  4) `olmoe_m_stab5` (five stability measures, including fp32 router compute):
+  4) `olmoe_m_stab3` (three stability measures):
+     - QK-norm
+     - topk-then-softmax routing
+     - fp32 router compute
+  5) `olmoe_m_stab4` (four stability measures, target-L2 equilibrium objective):
+     - QK-norm
+     - topk-then-softmax routing
+     - fp32 router compute
+     - equilibrium/quantile load balancing (MoE Odyssey / Optimal Allocation)
+  6) `olmoe_m_stab4_original` (same as stab4, but original article objective):
+     - QK-norm
+     - topk-then-softmax routing
+     - fp32 router compute
+     - equilibrium/quantile load balancing with article objective
+  7) `olmoe_m_stab4_fast` (online one-step article objective):
+     - same as `olmoe_m_stab4_original`
+     - runs one alternating quantile update per train step, using the persistent expert bias as the warm start
+  8) `olmoe_m_stab4_original_current_step` (debug ablation of stab4_original):
+     - same as `olmoe_m_stab4_original`
+     - routes with the freshly solved current-step quantile bias instead of the previous-step persistent bias
+  9) `olmoe_m_stab4_fast_current_step` (debug ablation of stab4_fast):
+     - same as `olmoe_m_stab4_fast`
+     - routes with the freshly solved current-step quantile bias instead of the previous-step persistent bias
+  10) `olmoe_m_stab5` (five stability measures, including fp32 router compute):
      - QK-norm
      - topk-then-softmax routing
      - auxiliary-free load balancing (ALF-LB)
@@ -32,7 +46,8 @@ This mirrors `experiments/speedrun/olmoe_s_dclm10b_moe_vs_dense_lr_sweep.py`, bu
      - fp32 router compute
 
 W&B:
-- set `WANDB_PROJECT=olmoe_m` (or pass `--wandb-project olmoe_m`) to keep these runs in a separate project.
+- choose a project with `--wandb-project` (for example `olmoe_m` or `olmoe_m_nemotron`).
+- default learning-rate sweep is `[8e-4, 1e-3, 2e-3, 4e-3]`.
 """
 
 # nodryrun
@@ -51,7 +66,7 @@ from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.speedrun.olmoe_1b7b_nemotron_40b import DATASET_OPTIONS
 from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.utils.activation import ActivationFunctionEnum
+from levanter.optim import AdamConfig
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 
 logger = logging.getLogger("ray")
@@ -72,7 +87,16 @@ def _format_lr_tag(lr: float) -> str:
     return f"{mantissa}{exp_tag}"
 
 
-def _build_olmoe_m_config(seq_len: int) -> MixtralConfig:
+def _identity_activation(x):
+    return x
+
+
+def _build_olmoe_m_config(
+    seq_len: int,
+    *,
+    cross_entropy_block_size: int,
+    cross_entropy_implementation: str | None,
+) -> MixtralConfig:
     # Keep expert granularity fixed: topk/n_experts = 2/16 = 1/8.
     return MixtralConfig(
         seq_len=seq_len,
@@ -87,14 +111,25 @@ def _build_olmoe_m_config(seq_len: int) -> MixtralConfig:
         gradient_checkpointing=True,
         scan_layers=True,
         use_gmm=True,
-        # Keep the CE vocab block size modest: very large (e.g. 32k) blocks can trigger TPU/XLA allocation-size
-        # overflows for (tokens x vocab_block) intermediates at long seq / large batch settings.
-        cross_entropy_block_size=4096,
-        cross_entropy_implementation="xla",
+        # Default keeps the existing high-MFU fused CE behavior; callers can override for stability/debugging.
+        cross_entropy_block_size=cross_entropy_block_size,
+        cross_entropy_implementation=cross_entropy_implementation,
         flash_attention_block_size=None,
         reference_checkpoint=OLMOE_1B7B_REFERENCE_CHECKPOINT,
         tokenizer=OLMOE_1B7B_REFERENCE_CHECKPOINT,
     )
+
+
+def _dataset_tag(dataset_name: str) -> str:
+    if dataset_name == "nemotron_dclm_fineweb_10b":
+        return "nemotron_dclm_fineweb"
+    return dataset_name
+
+
+def _experiment_tag(dataset_name: str) -> str:
+    if dataset_name == "nemotron_cc":
+        return "exp=olmoe_m_nemotron_lr_sweep"
+    return "exp=olmoe_m_lr_sweep"
 
 
 def _make_tags(
@@ -108,23 +143,28 @@ def _make_tags(
     use_qk_norm: bool,
     router_topk_then_softmax: bool,
     alf_lb_loss_scale: float,
+    equilibrium_lb_loss_scale: float,
+    equilibrium_lb_objective: str,
     dense_first_n_layers: int,
     router_fp32: bool,
+    dataset_name: str,
     extra_tags: list[str],
 ) -> list[str]:
     return [
-        "exp=olmoe_m_lr_sweep",
-        "data=nemotron_dclm_fineweb",
+        _experiment_tag(dataset_name),
+        f"data={_dataset_tag(dataset_name)}",
         f"token_target={token_target}",
         f"perm={permutation_type}",
         f"seq={seq_len}",
         f"bs={global_batch_size}",
-        "opt=adamw_b0.9_0.95",
+        "opt=adamc_b0.9_0.95",
         f"lr={lr:.2e}",
         f"variant={variant}",
         f"stab_qk_norm={int(use_qk_norm)}",
         f"stab_topk_then_softmax={int(router_topk_then_softmax)}",
         f"stab_alf_lb={int(alf_lb_loss_scale > 0)}",
+        f"stab_equilibrium_lb={int(equilibrium_lb_loss_scale > 0)}",
+        f"stab_equilibrium_obj={equilibrium_lb_objective}",
         f"stab_dense_first2={int(dense_first_n_layers >= 2)}",
         f"stab_router_fp32={int(router_fp32)}",
         *extra_tags,
@@ -132,23 +172,75 @@ def _make_tags(
 
 
 def main() -> None:
+    variant_choices = (
+        "olmoe_m",
+        "olmoe_m_bilinear",
+        "olmoe_m_stab2",
+        "olmoe_m_stab3",
+        "olmoe_m_stab4",
+        "olmoe_m_stab4_original",
+        "olmoe_m_stab4_fast",
+        "olmoe_m_stab4_original_current_step",
+        "olmoe_m_stab4_fast_current_step",
+        "olmoe_m_stab5",
+    )
     parser = argparse.ArgumentParser(
-        description="OLMoE-M LR sweep on Nemotron+DCLM+FineWeb (token budget; 3 variants x 4 LR multipliers)."
+        description=(
+            "OLMoE-M LR sweep on configurable Nemotron-family datasets "
+            "(token budget; configurable variants x 4 learning rates)."
+        )
     )
     parser.add_argument("--tpu-type", default="v5p-16")
-    parser.add_argument("--seq-len", type=int, default=4096)
-    parser.add_argument("--global-batch-size", type=int, default=512)
-    parser.add_argument("--token-target", type=int, default=40_000_000_000)
-
-    parser.add_argument("--base-lr", type=float, default=1e-4)
     parser.add_argument(
-        "--lr-multipliers",
+        "--tpu-head-resource",
+        action="append",
+        default=[],
+        help=(
+            "Additional Ray custom resource required on the TPU slice head when acquiring a slice. "
+            "Use KEY or KEY=VALUE. Repeatable. Useful for pinning runs to specific labeled TPU workers."
+        ),
+    )
+    parser.add_argument(
+        "--variant-head-resource",
+        action="append",
+        default=[],
+        metavar="VARIANT=RESOURCE",
+        help=(
+            "Pin a specific variant to a TPU worker by requiring RESOURCE on the TPU slice head when acquiring a "
+            "slice. Repeatable. Example: --variant-head-resource olmoe_m=olmoe_base"
+        ),
+    )
+    parser.add_argument("--seq-len", type=int, default=4096)
+    parser.add_argument("--global-batch-size", type=int, default=256)
+    parser.add_argument("--token-target", type=int, default=40_000_000_000)
+    parser.add_argument(
+        "--cross-entropy-block-size",
+        type=int,
+        default=2048,
+        help="Vocab block size for fused CE. Smaller values reduce TPU/XLA allocation pressure.",
+    )
+    parser.add_argument(
+        "--cross-entropy-implementation",
+        type=str,
+        choices=("auto", "pallas_tpu", "xla", "reference"),
+        default="pallas_tpu",
+        help="Cross-entropy backend. Use xla to avoid pallas scoped-vmem pressure.",
+    )
+
+    parser.add_argument(
+        "--learning-rates",
         type=float,
         nargs="+",
-        default=[0.25, 0.5, 1.0, 2.0],
-        help="Learning-rate multipliers applied to --base-lr.",
+        default=[8e-4, 1e-3, 2e-3, 4e-3],
+        help="Explicit learning-rate sweep values.",
     )
     parser.add_argument("--weight-decay", type=float, default=0.1)
+    parser.add_argument("--beta1", type=float, default=0.9)
+    parser.add_argument("--beta2", type=float, default=0.95)
+    parser.add_argument("--epsilon", type=float, default=1e-8)
+    parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--warmup-steps", type=float, default=2000)
+    parser.add_argument("--min-lr-ratio", type=float, default=0.125)
     parser.add_argument(
         "--steps-per-eval",
         type=int,
@@ -157,20 +249,34 @@ def main() -> None:
     )
     parser.add_argument(
         "--disable-default-validation",
+        dest="disable_default_validation",
         action="store_true",
         help="Disable default Levanter validation losses (Paloma + uncheatable).",
+    )
+    parser.add_argument(
+        "--enable-default-validation",
+        dest="disable_default_validation",
+        action="store_false",
+        help="Enable default Levanter validation losses (Paloma + uncheatable).",
     )
 
     parser.add_argument(
         "--permutation-type",
         choices=("feistel", "linear"),
         default="feistel",
-        help="Shuffle permutation type for the mixture dataset.",
+        help="Shuffle permutation type for the selected dataset.",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=("nemotron_cc", "nemotron_dclm_fineweb_10b"),
+        default="nemotron_cc",
+        help="Tokenized dataset preset to use for training.",
     )
     parser.add_argument(
         "--dataset-tokenizer",
         type=str,
-        default="stanford-crfm/marin-tokenizer",
+        # Nemotron-CC tokenized caches are built with the Llama 3 tokenizer.
+        default="meta-llama/Meta-Llama-3.1-8B",
         help=(
             "Optional tokenizer name/path used for vocab size / special ids. "
             "Must match the tokenizer used to pretokenize the dataset."
@@ -187,18 +293,32 @@ def main() -> None:
     )
     parser.add_argument("--checkpoint-save-minutes", type=int, default=60)
 
-    parser.add_argument("--wandb-project", type=str, default="olmoe_m")
+    # This sweep is Nemotron-family specific; default to the Nemotron project to
+    # avoid accidental logging into the generic OLMoE project.
+    parser.add_argument("--wandb-project", type=str, default="olmoe_m_nemotron")
     parser.add_argument("--wandb-name-suffix", type=str, default=None)
     parser.add_argument("--run-suffix", type=str, default=None)
     parser.add_argument("--extra-tag", action="append", default=[], help="Additional W&B tag (repeatable).")
 
     parser.add_argument("--stab-alf-lb-loss-scale", type=float, default=0.01)
     parser.add_argument(
+        "--stab-equilibrium-lb-loss-scale",
+        type=float,
+        default=0.01,
+        help="Equilibrium/quantile load-balancing bias-loss scale used by stab4.",
+    )
+    parser.add_argument(
+        "--stab-equilibrium-lb-iterations",
+        type=int,
+        default=5,
+        help="Number of alternating quantile updates used by stab4 equilibrium balancing.",
+    )
+    parser.add_argument(
         "--variants",
         nargs="+",
-        choices=("olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab2", "olmoe_m_stab5"),
-        default=["olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab5"],
-        help="Which variants to run (default: all).",
+        choices=variant_choices,
+        default=["olmoe_m", "olmoe_m_bilinear", "olmoe_m_stab3", "olmoe_m_stab5"],
+        help=("Which variants to run (default: " "olmoe_m olmoe_m_bilinear olmoe_m_stab3 olmoe_m_stab5)."),
     )
 
     # Executor controls (so this script can be run under ray_run without draccus CLI conflicts).
@@ -214,7 +334,7 @@ def main() -> None:
             "Set to 1 to use a single TPU slice per submission (sequential LR runs)."
         ),
     )
-    parser.set_defaults(force_run_failed=True)
+    parser.set_defaults(force_run_failed=True, disable_default_validation=False)
     parser.add_argument(
         "--no-force-run-failed",
         dest="force_run_failed",
@@ -223,8 +343,48 @@ def main() -> None:
     )
     parser.add_argument("--run-only", nargs="*", default=None)
     args = parser.parse_args()
+    if args.cross_entropy_block_size <= 0:
+        raise ValueError("--cross-entropy-block-size must be > 0")
+    if not args.learning_rates:
+        raise ValueError("--learning-rates must include at least one value.")
 
     use_default_validation = not args.disable_default_validation
+
+    tpu_head_resources: dict[str, float] = {}
+    for item in args.tpu_head_resource:
+        item = (item or "").strip()
+        if not item:
+            continue
+        if "=" in item:
+            key, value = item.split("=", 1)
+            key = key.strip()
+            if not key:
+                raise ValueError(f"Invalid --tpu-head-resource '{item}': key must be non-empty.")
+            tpu_head_resources[key] = float(value)
+        else:
+            tpu_head_resources[item] = 1.0
+
+    variant_head_resource: dict[str, str] = {}
+    for item in args.variant_head_resource:
+        item = (item or "").strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(
+                f"Invalid --variant-head-resource '{item}': expected VARIANT=RESOURCE "
+                "(for example: --variant-head-resource olmoe_m=olmoe_base)."
+            )
+        variant, resource = item.split("=", 1)
+        variant = variant.strip()
+        resource = resource.strip()
+        if not variant or not resource:
+            raise ValueError(f"Invalid --variant-head-resource '{item}': variant and resource must be non-empty.")
+        if variant not in variant_choices:
+            raise ValueError(
+                f"Invalid --variant-head-resource '{item}': unknown variant '{variant}'. "
+                f"Expected one of: {', '.join(variant_choices)}."
+            )
+        variant_head_resource[variant] = resource
 
     tokens_per_step = args.global_batch_size * args.seq_len
     num_train_steps = max(1, _ceil_div(args.token_target, tokens_per_step))
@@ -232,35 +392,94 @@ def main() -> None:
         "Token budget=%d, tokens/step=%d => num_train_steps=%d", args.token_target, tokens_per_step, num_train_steps
     )
 
+    base_optimizer = AdamConfig(
+        learning_rate=float(args.learning_rates[0]),
+        weight_decay=args.weight_decay,
+        beta1=args.beta1,
+        beta2=args.beta2,
+        epsilon=args.epsilon,
+        max_grad_norm=args.max_grad_norm,
+        warmup=args.warmup_steps,
+        min_lr_ratio=args.min_lr_ratio,
+        lr_schedule="cosine",
+        adamc_weight_decay=True,
+    )
     base_train_config = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu(tpu_type=args.tpu_type),
+        resources=ResourceConfig.with_tpu(tpu_type=args.tpu_type, tpu_head_resources=tpu_head_resources),
         train_batch_size=args.global_batch_size,
         num_train_steps=num_train_steps,
-        learning_rate=args.base_lr,
+        learning_rate=float(args.learning_rates[0]),
         train_seq_len=args.seq_len,
-        weight_decay=args.weight_decay,
-        beta1=0.9,
-        beta2=0.95,
+        optimizer_config=base_optimizer,
         steps_per_eval=args.steps_per_eval,
         steps_per_export=100_000_000,
         steps_per_hf_export=-1,
     )
 
-    tokenized = DATASET_OPTIONS["nemotron_dclm_fineweb_10b"]
+    tokenized = DATASET_OPTIONS[args.dataset]
     if not isinstance(tokenized, LMMixtureDatasetConfig):
-        raise ValueError("Expected nemotron_dclm_fineweb_10b to be a mixture dataset config")
+        raise ValueError(f"Expected {args.dataset} to resolve to a mixture dataset config.")
     tokenized = dataclasses.replace(
         tokenized,
         permutation_type=args.permutation_type,
         tokenizer=args.dataset_tokenizer,
+        auto_build_caches=False,
     )
 
-    olmoe_m = _build_olmoe_m_config(args.seq_len)
-    olmoe_m_bilinear = dataclasses.replace(olmoe_m, activation_function=ActivationFunctionEnum.linear)
+    cross_entropy_implementation = (
+        None if args.cross_entropy_implementation == "auto" else args.cross_entropy_implementation
+    )
+    olmoe_m = _build_olmoe_m_config(
+        args.seq_len,
+        cross_entropy_block_size=args.cross_entropy_block_size,
+        cross_entropy_implementation=cross_entropy_implementation,
+    )
+    olmoe_m_bilinear = dataclasses.replace(olmoe_m, activation_function=_identity_activation)
     olmoe_m_stab2 = dataclasses.replace(
         olmoe_m,
         router_fp32=True,
         alf_lb_loss_scale=args.stab_alf_lb_loss_scale,
+    )
+    olmoe_m_stab3 = dataclasses.replace(
+        olmoe_m,
+        use_qk_norm=True,
+        router_topk_then_softmax=True,
+        router_fp32=True,
+    )
+    olmoe_m_stab4 = dataclasses.replace(
+        olmoe_m,
+        use_qk_norm=True,
+        router_topk_then_softmax=True,
+        router_fp32=True,
+        lbl_coef=None,
+        equilibrium_lb_loss_scale=args.stab_equilibrium_lb_loss_scale,
+        equilibrium_lb_iterations=args.stab_equilibrium_lb_iterations,
+        equilibrium_lb_objective="target_l2",
+        moe_metrics_mode="equilibrium_only",
+    )
+    olmoe_m_stab4_original = dataclasses.replace(
+        olmoe_m,
+        use_qk_norm=True,
+        router_topk_then_softmax=True,
+        router_fp32=True,
+        lbl_coef=None,
+        equilibrium_lb_loss_scale=args.stab_equilibrium_lb_loss_scale,
+        equilibrium_lb_iterations=args.stab_equilibrium_lb_iterations,
+        equilibrium_lb_center_bias=False,
+        equilibrium_lb_objective="article_original",
+        moe_metrics_mode="equilibrium_only",
+    )
+    olmoe_m_stab4_fast = dataclasses.replace(
+        olmoe_m_stab4_original,
+        equilibrium_lb_iterations=1,
+    )
+    olmoe_m_stab4_original_current_step = dataclasses.replace(
+        olmoe_m_stab4_original,
+        equilibrium_lb_use_current_step_bias=True,
+    )
+    olmoe_m_stab4_fast_current_step = dataclasses.replace(
+        olmoe_m_stab4_fast,
+        equilibrium_lb_use_current_step_bias=True,
     )
     olmoe_m_stab5 = dataclasses.replace(
         olmoe_m,
@@ -275,18 +494,30 @@ def main() -> None:
         ("olmoe_m", olmoe_m),
         ("olmoe_m_bilinear", olmoe_m_bilinear),
         ("olmoe_m_stab2", olmoe_m_stab2),
+        ("olmoe_m_stab3", olmoe_m_stab3),
+        ("olmoe_m_stab4", olmoe_m_stab4),
+        ("olmoe_m_stab4_original", olmoe_m_stab4_original),
+        ("olmoe_m_stab4_fast", olmoe_m_stab4_fast),
+        ("olmoe_m_stab4_original_current_step", olmoe_m_stab4_original_current_step),
+        ("olmoe_m_stab4_fast_current_step", olmoe_m_stab4_fast_current_step),
         ("olmoe_m_stab5", olmoe_m_stab5),
     ]
     selected_variants = {v.strip() for v in args.variants}
     variants = [v for v in variants if v[0] in selected_variants]
 
     steps: list[ExecutorStep] = []
-    for mult in args.lr_multipliers:
-        lr = float(args.base_lr * mult)
+    for lr in args.learning_rates:
+        lr = float(lr)
         lr_tag = _format_lr_tag(lr)
-        train_cfg = dataclasses.replace(base_train_config, learning_rate=lr)
+        optimizer_cfg = dataclasses.replace(base_optimizer, learning_rate=lr)
+        train_cfg = dataclasses.replace(base_train_config, learning_rate=lr, optimizer_config=optimizer_cfg)
 
         for variant, model_cfg in variants:
+            variant_resources = dict(tpu_head_resources)
+            variant_resource_key = variant_head_resource.get(variant)
+            if variant_resource_key:
+                variant_resources[variant_resource_key] = 1.0
+
             base_name = f"olmoe_m_40b/{variant}/lr_{lr_tag}/s{args.seq_len}_b{args.global_batch_size}"
 
             suffix = f"_{args.wandb_name_suffix}" if args.wandb_name_suffix else ""
@@ -295,6 +526,8 @@ def main() -> None:
             use_qk_norm = bool(getattr(model_cfg, "use_qk_norm", False))
             router_topk_then_softmax = bool(getattr(model_cfg, "router_topk_then_softmax", False))
             alf_lb_loss_scale = float(getattr(model_cfg, "alf_lb_loss_scale", 0.0) or 0.0)
+            equilibrium_lb_loss_scale = float(getattr(model_cfg, "equilibrium_lb_loss_scale", 0.0) or 0.0)
+            equilibrium_lb_objective = str(getattr(model_cfg, "equilibrium_lb_objective", "target_l2"))
             dense_first_n_layers = int(getattr(model_cfg, "dense_first_n_layers", 0) or 0)
             router_fp32 = bool(getattr(model_cfg, "router_fp32", False))
 
@@ -312,18 +545,25 @@ def main() -> None:
                 use_qk_norm=use_qk_norm,
                 router_topk_then_softmax=router_topk_then_softmax,
                 alf_lb_loss_scale=alf_lb_loss_scale,
+                equilibrium_lb_loss_scale=equilibrium_lb_loss_scale,
+                equilibrium_lb_objective=equilibrium_lb_objective,
                 dense_first_n_layers=dense_first_n_layers,
                 router_fp32=router_fp32,
+                dataset_name=args.dataset,
                 extra_tags=extra_tags,
             )
 
-            run_suffix = f"_{args.run_suffix}" if args.run_suffix else ""
+            run_suffix = f"-{args.run_suffix}" if args.run_suffix else ""
+            train_cfg_variant = dataclasses.replace(
+                train_cfg,
+                resources=dataclasses.replace(train_cfg.resources, tpu_head_resources=variant_resources),
+            )
             steps.append(
                 default_train(
                     name=f"{base_name}{run_suffix}",
                     tokenized=tokenized,
                     model_config=model_cfg,
-                    train_config=train_cfg,
+                    train_config=train_cfg_variant,
                     tags=tags,
                     use_default_validation=use_default_validation,
                     eval_harness_tasks=(),
@@ -342,7 +582,11 @@ def main() -> None:
         run_only=args.run_only,
         max_concurrent=args.max_concurrent,
     )
-    executor_main.__wrapped__(executor_cfg, steps=steps, description="OLMoE-M LR sweep (Nemotron+DCLM+FineWeb; 40B)")
+    executor_main.__wrapped__(
+        executor_cfg,
+        steps=steps,
+        description="OLMoE-M AdamC LR sweep (Nemotron-family datasets; 40B tokens)",
+    )
 
 
 if __name__ == "__main__":
