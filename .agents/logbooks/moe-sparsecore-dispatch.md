@@ -1,6 +1,10 @@
 # MoE SparseCore Dispatch: Research Logbook
 
 - GitHub experiment issue: [#3418](https://github.com/marin-community/marin/issues/3418)
+- Seal snapshot:
+  - Branch: `codex/moe-sparsecore-dispatch-seal`
+  - Commit: `92780c7c95198f54b0401d511e09d1756baad1e8`
+  - Tag: `moe-sparsecore-dispatch-v5p8-seal-20260308`
 
 ## Scope
 - Goal: Evaluate whether an opt-in SparseCore-assisted dispatch path for [`moe_mlp`](/Users/dlwh/.codex/worktrees/4f0b/marin/lib/levanter/src/levanter/grug/grug_moe.py) can improve full forward+backward throughput over the current argsort-based TC-only dispatch path on `v5p-8`.
