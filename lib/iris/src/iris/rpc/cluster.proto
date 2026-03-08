@@ -123,6 +123,11 @@ message GetProcessStatusRequest {
   int32 max_log_lines = 1;     // Max log entries to include (0 = default 200)
   string log_substring = 2;    // Substring filter for logs
   string min_log_level = 3;    // Minimum log level filter
+
+  // Target process. Uses the same naming convention as profiling/logs:
+  //   /system/process              - the local process (default if empty)
+  //   /system/worker/<worker_id>   - proxy to a specific worker
+  string target = 4;
 }
 
 message GetProcessStatusResponse {

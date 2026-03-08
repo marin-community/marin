@@ -200,14 +200,16 @@ class ProcessInfo(_message.Message):
     def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., cpu_percent: _Optional[float] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ...) -> None: ...
 
 class GetProcessStatusRequest(_message.Message):
-    __slots__ = ("max_log_lines", "log_substring", "min_log_level")
+    __slots__ = ("max_log_lines", "log_substring", "min_log_level", "target")
     MAX_LOG_LINES_FIELD_NUMBER: _ClassVar[int]
     LOG_SUBSTRING_FIELD_NUMBER: _ClassVar[int]
     MIN_LOG_LEVEL_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
     max_log_lines: int
     log_substring: str
     min_log_level: str
-    def __init__(self, max_log_lines: _Optional[int] = ..., log_substring: _Optional[str] = ..., min_log_level: _Optional[str] = ...) -> None: ...
+    target: str
+    def __init__(self, max_log_lines: _Optional[int] = ..., log_substring: _Optional[str] = ..., min_log_level: _Optional[str] = ..., target: _Optional[str] = ...) -> None: ...
 
 class GetProcessStatusResponse(_message.Message):
     __slots__ = ("process_info", "log_entries")
