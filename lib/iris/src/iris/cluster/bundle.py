@@ -9,7 +9,6 @@ import hashlib
 import io
 import logging
 import posixpath
-import re
 import sqlite3
 import threading
 import time
@@ -17,14 +16,7 @@ import zipfile
 from pathlib import Path
 from urllib.request import urlopen
 
-_BUNDLE_ID_RE = r"^[0-9a-f]{64}$"
 logger = logging.getLogger(__name__)
-
-
-def validate_bundle_id(bundle_id: str) -> None:
-    """Validate a bundle identifier."""
-    if not re.fullmatch(_BUNDLE_ID_RE, bundle_id):
-        raise ValueError(f"Invalid bundle_id: {bundle_id!r}")
 
 
 def bundle_id_for_zip(blob: bytes) -> str:
@@ -118,7 +110,6 @@ class BundleStore:
 
     def get_zip(self, bundle_id: str) -> bytes:
         """Read zip bytes by bundle id."""
-        validate_bundle_id(bundle_id)
         with self._lock:
             row = self._conn.execute(
                 "SELECT zip_bytes FROM bundles WHERE bundle_id = ?",
@@ -135,7 +126,6 @@ class BundleStore:
 
     def prefetch_bundle(self, bundle_id: str) -> None:
         """Ensure bundle is present locally, fetching from controller on miss."""
-        validate_bundle_id(bundle_id)
         try:
             self.get_zip(bundle_id)
             return

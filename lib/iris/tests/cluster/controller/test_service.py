@@ -138,7 +138,9 @@ def mock_scheduler():
 @pytest.fixture
 def service(state, mock_scheduler, tmp_path):
     """Create a ControllerServiceImpl for testing."""
-    return ControllerServiceImpl(state, mock_scheduler, bundle_db_path=tmp_path / "bundles.sqlite3")
+    from iris.cluster.bundle import BundleStore
+
+    return ControllerServiceImpl(state, mock_scheduler, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"))
 
 
 # =============================================================================

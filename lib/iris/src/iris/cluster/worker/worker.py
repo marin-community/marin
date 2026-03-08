@@ -448,14 +448,6 @@ class Worker:
 
         task_id.require_task()
 
-        bundle_prefetch_error: str | None = None
-        if request.bundle_id:
-            try:
-                self._bundle_store.prefetch_bundle(request.bundle_id)
-            except Exception as e:
-                bundle_prefetch_error = f"Bundle prefetch failed for {request.bundle_id}: {e}"
-                logger.warning(bundle_prefetch_error)
-
         # Create a minimal TaskAttemptConfig. Expensive setup (port allocation,
         # workdir creation, log sink init) is deferred to TaskAttempt.run() so
         # the heartbeat RPC returns quickly.
@@ -465,7 +457,6 @@ class Worker:
             attempt_id=attempt_id,
             request=request,
             cache_dir=self._cache_dir,
-            bundle_prefetch_error=bundle_prefetch_error,
         )
 
         attempt = TaskAttempt(

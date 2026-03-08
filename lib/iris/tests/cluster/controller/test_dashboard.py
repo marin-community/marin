@@ -12,6 +12,7 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     JobSubmittedEvent,
@@ -126,7 +127,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 @pytest.fixture
 def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
-    return ControllerServiceImpl(state, controller_mock, bundle_db_path=tmp_path / "bundles.sqlite3")
+    return ControllerServiceImpl(state, controller_mock, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"))
 
 
 @pytest.fixture
@@ -139,7 +140,7 @@ def client(service):
 def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    return ControllerServiceImpl(state, controller_mock, bundle_db_path=tmp_path / "bundles.sqlite3")
+    return ControllerServiceImpl(state, controller_mock, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"))
 
 
 def rpc_post(client: TestClient, method: str, body: dict | None = None):

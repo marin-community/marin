@@ -123,7 +123,6 @@ class TaskAttemptConfig:
     attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
     cache_dir: Path
-    bundle_prefetch_error: str | None = None
 
 
 def _get_host_ip() -> str:
@@ -292,7 +291,6 @@ class TaskAttempt:
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
         self.request: cluster_pb2.Worker.RunTaskRequest = config.request
-        self._bundle_prefetch_error: str | None = config.bundle_prefetch_error
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
@@ -474,11 +472,6 @@ class TaskAttempt:
         try:
             self._check_cancelled()
             self._setup()
-            if self._bundle_prefetch_error:
-                self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
-                self.started_at = Timestamp.now()
-                self._report_state()
-                raise RuntimeError(self._bundle_prefetch_error)
             self._check_cancelled()
             self._download_bundle()
             self._check_cancelled()

@@ -122,7 +122,7 @@ def test_bundle_fetch_init_container_is_present(monkeypatch):
     assert init["name"] == "stage-workdir"
     assert init["command"][:2] == ["bash", "-lc"]
     script = init["command"][2]
-    assert "curl -fsSL" in script
+    assert "urlopen" in script
     assert "IRIS_BUNDLE_ID" in script
     assert "IRIS_CONTROLLER_URL" in script
     env = init["env"]

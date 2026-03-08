@@ -28,6 +28,7 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     merge_constraints,
 )
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
@@ -511,7 +512,7 @@ class ControllerConfig:
     """Port to bind the HTTP server to. Use 0 for auto-assign."""
 
     bundle_prefix: str | None = None
-    """Unused legacy field retained in config. Bundles are stored in sqlite."""
+    """Storage prefix for snapshots (e.g. gs://bucket/path, s3://bucket/path)."""
 
     scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
     """How often to run the scheduling loop."""
@@ -585,20 +586,18 @@ class Controller:
         self._config = config
         self.stub_factory = worker_stub_factory
 
-        if config.log_dir:
-            bundle_db_path = config.log_dir / "bundles.sqlite3"
-        else:
-            bundle_db_path = Path(tempfile.gettempdir()) / "iris-controller-bundles.sqlite3"
+        bundle_db_path = Path(tempfile.gettempdir()) / "iris-controller-bundles.sqlite3"
 
         self._state = ControllerState(
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             log_dir=config.log_dir,
         )
         self._scheduler = Scheduler()
+        self._bundle_store = BundleStore(db_path=bundle_db_path)
         self._service = ControllerServiceImpl(
             self._state,
             self,
-            bundle_db_path=bundle_db_path,
+            bundle_store=self._bundle_store,
         )
         self._dashboard = ControllerDashboard(
             self._service,

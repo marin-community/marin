@@ -87,43 +87,14 @@ def _build_task_script(config: ContainerConfig) -> str:
 
 
 def _build_stage_init_script() -> str:
-    """Build init-container script that stages bundle ID and workdir files."""
-    return (
-        "set -euo pipefail\n"
-        'if [ -n "${IRIS_BUNDLE_ID:-}" ]; then\n'
-        '  curl -fsSL "${IRIS_CONTROLLER_URL}/bundles/${IRIS_BUNDLE_ID}.zip" -o /tmp/bundle.zip\n'
-        "fi\n"
-        "python - <<'IRIS_STAGE_FILES'\n"
-        "import io\n"
-        "import os\n"
-        "import zipfile\n"
-        "from pathlib import Path\n"
-        "bundle_id = os.environ.get('IRIS_BUNDLE_ID', '')\n"
-        "dest = Path(os.environ.get('IRIS_WORKDIR', '/app')).resolve()\n"
-        "dest.mkdir(parents=True, exist_ok=True)\n"
-        "if bundle_id:\n"
-        "    archive = Path('/tmp/bundle.zip').read_bytes()\n"
-        "    with zipfile.ZipFile(io.BytesIO(archive), 'r') as zf:\n"
-        "        for member in zf.infolist():\n"
-        "            target = (dest / member.filename).resolve()\n"
-        "            if not target.is_relative_to(dest):\n"
-        "                raise ValueError(f'Zip slip detected: {member.filename}')\n"
-        "        zf.extractall(dest)\n"
-        "files_src = os.environ.get('IRIS_WORKDIR_FILES_SRC', '')\n"
-        "if files_src:\n"
-        "    src = Path(files_src)\n"
-        "    if src.exists():\n"
-        "        for path in src.rglob('*'):\n"
-        "            if not path.is_file():\n"
-        "                continue\n"
-        "            rel = path.relative_to(src)\n"
-        "            target = (dest / rel).resolve()\n"
-        "            if not target.is_relative_to(dest):\n"
-        "                raise ValueError(f'Path traversal detected: {rel}')\n"
-        "            target.parent.mkdir(parents=True, exist_ok=True)\n"
-        "            target.write_bytes(path.read_bytes())\n"
-        "IRIS_STAGE_FILES"
-    )
+    """Build init-container script that stages bundle ID and workdir files.
+
+    Reads the script from kubernetes_bundle_fetch.py so it can be tested
+    and syntax-checked independently.
+    """
+    script_path = Path(__file__).with_name("kubernetes_bundle_fetch.py")
+    script_content = script_path.read_text()
+    return f"python - <<'IRIS_STAGE_FILES'\n{script_content}IRIS_STAGE_FILES"
 
 
 def _build_gpu_resources(config: ContainerConfig) -> dict[str, str]:

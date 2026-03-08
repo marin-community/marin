@@ -11,7 +11,6 @@ aggregated from task states.
 import json
 import logging
 import uuid
-from pathlib import Path
 from typing import Any, Protocol
 
 from connectrpc.code import Code
@@ -19,7 +18,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.bundle import BundleStore, validate_bundle_id
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -246,19 +245,19 @@ class ControllerServiceImpl:
 
     Args:
         state: Controller state containing jobs, tasks, and workers
-        scheduler: Background scheduler for task dispatch (any object with wake() method)
-        bundle_db_path: SQLite path for bundle zip storage.
+        controller: Background scheduler for task dispatch (any object with wake() method)
+        bundle_store: Bundle store for zip storage.
     """
 
     def __init__(
         self,
         state: ControllerState,
         controller: ControllerProtocol,
-        bundle_db_path: Path,
+        bundle_store: BundleStore,
     ):
         self._state = state
         self._controller = controller
-        self._bundle_store = BundleStore(db_path=bundle_db_path)
+        self._bundle_store = bundle_store
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -336,9 +335,6 @@ class ControllerServiceImpl:
             new_request.ClearField("bundle_blob")
             new_request.bundle_id = bundle_id
             request = new_request
-        elif request.bundle_id:
-            validate_bundle_id(request.bundle_id)
-
         # Auto-inject device constraints from the resource spec.
         # Explicit user constraints for canonical keys (device-type,
         # device-variant, etc.) replace auto-generated ones.
