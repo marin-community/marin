@@ -245,6 +245,25 @@
   - latest observed `K=8` resume reached step `81/2000` again with the same early loss pattern
 - Interpretation:
   - `K=16` is clearly operational on `v6e-8` at batch size `64`
-  - the current `K=8` trial configuration is not resilient enough for preemptible slices; continuing unchanged is likely to waste more TPU time
-  - the right immediate fix is denser checkpointing rather than changing model hyperparameters
+- the current `K=8` trial configuration is not resilient enough for preemptible slices; continuing unchanged is likely to waste more TPU time
+- the right immediate fix is denser checkpointing rather than changing model hyperparameters
 - Next action: commit the tracker+checkpointing hardening, stop the degraded `K=8` trial, and relaunch a fresh retry with 2-minute checkpoints under a new run id.
+
+### 2026-03-09 04:10 - K=8 retry is checkpointing; K=16 trial staged
+
+- Hypothesis: once the `K=8` retry proves that 2-minute checkpointing actually lands durable state, the next bounded rung should be a full `K=16` trial rather than more `K=8` infrastructure churn.
+- Command:
+  - `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a job-logs -n 400 ray-run-dlwh-launch-20260308-103217`
+  - local edit of `experiments/jpeg_tokenizer/base/launch.py`
+- Config:
+  - active run: `tokexplore/jpeg-tokenizer-k8-trial-r2`
+  - staged run: `tokexplore/jpeg-tokenizer-k16-trial`
+  - checkpoint policy: every `2` minutes, keep every `500` steps
+- Result:
+  - the `K=8` retry wrote durable checkpoints at steps `79`, `218`, and `358` to `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd/checkpoints`
+  - latest observed `K=8` progress reached step `429/2000` with train loss `4.18`
+  - launch config now includes a full `K=16` trial at sequence length `16384`, batch size `64`, `2000` steps, and eval every `1000` steps
+- Interpretation:
+  - the earlier `K=8` failure mode is resolved: preemptions should no longer erase the whole run
+  - `K=16` is ready for the same end-to-end comparison treatment as `K=4` and `K=8`
+- Next action: validate the new launch surface, commit the milestone, and submit `tokexplore/jpeg-tokenizer-k16-trial` on `marin-eu-west4-a`.

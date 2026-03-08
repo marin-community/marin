@@ -158,3 +158,42 @@ This is enough to say that `16384`-token coefficient sequences are operationally
 The original `K=8` trial has now been interrupted multiple times by TPU preemptions and has restarted from scratch after
 at least one resume because no checkpoint had landed before the node died. The next `K=8` trial should therefore use a
 much shorter checkpoint interval instead of the original 10-minute save cadence.
+
+## K8 Retry Status
+
+The retried `K=8` baseline with 2-minute checkpointing is now behaving as intended:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260308-103217`
+- W&B run:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-trial-r2`
+- Latest observed progress:
+  step `429/2000` with train loss `4.18`
+- Confirmed checkpoints:
+  steps `79`, `218`, and `358`
+- Checkpoint path:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd/checkpoints`
+
+This resolves the main reliability concern from the original `K=8` trial: useful progress is now landing in GCS well
+before the next likely TPU preemption.
+
+## K16 Trial Staging
+
+The next rung is now prepared as a full baseline run:
+
+- Executor step:
+  `tokexplore/jpeg-tokenizer-k16-trial`
+- W&B group:
+  `tokexplore-jpeg-tokenizer-k16`
+- Sequence length:
+  `16384`
+- Batch size:
+  `64`
+- Train steps:
+  `2000`
+- Eval cadence:
+  every `1000` steps
+- Checkpoint policy:
+  every `2` minutes, keep every `500` steps
+
+This keeps the `K=16` trial on the same comparison shape as the completed `K=4` baseline and the active `K=8` retry.
