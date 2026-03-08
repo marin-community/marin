@@ -35,7 +35,7 @@ from iris.cluster.controller.state import (
     ControllerWorker,
 )
 from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
-from iris.cluster.runtime.profile import is_system_target, profile_local_process
+from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -973,9 +973,10 @@ class ControllerServiceImpl:
             except Exception as e:
                 return cluster_pb2.ProfileTaskResponse(error=str(e))
 
-        # Task target: parse, validate, proxy to worker
+        # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
-            task_name = JobName.from_wire(request.target)
+            parsed = parse_profile_target(request.target)
+            task_name = JobName.from_wire(parsed.task_id)
             task_name.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -139,15 +140,18 @@ def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.Profi
     """Profile the current interpreter process using py-spy or memray.
 
     Used by the controller and worker to handle /system/process targets.
-    All tools (py-spy, memray) are assumed to be installed.
+    Raises RuntimeError immediately if the required tool is not installed.
     """
     pid = str(os.getpid())
 
     if profile_type.HasField("threads"):
+        _check_tool("py-spy")
         return run_pyspy_dump(pid)
     elif profile_type.HasField("cpu"):
+        _check_tool("py-spy")
         return _run_pyspy_record(pid, duration_seconds, profile_type.cpu)
     elif profile_type.HasField("memory"):
+        _check_tool("memray")
         return _run_memray_profile(pid, duration_seconds, profile_type.memory)
     else:
         raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
@@ -219,3 +223,44 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_
 def is_system_target(target: str) -> bool:
     """Return True if the target refers to the local process rather than a task."""
     return target == SYSTEM_PROCESS_TARGET
+
+
+@dataclass(frozen=True)
+class ParsedTarget:
+    """Result of parsing a profiling target string.
+
+    For task targets like ``/user/job/0`` or ``/user/job/0:3``, ``task_id``
+    is the bare task path and ``attempt_id`` is the optional attempt qualifier
+    (``None`` when omitted, meaning "use the current/latest attempt").
+    """
+
+    task_id: str
+    attempt_id: int | None
+
+
+def parse_profile_target(target: str) -> ParsedTarget:
+    """Parse an optional ``:attempt_id`` suffix from a task target.
+
+    Examples:
+        >>> parse_profile_target("/alice/job/0")
+        ParsedTarget(task_id='/alice/job/0', attempt_id=None)
+        >>> parse_profile_target("/alice/job/0:3")
+        ParsedTarget(task_id='/alice/job/0', attempt_id=3)
+    """
+    if ":" in target:
+        task_part, attempt_str = target.rsplit(":", 1)
+        try:
+            attempt_id = int(attempt_str)
+        except ValueError as exc:
+            raise ValueError(f"Invalid attempt ID in target '{target}': '{attempt_str}' is not an integer") from exc
+        return ParsedTarget(task_id=task_part, attempt_id=attempt_id)
+    return ParsedTarget(task_id=target, attempt_id=None)
+
+
+def _check_tool(name: str) -> None:
+    """Raise RuntimeError if a profiling tool is not on PATH."""
+    if shutil.which(name) is None:
+        raise RuntimeError(
+            f"'{name}' is not installed. /system/process profiling requires "
+            f"py-spy and memray to be available in the controller/worker environment."
+        )

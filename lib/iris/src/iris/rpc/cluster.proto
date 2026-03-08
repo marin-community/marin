@@ -67,7 +67,8 @@ message ProfileType {
 
 message ProfileTaskRequest {
   // Target to profile. Accepts either:
-  //   /job/name/task/0:attempt_id  - a task attempt (proxied to its worker)
+  //   /job/name/task/0             - task (uses current/latest attempt)
+  //   /job/name/task/0:attempt_id  - specific task attempt (optional)
   //   /system/process              - the local process (worker or controller)
   string target = 4;
   int32 duration_seconds = 2;   // How long to sample (default: 10)

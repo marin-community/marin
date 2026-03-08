@@ -49,6 +49,10 @@ RUN uv sync --no-install-project
 COPY src/ ./src/
 RUN uv sync
 
+# Install profiling tools (py-spy for CPU/thread profiling, memray for memory profiling).
+# These are needed for /system/process profiling on the controller.
+RUN uv pip install py-spy memray
+
 # Default cache directory
 RUN mkdir -p /var/cache/iris
 

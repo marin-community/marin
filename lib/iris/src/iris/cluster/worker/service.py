@@ -13,7 +13,7 @@ from connectrpc.request import RequestContext
 
 from iris.chaos import chaos
 from iris.cluster.log_store import LogStore
-from iris.cluster.runtime.profile import is_system_target, profile_local_process
+from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
@@ -33,7 +33,9 @@ class TaskProvider(Protocol):
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
     def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
-    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes: ...
+    def profile_task(
+        self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType, attempt_id: int | None = None
+    ) -> bytes: ...
 
 
 class WorkerServiceImpl:
@@ -154,11 +156,13 @@ class WorkerServiceImpl:
                     data = profile_local_process(duration, request.profile_type)
                     return cluster_pb2.ProfileTaskResponse(profile_data=data)
 
-                # Task target: delegate to the container handle
+                # Task target: parse optional :attempt_id and delegate to the container handle
+                parsed = parse_profile_target(request.target)
                 data = self._provider.profile_task(
-                    request.target,
+                    parsed.task_id,
                     duration_seconds=duration,
                     profile_type=request.profile_type,
+                    attempt_id=parsed.attempt_id,
                 )
                 return cluster_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:
