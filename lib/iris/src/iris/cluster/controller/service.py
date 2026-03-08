@@ -35,12 +35,13 @@ from iris.cluster.controller.state import (
     ControllerWorker,
 )
 from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
+from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.proto_utils import job_state_name, task_state_name
-from iris.time_utils import Timestamp
+from iris.time_utils import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,7 @@ class ControllerServiceImpl:
         self._state = state
         self._controller = controller
         self._bundle_store = BundleStore(bundle_prefix)
+        self._timer = Timer()
 
     def _get_autoscaler_pending_hints(self) -> dict[str, str]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -1194,3 +1196,11 @@ class ControllerServiceImpl:
         )
         resp.created_at.CopyFrom(result.proto.created_at)
         return resp
+
+    def get_process_status(
+        self,
+        request: cluster_pb2.GetProcessStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetProcessStatusResponse:
+        """Return local process info and recent process logs."""
+        return get_process_status(request, self._state.log_store, self._timer)
