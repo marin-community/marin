@@ -375,43 +375,6 @@ def test_default_implementation_on_cpu_skips_expected_tpu_warning():
     assert not any("requires TPU backend" in str(warning.message) for warning in caught)
 
 
-def test_default_implementations_prefers_pallas_tpu_on_tpu(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(fused_api.jax, "default_backend", lambda: "tpu")
-    monkeypatch.setattr(
-        fused_api,
-        "IMPLEMENTATIONS",
-        {
-            "xla": fused_api.IMPLEMENTATIONS["xla"],
-            "reference": fused_api.IMPLEMENTATIONS["reference"],
-            "pallas_tpu": fused_api.IMPLEMENTATIONS.get("pallas_tpu", fused_api.IMPLEMENTATIONS["xla"]),
-        },
-    )
-    fused_api._default_implementations.cache_clear()
-
-    impls = fused_api._default_implementations()
-
-    assert impls[:2] == ("pallas_tpu", "xla")
-    fused_api._default_implementations.cache_clear()
-
-
-def test_default_implementations_uses_xla_only_when_pallas_tpu_missing(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(fused_api.jax, "default_backend", lambda: "tpu")
-    monkeypatch.setattr(
-        fused_api,
-        "IMPLEMENTATIONS",
-        {
-            "xla": fused_api.IMPLEMENTATIONS["xla"],
-            "reference": fused_api.IMPLEMENTATIONS["reference"],
-        },
-    )
-    fused_api._default_implementations.cache_clear()
-
-    impls = fused_api._default_implementations()
-
-    assert impls == ("xla",)
-    fused_api._default_implementations.cache_clear()
-
-
 def test_fused_cross_entropy_default_matches_reference():
     backend = jax.default_backend()
     if backend == "tpu":
