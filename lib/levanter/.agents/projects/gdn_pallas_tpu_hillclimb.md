@@ -3927,3 +3927,86 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated but regressive**. True `Ct` sweep tiles substantially reduced the same train forward/backward closed-call times, but did not improve end-to-end throughput because the large `while` overhead persisted and dominated step time.
 - Next bold hypothesis:
   - Pivot to **Macro Move E** (shared-K V-tiling redesign on train recurrent+backward kernels) with an explicit requirement to avoid introducing/expanding `while` control-flow cost while retaining train closed-call gains.
+
+### Iteration 63 - Macro Move E / in-kernel V-tiling with shared-K precompute (validated, regressed, reverted)
+
+- Coverage slot: E (2/5)
+- Covered set so far: {I, E, H, J}
+- Date: 2026-03-08T08:34:39Z
+- Commit: none (failed attempt)
+- Starting commit: `362cc27f7c1427f36b96e69e307f350e0a338169`
+- Dominant bottleneck carried in (latest validated train trace, TPU:0 XLA Ops `pid=3, tid=3`):
+  - `shard_map`: `39.018 ms` (dominant)
+  - `while`: `31.584 ms` (second-largest, previously added control-flow bucket)
+  - dominant train shard-map custom-call signatures (closed-call source labels are unavailable in this Perfetto export):
+    - forward fused signature key: `20.662 ms`
+    - backward signature key: `13.129 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move E**: in-kernel V-tiling (`Vt=32`) in train fused forward/backward with shared K-side precompute, while keeping launch/control-flow structure unchanged (`+10-20%`, high kernel math refactor risk).
+  2. **Macro Move E**: add explicit `vblock` program-grid axis for train kernels to shrink per-program state (`+15-30%`, very high `in_specs/out_specs` + reduction complexity risk).
+  3. **Macro Move I**: segmented fused forward/recurrent relaunch reduction with strict no-while budget (`+10-20%`, high repeat-regression risk).
+
+- Selected macro-move category: **E) Tile the state/output along V**.
+- Why repeating E is justified: prior E attempts changed decomposition/launch behavior and correlated with `while` expansion; this attempt is a new algorithmic variant that tiles V inside existing train kernels and reuses K-side work, explicitly targeting no additional control-flow growth.
+- Selected hypothesis: tile V inside train fused forward/backward chunk math (`Vt=32`) so K-side terms (`QK/KKT/solve`) are computed once per chunk and reused across V tiles, reducing per-program live `KxV` intermediates without increasing `while` regions.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Implemented in-kernel V-tiling for train fused forward non-pipeline chunk path with shared K-side precompute.
+  - Implemented matching in-kernel V-tiling decomposition in the train backward chunk helper with tiled V-gradient accumulation and shared K-side adjoint terms.
+  - After validated profile regression, reverted all speculative kernel edits; tree kept only log updates.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`, managed dev TPU):
+    - first attempt:
+      - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - result: one parity miss in `test_gdn_layer_backward_matches_hf[False]` (`max abs diff ~2.416e-5`).
+    - retry once per identical-command retry policy:
+      - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - result: `87 passed, 2 skipped`.
+
+- Profile run (managed dev TPU, completed):
+  - command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --run-name-prefix gdn_iter63_macroE_vtile_sharedk --marin-prefix gs://marin-us-east5 --no-sync`
+  - W&B run:
+    - `https://wandb.ai/marin-community/marin/runs/gdn_iter63_macroE_vtile_sharedk_130m_ch128_seg16_20step-9e6e2f`
+  - W&B profiler artifact:
+    - `run-gdn_iter63_macroE_vtile_sharedk_130m_ch128_seg16_20step-9e6e2f-profiler:v0`
+  - Downloaded trace:
+    - `.profiles/wandb/run-gdn_iter63_macroE_vtile_sharedk_130m_ch128_seg16_20step-9e6e2f-profiler-v0/plugins/profile/2026_03_08_08_30_00/perfetto_trace.json.gz`
+  - Baseline trace used for comparison:
+    - `.profiles/wandb/run-gdn_iter03_macroJ_truect_c128s16_130m_ch128_seg16_20ste-df16c5-profiler-v0/plugins/profile/2026_03_08_07_32_48/perfetto_trace.json.gz`
+
+- Hotspots observed (`pid=3, tid=3`, baseline -> candidate):
+  - bucket deltas:
+    - `shard_map`: `39.018 ms -> 43.097 ms` (`+10.45%`)
+    - `while`: `31.584 ms -> 31.608 ms` (`+0.08%`) (no large new while expansion, but unchanged high cost)
+    - `fusion`: `34.929 ms -> 34.942 ms` (`+0.04%`)
+    - `all-gather`: `10.090 ms -> 10.144 ms` (`+0.54%`)
+  - train shard-map custom-call signature deltas:
+    - forward fused signature: `20.662 ms -> 22.202 ms` (`+7.45%`)
+    - backward signature: `13.129 ms -> 15.670 ms` (`+19.36%`)
+
+- MFU/throughput delta (history-window median, `global_step in [10,18]`, vs baseline run above):
+  - `throughput/mfu`: `5.427151 -> 5.290551` (`-2.52%`)
+  - `throughput/tokens_per_second`: `175567.283 -> 171148.329` (`-2.52%`)
+  - `throughput/duration`: `0.186641s -> 0.191460s` (`+2.58%`)
+  - vs active champion (`throughput/mfu=5.748507` from `.agents/logs/gdn_codex_loop/perf_state.json`): `-7.97%`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> first run parity miss, retry-once run `87 passed, 2 skipped`.
+  - Perf:
+    - Forward `shard_map/pallas_call` delta (trace signature key): `20.662 ms -> 22.202 ms` (`+7.45%`).
+    - Backward `shard_map/pallas_call` delta (trace signature key): `13.129 ms -> 15.670 ms` (`+19.36%`).
+    - `throughput/mfu -2.52%`, `throughput/tokens_per_second -2.52%`, `throughput/duration +2.58%`.
+  - Governance:
+    - MFU gain `<3%` with dominant hotspot family unchanged (`shard_map` still dominant, `while` still large and unchanged class).
+    - Attempt marked **low-impact/regressive**; speculative kernel code was reverted.
+
+- Assessment: **validated but regressive**. This Macro-E variant avoided creating a larger `while` bucket, but increased the dominant train-path shard-map kernel costs and regressed end-to-end throughput.
+- Next bold hypothesis:
+  - Place Macro-E on cooldown for now and escalate to **Macro Move I** with a no-while budget: reduce train-path launch/control overhead without introducing additional control-flow regions, and target a net drop in both `shard_map` and `while` buckets.
