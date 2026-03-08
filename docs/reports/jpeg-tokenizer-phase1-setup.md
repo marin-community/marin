@@ -122,3 +122,16 @@ The `K=16` coefficient rung has now been staged:
 
 The `K=16` smoke has passed packaging, executor launch, and Fray TPU dispatch on `v6e-8`. The remaining question is
 whether trainer startup and the first eval complete cleanly at batch size `64`.
+
+The `K=8` trial is still active and has already progressed well beyond initial bring-up:
+
+- Latest observed progress:
+  about step `498/2000`
+- Latest observed train loss:
+  `4.08`
+- Reliability note:
+  the run has survived two TPU preemptions and continued retrying under the same Ray submission.
+
+In parallel, executor-side log noise from config serialization has been fixed locally in
+`marin.utilities.json_encoder`, so newly launched runs should no longer emit large warning blocks for dataclass
+configs and `PartitionSpec` values.

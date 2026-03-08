@@ -207,3 +207,23 @@
   - `K=16` is now staged end to end with bounded additional storage cost
   - the next meaningful checkpoint is whether the worker reaches W&B/trainer startup and first eval, not whether packaging works
 - Next action: monitor the `K=16` smoke through trainer bring-up, then decide whether the next commit should include only launch/staging or also a completed smoke result.
+
+### 2026-03-09 03:45 - Monitoring update and executor-log cleanup
+
+- Hypothesis: the next useful improvement is reducing executor-side serialization noise while the active runs continue in the background; this improves monitoring without changing experiment behavior.
+- Command:
+  - `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a job-logs -n 220 ray-run-dlwh-launch-20260308-095441`
+  - `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a job-logs -n 220 ray-run-dlwh-launch-20260308-101439`
+  - `uv run --with pytest python -m pytest -o addopts='' tests/execution/test_json_encoder.py tests/execution/test_executor.py`
+- Config:
+  - `CustomJsonEncoder` now serializes dataclasses structurally and `PartitionSpec` values as readable strings
+  - added a regression test covering a nested dataclass payload with `PartitionSpec`
+- Result:
+  - `K=8` trial `ray-run-dlwh-launch-20260308-095441` is still running after a second TPU preemption; latest observed progress was step `498/2000` with loss `4.08`
+  - `K=16` smoke `ray-run-dlwh-launch-20260308-101439` is still running but has only reached executor launch and Fray dispatch so far
+  - executor serialization warnings for dataclass configs and `PartitionSpec` are fixed locally for future runs
+- Interpretation:
+  - the active `K=8` trial is robust enough to keep running despite repeated preemptions
+  - `K=16` has not yet proven trainer bring-up, so launching a full `K=16` trial now would be premature
+  - the next submitted runs should have much cleaner executor logs because the local encoder fix is independent of model code
+- Next action: commit the encoder cleanup, then keep monitoring the two active jobs rather than adding more parallel experiments.

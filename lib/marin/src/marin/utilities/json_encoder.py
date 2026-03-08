@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import logging
 from datetime import timedelta
@@ -8,6 +9,7 @@ from pathlib import Path
 
 # Todo(Percy, dlwh): Can we remove this jax dependency?
 from jax.numpy import bfloat16, float32
+from jax.sharding import PartitionSpec
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,10 @@ class CustomJsonEncoder(json.JSONEncoder):
         if isinstance(obj, Path):
             return str(obj)
         if obj in (float32, bfloat16):
+            return str(obj)
+        if dataclasses.is_dataclass(obj):
+            return dataclasses.asdict(obj)
+        if isinstance(obj, PartitionSpec):
             return str(obj)
         try:
             return super().default(obj)
