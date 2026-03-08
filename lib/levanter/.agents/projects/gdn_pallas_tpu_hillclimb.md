@@ -3822,3 +3822,108 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **failed attempt**. The Macro-H variant did not reach validated TPU correctness and produced no end-to-end gain evidence; speculative code was reverted before finishing the run.
 - Next bold hypothesis:
   - Execute **Macro Move J** next with the required compact sweep table (`Ct={64,96,128}`, `Seg={8,16,32}`), then use the best point for the next structural kernel redesign.
+
+### Iteration 62 - Macro Move J / true Ct tile sweep + compact Ct/Seg profile grid (validated, regressed, reverted)
+
+- Coverage slot: J (3/5)
+- Covered set so far: {I, E, H, J}
+- Date: 2026-03-08T07:38:00Z
+- Commit: none (failed attempt)
+- Starting commit: `12e4726714114a992413108d4f0a91c4d9f48111`
+- Dominant bottleneck carried in (baseline trace `.profiles/wandb/gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c/plugins/profile/2026_02_22_08_29_07/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - train-path `shard_map/custom-call` bucket: `78.098 ms` (dominant)
+  - forward closed-call source: `gated_deltanet.py:2486` = `41.324 ms`
+  - backward closed-call source: `gated_deltanet.py:3972` = `26.266 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro Move J**: enable true Ct tile sweep (`Ct=64/96/128`) with explicit train-path dtype policy and compact `Ct/Seg` grid to re-anchor operating points after repeated fusion regressions (`+10-20%`, medium/high risk).
+  2. **Macro Move I**: another fused prepare+recurrent train call variant with stricter control-flow budget (`+10-20%`, high repeat-regression risk due prior `while` growth).
+  3. **Macro Move E**: V-tiling + shared-K precompute on recurrent/backward train kernels (`+15-30%`, high decomposition/correctness risk).
+
+- Selected macro-move category: **J) Sweep `Ct`/`Seg` explicitly**.
+- Selected hypothesis: switch chunk tiling from hard `64`-multiple to true `32`-multiple chunk tiles so `Ct=96` is actually exercised on train kernels, then run a compact `Ct/Seg` sweep to identify whether any point can reduce dominant train-path closed-call cost **and** improve end-to-end MFU.
+
+- Change attempt summary (`lib/levanter/src/levanter/layers/gated_deltanet.py`):
+  - Added true chunk-tile helper (`_chunk_tile_size`) with `_GDN_TPU_CHUNK_MULT=32` so sweep points map to real kernel tile sizes (`Ct=64/96/128`) instead of all rounding to `128`.
+  - Split chunk-vs-feature padding controls (`_GDN_TPU_CHUNK_MULT=32`, `_GDN_TPU_FEATURE_MULT=64`) to keep feature-axis padding conservative while allowing chunk-axis sweep.
+  - Added explicit dtype policy helpers (`_chunk_precision_mode`, `_chunk_io_dtype`) and applied them consistently across chunk forward/backward pallas wrappers.
+  - Kept fused train-forward eligibility conservative (`Ct >= 128`) to avoid introducing new correctness risk while isolating Macro-J tile-sweep effects.
+  - End-to-end MFU regressed at all tested points; speculative kernel edits were reverted.
+
+- Correctness checks:
+  - Local smoke:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`.
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`.
+  - TPU validation (`tests=both`, managed dev TPU):
+    - first attempt:
+      - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - result: one parity miss (`test_gdn_layer_backward_matches_hf[True]`, max abs diff `~4.99e-5`).
+    - retry once per policy (same command/signature):
+      - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - result: `87 passed, 2 skipped`.
+
+- Profile sweep runs (managed dev TPU):
+  - `Ct=64, Seg=8`:
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --chunk-size 64 --segment-size 8 --run-name-prefix gdn_iter03_macroJ_truect_c64s8 --marin-prefix gs://marin-us-east5 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_iter03_macroJ_truect_c64s8_130m_ch64_seg8_20steps-a7a60d`
+    - artifact: `run-gdn_iter03_macroJ_truect_c64s8_130m_ch64_seg8_20steps-a7a60d-profiler:v0`
+    - trace: `.profiles/wandb/run-gdn_iter03_macroJ_truect_c64s8_130m_ch64_seg8_20steps-a7a60d-profiler-v0/plugins/profile/2026_03_08_07_19_41/perfetto_trace.json.gz`
+  - `Ct=96, Seg=8`:
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_iter03_macroJ_truect_c96s8_130m_ch96_seg8_20steps-4b57a8`
+    - artifact: `run-gdn_iter03_macroJ_truect_c96s8_130m_ch96_seg8_20steps-4b57a8-profiler:v0`
+    - trace: `.profiles/wandb/run-gdn_iter03_macroJ_truect_c96s8_130m_ch96_seg8_20steps-4b57a8-profiler-v0/plugins/profile/2026_03_08_07_24_08/perfetto_trace.json.gz`
+  - `Ct=96, Seg=16`:
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_iter03_macroJ_truect_c96s16_130m_ch96_seg16_20steps-0db634`
+    - artifact: `run-gdn_iter03_macroJ_truect_c96s16_130m_ch96_seg16_20steps-0db634-profiler:v0`
+    - trace: `.profiles/wandb/run-gdn_iter03_macroJ_truect_c96s16_130m_ch96_seg16_20steps-0db634-profiler-v0/plugins/profile/2026_03_08_07_28_33/perfetto_trace.json.gz`
+  - `Ct=128, Seg=16`:
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_iter03_macroJ_truect_c128s16_130m_ch128_seg16_20ste-df16c5`
+    - artifact: `run-gdn_iter03_macroJ_truect_c128s16_130m_ch128_seg16_20ste-df16c5-profiler:v0`
+    - trace: `.profiles/wandb/run-gdn_iter03_macroJ_truect_c128s16_130m_ch128_seg16_20ste-df16c5-profiler-v0/plugins/profile/2026_03_08_07_32_48/perfetto_trace.json.gz`
+  - `Ct=128, Seg=32`:
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_iter03_macroJ_truect_c128s32_130m_ch128_seg32_20ste-7b8fb3`
+    - artifact: `run-gdn_iter03_macroJ_truect_c128s32_130m_ch128_seg32_20ste-7b8fb3-profiler:v0`
+    - trace: `.profiles/wandb/run-gdn_iter03_macroJ_truect_c128s32_130m_ch128_seg32_20ste-7b8fb3-profiler-v0/plugins/profile/2026_03_08_07_36_59/perfetto_trace.json.gz`
+
+- Macro J sweep table (history-window median, `global_step in [10,18]`):
+
+| Ct | Seg | Status | `throughput/mfu` | `tokens/s` | `duration` | Delta vs baseline MFU |
+| --- | --- | --- | --- | --- | --- | --- |
+| 64 | 8 | Succeeded | `4.277136` | `138364.519` | `0.236824s` | `-26.64%` |
+| 96 | 8 | Succeeded | `4.760820` | `154011.631` | `0.212763s` | `-18.34%` |
+| 96 | 16 | Succeeded | `4.770900` | `154337.715` | `0.212314s` | `-18.17%` |
+| 128 | 16 | Succeeded (**best tested point**) | `5.427151` | `175567.283` | `0.186641s` | `-6.91%` |
+| 128 | 32 | Succeeded | `5.400083` | `174691.651` | `0.187576s` | `-7.37%` |
+
+- Hotspots observed (`pid=3, tid=3`, best tested point `Ct=128,Seg=16` vs baseline trace):
+  - bucket deltas:
+    - `shard_map`: `78.098 ms -> 39.018 ms` (`-50.04%`)
+    - `fusion`: `45.618 ms -> 34.929 ms` (`-23.43%`)
+    - `all-gather`: `20.158 ms -> 10.090 ms` (`-49.95%`)
+    - `while`: `0.000 ms -> 31.584 ms` (new large overhead)
+  - closed-call shard-map deltas:
+    - forward `jit(_train_step)/jvp(...)/closed_call/shard_map/pallas_call`:
+      `41.324 ms -> 20.662 ms` (`-50.00%`)
+    - backward `jit(_train_step)/transpose(jvp(...))/closed_call/shard_map/pallas_call`:
+      `26.266 ms -> 13.129 ms` (`-50.02%`)
+
+- MFU/throughput delta (best tested point `Ct=128,Seg=16`, vs baseline run `gdn_segpipe_i17_dev_130m_ch128_seg16_20steps-27983c`):
+  - `throughput/mfu`: `5.830017 -> 5.427151` (`-6.91%`)
+  - `throughput/tokens_per_second`: `188599.934 -> 175567.283` (`-6.91%`)
+  - `throughput/duration`: `0.173743s -> 0.186641s` (`+7.42%`)
+  - vs active champion (`throughput/mfu=5.748507` from `.agents/logs/gdn_codex_loop/perf_state.json`): `-5.59%`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> retry-once policy exercised; second run `87 passed, 2 skipped`.
+  - Perf:
+    - Forward closed-call `shard_map/pallas_call`: `41.324 ms -> 20.662 ms` (`-50.00%`).
+    - Backward closed-call `shard_map/pallas_call`: `26.266 ms -> 13.129 ms` (`-50.02%`).
+    - `throughput/mfu -6.91%`, `throughput/tokens_per_second -6.91%`, `throughput/duration +7.42%`.
+  - Governance:
+    - MFU gain `<3%` and dominant hotspot family remained train-path `shard_map/custom-call`, with large added `while` overhead unchanged in class.
+    - Per governance/escalation rule, speculative code was reverted and attempt is marked **low-impact/regressive**.
+
+- Assessment: **validated but regressive**. True `Ct` sweep tiles substantially reduced the same train forward/backward closed-call times, but did not improve end-to-end throughput because the large `while` overhead persisted and dominated step time.
+- Next bold hypothesis:
+  - Pivot to **Macro Move E** (shared-K V-tiling redesign on train recurrent+backward kernels) with an explicit requirement to avoid introducing/expanding `while` control-flow cost while retaining train closed-call gains.
