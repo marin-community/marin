@@ -56,7 +56,10 @@ if _GDN_TRIANGULAR_SOLVE_PROBE not in {"off", "identity", "first_order"}:
     )
 _GDN_CHUNK_FLASH_BACKEND = os.environ.get("GDN_CHUNK_FLASH_BACKEND", "pallas").strip().lower()
 if _GDN_CHUNK_FLASH_BACKEND not in {"pallas", "xla"}:
-    raise ValueError("GDN_CHUNK_FLASH_BACKEND must be one of: pallas, xla. " f"Got {_GDN_CHUNK_FLASH_BACKEND!r}.")
+    raise ValueError(
+        "GDN_CHUNK_FLASH_BACKEND must be one of: pallas, xla. "
+        f"Got {_GDN_CHUNK_FLASH_BACKEND!r}."
+    )
 
 
 def _dbg(tag: str, arr):
@@ -1014,28 +1017,13 @@ recurrent_gated_delta_rule.__doc__ = _recurrent_gated_delta_rule_reference.__doc
 # -----------------------------------------------------------------------------
 
 _GDN_EXP_CLIP = 80.0
-_GDN_TPU_CHUNK_MULT = 32
-_GDN_TPU_FEATURE_MULT = 64
+_GDN_TPU_MULT = 64
 _MXU_TILE = 128
-_GDN_MIN_BF16_CT = 96
-_GDN_MIN_FUSED_TRAIN_CT = 96
 _GDN_SEGMENT_SCAN_UNROLL = 8
 
 
 def _round_up_to(x: int, m: int) -> int:
     return ((x + m - 1) // m) * m
-
-
-def _chunk_tile_size(chunk_size: int) -> int:
-    return _round_up_to(int(chunk_size), _GDN_TPU_CHUNK_MULT)
-
-
-def _chunk_precision_mode(Ct: int) -> Literal["fp32", "bf16"]:
-    return "bf16" if Ct >= _GDN_MIN_BF16_CT else "fp32"
-
-
-def _chunk_io_dtype(Ct: int):
-    return jnp.bfloat16 if Ct >= _GDN_MIN_BF16_CT else jnp.float32
 
 
 def _resolve_chunk_flash_backend(*, use_flash: bool) -> str:
@@ -1505,7 +1493,7 @@ def _gdn_chunk_segment_prepare_pallas(
     K_pad: int,
     V_pad: int,
 ):
-    precision_mode: Literal["fp32", "bf16"] = _chunk_precision_mode(Ct)
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_segment_prepare_kernel_tpu,
         Seg=int(Seg),
@@ -1693,7 +1681,7 @@ def _gdn_chunk_fullseq_prepare_pallas(
     K_pad: int,
     V_pad: int,
 ):
-    precision_mode: Literal["fp32", "bf16"] = _chunk_precision_mode(Ct)
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_fullseq_prepare_pipeline_kernel_tpu,
         N_chunks=int(N_chunks),
@@ -1877,7 +1865,7 @@ def _gdn_chunk_segment_recurrent_fwd_pallas(
     K_pad: int,
     V_pad: int,
 ):
-    precision_mode: Literal["fp32", "bf16"] = _chunk_precision_mode(Ct)
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_segment_recurrent_fwd_kernel_tpu,
         Seg=int(Seg),
@@ -2126,7 +2114,7 @@ def _gdn_chunk_fullseq_recurrent_fwd_pallas(
     K_pad: int,
     V_pad: int,
 ):
-    precision_mode: Literal["fp32", "bf16"] = _chunk_precision_mode(Ct)
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_fullseq_recurrent_fwd_pipeline_kernel_tpu,
         N_chunks=int(N_chunks),
@@ -2490,7 +2478,7 @@ def _gdn_chunk_segment_fwd_fused_pallas(
     K_pad: int,
     V_pad: int,
 ):
-    precision_mode: Literal["fp32", "bf16"] = _chunk_precision_mode(Ct)
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_segment_fwd_fused_kernel_tpu,
         Seg=int(Seg),
@@ -2599,8 +2587,8 @@ def _gdn_chunk_segment_fwd_pallas(
     return_prepare_tape: bool = False,
 ):
     # Training path: fuse prepare+recurrent in one call and emit backward tape
-    # for Ct values where fused tape kernels are validated and beneficial.
-    if return_prepare_tape and Ct >= _GDN_MIN_FUSED_TRAIN_CT:
+    # only for MXU-sized chunks. Small Ct paths stay on the validated split kernels.
+    if return_prepare_tape and Ct >= _MXU_TILE:
         return _gdn_chunk_segment_fwd_fused_pallas(
             q_bhscK,
             k_bhscK,
@@ -3087,7 +3075,7 @@ def _gdn_chunk_segment_bwd_pallas(
     K_pad: int,
     V_pad: int,
 ):
-    precision_mode: Literal["fp32", "bf16"] = _chunk_precision_mode(Ct)
+    precision_mode: Literal["fp32", "bf16"] = "bf16" if Ct >= _MXU_TILE else "fp32"
     kernel = functools.partial(
         _gdn_chunk_segment_bwd_kernel_tpu,
         Seg=int(Seg),
@@ -3255,8 +3243,8 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
     B, H, L, dk = q_arr.shape
     dv = v_arr.shape[-1]
     C = int(chunk_size)
-    Ct = _chunk_tile_size(C)
-    pallas_io_dtype = _chunk_io_dtype(Ct)
+    Ct = _round_up_to(C, _GDN_TPU_MULT)
+    pallas_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
 
     q_arr = q_arr.astype(pallas_io_dtype, copy=False)
     k_arr = k_arr.astype(pallas_io_dtype, copy=False)
@@ -3297,8 +3285,8 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
         b_c = jnp.pad(b_c, ((0, 0), (0, 0), (0, pad_chunks), (0, 0)))
 
     # pad feature dims for TPU
-    K_pad = _round_up_to(dk, _GDN_TPU_FEATURE_MULT)
-    V_pad = _round_up_to(dv, _GDN_TPU_FEATURE_MULT)
+    K_pad = _round_up_to(dk, _GDN_TPU_MULT)
+    V_pad = _round_up_to(dv, _GDN_TPU_MULT)
 
     q_c = _pad_axis_right(q_c, axis=-1, new_size=K_pad)
     k_c = _pad_axis_right(k_c, axis=-1, new_size=K_pad)
@@ -3528,10 +3516,10 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
     dv = v_arr.shape[-1]
     C = int(chunk_size)
 
-    Ct = _chunk_tile_size(C)
-    K_pad = _round_up_to(dk, _GDN_TPU_FEATURE_MULT)
-    V_pad = _round_up_to(dv, _GDN_TPU_FEATURE_MULT)
-    pallas_io_dtype = _chunk_io_dtype(Ct)
+    Ct = _round_up_to(C, _GDN_TPU_MULT)
+    K_pad = _round_up_to(dk, _GDN_TPU_MULT)
+    V_pad = _round_up_to(dv, _GDN_TPU_MULT)
+    pallas_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
 
     pad_tok = (C - (L % C)) % C
     Lt = L + pad_tok
@@ -3994,8 +3982,8 @@ def chunk_gated_delta_rule(
         g_arr = g_arr * valid
 
     backend = _resolve_chunk_flash_backend(use_flash=use_flash)
-    Ct = _chunk_tile_size(int(chunk_size))
-    flash_io_dtype = _chunk_io_dtype(Ct)
+    Ct = _round_up_to(int(chunk_size), _GDN_TPU_MULT)
+    flash_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
     q_arr = q_arr.astype(flash_io_dtype, copy=False)
     k_arr = k_arr.astype(flash_io_dtype, copy=False)
     v_arr = v_arr.astype(flash_io_dtype, copy=False)
