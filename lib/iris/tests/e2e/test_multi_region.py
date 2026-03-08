@@ -99,7 +99,6 @@ def _noop():
     return "ok"
 
 
-@pytest.mark.xfail(reason="Local workers don't propagate region attributes")
 def test_region_constrained_job_routes_correctly(multi_region_cluster):
     """A job with a region constraint lands on a worker in that region."""
     cluster = multi_region_cluster
@@ -137,7 +136,6 @@ def _submit_child_no_constraints():
     child.wait(timeout=60, raise_on_failure=True)
 
 
-@pytest.mark.xfail(reason="Local workers don't propagate region attributes")
 def test_child_inherits_parent_region_constraint(multi_region_cluster):
     """A child job without explicit constraints inherits the parent's region."""
     cluster = multi_region_cluster
@@ -194,7 +192,6 @@ def _submit_child_with_region_override():
     child.wait(timeout=60, raise_on_failure=True)
 
 
-@pytest.mark.xfail(reason="Local workers don't propagate region attributes")
 def test_child_overrides_parent_region_constraint(multi_region_cluster):
     """A child job with its own region constraint overrides the parent's region."""
     cluster = multi_region_cluster
