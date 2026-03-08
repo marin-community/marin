@@ -35,5 +35,4 @@ uv run pytest tests -m "not entry and not slow and not ray"
 - **Compile performance:** Prefer `Stacked` with `fold` or `scan` over hand-written loops.
 - **Reproducibility:** Aim for deterministic training; use explicit PRNG keys.
 - **JIT safety:** Follow `docs/design/jit-safety.md` for all jitted code paths.
-- Avoid hard-coding dataset paths; surface them through configuration.
 - Maintain compatibility with both GPU and TPU backends.
