@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-transport-https \
     openssh-client \
     git \
+    lldb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Google Cloud SDK (required for TPU management via gcloud)
