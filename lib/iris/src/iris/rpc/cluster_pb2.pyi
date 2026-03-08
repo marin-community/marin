@@ -1013,9 +1013,13 @@ class HeartbeatRequest(_message.Message):
     def __init__(self, tasks_to_run: _Optional[_Iterable[_Union[Worker.RunTaskRequest, _Mapping]]] = ..., tasks_to_kill: _Optional[_Iterable[str]] = ..., expected_tasks: _Optional[_Iterable[_Union[Controller.WorkerTaskStatus, _Mapping]]] = ...) -> None: ...
 
 class HeartbeatResponse(_message.Message):
-    __slots__ = ("tasks", "resource_snapshot")
+    __slots__ = ("tasks", "resource_snapshot", "worker_healthy", "health_error")
     TASKS_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
+    WORKER_HEALTHY_FIELD_NUMBER: _ClassVar[int]
+    HEALTH_ERROR_FIELD_NUMBER: _ClassVar[int]
     tasks: _containers.RepeatedCompositeFieldContainer[Controller.WorkerTaskStatus]
     resource_snapshot: WorkerResourceSnapshot
-    def __init__(self, tasks: _Optional[_Iterable[_Union[Controller.WorkerTaskStatus, _Mapping]]] = ..., resource_snapshot: _Optional[_Union[WorkerResourceSnapshot, _Mapping]] = ...) -> None: ...
+    worker_healthy: bool
+    health_error: str
+    def __init__(self, tasks: _Optional[_Iterable[_Union[Controller.WorkerTaskStatus, _Mapping]]] = ..., resource_snapshot: _Optional[_Union[WorkerResourceSnapshot, _Mapping]] = ..., worker_healthy: bool = ..., health_error: _Optional[str] = ...) -> None: ...

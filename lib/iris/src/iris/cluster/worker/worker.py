@@ -23,6 +23,7 @@ from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
     HostMetricsCollector,
     build_worker_metadata,
+    check_worker_health,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -645,9 +646,17 @@ class Worker:
                 resource_snapshot.running_task_count = running_count
                 resource_snapshot.total_process_count = total_processes
 
+            # Run health checks to detect local faults (disk full, write failure)
+            with slow_log(logger, "heartbeat health_check", threshold_ms=100):
+                health = check_worker_health(disk_path=str(self._cache_dir))
+                if not health.healthy:
+                    logger.warning("Worker health check failed: %s", health.error)
+
             return cluster_pb2.HeartbeatResponse(
                 tasks=tasks,
                 resource_snapshot=resource_snapshot,
+                worker_healthy=health.healthy,
+                health_error=health.error,
             )
 
     def _kill_task_attempt(

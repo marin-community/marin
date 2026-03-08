@@ -837,6 +837,14 @@ message HeartbeatResponse {
 
   // Current host-level resource snapshot
   WorkerResourceSnapshot resource_snapshot = 3;
+
+  // Worker health status. When false, the worker has detected a local fault
+  // (disk full, cannot write tempfile, etc.) and should be immediately
+  // marked as permanently failed by the controller.
+  bool worker_healthy = 5;
+
+  // Human-readable description of the health check failure.
+  string health_error = 6;
 }
 
 // ============================================================================

@@ -443,6 +443,61 @@ def _read_net_dev_bytes() -> tuple[int, int]:
     return recv_total, sent_total
 
 
+MIN_DISK_FREE_FRACTION = 0.05
+"""Worker is unhealthy if the work volume has less than 5% free space."""
+
+
+@dataclass(frozen=True)
+class HealthCheckResult:
+    """Result of worker health checks run during heartbeat."""
+
+    healthy: bool
+    error: str = ""
+
+
+def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
+    """Run basic health probes and return a combined result.
+
+    Checks performed:
+    - Can write and remove a tempfile in the work directory
+    - Root/work volume has >= 5% free space
+
+    Docker probing is implicit: if the worker is processing heartbeats
+    and fetching task status, Docker is operational.
+
+    If disk_path does not exist (e.g. during teardown), the probe is
+    skipped and the worker is considered healthy.
+    """
+    dp = Path(disk_path)
+    if not dp.exists():
+        return HealthCheckResult(healthy=True)
+
+    errors: list[str] = []
+
+    # Check tempfile write
+    try:
+        probe_path = dp / ".iris_health_probe"
+        probe_path.write_text("ok")
+        probe_path.unlink()
+    except OSError as e:
+        errors.append(f"tempfile write failed: {e}")
+
+    # Check disk free space
+    try:
+        usage = shutil.disk_usage(disk_path)
+        if usage.total > 0:
+            free_fraction = (usage.total - usage.used) / usage.total
+            if free_fraction < MIN_DISK_FREE_FRACTION:
+                pct = free_fraction * 100
+                errors.append(f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%")
+    except OSError as e:
+        errors.append(f"disk usage check failed: {e}")
+
+    if errors:
+        return HealthCheckResult(healthy=False, error="; ".join(errors))
+    return HealthCheckResult(healthy=True)
+
+
 class HostMetricsCollector:
     """Collects host-level resource metrics using /proc and standard library.
 
