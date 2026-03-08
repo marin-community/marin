@@ -19,7 +19,7 @@ from pathlib import Path
 from datasets import load_dataset
 
 from experiments.jpeg_tokenizer.base.eval import compute_token_sequence_stats
-from experiments.jpeg_tokenizer.base.tokenizers import (
+from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     V0_CANONICAL_JPEG_CONFIG,
     V0_COEFFICIENT_CONFIG,
     V0_SYMBOL_CONFIG,

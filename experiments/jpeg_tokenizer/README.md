@@ -69,7 +69,7 @@ WebVision is useful for later robustness checks because it captures real web-ima
 
 `/experiments/jpeg_tokenizer/base/` is split to mirror the repo's template-first experiment style:
 
-- `tokenizers.py`: canonical JPEG decisions and token encoders.
+- `jpeg_codecs.py`: canonical JPEG decisions and token encoders.
 - `data.py`: thin random-access dataset adapters and `LmDataConfig` wiring.
 - `model.py`: local model surface, initially reusing the grug base transformer.
 - `train.py`: local training surface, initially reusing the grug base trainer.
@@ -78,6 +78,6 @@ WebVision is useful for later robustness checks because it captures real web-ima
 
 ## Immediate Next Steps
 
-1. Point the first JPEG tokenizer training run at the local `K=4` coefficient store through `build_passthrough_lm_data_config_from_store`.
-2. Start Phase 1 with the coefficient baseline at `4096` tokens.
+1. Launch `tokexplore/jpeg-tokenizer-k4-smoke` on `v6e-8` against the regional `gs://marin-eu-west4/...` token store.
+2. If the smoke run is healthy, launch `tokexplore/jpeg-tokenizer-k4-trial` as the first real Phase 1 baseline.
 3. Add a windowing or reduced-resolution plan for byte and symbol baselines before trying matched training runs.

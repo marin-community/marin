@@ -20,7 +20,7 @@ from experiments.jpeg_tokenizer.base.data import (
     TokenStoreSplitInfo,
     write_token_store,
 )
-from experiments.jpeg_tokenizer.base.tokenizers import (
+from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     V0_CANONICAL_JPEG_CONFIG,
     V0_COEFFICIENT_CONFIG,
     canonicalize_image,

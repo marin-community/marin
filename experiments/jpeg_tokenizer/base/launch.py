@@ -24,6 +24,7 @@ from experiments.jpeg_tokenizer.base.model import JPEG_TOKENIZER_V0_MODEL, JpegL
 from experiments.jpeg_tokenizer.base.train import JpegEvalConfig, JpegRunConfig, JpegTrainerConfig, run_jpeg_tokenizer
 
 DEFAULT_COEFF_K4_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k4_v0"
+DEFAULT_TPU_TYPE = "v6e-8"
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,16 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     if isinstance(tracker, WandbConfig):
         return dataclasses.replace(tracker, name=run_id)
     return tracker
+
+
+def _build_wandb_tracker(*, group: str, tags: list[str]) -> WandbConfig:
+    return WandbConfig(
+        entity="marin-community",
+        project="tokexplore",
+        tags=tags,
+        group=group,
+        name=None,
+    )
 
 
 def build_coeff_k4_data_config(store_path: str = DEFAULT_COEFF_K4_STORE_PATH) -> LmDataConfig:
@@ -99,15 +110,60 @@ def run_jpeg_tokenizer_trial(config: JpegTokenizerLaunchConfig) -> None:
     run_jpeg_tokenizer(run_config)
 
 
-DEFAULT_JPEG_TOKENIZER_TRACKER = WandbConfig(
-    entity="marin-community",
-    project="tokexplore",
-    tags=["jpeg-tokenizer", "coeff-k4", "template"],
+DEFAULT_JPEG_TOKENIZER_SMOKE_TRACKER = _build_wandb_tracker(
+    group="tokexplore-jpeg-tokenizer-k4-smoke",
+    tags=["jpeg-tokenizer", "coeff-k4", "smoke"],
+)
+DEFAULT_JPEG_TOKENIZER_TRACKER = _build_wandb_tracker(
     group="tokexplore-jpeg-tokenizer-k4",
-    name=None,
+    tags=["jpeg-tokenizer", "coeff-k4", "baseline"],
 )
 
+RESOLVED_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-k4-smoke")
 RESOLVED_RUN_ID = _resolve_run_id("jpeg-tokenizer-k4-trial")
+
+coeff_k4_smoke = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-k4-smoke",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(JPEG_TOKENIZER_V0_MODEL),
+        token_store_path=str(DEFAULT_COEFF_K4_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_SMOKE_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(128),
+        batch_size=versioned(256),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=DEFAULT_JPEG_TOKENIZER_SMOKE_TRACKER,
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=64,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=64,
+                steps_per_eval=64,
+                max_eval_batches=4,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    ),
+)
 
 coeff_k4_trial = ExecutorStep(
     name="tokexplore/jpeg-tokenizer-k4-trial",
@@ -117,7 +173,7 @@ coeff_k4_trial = ExecutorStep(
         token_store_path=str(DEFAULT_COEFF_K4_STORE_PATH),
         output_path=this_output_path(),
         run_id=RESOLVED_RUN_ID,
-        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
         steps=versioned(2_000),
         batch_size=versioned(512),
         seed=versioned(0),
@@ -155,17 +211,21 @@ coeff_k4_trial = ExecutorStep(
 
 if __name__ == "__main__":
     executor_main(
-        steps=[coeff_k4_trial],
-        description="JPEG tokenizer K=4 coefficient baseline on the local Imagenette token store.",
+        steps=[coeff_k4_smoke, coeff_k4_trial],
+        description="JPEG tokenizer K=4 coefficient runs on the Imagenette token store.",
     )
 
 
 __all__ = [
     "DEFAULT_COEFF_K4_STORE_PATH",
+    "DEFAULT_JPEG_TOKENIZER_SMOKE_TRACKER",
     "DEFAULT_JPEG_TOKENIZER_TRACKER",
+    "DEFAULT_TPU_TYPE",
     "RESOLVED_RUN_ID",
+    "RESOLVED_SMOKE_RUN_ID",
     "JpegTokenizerLaunchConfig",
     "build_coeff_k4_data_config",
+    "coeff_k4_smoke",
     "coeff_k4_trial",
     "run_jpeg_tokenizer_trial",
 ]

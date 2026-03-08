@@ -25,14 +25,20 @@ This note records the first runnable training setup for the `K=4` coefficient ba
 
 ## Launch Conventions
 
+- Executor smoke step name:
+  `tokexplore/jpeg-tokenizer-k4-smoke`
 - Executor step name:
   `tokexplore/jpeg-tokenizer-k4-trial`
 - W&B target:
   `marin-community/tokexplore`
+- W&B smoke group:
+  `tokexplore-jpeg-tokenizer-k4-smoke`
 - W&B group:
   `tokexplore-jpeg-tokenizer-k4`
 - Default token store path:
   `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k4_v0`
+- TPU target:
+  `v6e-8`
 
 ## Validation
 
@@ -42,4 +48,5 @@ This note records the first runnable training setup for the `K=4` coefficient ba
 
 ## Next Step
 
-Use the `tokexplore/jpeg-tokenizer-k4-trial` step as the first TPU-backed end-to-end run, starting conservatively with the existing short `2000`-step config.
+Use `tokexplore/jpeg-tokenizer-k4-smoke` as the first TPU-backed bring-up run, then move to
+`tokexplore/jpeg-tokenizer-k4-trial` once the smoke path confirms the remote token-store and trainer wiring.

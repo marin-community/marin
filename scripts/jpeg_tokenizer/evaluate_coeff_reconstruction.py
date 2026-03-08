@@ -15,7 +15,7 @@ from pathlib import Path
 from datasets import load_dataset
 
 from experiments.jpeg_tokenizer.base.eval import compute_reconstruction_metrics, summarize_metric
-from experiments.jpeg_tokenizer.base.tokenizers import (
+from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     V0_CANONICAL_JPEG_CONFIG,
     V0_COEFFICIENT_CONFIG,
     canonicalize_image,

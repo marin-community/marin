@@ -27,7 +27,7 @@ from experiments.jpeg_tokenizer.base.data import (
 from experiments.jpeg_tokenizer.base.eval import compute_reconstruction_metrics, compute_token_sequence_stats
 from experiments.jpeg_tokenizer.base.model import JpegLmConfig
 from experiments.jpeg_tokenizer.base.train import JpegEvalConfig, JpegRunConfig, JpegTrainerConfig, run_jpeg_tokenizer
-from experiments.jpeg_tokenizer.base.tokenizers import (
+from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     canonicalize_image,
     encode_dct_coeffs,
     encode_jpeg_bytes,
