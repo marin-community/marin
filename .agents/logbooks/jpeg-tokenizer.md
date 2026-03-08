@@ -67,5 +67,7 @@
   - refactored JPEG training config so the token-store path is serialized, while `LmDataConfig` is built inside the TPU-local entrypoint
   - fourth run reached the TPU-local entrypoint but failed because token-store materialization happened before `trainer.initialize()`, which tripped JAX distributed startup ordering
   - refactored the shared grug local runner so JPEG can initialize the trainer first, then build its data config, then enter the common training loop
+  - fifth run reached evaluator setup and exposed that `compute_bpb=True` is invalid for the passthrough JPEG tokenizer because the generic bytes-per-token probe tokenizes `"."` as text
+  - disabled `compute_bpb` for the JPEG smoke/trial eval configs
 - Interpretation: the pipeline now matches the actual execution boundary. The remaining test is a fresh cluster smoke submit from the worker-side token-store path.
 - Next action: commit the worker-side materialization fix and rerun `tokexplore/jpeg-tokenizer-k4-smoke`.

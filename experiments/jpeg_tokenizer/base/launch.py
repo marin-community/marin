@@ -159,6 +159,7 @@ coeff_k4_smoke = ExecutorStep(
                 max_eval_batches=4,
                 eval_current=True,
                 eval_ema=False,
+                compute_bpb=False,
             )
         ),
     ),
@@ -202,6 +203,7 @@ coeff_k4_trial = ExecutorStep(
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
+                compute_bpb=False,
             )
         ),
     ),
