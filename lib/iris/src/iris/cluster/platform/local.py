@@ -49,6 +49,7 @@ from iris.cluster.platform.base import (
     WorkerStatus,
     default_stop_all,
     find_free_port,
+    generate_slice_suffix,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
@@ -386,7 +387,7 @@ class LocalPlatform:
         that register with the controller (E2E mode). Otherwise creates in-memory
         stubs (unit test mode).
         """
-        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
         num_vms = config.num_vms or 1
 
         if self._controller_address is not None:
@@ -494,7 +495,7 @@ class LocalPlatform:
             wc = WorkerConfig(
                 host="127.0.0.1",
                 port=worker_port,
-                cache_dir=self._cache_path,
+                cache_dir=self._cache_path / worker_id,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
                 default_task_image="process-runtime-unused",
@@ -574,6 +575,8 @@ class LocalPlatform:
 
     def shutdown(self) -> None:
         """Stop all worker threads. Critical for clean test teardown."""
+        for s in self._slices.values():
+            s.terminate()
         self._threads.stop(timeout=Duration.from_seconds(5.0))
         self._slices.clear()
         self._vms.clear()

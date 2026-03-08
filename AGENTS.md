@@ -24,13 +24,16 @@ Agent-friendly recipes live in `docs/recipes/`. Key ones:
 ```bash
 # Lint and format
 ./infra/pre-commit.py --all-files --fix
+- `./infra/pre-commit.py` is the required lint entry point for this repo.
+- Do not replace it with `uv run pre-commit ...`!
 
-# Type checking
+# Type checking (also done by pre-commit.py)
 uv run pyrefly
+- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 ```
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
-- NEVER stop, restart, or bounce a Ray cluster unless the user gives express permission.
+- NEVER stop, restart, or bounce a Ray or Iris cluster unless the user gives express permission.
 
 ## Communication & Commits
 

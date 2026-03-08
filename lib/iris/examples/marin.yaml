@@ -59,9 +59,9 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5-lite
   tpu_v5e_8:
     zones: [europe-west4-b, us-west4-a]
-    num_vms: 2
+    num_vms: 1
     priority: 20
-    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-8, device_count: 4, preemptible: true }
+    resources: { cpu: 112, ram: 192GB, disk: 100GB, device_type: tpu, device_variant: v5litepod-8, device_count: 8, preemptible: true }
     min_slices: 0
     max_slices: 512
     slice_template:
@@ -134,9 +134,9 @@ scale_groups:
         runtime_version: v2-alpha-tpuv6e
   tpu_v6e_8:
     zones: [europe-west4-a, us-east1-d, us-east5-b]
-    num_vms: 2
+    num_vms: 1
     priority: 20
-    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-8, device_count: 4, preemptible: true }
+    resources: { cpu: 180, ram: 720GB, disk: 100GB, device_type: tpu, device_variant: v6e-8, device_count: 8, preemptible: true }
     min_slices: 0
     max_slices: 512
     slice_template:
@@ -196,10 +196,11 @@ scale_groups:
   # ---------------------------------------------------------------------------
   # v5p — us-central1-a, us-east5-a
   # Per-VM: ct5p-hightpu-4t — 208 vCPU, 448 GiB RAM, 4 TPU chips
+  # num_vms must match iris.cluster.types TPU vm_count for gang-scheduled jobs.
   # ---------------------------------------------------------------------------
   tpu_v5p_8:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 2
+    num_vms: 1
     priority: 20
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-8, device_count: 4, preemptible: true }
     min_slices: 0
@@ -209,7 +210,7 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_16:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 4
+    num_vms: 2
     priority: 30
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-16, device_count: 4, preemptible: true }
     min_slices: 0
@@ -219,7 +220,7 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_32:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 8
+    num_vms: 4
     priority: 40
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-32, device_count: 4, preemptible: true }
     min_slices: 0
@@ -229,7 +230,7 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_64:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 16
+    num_vms: 8
     priority: 50
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-64, device_count: 4, preemptible: true }
     min_slices: 0
@@ -239,7 +240,7 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_128:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 32
+    num_vms: 16
     priority: 60
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-128, device_count: 4, preemptible: true }
     min_slices: 0
@@ -249,7 +250,7 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_256:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 64
+    num_vms: 32
     priority: 70
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-256, device_count: 4, preemptible: true }
     min_slices: 0
@@ -259,7 +260,7 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_512:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 128
+    num_vms: 64
     priority: 80
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-512, device_count: 4, preemptible: true }
     min_slices: 0
@@ -269,7 +270,7 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_1024:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 256
+    num_vms: 128
     priority: 90
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-1024, device_count: 4, preemptible: true }
     min_slices: 0
@@ -279,7 +280,7 @@ scale_groups:
         runtime_version: v2-alpha-tpuv5
   tpu_v5p_2048:
     zones: [us-central1-a, us-east5-a]
-    num_vms: 512
+    num_vms: 256
     priority: 100
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-2048, device_count: 4, preemptible: true }
     min_slices: 0

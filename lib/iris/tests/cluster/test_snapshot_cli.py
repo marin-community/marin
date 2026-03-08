@@ -22,6 +22,9 @@ class _FakeStubFactory:
     def evict(self, address: str) -> None:
         pass
 
+    def close(self) -> None:
+        pass
+
 
 def _make_controller(tmp_path: str, checkpoint_interval: Duration | None = None) -> Controller:
     config = ControllerConfig(

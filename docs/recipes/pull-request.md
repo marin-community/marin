@@ -56,6 +56,7 @@ If no issue exists yet, create one with `gh issue create` before opening the PR.
 Before marking a PR ready for review:
 
 - Run `./infra/pre-commit.py --all-files --fix` and fix any issues.
+- Do not substitute `uv run pre-commit ...`; use `./infra/pre-commit.py` directly so checks run in all environments.
 - Run `uv run pytest -m 'not slow'` for the relevant test directories.
 - Ensure all CI checks pass after pushing. Monitor with
   `gh pr view <number> --json statusCheckRollup`.

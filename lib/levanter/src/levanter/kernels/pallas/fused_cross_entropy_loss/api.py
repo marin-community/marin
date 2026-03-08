@@ -48,6 +48,7 @@ _AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
 _AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, BlockSizes] = {}
 _AUTOTUNE_CACHE_LOADED = False
 _AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
+_VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,24 @@ def _warn_pallas_fallback_once(exc: Exception) -> None:
     _PALLAS_FALLBACK_WARNINGS_EMITTED.add(message)
     warnings.warn(
         f"Pallas fused cross-entropy unavailable, falling back to XLA: {message}",
+        RuntimeWarning,
+    )
+
+
+def _is_tpu_vmem_compile_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "resource_exhausted" in message and "vmem" in message
+
+
+def _warn_vmem_compile_fallback_once(exc: Exception, *, impl_name: str) -> None:
+    message = str(exc)
+    key = f"{impl_name}|{message}"
+    if key in _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED:
+        return
+    _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED.add(key)
+    warnings.warn(
+        f"Pallas fused cross-entropy hit TPU vmem compile OOM in {impl_name}; "
+        f"trying the next implementation. Error: {message}",
         RuntimeWarning,
     )
 
@@ -520,20 +539,24 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     if implementation is None:
         impls = cast(Sequence[Implementation | ArrayImpl], _default_implementations())
         explicit = False
+        user_requested_impls = False
     elif isinstance(implementation, Sequence) and not isinstance(implementation, (str, bytes)):
         impls = cast(Sequence[Implementation | ArrayImpl], implementation)
         explicit = len(impls) == 1
+        user_requested_impls = True
     else:
         impls = (cast(Implementation, implementation),)
         explicit = True
+        user_requested_impls = True
 
     errors: list[Exception] = []
     for impl in impls:
+        impl_for_call = impl
         if explicit_block_sizes:
             block_sizes_for_impl = resolved_block_sizes
-        elif impl in ("xla", "reference"):
+        elif impl_for_call in ("xla", "reference"):
             block_sizes_for_impl = None
-        elif isinstance(impl, str) and impl in ("pallas_tpu", "pallas_gpu"):
+        elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "pallas_gpu"):
             inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
                 x.shape[0],
                 x.shape[1],
@@ -543,12 +566,12 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             if has_tuned_match:
                 block_sizes_for_impl = inferred
             else:
-                fn = IMPLEMENTATIONS.get(impl)
+                fn = IMPLEMENTATIONS.get(impl_for_call)
                 if fn is None:
                     block_sizes_for_impl = inferred
                 else:
                     block_sizes_for_impl = _autotune_block_sizes_on_miss(
-                        impl_name=impl,
+                        impl_name=impl_for_call,
                         fn=fn,
                         x=x,
                         labels=labels,
@@ -561,7 +584,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     )
         else:
             block_sizes_for_impl = infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
-        if callable(impl):
+        if callable(impl_for_call):
             try:
                 kwargs = dict(
                     block_sizes=block_sizes_for_impl,
@@ -571,7 +594,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 )
                 if return_argmax:
                     kwargs["return_argmax"] = True
-                result = impl(x, labels, w, **kwargs)
+                result = impl_for_call(x, labels, w, **kwargs)
             except PallasUnsupportedError as e:
                 if explicit:
                     raise
@@ -585,9 +608,9 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 errors.append(e)
                 continue
         else:
-            fn = IMPLEMENTATIONS.get(impl)
+            fn = IMPLEMENTATIONS.get(impl_for_call)
             if fn is None:
-                raise ValueError(f"Unsupported implementation: {impl}")
+                raise ValueError(f"Unsupported implementation: {impl_for_call}")
             try:
                 kwargs = dict(
                     block_sizes=block_sizes_for_impl,
@@ -610,8 +633,23 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 _warn_pallas_fallback_once(e)
                 errors.append(e)
                 continue
+            except Exception as e:
+                should_try_next_impl = (
+                    not explicit
+                    and isinstance(impl_for_call, str)
+                    and impl_for_call in ("pallas_tpu", "pallas_gpu")
+                    and _is_tpu_vmem_compile_error(e)
+                )
+                if should_try_next_impl:
+                    _warn_vmem_compile_fallback_once(e, impl_name=impl_for_call)
+                    errors.append(e)
+                    continue
+                if explicit or user_requested_impls:
+                    raise
+                errors.append(e)
+                continue
 
-        selected = str(impl)
+        selected = str(impl_for_call)
         if selected not in _SELECTED_IMPL_LOGGED:
             _SELECTED_IMPL_LOGGED.add(selected)
             logger.info("Fused cross-entropy selected implementation: %s", selected)

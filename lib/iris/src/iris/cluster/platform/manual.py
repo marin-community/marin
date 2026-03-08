@@ -42,6 +42,7 @@ from iris.cluster.platform.base import (
     SliceStatus,
     WorkerStatus,
     default_stop_all,
+    generate_slice_suffix,
 )
 from iris.cluster.platform.bootstrap import build_worker_bootstrap_script
 from iris.cluster.platform.remote_exec import (
@@ -273,7 +274,7 @@ class ManualPlatform:
         bootstrap state with the base state.
         """
         manual = config.manual
-        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
 
         # Use explicitly listed hosts if provided, otherwise draw from pool
         if manual.hosts:
