@@ -82,7 +82,9 @@ def _default_implementations() -> tuple[Implementation, ...]:
             return cast(tuple[Implementation, ...], implementations + ("pallas_gpu",))
         return cast(tuple[Implementation, ...], ("pallas_gpu",) + implementations)
     if backend == "tpu":
-        # Keep TPU default stable and robust unless Pallas is explicitly requested.
+        # Prefer TPU Pallas CE when available; keep XLA in the fallback chain for robustness.
+        if "pallas_tpu" in IMPLEMENTATIONS:
+            return cast(tuple[Implementation, ...], ("pallas_tpu",) + implementations)
         return implementations
     return implementations
 
