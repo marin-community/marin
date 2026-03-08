@@ -799,18 +799,75 @@ def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypa
     assert called["xla"] == 1
 
 
-def test_pallas_tpu_non_vmem_runtime_error_still_raises(monkeypatch: pytest.MonkeyPatch):
+def test_pallas_tpu_vmem_compile_error_uses_remaining_requested_order(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    called = {"pallas": 0, "reference": 0, "xla": 0}
+    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
+    vmem_error = RuntimeError(
+        "RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. " "Ran out of memory in memory space vmem."
+    )
+
+    def fake_pallas(*args, **kwargs):
+        del args, kwargs
+        called["pallas"] += 1
+        raise vmem_error
+
+    def fake_reference(x_raw, labels_raw, w_raw, **kwargs):
+        del labels_raw, w_raw
+        called["reference"] += 1
+        assert kwargs["block_sizes"] == block_sizes
+        batch = x_raw.shape[0]
+        return jnp.ones((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    def fake_xla(*args, **kwargs):
+        del args, kwargs
+        called["xla"] += 1
+        raise AssertionError("xla should not run before earlier requested implementations")
+
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_pallas)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "reference", fake_reference)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "xla", fake_xla)
+    monkeypatch.setattr(fused_api, "_VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED", set())
+
+    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        block_sizes=block_sizes,
+        implementation=("pallas_tpu", "reference", "xla"),
+    )
+
+    assert jnp.array_equal(loss, jnp.ones((4,), dtype=jnp.float32))
+    assert called == {"pallas": 1, "reference": 1, "xla": 0}
+
+
+@pytest.mark.parametrize("implementation", ["pallas_tpu", ("pallas_tpu", "xla")])
+def test_pallas_tpu_non_vmem_runtime_error_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    implementation: str | tuple[str, str],
+):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
     y = jnp.zeros((4,), dtype=jnp.int32)
 
     inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    called = {"xla": 0}
 
     def fake_pallas(*args, **kwargs):
         del args, kwargs
         raise RuntimeError("some other runtime error")
 
+    def fake_xla(*args, **kwargs):
+        del args, kwargs
+        called["xla"] += 1
+        raise AssertionError("xla should not run for non-vmem explicit failures")
+
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_pallas)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "xla", fake_xla)
     monkeypatch.setattr(
         fused_api,
         "infer_block_sizes_with_tuned_match",
@@ -823,8 +880,10 @@ def test_pallas_tpu_non_vmem_runtime_error_still_raises(monkeypatch: pytest.Monk
             y,
             w,
             reduction=None,
-            implementation="pallas_tpu",
+            implementation=implementation,
         )
+
+    assert called["xla"] == 0
 
 
 def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):

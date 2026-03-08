@@ -113,19 +113,9 @@ def _warn_vmem_compile_fallback_once(exc: Exception, *, impl_name: str) -> None:
     _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED.add(key)
     warnings.warn(
         f"Pallas fused cross-entropy hit TPU vmem compile OOM in {impl_name}; "
-        f"falling back to XLA. Error: {message}",
+        f"trying the next implementation. Error: {message}",
         RuntimeWarning,
     )
-
-
-def _impl_sequence_includes_xla(impls: Sequence[Implementation | ArrayImpl]) -> bool:
-    xla_fn = IMPLEMENTATIONS.get("xla")
-    for impl in impls:
-        if impl == "xla":
-            return True
-        if callable(impl) and xla_fn is not None and impl is xla_fn:
-            return True
-    return False
 
 
 def _autotune_enabled() -> bool:
@@ -558,7 +548,6 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         impls = (cast(Implementation, implementation),)
         explicit = True
         user_requested_impls = True
-    xla_in_requested_impls = _impl_sequence_includes_xla(impls)
 
     errors: list[Exception] = []
     for impl in impls:
@@ -645,44 +634,20 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 errors.append(e)
                 continue
             except Exception as e:
-                should_retry_xla = (
-                    isinstance(impl_for_call, str)
+                should_try_next_impl = (
+                    not explicit
+                    and isinstance(impl_for_call, str)
                     and impl_for_call in ("pallas_tpu", "pallas_gpu")
                     and _is_tpu_vmem_compile_error(e)
-                    and (not user_requested_impls or xla_in_requested_impls)
                 )
-                if not should_retry_xla:
-                    if explicit:
-                        raise
+                if should_try_next_impl:
+                    _warn_vmem_compile_fallback_once(e, impl_name=impl_for_call)
                     errors.append(e)
                     continue
-
-                xla_fn = IMPLEMENTATIONS.get("xla")
-                if xla_fn is None:
-                    if explicit:
-                        raise
-                    errors.append(e)
-                    continue
-
-                _warn_vmem_compile_fallback_once(e, impl_name=impl_for_call)
+                if explicit or user_requested_impls:
+                    raise
                 errors.append(e)
-
-                xla_kwargs = dict(
-                    block_sizes=None,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                )
-                if return_argmax:
-                    xla_kwargs["return_argmax"] = True
-                try:
-                    result = xla_fn(x, labels, w, **xla_kwargs)
-                    impl_for_call = "xla"
-                except Exception as xla_exc:
-                    if explicit:
-                        raise
-                    errors.append(xla_exc)
-                    continue
+                continue
 
         selected = str(impl_for_call)
         if selected not in _SELECTED_IMPL_LOGGED:

@@ -462,18 +462,35 @@ def _extend_tpu_v4_bucket_for_mid_vocab(
     if not (16_385 <= v <= 119_999):
         return bucket
 
+    candidate_buckets: list[str] = []
     if 512 <= b <= 2_048 and 256 <= h <= 1_024:
-        return "small-vocab"
+        candidate_buckets.append("small-vocab")
     if 4_096 <= b <= 16_384 and h == 4_096:
-        return "llama3-ish"
+        candidate_buckets.append("llama3-ish")
     if 4_096 <= b <= 32_768 and 768 <= h <= 1_536:
-        return "mid-h-large-vocab"
+        candidate_buckets.append("mid-h-large-vocab")
     if 131_073 <= b <= 1_048_576 and 256 <= h <= 1_024:
-        return "huge-batch-small-h"
+        candidate_buckets.append("huge-batch-small-h")
     if 32_768 <= b <= 131_072 and 256 <= h <= 1_024:
-        return "large-batch-small-h"
+        candidate_buckets.append("large-batch-small-h")
     if 8_192 <= b <= 32_768 and 1_536 <= h <= 3_072:
-        return "medium-batch-medium-h"
+        candidate_buckets.append("medium-batch-medium-h")
+
+    # Only advertise a remapped bucket when the corresponding TPU v4 tuned entry
+    # is actually valid for this local B/H shape.
+    for candidate in candidate_buckets:
+        for dtype_name in ("bfloat16", "float32"):
+            entry = TUNED_BLOCK_SIZES["TPU v4"].get((dtype_name, candidate))
+            if entry is None:
+                continue
+            if _is_valid_for_pallas_shape(
+                entry,
+                b=b,
+                h=h,
+                device_key=device_key,
+                device_kind=device_key,
+            ):
+                return candidate
     return bucket
 
 
