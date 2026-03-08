@@ -1,35 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canonical bundle interfaces and implementations for controller/worker/runtime."""
+"""Bundle ID utilities and a single sqlite-backed BundleStore implementation."""
 
 from __future__ import annotations
 
 import hashlib
-import logging
+import io
+import posixpath
 import re
-import shutil
+import sqlite3
 import threading
 import time
 import zipfile
-from collections import defaultdict
 from pathlib import Path
-from typing import Protocol
 from urllib.request import urlopen
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.marin_fs import url_to_fs
-
-logger = logging.getLogger(__name__)
-
-BUNDLE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+_BUNDLE_ID_RE = r"^[0-9a-f]{64}$"
 
 
 def validate_bundle_id(bundle_id: str) -> None:
     """Validate a bundle identifier."""
-    if not BUNDLE_ID_RE.fullmatch(bundle_id):
+    if not re.fullmatch(_BUNDLE_ID_RE, bundle_id):
         raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid bundle_id: {bundle_id!r}")
 
 
@@ -38,223 +33,176 @@ def bundle_id_for_zip(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-class BundleStore(Protocol):
-    """Bundle storage contract shared across controller/worker/runtime."""
-
-    def write_zip(self, blob: bytes) -> str: ...
-
-    def get_zip(self, bundle_id: str) -> bytes: ...
-
-    def get_bundle(self, bundle_id: str) -> Path: ...
-
-    def prefetch_bundle(self, bundle_id: str) -> None: ...
-
-
-class ControllerBundleStore:
-    """Content-addressed bundle storage used by the controller."""
-
-    def __init__(self, bundle_prefix: str):
-        self._prefix = bundle_prefix.rstrip("/")
-        self._lock = threading.Lock()
-
-    @property
-    def prefix(self) -> str:
-        return self._prefix
-
-    def bundle_uri_for_id(self, bundle_id: str) -> str:
-        validate_bundle_id(bundle_id)
-        return f"{self._prefix}/{bundle_id}.zip"
-
-    def write_zip(self, blob: bytes) -> str:
-        bundle_id = bundle_id_for_zip(blob)
-        bundle_uri = self.bundle_uri_for_id(bundle_id)
-        with self._lock:
-            try:
-                fs, path = url_to_fs(bundle_uri)
-                if fs.exists(path):
-                    return bundle_id
-                fs.makedirs(str(Path(path).parent), exist_ok=True)
-                with fs.open(path, "wb") as f:
-                    f.write(blob)
-            except Exception as e:
-                raise ConnectError(Code.INTERNAL, f"Failed to store bundle {bundle_id}: {e}") from e
-        return bundle_id
-
-    def get_zip(self, bundle_id: str) -> bytes:
-        validate_bundle_id(bundle_id)
-        bundle_uri = self.bundle_uri_for_id(bundle_id)
-        try:
-            fs, path = url_to_fs(bundle_uri)
-            if not fs.exists(path):
-                raise ConnectError(Code.NOT_FOUND, f"Bundle not found: {bundle_id}")
-            with fs.open(path, "rb") as f:
-                return f.read()
-        except ConnectError:
-            raise
-        except Exception as e:
-            raise ConnectError(Code.INTERNAL, f"Failed to read bundle {bundle_id}: {e}") from e
-
-    def get_bundle(self, bundle_id: str) -> Path:
-        """Return local filesystem path to bundle zip when available."""
-        bundle_uri = self.bundle_uri_for_id(bundle_id)
-        fs, path = url_to_fs(bundle_uri)
-        if fs.protocol not in {"file", ("file", "local"), ("local", "file"), "local"}:
-            raise ConnectError(Code.UNIMPLEMENTED, "get_bundle is only supported for local bundle stores")
-        return Path(path)
-
-    def prefetch_bundle(self, bundle_id: str) -> None:
-        # Controller store is canonical source; fetch validates existence.
-        self.get_zip(bundle_id)
+def normalize_workdir_relative_path(path: str) -> str:
+    """Return a normalized relative path safe to write under a task workdir."""
+    candidate = path.replace("\\", "/")
+    if candidate.startswith("/"):
+        raise ValueError(f"Invalid workdir file path (absolute paths are not allowed): {path}")
+    normalized = posixpath.normpath(candidate)
+    if normalized in {"", "."}:
+        raise ValueError(f"Invalid workdir file path: {path}")
+    if normalized.startswith("../") or normalized == "..":
+        raise ValueError(f"Invalid workdir file path (path traversal): {path}")
+    return normalized
 
 
-class LocalBundleStore:
-    """Filesystem-backed worker bundle store with controller fetch on miss."""
+class BundleStore:
+    """Single sqlite-backed bundle store for controller and workers.
 
-    _EVICTION_GRACE_SECONDS = 300
+    Bundles are stored as zip bytes in sqlite by ``bundle_id``.
+    Workers can lazily fetch missing bundles from the controller and cache
+    them locally.
+    """
 
     def __init__(
         self,
-        cache_dir: Path,
+        db_path: Path,
         controller_address: str | None = None,
-        max_bundles: int = 100,
+        max_total_bytes: int = 1_000_000_000,
+        max_items: int = 1000,
     ):
-        self._cache_dir = cache_dir
+        self._db_path = db_path
         self._controller_address = controller_address.rstrip("/") if controller_address else ""
-        self._bundles_dir = cache_dir / "bundles"
-        self._extracts_dir = cache_dir / "extracts"
-        self._max_bundles = max_bundles
-        self._extract_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+        self._max_total_bytes = max_total_bytes
+        self._max_items = max_items
+        self._lock = threading.RLock()
 
-        self._bundles_dir.mkdir(parents=True, exist_ok=True)
-        self._extracts_dir.mkdir(parents=True, exist_ok=True)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bundles (
+                bundle_id TEXT PRIMARY KEY,
+                zip_bytes BLOB NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                last_access_ms INTEGER NOT NULL,
+                size_bytes INTEGER NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_bundles_last_access
+            ON bundles(last_access_ms)
+            """
+        )
+        self._conn.commit()
 
-    def _zip_path(self, bundle_id: str) -> Path:
-        return self._bundles_dir / f"{bundle_id}.zip"
-
-    def _extract_path(self, bundle_id: str) -> Path:
-        return self._extracts_dir / bundle_id
-
-    def _download_url(self, bundle_id: str) -> str:
-        if not self._controller_address:
-            raise ConnectError(Code.FAILED_PRECONDITION, "controller address is required for bundle fetches")
-        return f"{self._controller_address}/bundles/{bundle_id}.zip"
+    @staticmethod
+    def _now_ms() -> int:
+        return int(time.time() * 1000)
 
     def write_zip(self, blob: bytes) -> str:
+        """Write zip bytes if absent and return canonical bundle id."""
         bundle_id = bundle_id_for_zip(blob)
-        zip_path = self._zip_path(bundle_id)
-        if not zip_path.exists():
-            zip_path.write_bytes(blob)
-        self._validate_hash(zip_path, bundle_id)
+        now_ms = self._now_ms()
+        with self._lock:
+            row = self._conn.execute("SELECT 1 FROM bundles WHERE bundle_id = ?", (bundle_id,)).fetchone()
+            if row is None:
+                self._conn.execute(
+                    "INSERT INTO bundles(bundle_id, zip_bytes, created_at_ms, last_access_ms, size_bytes)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (bundle_id, blob, now_ms, now_ms, len(blob)),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE bundles SET last_access_ms = ? WHERE bundle_id = ?",
+                    (now_ms, bundle_id),
+                )
+            self._conn.commit()
+            self._evict_if_needed_locked()
         return bundle_id
 
     def get_zip(self, bundle_id: str) -> bytes:
+        """Read zip bytes by bundle id."""
         validate_bundle_id(bundle_id)
-        zip_path = self._zip_path(bundle_id)
-        if not zip_path.exists():
-            self._download(bundle_id, zip_path)
-        self._validate_hash(zip_path, bundle_id)
-        return zip_path.read_bytes()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT zip_bytes FROM bundles WHERE bundle_id = ?",
+                (bundle_id,),
+            ).fetchone()
+            if row is None:
+                raise ConnectError(Code.NOT_FOUND, f"Bundle not found: {bundle_id}")
+            self._conn.execute(
+                "UPDATE bundles SET last_access_ms = ? WHERE bundle_id = ?",
+                (self._now_ms(), bundle_id),
+            )
+            self._conn.commit()
+            return bytes(row[0])
 
     def prefetch_bundle(self, bundle_id: str) -> None:
-        self.get_bundle(bundle_id)
-
-    def get_bundle(self, bundle_id: str) -> Path:
+        """Ensure bundle is present locally, fetching from controller on miss."""
         validate_bundle_id(bundle_id)
-        extract_path = self._extract_path(bundle_id)
-        zip_path = self._zip_path(bundle_id)
+        try:
+            self.get_zip(bundle_id)
+            return
+        except ConnectError as e:
+            if e.code != Code.NOT_FOUND:
+                raise
 
-        with self._extract_locks[bundle_id]:
-            if extract_path.exists():
-                extract_path.touch()
-                return extract_path
+        if not self._controller_address:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Bundle {bundle_id} is not cached and controller address is not configured",
+            )
 
-            if not zip_path.exists():
-                self._download(bundle_id, zip_path)
-            else:
-                self._validate_hash(zip_path, bundle_id)
-
-            self._extract(zip_path, extract_path)
-            self._evict_old_bundles()
-            return extract_path
-
-    def _download(self, bundle_id: str, local_path: Path) -> None:
-        url = self._download_url(bundle_id)
+        url = f"{self._controller_address}/bundles/{bundle_id}.zip"
         try:
             with urlopen(url, timeout=120) as resp:
-                data = resp.read()
+                blob = resp.read()
         except Exception as e:
-            raise ConnectError(Code.UNAVAILABLE, f"failed to fetch bundle {bundle_id} from controller: {e}") from e
+            raise ConnectError(Code.UNAVAILABLE, f"Failed to fetch bundle {bundle_id}: {e}") from e
 
-        local_path.write_bytes(data)
-        self._validate_hash(local_path, bundle_id)
+        actual = bundle_id_for_zip(blob)
+        if actual != bundle_id:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Bundle hash mismatch while fetching {bundle_id}: got {actual}",
+            )
+        self.write_zip(blob)
 
-    @staticmethod
-    def _validate_hash(path: Path, expected_bundle_id: str) -> None:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk)
-        actual = h.hexdigest()
-        if actual != expected_bundle_id:
-            raise ValueError(f"Bundle hash mismatch: {actual} != {expected_bundle_id}")
+    def extract_bundle_to(self, bundle_id: str, dest: Path) -> None:
+        """Extract a bundle zip into ``dest`` with zip-slip protection."""
+        blob = self.get_zip(bundle_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        base = dest.resolve()
 
-    def _extract(self, zip_path: Path, extract_path: Path) -> None:
-        extract_path.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            base = extract_path.resolve()
+        with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
             for member in zf.namelist():
-                member_path = (extract_path / member).resolve()
+                member_path = (dest / member).resolve()
                 if not member_path.is_relative_to(base):
                     raise ValueError(f"Zip slip detected: {member} attempts to write outside extract path")
-            zf.extractall(extract_path)
+            zf.extractall(dest)
 
-    def _evict_old_bundles(self) -> None:
-        extracts = list(self._extracts_dir.iterdir())
-        if len(extracts) <= self._max_bundles:
+    def write_workdir_files(self, dest: Path, files: dict[str, bytes]) -> None:
+        """Write workdir files under ``dest`` with path validation."""
+        for name, data in files.items():
+            normalized = normalize_workdir_relative_path(name)
+            path = dest / normalized
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+
+    def _evict_if_needed_locked(self) -> None:
+        if self._max_items <= 0 and self._max_total_bytes <= 0:
             return
-
-        extracts.sort(key=lambda p: p.stat().st_mtime)
-        for path in extracts[: len(extracts) - self._max_bundles]:
-            if time.time() - path.stat().st_mtime < self._EVICTION_GRACE_SECONDS:
-                break
-            bundle_id = path.name
-            with self._extract_locks[bundle_id]:
-                if not path.exists():
-                    continue
-                if time.time() - path.stat().st_mtime < self._EVICTION_GRACE_SECONDS:
-                    continue
-                if path.is_dir():
-                    shutil.rmtree(path)
-                zip_path = self._zip_path(bundle_id)
-                if zip_path.exists():
-                    zip_path.unlink()
-
-
-def stage_bundle_to_local(
-    *,
-    bundle_id: str,
-    workdir: Path,
-    workdir_files: dict[str, bytes],
-    bundle_store: BundleStore,
-) -> None:
-    """Fetch bundle and materialize it plus workdir files in workdir."""
-    bundle_path = bundle_store.get_bundle(bundle_id)
-    if bundle_path.suffix == ".zip":
-        extract_dir = workdir / ".iris_bundle_extract"
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(bundle_path, "r") as zf:
-            base = extract_dir.resolve()
-            for member in zf.namelist():
-                member_path = (extract_dir / member).resolve()
-                if not member_path.is_relative_to(base):
-                    raise ValueError(f"Zip slip detected: {member} attempts to write outside extract path")
-            zf.extractall(extract_dir)
-        shutil.copytree(extract_dir, workdir, dirs_exist_ok=True)
-        shutil.rmtree(extract_dir, ignore_errors=True)
-    else:
-        shutil.copytree(bundle_path, workdir, dirs_exist_ok=True)
-
-    for name, data in workdir_files.items():
-        path = workdir / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        while True:
+            row = self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM bundles",
+            ).fetchone()
+            if row is None:
+                return
+            count = int(row[0])
+            total = int(row[1])
+            over_items = self._max_items > 0 and count > self._max_items
+            over_bytes = self._max_total_bytes > 0 and total > self._max_total_bytes
+            if not (over_items or over_bytes):
+                return
+            victim = self._conn.execute(
+                "SELECT bundle_id FROM bundles ORDER BY last_access_ms ASC LIMIT 1",
+            ).fetchone()
+            if victim is None:
+                return
+            self._conn.execute("DELETE FROM bundles WHERE bundle_id = ?", (str(victim[0]),))
+            self._conn.commit()

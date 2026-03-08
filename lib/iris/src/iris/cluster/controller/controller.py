@@ -6,6 +6,7 @@
 import logging
 import queue
 import sys
+import tempfile
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -510,8 +511,7 @@ class ControllerConfig:
     """Port to bind the HTTP server to. Use 0 for auto-assign."""
 
     bundle_prefix: str | None = None
-    """URI prefix for storing job bundles (e.g., file:///var/cache/iris/bundles).
-    Uses fsspec for storage, so it can target local or remote object stores."""
+    """Unused legacy field retained in config. Bundles are stored in sqlite."""
 
     scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
     """How often to run the scheduling loop."""
@@ -582,14 +582,13 @@ class Controller:
         autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
     ):
-        if not config.bundle_prefix:
-            raise ValueError(
-                "bundle_prefix is required. Set via ControllerConfig.bundle_prefix. "
-                "Example: bundle_prefix='gs://my-bucket/iris/bundles'"
-            )
-
         self._config = config
         self.stub_factory = worker_stub_factory
+
+        if config.log_dir:
+            bundle_db_path = config.log_dir / "bundles.sqlite3"
+        else:
+            bundle_db_path = Path(tempfile.gettempdir()) / "iris-controller-bundles.sqlite3"
 
         self._state = ControllerState(
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
@@ -599,7 +598,7 @@ class Controller:
         self._service = ControllerServiceImpl(
             self._state,
             self,
-            bundle_prefix=config.bundle_prefix,
+            bundle_db_path=bundle_db_path,
         )
         self._dashboard = ControllerDashboard(
             self._service,

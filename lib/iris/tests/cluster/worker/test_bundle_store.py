@@ -1,15 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for LocalBundleStore."""
+"""Tests for worker-side BundleStore behavior."""
 
 import hashlib
 import io
-import os
 import zipfile
 
 import pytest
-from iris.cluster.bundle import LocalBundleStore
+from connectrpc.errors import ConnectError
+
+from iris.cluster.bundle import BundleStore
 
 
 class _FakeResponse:
@@ -35,13 +36,15 @@ def _make_zip(entries: dict[str, bytes]) -> bytes:
 
 
 @pytest.fixture
-def temp_cache_dir(tmp_path):
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
-    return cache_dir
+def store(tmp_path):
+    return BundleStore(
+        db_path=tmp_path / "bundles.sqlite3",
+        controller_address="http://controller.internal",
+        max_items=2,
+    )
 
 
-def test_download_and_extract_bundle(monkeypatch, temp_cache_dir):
+def test_prefetch_and_extract_bundle(monkeypatch, store, tmp_path):
     bundle_zip = _make_zip({"main.py": b"print('hello')", "src/module.py": b"def f():\n  return 1\n"})
     bundle_id = hashlib.sha256(bundle_zip).hexdigest()
 
@@ -50,35 +53,15 @@ def test_download_and_extract_bundle(monkeypatch, temp_cache_dir):
         return _FakeResponse(bundle_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
-    cache = LocalBundleStore(temp_cache_dir, controller_address="http://controller.internal")
+    store.prefetch_bundle(bundle_id)
 
-    extract_path = cache.get_bundle(bundle_id)
-    assert (extract_path / "main.py").exists()
-    assert (extract_path / "src/module.py").exists()
-
-
-def test_caching_behavior(monkeypatch, temp_cache_dir):
-    bundle_zip = _make_zip({"a.txt": b"A"})
-    bundle_id = hashlib.sha256(bundle_zip).hexdigest()
-    calls = 0
-
-    def fake_urlopen(url: str, timeout: int):
-        nonlocal calls
-        calls += 1
-        assert url == f"http://controller.internal/bundles/{bundle_id}.zip"
-        return _FakeResponse(bundle_zip)
-
-    monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
-    cache = LocalBundleStore(temp_cache_dir, controller_address="http://controller.internal")
-
-    path1 = cache.get_bundle(bundle_id)
-    path2 = cache.get_bundle(bundle_id)
-
-    assert path1 == path2
-    assert calls == 1
+    extract_dir = tmp_path / "extract"
+    store.extract_bundle_to(bundle_id, extract_dir)
+    assert (extract_dir / "main.py").exists()
+    assert (extract_dir / "src/module.py").exists()
 
 
-def test_hash_verification_failure(monkeypatch, temp_cache_dir):
+def test_prefetch_hash_verification_failure(monkeypatch, store):
     bad_zip = _make_zip({"a.txt": b"A"})
     wrong_id = "a" * 64
 
@@ -87,36 +70,19 @@ def test_hash_verification_failure(monkeypatch, temp_cache_dir):
         return _FakeResponse(bad_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
-    cache = LocalBundleStore(temp_cache_dir, controller_address="http://controller.internal")
-
-    with pytest.raises(ValueError, match="Bundle hash mismatch"):
-        cache.get_bundle(wrong_id)
+    with pytest.raises(ConnectError, match="Bundle hash mismatch"):
+        store.prefetch_bundle(wrong_id)
 
 
-def test_lru_eviction(monkeypatch, temp_cache_dir):
-    cache = LocalBundleStore(temp_cache_dir, controller_address="http://controller.internal", max_bundles=2)
+def test_lru_eviction_by_item_count(store):
     bundles = []
     for i in range(3):
         bundle_zip = _make_zip({"test.txt": f"bundle {i}".encode()})
         bundle_id = hashlib.sha256(bundle_zip).hexdigest()
         bundles.append((bundle_id, bundle_zip))
+        store.write_zip(bundle_zip)
 
-    def fake_urlopen(url: str, timeout: int):
-        bundle_id = url.rsplit("/", 1)[1].removesuffix(".zip")
-        for b_id, blob in bundles:
-            if b_id == bundle_id:
-                return _FakeResponse(blob)
-        raise AssertionError(f"unexpected bundle fetch: {url}")
-
-    monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
-
-    paths = []
-    for bundle_id, _ in bundles:
-        for j, p in enumerate(paths):
-            os.utime(p, (j, j))
-        paths.append(cache.get_bundle(bundle_id))
-
-    assert not paths[0].exists()
-    assert paths[1].exists()
-    assert paths[2].exists()
-    assert len(list((temp_cache_dir / "extracts").iterdir())) == 2
+    with pytest.raises(ConnectError, match="Bundle not found"):
+        store.get_zip(bundles[0][0])
+    assert store.get_zip(bundles[1][0]) == bundles[1][1]
+    assert store.get_zip(bundles[2][0]) == bundles[2][1]

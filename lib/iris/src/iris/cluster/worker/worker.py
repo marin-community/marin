@@ -17,7 +17,7 @@ from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerRuntime
 from iris.cluster.types import JobName
-from iris.cluster.bundle import BundleStore, LocalBundleStore
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -127,10 +127,10 @@ class Worker:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Use overrides if provided, otherwise create defaults
-        self._bundle_store = bundle_store or LocalBundleStore(
-            self._cache_dir,
+        self._bundle_store = bundle_store or BundleStore(
+            db_path=self._cache_dir / "bundles.sqlite3",
             controller_address=config.controller_address,
-            max_bundles=100,
+            max_items=100,
         )
         self._runtime = container_runtime or DockerRuntime()
         self._port_allocator = port_allocator or PortAllocator(config.port_range)

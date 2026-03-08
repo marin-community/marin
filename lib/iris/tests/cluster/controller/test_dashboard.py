@@ -124,9 +124,9 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def service(state, scheduler):
+def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
-    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
+    return ControllerServiceImpl(state, controller_mock, bundle_db_path=tmp_path / "bundles.sqlite3")
 
 
 @pytest.fixture
@@ -136,10 +136,10 @@ def client(service):
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler):
+def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
+    return ControllerServiceImpl(state, controller_mock, bundle_db_path=tmp_path / "bundles.sqlite3")
 
 
 def rpc_post(client: TestClient, method: str, body: dict | None = None):

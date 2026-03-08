@@ -12,7 +12,7 @@ from connectrpc.request import RequestContext
 
 from iris.cluster.types import Entrypoint, JobName
 from iris.time_utils import Duration
-from iris.cluster.bundle import LocalBundleStore
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
@@ -29,13 +29,10 @@ from tests.test_utils import wait_for_condition
 
 @pytest.fixture
 def mock_bundle_store(tmp_path):
-    """Create mock LocalBundleStore with a real temp directory."""
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    (bundle_dir / "test_file.py").write_text("print('hello')")
-
-    cache = Mock(spec=LocalBundleStore)
-    cache.get_bundle = Mock(return_value=bundle_dir)
+    """Create mock BundleStore with a real temp directory."""
+    cache = Mock(spec=BundleStore)
+    cache.extract_bundle_to = Mock()
+    cache.write_workdir_files = Mock()
     cache.prefetch_bundle = Mock()
     return cache
 

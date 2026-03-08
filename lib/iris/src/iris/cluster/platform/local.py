@@ -40,6 +40,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
@@ -57,31 +58,6 @@ from iris.rpc import config_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# Local Providers (in-process implementations for testing)
-# ============================================================================
-
-
-class _LocalBundleStore:
-    def __init__(self, bundle_path: Path):
-        self._bundle_path = bundle_path
-
-    def write_zip(self, blob: bytes) -> str:
-        del blob
-        raise NotImplementedError("_LocalBundleStore.write_zip is not used in local platform tests")
-
-    def get_zip(self, bundle_id: str) -> bytes:
-        del bundle_id
-        raise NotImplementedError("_LocalBundleStore.get_zip is not used in local platform tests")
-
-    def get_bundle(self, bundle_id: str) -> Path:
-        del bundle_id
-        return self._bundle_path
-
-    def prefetch_bundle(self, bundle_id: str) -> None:
-        del bundle_id
 
 
 # ============================================================================
@@ -447,9 +423,12 @@ class LocalPlatform:
                 logger.debug("Unknown accelerator variant %r; TPU topology not available", config.accelerator_variant)
 
         for tpu_worker_id in range(worker_count):
-            bundle_store = _LocalBundleStore(self._fake_bundle)
-            container_runtime = ProcessRuntime()
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
+            bundle_store = BundleStore(
+                db_path=self._cache_path / f"bundles-{worker_id}.sqlite3",
+                controller_address=self._controller_address,
+            )
+            container_runtime = ProcessRuntime()
             worker_port = find_free_port()
 
             # Collect extra worker attributes from scale group config
