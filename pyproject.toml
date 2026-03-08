@@ -17,6 +17,7 @@ dependencies = [
     "marin",
     "zephyr",
     # top level deps. try to keep these small.
+    "pillow>=11.0.0",
     "watchdog",
 ]
 
