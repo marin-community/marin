@@ -98,15 +98,15 @@ to setup the required keys for accessing the Marin Ray clusters.
    ```bash
    ray dashboard infra/marin-$REGION.yaml
    ```
-2. We have made a thin wrapper on top of `ray submit` called [ray-run](https://github.com/marin-community/tree/main/marin/run/ray_run.py) which can be used to easily specify the additional pip requirements and environment variables (Apart from those specified in the Dockerfile or cluster config). Ray run ensures following stuff:
+2. We have made a thin wrapper on top of `ray submit` called [ray-run](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/run/ray_run.py) which can be used to easily specify additional dependency extras/packages and environment variables (apart from those specified in the Dockerfile or cluster config). Ray run ensures the following:
    - All the dependencies in pyproject.toml are installed
-   - Some of the necessary environment variables are set from file [vars.py](https://github.com/marin-community/tree/main/marin/run/vars.py)
+   - Some necessary environment defaults are set directly in `ray_run.py`
    - `src` directories of submodules are added to `PYTHONPATH`.
 
 
-You can use `--env_vars` and `--pip_deps` to specify additional environment variables and pip dependencies. For example, to run a job with additional pip dependencies `jax==0.4.35 and async-lru, along with the environment variable WANDB_API_KEY, you can use:
+You can use `--env_vars` and `--extra` to specify additional environment variables and dependency extras/packages. For example, to run a job with an additional package (`async-lru`) and the environment variable `WANDB_API_KEY`, you can use:
 ```bash
-python marin/run/ray_run.py --env_vars WANDB_API_KEY ${WANDB_API_KEY}  --pip_deps jax==0.4.35,async-lru --  python experiments/tutorials/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py --env_vars WANDB_API_KEY ${WANDB_API_KEY} --extra async-lru -- python experiments/tutorials/hello_world.py
 ```
 
 ## Managing the Cluster

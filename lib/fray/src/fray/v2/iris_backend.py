@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Iris backend for fray v2.
@@ -24,7 +24,13 @@ from iris.client.client import Job as IrisJob
 from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import Constraint, EnvironmentSpec, ResourceSpec
+from iris.cluster.constraints import (
+    Constraint,
+    device_variant_constraint,
+    preemptible_constraint,
+    region_constraint,
+)
+from iris.cluster.types import EnvironmentSpec, ResourceSpec
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
@@ -95,13 +101,15 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray v2 ResourceConfig."""
-    from iris.cluster.types import preemptible_constraint, region_constraint
-
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
     if resources.regions:
         constraints.append(region_constraint(resources.regions))
+    if resources.device_alternatives:
+        if isinstance(resources.device, (TpuConfig, GpuConfig)):
+            all_variants = [resources.device.variant, *resources.device_alternatives]
+            constraints.append(device_variant_constraint(all_variants))
     return constraints
 
 
@@ -118,16 +126,20 @@ def convert_entrypoint(entrypoint: Entrypoint_v2) -> IrisEntrypoint:
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
 
 
-def convert_environment(env: EnvironmentConfig | None) -> EnvironmentSpec | None:
+def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | None = None) -> EnvironmentSpec | None:
     """Convert fray v2 EnvironmentConfig to Iris EnvironmentSpec."""
-    if env is None:
+    env_vars = dict(env.env_vars) if env is not None else {}
+    if device is not None:
+        for key, value in device.default_env_vars().items():
+            env_vars.setdefault(key, value)
+    if env is None and not env_vars:
         return None
     from iris.cluster.types import EnvironmentSpec
 
     return EnvironmentSpec(
-        pip_packages=list(env.pip_packages),
-        env_vars=dict(env.env_vars),
-        extras=list(env.extras),
+        pip_packages=list(env.pip_packages) if env is not None else [],
+        env_vars=env_vars,
+        extras=list(env.extras) if env is not None else [],
     )
 
 
@@ -430,7 +442,7 @@ class FrayIrisClient:
 
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
-        iris_environment = convert_environment(request.environment)
+        iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
         # Auto-enable coscheduling for multi-host TPU jobs.
@@ -450,6 +462,8 @@ class FrayIrisClient:
                 constraints=iris_constraints if iris_constraints else None,
                 coscheduling=coscheduling,
                 replicas=replicas,
+                max_retries_failure=request.max_retries_failure,
+                max_retries_preemption=request.max_retries_preemption,
             )
         except IrisJobAlreadyExists as e:
             if adopt_existing:
@@ -499,6 +513,11 @@ class FrayIrisClient:
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
         entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+
+        retry_kwargs: dict[str, Any] = {}
+        if actor_config.max_task_retries is not None:
+            retry_kwargs["max_retries_failure"] = actor_config.max_task_retries
+
         job = self._iris.submit(
             entrypoint=entrypoint,
             name=name,
@@ -507,6 +526,7 @@ class FrayIrisClient:
             constraints=iris_constraints if iris_constraints else None,
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
+            **retry_kwargs,
         )
 
         return IrisActorGroup(

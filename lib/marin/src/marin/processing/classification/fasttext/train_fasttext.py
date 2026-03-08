@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import draccus
-import fsspec
 from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from iris.marin_fs import open_url
 from marin.processing.classification.dataset_utils import (
     Attribute,
     DatasetConfig,
@@ -120,12 +120,12 @@ def create_dataset_shard(
     from contextlib import ExitStack
 
     with ExitStack() as stack:
-        doc_fs = fsspec.open(input_file_path, "r", compression="infer")
+        doc_fs = open_url(input_file_path, "r", compression="infer")
         doc_file = stack.enter_context(doc_fs)
 
         attr_files = []
         for attr_file_path in attr_file_paths:
-            attr_fs = fsspec.open(attr_file_path, "r", compression="infer")
+            attr_fs = open_url(attr_file_path, "r", compression="infer")
             attr_file = stack.enter_context(attr_fs)
             attr_files.append(attr_file)
 
@@ -168,7 +168,7 @@ def merge_dataset_shards(shard_paths: list[str], output_path: str) -> None:
 
     with open(output_path, "w") as output_file:
         for shard_path in shard_paths:
-            with fsspec.open(shard_path, "r", compression="infer") as shard_file:
+            with open_url(shard_path, "r", compression="infer") as shard_file:
                 for line in shard_file:
                     output_file.write(line)
 
@@ -283,8 +283,6 @@ def train_model(
     Returns:
         None: No return value.
     """
-    logger = logging.getLogger("ray")
-
     logger.info(f"Training fastText model for experiment {output_path}")
     datetime_start = datetime.utcnow()
 

@@ -74,10 +74,11 @@ trainer:
   num_train_steps: 10000
   per_device_eval_parallelism: 2
   per_device_parallelism: 2
-  profiler: false
-  profiler_num_steps: 100
-  profiler_perfetto_link: false
-  profiler_start_step: 5
+  profiler:
+    enabled: false
+    num_steps: 100
+    perfetto_link: false
+    start_step: 5
   ray:
     address: null
     auto_start_cluster: false

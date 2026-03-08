@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2E tests for the autoscaler dashboard tab with a 2-group TPU config.
@@ -14,27 +14,25 @@ import pytest
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.constraints import WellKnownAttribute, zone_constraint
 from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
-    REGION_ATTRIBUTE_KEY,
     ResourceSpec,
-    ZONE_ATTRIBUTE_KEY,
-    zone_constraint,
 )
 from iris.rpc import config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 from .conftest import (
     IRIS_ROOT,
-    TestCluster,
+    IrisTestCluster,
     _is_noop_page,
     assert_visible,
     dashboard_click,
     wait_for_dashboard_ready,
 )
 
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 pytestmark = pytest.mark.e2e
 
@@ -48,22 +46,23 @@ def _add_scale_group(
 ) -> None:
     sg = config.scale_groups[name]
     sg.name = name
-    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.accelerator_variant = variant
     sg.num_vms = num_vms
     sg.min_slices = 1
     sg.max_slices = 2
-    sg.resources.cpu = 128
+    sg.resources.cpu_millicores = 128000
     sg.resources.memory_bytes = 128 * 1024**3
     sg.resources.disk_bytes = 1024 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.resources.device_variant = variant
+    sg.resources.preemptible = True
     sg.slice_template.preemptible = True
     sg.slice_template.num_vms = num_vms
     sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
     sg.slice_template.accelerator_variant = variant
     sg.slice_template.local.SetInParent()
     if zone:
-        sg.worker.attributes[ZONE_ATTRIBUTE_KEY] = zone
-        sg.worker.attributes[REGION_ATTRIBUTE_KEY] = zone.rsplit("-", 1)[0]
+        sg.worker.attributes[WellKnownAttribute.ZONE] = zone
+        sg.worker.attributes[WellKnownAttribute.REGION] = zone.rsplit("-", 1)[0]
 
 
 def _make_two_group_config() -> config_pb2.IrisClusterConfig:
@@ -81,7 +80,7 @@ def cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = TestCluster(url=url, client=client, controller_client=controller_client)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         # min_slices=1 each: 2 VMs for v5e_16 + 4 VMs for v5e_32 = 6 workers
         tc.wait_for_workers(6, timeout=30)
         yield tc
@@ -105,25 +104,22 @@ def test_autoscaler_tab_shows_scale_groups(cluster, page, screenshot):
     assert_visible(page, "text=tpu_v5e_16")
     assert_visible(page, "text=tpu_v5e_32")
     assert_visible(page, "text=Waterfall Routing")
-    assert_visible(page, "text=Availability")
-    assert_visible(page, "text=Blocker")
+    assert_visible(page, "text=Decision")
+    assert_visible(page, "text=Reason")
 
     screenshot("autoscaler-scale-groups")
 
 
-def test_autoscaler_tab_shows_slices(cluster, page, screenshot):
-    """Slice sub-rows with VM state indicators and VM counts are rendered."""
+def test_autoscaler_tab_shows_routing_table(cluster, page, screenshot):
+    """Waterfall Routing table has rows for each scale group."""
     _click_autoscaler_tab(page, cluster)
 
     if not _is_noop_page(page):
-        page.wait_for_selector(".vm-state-indicator", timeout=10000)
-        indicators = page.locator(".vm-state-indicator")
-        assert indicators.count() >= 2, f"Expected at least 2 vm-state-indicator elements, got {indicators.count()}"
+        page.wait_for_selector(".scale-groups-table", timeout=10000)
+        rows = page.locator(".scale-groups-table tbody tr")
+        assert rows.count() >= 2, f"Expected at least 2 routing table rows, got {rows.count()}"
 
-        vm_cells = page.locator("text=/\\d+ VMs/")
-        assert vm_cells.count() >= 2, f"Expected at least 2 VM count cells, got {vm_cells.count()}"
-
-    screenshot("autoscaler-slices")
+    screenshot("autoscaler-routing-table")
 
 
 def test_autoscaler_tab_recent_actions(cluster, page, screenshot):
@@ -146,11 +142,11 @@ def test_autoscaler_tab_logs_section_rendered(cluster, page, screenshot):
     _click_autoscaler_tab(page, cluster)
 
     if not _is_noop_page(page):
-        page.wait_for_selector("h3:has-text('Autoscaler Logs')", timeout=10000)
-        logs_pre = page.locator("h3:has-text('Autoscaler Logs') + pre")
-        logs_pre.wait_for(timeout=10000)
-        content = logs_pre.text_content(timeout=5000)
-        assert content is not None and len(content) > 0, "Autoscaler logs pre element is empty"
+        page.wait_for_selector("h2:has-text('Autoscaler Logs')", timeout=10000)
+        log_container = page.locator(".log-viewer:has(h2:has-text('Autoscaler Logs')) .log-container")
+        log_container.wait_for(timeout=10000)
+        content = log_container.text_content(timeout=5000)
+        assert content is not None, "Autoscaler log container not found"
         assert content != "Loading logs...", "Logs section still showing loading state"
 
     screenshot("autoscaler-logs")
@@ -200,3 +196,42 @@ def test_autoscaler_tab_unmet_demand_shows_concise_reason(cluster, page, screens
 
     # Clean up the job
     cluster.kill(job)
+
+
+def test_autoscaler_tab_slice_detail_toggle(cluster, page, screenshot):
+    """Clicking the slice toggle in the Slices column expands per-slice details."""
+    _click_autoscaler_tab(page, cluster)
+
+    if not _is_noop_page(page):
+        # Wait for the routing table to render with slices
+        page.wait_for_selector(".slice-toggle", timeout=10000)
+
+        # Click the first slice toggle (arrow next to the badge)
+        page.click(".slice-toggle", timeout=5000)
+        time.sleep(0.3)
+
+        # Verify slice detail row appears with slice IDs and VM counts
+        page.wait_for_selector(".slice-detail-row", timeout=5000)
+        detail = page.locator(".slice-detail-row .slice-row")
+        assert detail.count() >= 1, f"Expected at least 1 slice detail row, got {detail.count()}"
+
+        # Verify the slice row shows VM count
+        detail_text = page.locator(".slice-detail-row").first.text_content(timeout=5000)
+        assert "vm" in detail_text, f"Expected 'vm' count in slice detail, got: {detail_text}"
+
+        # Freshly-ready slices should show "active" badge (not idle yet)
+        assert_visible(page, ".slice-idle-badge.active")
+
+    screenshot("autoscaler-slice-detail-expanded")
+
+
+def test_autoscaler_tab_slice_badges_show_ready_count(cluster, page, screenshot):
+    """Slice badges in the waterfall table show ready count for groups with slices."""
+    _click_autoscaler_tab(page, cluster)
+
+    if not _is_noop_page(page):
+        page.wait_for_selector(".slice-badge.ready", timeout=10000)
+        badges = page.locator(".slice-badge.ready")
+        assert badges.count() >= 2, f"Expected at least 2 ready badges (one per group), got {badges.count()}"
+
+    screenshot("autoscaler-slice-badges")

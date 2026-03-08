@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,8 +45,9 @@ from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from urllib.parse import urlparse
 
+from google.protobuf.json_format import MessageToDict
+
 from iris.cluster.config import config_to_dict
-from iris.cluster.controller.scaling_group import prepare_slice_config
 from iris.cluster.k8s.kubectl import Kubectl
 from iris.cluster.platform.base import (
     CloudSliceState,
@@ -59,9 +60,10 @@ from iris.cluster.platform.base import (
     StandaloneWorkerHandle,
     WorkerStatus,
     find_free_port,
+    generate_slice_suffix,
 )
 from iris.rpc import config_pb2
-from iris.time_utils import Deadline, Duration, Timestamp
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,8 @@ _DEPLOYMENT_READY_TIMEOUT = 2400.0
 _KUBECTL_TIMEOUT = 1800.0
 
 _S3_SECRET_NAME = "iris-s3-credentials"
+_CONTROLLER_CPU_REQUEST = "2"
+_CONTROLLER_MEMORY_REQUEST = "4Gi"
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
 # bucket name is a subdomain (https://<bucket>.cwobject.com). Path-style
@@ -95,6 +99,10 @@ def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
 
 def _worker_pod_name(slice_id: str) -> str:
     return f"iris-worker-{slice_id}"
+
+
+def _worker_config_cm_name(slice_id: str) -> str:
+    return f"iris-worker-{slice_id}-wc"
 
 
 def _classify_kubectl_error(stderr: str) -> PlatformError:
@@ -280,10 +288,12 @@ class CoreweaveSliceHandle:
             )
 
     def terminate(self) -> None:
-        """Delete the worker Pod."""
+        """Delete the worker Pod and its per-worker ConfigMap."""
         pod_name = _worker_pod_name(self._slice_id)
+        cm_name = _worker_config_cm_name(self._slice_id)
         logger.info("Deleting worker Pod: %s", pod_name)
         self._kubectl.delete("pod", pod_name, force=True)
+        self._kubectl.delete("configmap", cm_name)
         with self._lock:
             self._state = CloudSliceState.DELETING
 
@@ -328,7 +338,8 @@ class CoreweavePlatform:
         self._iris_labels = Labels(label_prefix)
         self._kubectl = Kubectl(
             namespace=self._namespace,
-            kubeconfig_path=config.kubeconfig_path or None,
+            # Let kubectl handle KUBECONFIG natively; only pass --kubeconfig when no env override is present.
+            kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),
             timeout=_KUBECTL_TIMEOUT,
         )
         self._poll_interval = poll_interval
@@ -378,7 +389,12 @@ class CoreweavePlatform:
                 {
                     "apiGroups": [""],
                     "resources": ["configmaps"],
-                    "verbs": ["get"],
+                    "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
+                },
+                {
+                    "apiGroups": ["metrics.k8s.io"],
+                    "resources": ["pods"],
+                    "verbs": ["get", "list"],
                 },
             ],
         }
@@ -406,7 +422,7 @@ class CoreweavePlatform:
 
     def _uses_s3_storage(self, config: config_pb2.IrisClusterConfig) -> bool:
         """Check if any storage URI uses S3."""
-        return config.storage.bundle_prefix.startswith("s3://") or config.storage.log_prefix.startswith("s3://")
+        return config.storage.bundle_prefix.startswith("s3://")
 
     # -- S3 Credentials -------------------------------------------------------
 
@@ -584,13 +600,16 @@ class CoreweavePlatform:
 
     # -- Platform Protocol Methods --------------------------------------------
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig) -> StandaloneWorkerHandle:
         raise NotImplementedError("CoreWeave does not use standalone VMs. Controller is an operator-managed Deployment.")
 
     def create_slice(
         self,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ) -> CoreweaveSliceHandle:
         """Create a worker Pod on a shared NodePool and return a handle in CREATING state.
 
@@ -602,16 +621,16 @@ class CoreweavePlatform:
                 f"CoreWeave platform does not support multi-node slices (num_vms={config.num_vms}). "
                 "Only num_vms=1 is supported."
             )
-        if not bootstrap_config:
+        if not worker_config:
             raise ValueError(
-                "bootstrap_config is required for CoreWeave slices (need docker_image for worker Pod creation)"
+                "worker_config is required for CoreWeave slices (need docker_image for worker Pod creation)"
             )
 
         # prepare_slice_config() sets name_prefix to "{label_prefix}-{sg_name}" but
         # the scale-group label to just sg_name. The nodeSelector must match the
         # NodePool's nodeLabels, which use the bare scale-group name.
         scale_group_name = config.name_prefix
-        slice_id = f"{self._label_prefix}-{scale_group_name}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{self._label_prefix}-{scale_group_name}-{generate_slice_suffix()}"
         labels = self._resource_labels(scale_group_name, slice_id)
 
         if config.labels:
@@ -629,19 +648,19 @@ class CoreweavePlatform:
             kubectl=self._kubectl,
         )
 
-        self._executor.submit(self._monitor_slice, handle, config, bootstrap_config)
+        self._executor.submit(self._monitor_slice, handle, config, worker_config)
         return handle
 
     def _monitor_slice(
         self,
         handle: CoreweaveSliceHandle,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig,
+        worker_config: config_pb2.WorkerConfig,
     ) -> None:
         """Background thread: create Pod, wait for Pod ready."""
         try:
             handle._set_state(CloudSliceState.BOOTSTRAPPING)
-            self._create_worker_pod(handle, config, bootstrap_config)
+            self._create_worker_pod(handle, config, worker_config)
             self._wait_for_pod_ready(handle)
 
             pod_name = _worker_pod_name(handle.slice_id)
@@ -662,7 +681,9 @@ class CoreweavePlatform:
             logger.error("Slice %s monitoring failed: %s", handle.slice_id, e)
             try:
                 pod_name = _worker_pod_name(handle.slice_id)
+                cm_name = _worker_config_cm_name(handle.slice_id)
                 self._kubectl.delete("pod", pod_name, force=True)
+                self._kubectl.delete("configmap", cm_name)
             except Exception as cleanup_err:
                 logger.warning(
                     "Cleanup after failure also failed for slice %s: %s",
@@ -675,7 +696,7 @@ class CoreweavePlatform:
         self,
         handle: CoreweaveSliceHandle,
         config: config_pb2.SliceConfig,
-        bootstrap_config: config_pb2.BootstrapConfig,
+        worker_config: config_pb2.WorkerConfig,
     ) -> None:
         """Create the worker Pod on the NodePool's node."""
         cw = config.coreweave
@@ -683,33 +704,32 @@ class CoreweavePlatform:
         labels = dict(handle.labels)
 
         env_vars = [
-            {"name": "IRIS_VM_ADDRESS", "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}},
             {"name": "IRIS_WORKER_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
             {"name": "IRIS_POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
             {"name": "IRIS_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
             {"name": "IRIS_POD_UID", "valueFrom": {"fieldRef": {"fieldPath": "metadata.uid"}}},
         ]
-        if bootstrap_config.env_vars:
-            for k, v in bootstrap_config.env_vars.items():
+        if worker_config.default_task_env:
+            for k, v in worker_config.default_task_env.items():
                 env_vars.append({"name": k, "value": v})
         if self._s3_enabled:
             env_vars.extend(self._s3_env_vars())
 
-        worker_port = bootstrap_config.worker_port
+        worker_port = worker_config.port
         if worker_port <= 0:
-            raise PlatformError(f"Invalid bootstrap worker_port={worker_port}; must be > 0")
+            raise PlatformError(f"Invalid worker_config.port={worker_port}; must be > 0")
 
-        cache_dir = bootstrap_config.cache_dir
+        cache_dir = worker_config.cache_dir
         if not cache_dir:
-            raise PlatformError("bootstrap_config.cache_dir must be non-empty")
+            raise PlatformError("worker_config.cache_dir must be non-empty")
 
-        runtime = bootstrap_config.runtime
+        runtime = worker_config.runtime
         if not runtime:
-            raise PlatformError("bootstrap_config.runtime must be set (docker/kubernetes)")
+            raise PlatformError("worker_config.runtime must be set (docker/kubernetes)")
 
-        worker_image = bootstrap_config.docker_image.strip()
+        worker_image = worker_config.docker_image.strip()
         if not worker_image:
-            raise PlatformError("bootstrap_config.docker_image must be non-empty")
+            raise PlatformError("worker_config.docker_image must be non-empty")
 
         # When using the kubernetes runtime, task containers are separate Pods
         # that claim GPU/RDMA resources directly from the device plugin. Pass
@@ -720,6 +740,25 @@ class CoreweavePlatform:
             if self._s3_enabled:
                 env_vars.append({"name": "IRIS_S3_SECRET_NAME", "value": _S3_SECRET_NAME})
 
+        # Serialize WorkerConfig proto as JSON and store in a per-worker ConfigMap
+        # so the worker process can load it via --worker-config.
+        wc_cm_name = _worker_config_cm_name(handle.slice_id)
+        worker_config_json = json.dumps(
+            MessageToDict(worker_config, preserving_proto_field_name=True),
+            indent=2,
+        )
+        wc_cm_manifest = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": wc_cm_name,
+                "namespace": self._namespace,
+                "labels": dict(handle.labels),
+            },
+            "data": {"worker_config.json": worker_config_json},
+        }
+        self._kubectl.apply_json(wc_cm_manifest)
+
         container_spec: dict = {
             "name": "iris-worker",
             "image": worker_image,
@@ -729,16 +768,18 @@ class CoreweavePlatform:
                 "-m",
                 "iris.cluster.worker.main",
                 "serve",
-                "--host=0.0.0.0",
-                f"--port={worker_port}",
-                f"--cache-dir={cache_dir}",
-                "--config=/etc/iris/config.json",
-                f"--runtime={runtime}",
+                "--worker-config",
+                "/etc/iris/worker_config.json",
             ],
             "ports": [{"containerPort": worker_port}],
             "env": env_vars,
             "volumeMounts": [
-                {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
+                {
+                    "name": "worker-config",
+                    "mountPath": "/etc/iris/worker_config.json",
+                    "subPath": "worker_config.json",
+                    "readOnly": True,
+                },
                 {"name": "cache", "mountPath": cache_dir},
             ],
             "readinessProbe": {
@@ -794,7 +835,7 @@ class CoreweavePlatform:
                 },
                 "containers": [container_spec],
                 "volumes": [
-                    {"name": "config", "configMap": {"name": "iris-cluster-config"}},
+                    {"name": "worker-config", "configMap": {"name": wc_cm_name}},
                     {"name": "cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}},
                 ],
                 "restartPolicy": "Always",
@@ -1059,7 +1100,16 @@ class CoreweavePlatform:
         # Wait for Deployment to be available (returns immediately if already up)
         self._wait_for_deployment_ready()
 
+        # Wait for the rollout to fully complete (all old pods terminated).
+        # Without this, a port-forward through the Service can land on a
+        # dying pod from the previous ReplicaSet and get connection-refused.
+        self._kubectl.rollout_status("deployment", "iris-controller", namespaced=True)
+
         return self.discover_controller(config.controller)
+
+    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+        """Restart controller by re-applying manifests and rolling restart."""
+        return self.start_controller(config)
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller by deleting its K8s resources."""
@@ -1097,88 +1147,12 @@ class CoreweavePlatform:
             name = pod.get("metadata", {}).get("name", "")
             if name:
                 self._kubectl.delete("pod", name, force=True)
+                # Clean up per-worker ConfigMap (name derived from pod name convention)
+                cm_name = name + "-wc"
+                self._kubectl.delete("configmap", cm_name)
 
         self.stop_controller(config)
         return target_names
-
-    def reload(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Reload workers and controller with updated images/config.
-
-        Workers are reloaded first (in parallel) to minimize downtime.
-        Then the controller Deployment image is updated and rolled out.
-        """
-        # Phase 1: Update ConfigMap
-        config_json = self._config_json_for_configmap(config)
-        configmap_manifest = {
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {"name": "iris-cluster-config", "namespace": self._namespace},
-            "data": {"config.json": config_json},
-        }
-        self._kubectl.apply_json(configmap_manifest)
-        logger.info("ConfigMap iris-cluster-config updated for reload")
-
-        # Phase 2: Reload worker Pods in parallel
-        self._reload_worker_pods(config)
-
-        # Phase 3: Rolling update controller Deployment
-        controller_image = config.controller.image
-        if controller_image:
-            self._kubectl.set_image(
-                "deployment",
-                "iris-controller",
-                "iris-controller",
-                controller_image,
-                namespaced=True,
-            )
-            self._kubectl.rollout_status(
-                "deployment",
-                "iris-controller",
-                timeout=_DEPLOYMENT_READY_TIMEOUT,
-                namespaced=True,
-            )
-            logger.info("Controller Deployment updated to image %s", controller_image)
-
-        return self.discover_controller(config.controller)
-
-    def _reload_worker_pods(self, config: config_pb2.IrisClusterConfig) -> None:
-        """Delete and recreate all managed worker Pods in parallel with updated images."""
-        bootstrap_config = config.defaults.bootstrap
-        slices = self.list_all_slices()
-        if not slices:
-            logger.info("No worker slices to reload")
-            return
-
-        def _reload_one(slice_handle: CoreweaveSliceHandle) -> None:
-            pod_name = _worker_pod_name(slice_handle.slice_id)
-            logger.info("Reloading worker Pod %s", pod_name)
-            self._kubectl.delete("pod", pod_name, force=True)
-
-            sg_name = slice_handle.scale_group
-            sg_config = config.scale_groups.get(sg_name)
-            if sg_config is None:
-                logger.warning(
-                    "Scale group %s not in config, skipping Pod recreation for slice %s",
-                    sg_name,
-                    slice_handle.slice_id,
-                )
-                return
-
-            slice_config = prepare_slice_config(sg_config.slice_template, sg_config, self._label_prefix)
-            self._create_worker_pod(slice_handle, slice_config, bootstrap_config)
-            self._wait_for_pod_ready(slice_handle)
-            logger.info("Worker Pod %s reloaded", pod_name)
-
-        futures = [self._executor.submit(_reload_one, s) for s in slices]
-        errors: list[Exception] = []
-        for future in futures:
-            try:
-                future.result(timeout=_POD_READY_TIMEOUT + 60)
-            except Exception as e:
-                errors.append(e)
-
-        if errors:
-            raise PlatformError(f"Failed to reload {len(errors)}/{len(slices)} worker Pods: {errors[0]}")
 
     def _wait_for_deployment_ready(self) -> None:
         """Poll controller Deployment until availableReplicas >= 1.
@@ -1190,6 +1164,7 @@ class CoreweavePlatform:
         deadline = Deadline.from_seconds(_DEPLOYMENT_READY_TIMEOUT)
         last_status_log = 0.0
         status_log_interval = 30.0  # log progress every 30s
+        prev_pod_state: tuple[str, str] | None = None  # (phase, node)
 
         while not self._shutdown_event.is_set():
             if deadline.expired():
@@ -1214,7 +1189,18 @@ class CoreweavePlatform:
                     )
 
                 # Check Pods owned by this Deployment for fatal errors
-                self._check_controller_pods_health()
+                pods = self._check_controller_pods_health()
+
+                # Log pod phase/node on transitions only — distinguishes
+                # node-provisioning vs image-pull vs readiness-probe time.
+                if pods:
+                    pod = pods[0]
+                    phase = pod.get("status", {}).get("phase", "Unknown")
+                    node = pod.get("spec", {}).get("nodeName") or "<none>"
+                    pod_state = (phase, node)
+                    if pod_state != prev_pod_state:
+                        logger.info("Controller pod: phase=%s node=%s", phase, node)
+                        prev_pod_state = pod_state
 
             self._shutdown_event.wait(self._poll_interval)
         raise PlatformError("Platform shutting down while waiting for controller Deployment")
@@ -1229,7 +1215,37 @@ class CoreweavePlatform:
     # a couple of attempts in case the first crash was transient.
     _CRASH_LOOP_MIN_RESTARTS = 2
 
-    def _check_controller_pods_health(self) -> None:
+    def debug_report(self) -> None:
+        """Log controller pod termination reason and previous container logs."""
+        pods = self._kubectl.list_json("pods", labels={"app": "iris-controller"})
+        if not pods:
+            logger.warning("Post-mortem: no controller pods found")
+            return
+
+        for pod in pods:
+            name = pod.get("metadata", {}).get("name", "unknown")
+            phase = pod.get("status", {}).get("phase", "Unknown")
+
+            for cs in pod.get("status", {}).get("containerStatuses", []):
+                restarts = cs.get("restartCount", 0)
+                terminated = cs.get("lastState", {}).get("terminated", {})
+                if terminated:
+                    logger.warning(
+                        "Post-mortem %s: phase=%s reason=%s exitCode=%s restarts=%d",
+                        name,
+                        phase,
+                        terminated.get("reason"),
+                        terminated.get("exitCode"),
+                        restarts,
+                    )
+                else:
+                    logger.warning("Post-mortem %s: phase=%s restarts=%d", name, phase, restarts)
+
+            prev_logs = self._kubectl.logs(name, tail=50, previous=True)
+            if prev_logs:
+                logger.warning("Post-mortem %s previous logs:\n%s", name, prev_logs)
+
+    def _check_controller_pods_health(self) -> list[dict]:
         """Check controller Pods for fatal conditions and fail fast.
 
         Detects three categories of unrecoverable failure:
@@ -1273,6 +1289,7 @@ class CoreweavePlatform:
                         logger.info("Controller Pod %s not ready: %s: %s", pod_name, cond_reason, cond_message)
 
         self._check_controller_pod_events()
+        return pods
 
     # Known-fatal event reasons that will never self-resolve
     _FATAL_EVENT_REASONS = frozenset(
@@ -1350,6 +1367,12 @@ def _build_controller_deployment(
     s3_env_vars: list[dict],
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
+    # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod
+    # as BestEffort. Matching limits keep the controller in Guaranteed QoS.
+    controller_resources = {
+        "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
+        "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
+    }
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -1366,6 +1389,13 @@ def _build_controller_deployment(
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "nodeSelector": node_selector,
+                    "tolerations": [
+                        {
+                            "key": "qos.coreweave.cloud/interruptable",
+                            "operator": "Exists",
+                            "effect": "NoExecute",
+                        },
+                    ],
                     "containers": [
                         {
                             "name": "iris-controller",
@@ -1383,6 +1413,7 @@ def _build_controller_deployment(
                             ],
                             "ports": [{"containerPort": port}],
                             "env": s3_env_vars,
+                            "resources": controller_resources,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
                             ],
@@ -1418,35 +1449,64 @@ def _coreweave_tunnel(
     service_name: str,
     remote_port: int,
     local_port: int | None = None,
-    timeout: float = 30.0,
+    timeout: float = 90.0,
 ) -> Iterator[str]:
-    """kubectl port-forward to a K8s Service, yielding the local URL."""
+    """kubectl port-forward to a K8s Service, yielding the local URL.
+
+    Uses a single deadline with exponential backoff to handle freshly
+    provisioned nodes whose konnectivity agent may not be ready when
+    the pod first passes its readiness probe.  If the kubectl process
+    exits (e.g. konnectivity timeout), it is relaunched automatically.
+    """
     if local_port is None:
-        local_port = find_free_port(start=10000)
+        local_port = find_free_port()
 
-    proc = kubectl.popen(
-        ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
-        namespaced=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
+    deadline = Deadline.from_seconds(timeout)
+    backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+    proc: subprocess.Popen | None = None
 
-    try:
-        deadline = Deadline.from_seconds(timeout)
-        while not deadline.expired():
-            try:
-                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
-                    break
-            except OSError:
-                time.sleep(0.5)
-        else:
+    while not deadline.expired():
+        # (Re-)launch kubectl port-forward when needed.
+        if proc is None:
+            proc = kubectl.popen(
+                ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
+                namespaced=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+
+        # Process died — log, back off, and relaunch on next iteration.
+        if proc.poll() is not None:
             stderr = proc.stderr.read() if proc.stderr else ""
+            logger.warning("Port-forward exited (retrying): %s", stderr.strip())
+            proc = None
+            time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
+            continue
+
+        # Try to connect to the forwarded port.
+        try:
+            with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                break
+        except OSError:
+            time.sleep(0.5)
+    else:
+        if proc is not None:
             proc.terminate()
             proc.wait()
-            raise RuntimeError(f"kubectl port-forward failed to establish: {stderr}")
+        # Capture konnectivity-agent state — it lives in kube-system and is
+        # invisible to normal pod-scoped queries. Without this, diagnosing
+        # the tunnel race requires manual kubectl before events TTL (~1h).
+        try:
+            result = kubectl.run(["get", "pods", "-n", "kube-system", "-o", "wide"], timeout=10)
+            if result.returncode == 0:
+                logger.warning("kube-system pods at tunnel failure:\n%s", result.stdout.strip())
+        except subprocess.TimeoutExpired:
+            pass
+        raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
+    try:
         logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
         yield f"http://127.0.0.1:{local_port}"
     finally:

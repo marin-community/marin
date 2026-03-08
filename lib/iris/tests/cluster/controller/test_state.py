@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for controller state management.
@@ -13,6 +13,7 @@ They focus on:
 import threading
 
 import pytest
+from iris.cluster.controller.autoscaler import DemandEntry
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.events import (
     JobCancelledEvent,
@@ -29,7 +30,9 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
 )
-from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, REGION_ATTRIBUTE_KEY, DeviceType, JobName, WorkerId
+from iris.cluster.constraints import WellKnownAttribute, constraints_from_resources
+from iris.cluster.constraints import DeviceType
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -114,11 +117,11 @@ def job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
     def _make(name: str = "test-job") -> cluster_pb2.Controller.LaunchJobRequest:
-        job_name = JobName.root(name)
+        job_name = JobName.root("test-user", name)
         return cluster_pb2.Controller.LaunchJobRequest(
             name=job_name.to_wire(),
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
             replicas=1,
         )
@@ -175,9 +178,27 @@ def submit_job(
     request: cluster_pb2.Controller.LaunchJobRequest,
     timestamp_ms: int | None = None,
 ) -> list[ControllerTask]:
-    """Submit a job via event and return tasks."""
-    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root(job_id)
+    """Submit a job via event and return tasks.
+
+    Auto-injects resource-derived constraints (device-type, device-variant)
+    to mirror service-layer behavior. All jobs in production go through
+    service.launch_job() which does this injection.
+    """
+    jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
+
+    auto_constraints = constraints_from_resources(request.resources)
+    for ac in auto_constraints:
+        already = any(c.key == ac.key for c in request.constraints)
+        if not already:
+            request.constraints.append(
+                cluster_pb2.Constraint(
+                    key=ac.key,
+                    op=cluster_pb2.CONSTRAINT_OP_EQ,
+                    value=cluster_pb2.AttributeValue(string_value=ac.value),
+                )
+            )
+
     state.handle_event(
         JobSubmittedEvent(
             job_id=jid,
@@ -206,7 +227,7 @@ def test_job_lifecycle_success(job_request, worker_metadata):
     req.replicas = 2
     tasks = submit_job(state, "j1", req)
 
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     assert job is not None
     assert len(tasks) == 2
@@ -235,7 +256,7 @@ def test_job_lifecycle_failure_exhausted_retries(job_request, worker_metadata):
     req = job_request("job1")
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     # Dispatch and fail (default max_retries_failure=0)
     dispatch_task(state, task, worker_id)
@@ -259,7 +280,7 @@ def test_task_failure_with_retry_requeues(job_request, worker_metadata):
     req.max_retries_failure = 1
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     # First attempt fails
     dispatch_task(state, task, worker_id)
@@ -284,7 +305,7 @@ def test_unschedulable_task_finalizes_job_with_timeout_error(job_request, worker
     req.scheduling_timeout.CopyFrom(Duration.from_seconds(300).to_proto())
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     dispatch_task(state, task, worker_id)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_UNSCHEDULABLE)
@@ -304,7 +325,7 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
     req = job_request("test-job")
     req.replicas = 3
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     # Dispatch 2 tasks, leave 1 pending
     dispatch_task(state, tasks[0], worker_id)
@@ -313,7 +334,7 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
     # Cancel job
     state.handle_event(
         JobCancelledEvent(
-            job_id=JobName.root("j1"),
+            job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
         )
     )
@@ -333,7 +354,7 @@ def test_cancelled_job_tasks_excluded_from_demand(job_request, worker_metadata):
     req = job_request("test-job")
     req.replicas = 3
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     # Dispatch 1 task, leave 2 pending (these will have no attempts when killed)
     dispatch_task(state, tasks[0], worker_id)
@@ -341,7 +362,7 @@ def test_cancelled_job_tasks_excluded_from_demand(job_request, worker_metadata):
     # Cancel job - pending tasks will be killed with no attempts
     state.handle_event(
         JobCancelledEvent(
-            job_id=JobName.root("j1"),
+            job_id=JobName.root("test-user", "j1"),
             reason="User cancelled",
         )
     )
@@ -469,9 +490,12 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     # 1. Worker marked unhealthy
     assert worker.healthy is False
 
-    # 2. Task requeued (back to PENDING for retry)
+    # 2. Task requeued (back to PENDING for retry).
+    #    Since the task was still ASSIGNED (never confirmed BUILDING/RUNNING),
+    #    this is a delivery failure — no budget consumed at all.
     assert task.state == cluster_pb2.TASK_STATE_PENDING
-    assert task.preemption_count == 1
+    assert task.preemption_count == 0
+    assert task.failure_count == 0
     assert task.can_be_scheduled()
 
     # 3. Task should be requeued for retry
@@ -481,6 +505,30 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
 
     # 4. Worker no longer has task assigned
     assert task.task_id not in worker.running_tasks
+
+
+def test_task_assigned_to_missing_worker_is_ignored(job_request, worker_metadata):
+    """Stale assignments to pruned workers are skipped without crashing."""
+    state = ControllerState()
+
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+    tasks = submit_job(state, "j1", job_request("job1"))
+    task = tasks[0]
+
+    # Worker disappears between scheduling and assignment commit.
+    state.remove_worker(worker_id)
+    state.handle_event(
+        TaskAssignedEvent(
+            task_id=task.task_id,
+            worker_id=worker_id,
+        )
+    )
+
+    # Task remains schedulable and no attempt/resources are committed.
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.current_attempt_id == -1
+    assert task.can_be_scheduled()
+    assert task.task_id in {t.task_id for t in state.peek_pending_tasks()}
 
 
 # =============================================================================
@@ -497,13 +545,13 @@ def test_failure_domain_kills_remaining_tasks(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-task-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
         replicas=3,
     )
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     # Dispatch 2 tasks, leave 1 pending
     dispatch_task(state, tasks[0], worker_id)
@@ -528,13 +576,13 @@ def test_max_task_failures_tolerance(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="tolerant-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=1,
     )
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     for task in tasks:
         dispatch_task(state, task, worker_id)
@@ -561,14 +609,14 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="preemption-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
         max_retries_preemption=1,
     )
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     dispatch_task(state, tasks[0], worker_id)
     transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
@@ -600,18 +648,18 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
         endpoint_id="ep1",
         name="j1/actor",
         address="a:1",
-        job_id=JobName.root("j1"),
+        job_id=JobName.root("test-user", "j1"),
     )
     state.add_endpoint(ep, task.task_id)
 
     # Verify endpoint visible while running
-    assert len(state.lookup_endpoints("j1/actor")) == 1
+    assert len(state.list_endpoints("j1/actor", exact=True)) == 1
 
     # Task succeeds
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
 
     # Endpoint removed
-    assert state.lookup_endpoints("j1/actor") == []
+    assert state.list_endpoints("j1/actor", exact=True) == []
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
@@ -623,29 +671,29 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
 
     req = job_request("test")
     tasks = submit_job(state, "ns-1", req)
-    job = state.get_job(JobName.root("ns-1"))
+    job = state.get_job(JobName.root("test-user", "ns-1"))
     task = tasks[0]
 
     ep = ControllerEndpoint(
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("ns-1"),
+        job_id=JobName.root("test-user", "ns-1"),
     )
     state.add_endpoint(ep)
 
     # Visible while pending (task may be executing before job state updates)
-    assert len(state.lookup_endpoints("ns-1/actor")) == 1
+    assert len(state.list_endpoints("ns-1/actor", exact=True)) == 1
 
     # Still visible after transition to running
     dispatch_task(state, task, worker_id)
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
-    assert len(state.lookup_endpoints("ns-1/actor")) == 1
+    assert len(state.list_endpoints("ns-1/actor", exact=True)) == 1
 
     # Not visible after completion (terminal state)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
-    assert len(state.lookup_endpoints("ns-1/actor")) == 0
+    assert len(state.list_endpoints("ns-1/actor", exact=True)) == 0
 
 
 def test_namespace_isolation(job_request, worker_metadata):
@@ -669,7 +717,7 @@ def test_namespace_isolation(job_request, worker_metadata):
             endpoint_id="ep-1",
             name="ns-1/actor",
             address="10.0.0.1:8080",
-            job_id=JobName.root("ns-1"),
+            job_id=JobName.root("test-user", "ns-1"),
         )
     )
     state.add_endpoint(
@@ -677,16 +725,16 @@ def test_namespace_isolation(job_request, worker_metadata):
             endpoint_id="ep-2",
             name="ns-2/actor",
             address="10.0.0.2:8080",
-            job_id=JobName.root("ns-2"),
+            job_id=JobName.root("test-user", "ns-2"),
         )
     )
 
     # Each namespace only sees its own endpoint
-    results_ns1 = state.lookup_endpoints("ns-1/actor")
+    results_ns1 = state.list_endpoints("ns-1/actor", exact=True)
     assert len(results_ns1) == 1
     assert results_ns1[0].address == "10.0.0.1:8080"
 
-    results_ns2 = state.lookup_endpoints("ns-2/actor")
+    results_ns2 = state.list_endpoints("ns-2/actor", exact=True)
     assert len(results_ns2) == 1
     assert results_ns2[0].address == "10.0.0.2:8080"
 
@@ -707,8 +755,8 @@ def test_task_queue_fifo_order(job_request):
 
     pending = state.peek_pending_tasks()
     assert len(pending) == 2
-    assert pending[0].job_id == JobName.root("j1")
-    assert pending[1].job_id == JobName.root("j2")
+    assert pending[0].job_id == JobName.root("test-user", "j1")
+    assert pending[1].job_id == JobName.root("test-user", "j2")
 
 
 def test_hierarchical_job_tracking(job_request):
@@ -719,21 +767,24 @@ def test_hierarchical_job_tracking(job_request):
     submit_job(state, "parent", parent_req)
 
     child1_req = job_request("child1")
-    submit_job(state, "/parent/child1", child1_req)
+    submit_job(state, "/test-user/parent/child1", child1_req)
 
     child2_req = job_request("child2")
-    submit_job(state, "/parent/child2", child2_req)
+    submit_job(state, "/test-user/parent/child2", child2_req)
 
     grandchild_req = job_request("grandchild")
-    submit_job(state, "/parent/child1/grandchild", grandchild_req)
+    submit_job(state, "/test-user/parent/child1/grandchild", grandchild_req)
 
     # get_children only returns direct children
-    children = state.get_children(JobName.root("parent"))
+    children = state.get_children(JobName.root("test-user", "parent"))
     assert len(children) == 2
-    assert {c.job_id for c in children} == {JobName.from_string("/parent/child1"), JobName.from_string("/parent/child2")}
+    assert {c.job_id for c in children} == {
+        JobName.from_string("/test-user/parent/child1"),
+        JobName.from_string("/test-user/parent/child2"),
+    }
 
     # No children for leaf nodes
-    assert state.get_children(JobName.from_string("/parent/child1/grandchild")) == []
+    assert state.get_children(JobName.from_string("/test-user/parent/child1/grandchild")) == []
 
 
 def test_thread_safety(job_request):
@@ -779,7 +830,7 @@ def test_excessive_replicas_fails_job(job_request):
     req.replicas = MAX_REPLICAS_PER_JOB + 1
 
     tasks = submit_job(state, "j1", req)
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
 
     assert job is not None
     assert job.state == cluster_pb2.JOB_STATE_FAILED
@@ -805,7 +856,7 @@ def make_job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
+            resources=cluster_pb2.ResourceSpecProto(cpu_millicores=cpu * 1000, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
             replicas=1,
         )
@@ -837,7 +888,7 @@ def test_worker_cannot_accept_task_when_resources_committed(make_job_request, wo
 
     # The task cannot be scheduled - no worker has sufficient capacity
     assert len(result.assignments) == 0
-    assert pending[0].job_id == JobName.root("j2")
+    assert pending[0].job_id == JobName.root("test-user", "j2")
 
 
 def test_worker_can_accept_new_task_after_previous_completes(make_job_request, worker_metadata):
@@ -871,7 +922,7 @@ def test_worker_can_accept_new_task_after_previous_completes(make_job_request, w
     context = _build_scheduling_context(scheduler, state)
     result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1
-    assert result.assignments[0][0].parent == JobName.root("j2")
+    assert result.assignments[0][0].parent == JobName.root("test-user", "j2")
 
 
 def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_metadata):
@@ -911,7 +962,7 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
     # Third task should still be pending
     pending = state.peek_pending_tasks()
     assert len(pending) == 1
-    assert pending[0].job_id == JobName.root("j2")
+    assert pending[0].job_id == JobName.root("test-user", "j2")
 
     # Scheduler should not assign the third task (no capacity - 4 CPUs used)
     context = _build_scheduling_context(scheduler, state)
@@ -931,22 +982,22 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
     # Register 4 workers (one per task)
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     # Create coscheduled job with 4 tasks
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
     assert job.is_coscheduled
 
     # Dispatch all tasks
@@ -974,25 +1025,25 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
     """Coscheduled sibling cascade must free committed resources on surviving workers.
 
     Regression test: previously, _cascade_coscheduled_failure marked siblings
-    terminal but never called _cleanup_task_resources, leaking committed_cpu/mem
+    terminal but never called _cleanup_task_resources, leaking committed_cpu_millicores/mem
     on workers and permanently blocking future scheduling.
     """
     state = ControllerState()
 
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="leak-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j-leak", req)
 
     for i, task in enumerate(tasks):
@@ -1001,7 +1052,7 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
     # Verify resources are committed before failure
     for i in range(4):
         w = state.get_worker(WorkerId(f"w{i}"))
-        assert w.committed_cpu == 2
+        assert w.committed_cpu_millicores == 2000
         assert len(w.running_tasks) == 1
 
     # Fail task-0 terminally → cascade kills siblings on w1, w2, w3
@@ -1017,13 +1068,13 @@ def test_coscheduled_cascade_releases_worker_resources(worker_metadata):
     # All surviving workers (w1..w3) must have resources fully released
     for i in range(1, 4):
         w = state.get_worker(WorkerId(f"w{i}"))
-        assert w.committed_cpu == 0, f"w{i} has leaked committed_cpu={w.committed_cpu}"
+        assert w.committed_cpu_millicores == 0, f"w{i} has leaked committed_cpu_millicores={w.committed_cpu_millicores}"
         assert w.committed_mem == 0, f"w{i} has leaked committed_mem={w.committed_mem}"
         assert len(w.running_tasks) == 0, f"w{i} has phantom running_tasks={w.running_tasks}"
 
     # w0 should also be clean (task-0 was the trigger, cleaned up by _on_task_state_changed)
     w0 = state.get_worker(WorkerId("w0"))
-    assert w0.committed_cpu == 0
+    assert w0.committed_cpu_millicores == 0
     assert len(w0.running_tasks) == 0
 
 
@@ -1033,20 +1084,20 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
 
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     # Use max_retries_preemption=1 so second worker failure is terminal.
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         max_retries_preemption=1,  # Allow one retry, so second failure is terminal
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
     # Dispatch all tasks
@@ -1095,18 +1146,18 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
 
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
     for i, task in enumerate(tasks):
@@ -1139,14 +1190,14 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=3,  # Allow failures without killing the job
     )
     tasks = submit_job(state, "j1", req)
 
-    job = state.get_job(JobName.root("j1"))
+    job = state.get_job(JobName.root("test-user", "j1"))
     assert not job.is_coscheduled
 
     for i, task in enumerate(tasks):
@@ -1177,20 +1228,20 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
 
     for i in range(4):
         meta = worker_metadata()
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
         register_worker(state, f"w{i}", f"addr{i}:8080", meta)
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         max_retries_failure=1,  # Allow one retry
         max_task_failures=4,  # Don't fail job on task failure
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     tasks = submit_job(state, "j1", req)
 
     for i, task in enumerate(tasks):
@@ -1301,12 +1352,14 @@ def test_stale_attempt_error_log_for_non_terminal(caplog, job_request, worker_me
 
 
 # =============================================================================
-# log_directory Tests
+# Heartbeat Log Forwarding Tests
 # =============================================================================
 
 
-def test_log_directory_persisted_on_first_running_heartbeat(job_request, worker_metadata):
-    """log_directory is stored from running_tasks even when task state has not changed."""
+def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
+    """Log entries from heartbeat are stored in the controller's log store."""
+    from iris.rpc import logging_pb2
+
     state = ControllerState()
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
@@ -1317,26 +1370,33 @@ def test_log_directory_persisted_on_first_running_heartbeat(job_request, worker_
     snapshot = state.begin_heartbeat(worker_id)
     assert snapshot is not None
 
-    # Worker reports task as RUNNING (same state the controller already has) with a log_directory.
-    # This simulates the common steady-state heartbeat where the state hasn't changed but
-    # log_directory has not yet been recorded by the controller.
+    log_entry = logging_pb2.LogEntry(source="stdout", data="hello world")
+    log_entry.timestamp.epoch_ms = 1000
+
     response = cluster_pb2.HeartbeatResponse(
-        running_tasks=[
-            cluster_pb2.Controller.RunningTaskEntry(
+        worker_healthy=True,
+        tasks=[
+            cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=task.task_id.to_wire(),
                 attempt_id=task.current_attempt_id,
                 state=cluster_pb2.TASK_STATE_RUNNING,
-                log_directory="s3://bucket/logs/task/0",
+                log_entries=[log_entry],
             )
-        ]
+        ],
     )
     state.complete_heartbeat(snapshot, response)
 
-    assert task.attempts[task.current_attempt_id].log_directory == "s3://bucket/logs/task/0"
+    from iris.cluster.log_store import task_log_key
+
+    log_result = state.log_store.get_logs(task_log_key(task.task_id, task.current_attempt_id))
+    assert len(log_result.entries) == 1
+    assert log_result.entries[0].data == "hello world"
 
 
-def test_log_directory_persisted_on_completed_task(job_request, worker_metadata):
-    """log_directory is stored from completed_tasks report."""
+def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata):
+    """Multiple heartbeats accumulate logs in the store."""
+    from iris.rpc import logging_pb2
+
     state = ControllerState()
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
@@ -1344,22 +1404,29 @@ def test_log_directory_persisted_on_completed_task(job_request, worker_metadata)
     task = tasks[0]
     dispatch_task(state, task, worker_id)
 
-    snapshot = state.begin_heartbeat(worker_id)
-    assert snapshot is not None
+    for i in range(3):
+        snapshot = state.begin_heartbeat(worker_id)
+        assert snapshot is not None
+        entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
+        entry.timestamp.epoch_ms = 1000 + i
+        response = cluster_pb2.HeartbeatResponse(
+            worker_healthy=True,
+            tasks=[
+                cluster_pb2.Controller.WorkerTaskStatus(
+                    task_id=task.task_id.to_wire(),
+                    attempt_id=task.current_attempt_id,
+                    state=cluster_pb2.TASK_STATE_RUNNING,
+                    log_entries=[entry],
+                )
+            ],
+        )
+        state.complete_heartbeat(snapshot, response)
 
-    response = cluster_pb2.HeartbeatResponse(
-        completed_tasks=[
-            cluster_pb2.Controller.CompletedTaskEntry(
-                task_id=task.task_id.to_wire(),
-                attempt_id=task.current_attempt_id,
-                state=cluster_pb2.TASK_STATE_SUCCEEDED,
-                log_directory="s3://bucket/logs/task/0",
-            )
-        ]
-    )
-    state.complete_heartbeat(snapshot, response)
+    from iris.cluster.log_store import task_log_key
 
-    assert task.attempts[task.current_attempt_id].log_directory == "s3://bucket/logs/task/0"
+    log_result = state.log_store.get_logs(task_log_key(task.task_id, task.current_attempt_id))
+    assert len(log_result.entries) == 3
+    assert [e.data for e in log_result.entries] == ["line 0", "line 1", "line 2"]
 
 
 # =============================================================================
@@ -1374,22 +1441,22 @@ def test_compute_demand_entries_counts_coscheduled_job_once():
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=4,
     )
-    req.coscheduling.group_by = "tpu-name"
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
     demand = compute_demand_entries(state)
     assert len(demand) == 1
-    assert demand[0].device_type == DeviceType.TPU
-    assert demand[0].device_variant == "v5litepod-16"
-    assert demand[0].task_ids == ["/j1/0", "/j1/1", "/j1/2", "/j1/3"]
-    assert demand[0].coschedule_group_id == "/j1"
+    assert demand[0].normalized.device_type == DeviceType.TPU
+    assert demand[0].normalized.device_variants == frozenset({"v5litepod-16"})
+    assert demand[0].task_ids == ["/test-user/j1/0", "/test-user/j1/1", "/test-user/j1/2", "/test-user/j1/3"]
+    assert demand[0].coschedule_group_id == "/test-user/j1"
 
 
 def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
@@ -1399,7 +1466,7 @@ def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
@@ -1412,8 +1479,8 @@ def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
     demand = compute_demand_entries(state)
     assert len(demand) == 4
     for entry in demand:
-        assert entry.device_type == DeviceType.TPU
-        assert entry.device_variant == "v5litepod-16"
+        assert entry.normalized.device_type == DeviceType.TPU
+        assert entry.normalized.device_variants == frozenset({"v5litepod-16"})
         assert entry.coschedule_group_id is None
         assert len(entry.task_ids) == 1
 
@@ -1427,14 +1494,14 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
         replicas=4,
     )
-    coscheduled_req.coscheduling.group_by = "tpu-name"
+    coscheduled_req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", coscheduled_req)
 
     # Regular job with 2 tasks -> 2 slices
@@ -1442,7 +1509,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
@@ -1453,14 +1520,14 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
 
     demand = compute_demand_entries(state)
     assert len(demand) == 3
-    coscheduled = [entry for entry in demand if entry.coschedule_group_id == "/j1"]
+    coscheduled = [entry for entry in demand if entry.coschedule_group_id == "/test-user/j1"]
     regular = [entry for entry in demand if entry.coschedule_group_id is None]
     assert len(coscheduled) == 1
     assert len(regular) == 2
-    assert coscheduled[0].task_ids == ["/j1/0", "/j1/1", "/j1/2", "/j1/3"]
+    assert coscheduled[0].task_ids == ["/test-user/j1/0", "/test-user/j1/1", "/test-user/j1/2", "/test-user/j1/3"]
     for entry in regular:
-        assert entry.device_type == DeviceType.TPU
-        assert entry.device_variant == "v5litepod-16"
+        assert entry.normalized.device_type == DeviceType.TPU
+        assert entry.normalized.device_variants == frozenset({"v5litepod-16"})
 
 
 def test_compute_demand_entries_separates_by_preemptible_constraint():
@@ -1472,7 +1539,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         name="preemptible-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1480,7 +1547,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key=PREEMPTIBLE_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.PREEMPTIBLE,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="true"),
             )
@@ -1493,7 +1560,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         name="on-demand-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1501,7 +1568,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key=PREEMPTIBLE_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.PREEMPTIBLE,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="false"),
             )
@@ -1512,11 +1579,11 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
     demand = compute_demand_entries(state)
     assert len(demand) == 2
 
-    by_preemptible = {d.preemptible: d for d in demand}
-    assert by_preemptible[True].device_type == DeviceType.TPU
-    assert by_preemptible[True].task_ids == ["/j1/0"]
-    assert by_preemptible[False].device_type == DeviceType.TPU
-    assert by_preemptible[False].task_ids == ["/j2/0"]
+    by_preemptible = {d.normalized.preemptible: d for d in demand}
+    assert by_preemptible[True].normalized.device_type == DeviceType.TPU
+    assert by_preemptible[True].task_ids == ["/test-user/j1/0"]
+    assert by_preemptible[False].normalized.device_type == DeviceType.TPU
+    assert by_preemptible[False].task_ids == ["/test-user/j2/0"]
 
 
 def test_compute_demand_entries_no_preemptible_constraint_gives_none():
@@ -1527,7 +1594,7 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
         name="unconstrained-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1538,7 +1605,7 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
 
     demand = compute_demand_entries(state)
     assert len(demand) == 1
-    assert demand[0].preemptible is None
+    assert demand[0].normalized.preemptible is None
 
 
 def test_compute_demand_entries_extracts_required_region():
@@ -1547,7 +1614,7 @@ def test_compute_demand_entries_extracts_required_region():
         name="regional-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1555,7 +1622,7 @@ def test_compute_demand_entries_extracts_required_region():
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key=REGION_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.REGION,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="us-west4"),
             )
@@ -1565,7 +1632,7 @@ def test_compute_demand_entries_extracts_required_region():
 
     demand = compute_demand_entries(state)
     assert len(demand) == 1
-    assert demand[0].required_regions == frozenset({"us-west4"})
+    assert demand[0].normalized.required_regions == frozenset({"us-west4"})
     assert demand[0].invalid_reason is None
 
 
@@ -1575,7 +1642,7 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
         name="invalid-regional-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
-            cpu=1,
+            cpu_millicores=1000,
             memory_bytes=1024**3,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
@@ -1583,12 +1650,12 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
         replicas=1,
         constraints=[
             cluster_pb2.Constraint(
-                key=REGION_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.REGION,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="us-west4"),
             ),
             cluster_pb2.Constraint(
-                key=REGION_ATTRIBUTE_KEY,
+                key=WellKnownAttribute.REGION,
                 op=cluster_pb2.CONSTRAINT_OP_EQ,
                 value=cluster_pb2.AttributeValue(string_value="eu-west4"),
             ),
@@ -1602,6 +1669,235 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
 
 
 # =============================================================================
+# Reservation Demand Deduplication Tests
+# =============================================================================
+
+
+def _make_reservation_job_request(
+    *,
+    task_device: cluster_pb2.DeviceConfig,
+    reservation_devices: list[cluster_pb2.DeviceConfig],
+    replicas: int = 1,
+) -> cluster_pb2.Controller.LaunchJobRequest:
+    """Build a LaunchJobRequest with a reservation and task resources.
+
+    Each reservation entry gets auto-generated constraints from its device
+    config, mirroring what the service layer does for the top-level request.
+    This ensures holder jobs get the correct device constraints from the
+    entry, not from the parent.
+    """
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="reservation-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=task_device,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=replicas,
+    )
+    for dev in reservation_devices:
+        entry_resources = cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=dev,
+        )
+        entry_constraints = [c.to_proto() for c in constraints_from_resources(entry_resources)]
+        req.reservation.entries.append(
+            cluster_pb2.ReservationEntry(
+                resources=entry_resources,
+                constraints=entry_constraints,
+            )
+        )
+    return req
+
+
+def _h100_device() -> cluster_pb2.DeviceConfig:
+    return cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="H100", count=8))
+
+
+def _a100_device() -> cluster_pb2.DeviceConfig:
+    return cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=8))
+
+
+def _is_synthetic_demand(state: ControllerState, demand_entry: DemandEntry) -> bool:
+    """Check if a demand entry comes from a holder job task."""
+    for tid in demand_entry.task_ids:
+        task = state.get_task(JobName.from_string(tid))
+        if task:
+            job = state.get_job(task.job_id)
+            if job and job.is_reservation_holder:
+                return True
+    return False
+
+
+def test_demand_reservation_all_tasks_generate_demand():
+    """2 H100 reservation + 2 H100 tasks = 4 total demand (no budget dedup).
+
+    All tasks generate demand through a unified path. Holder tasks and real
+    tasks are independent demand sources — preemption during scheduling
+    (not demand) handles the dedup.
+    """
+    state = ControllerState()
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+
+    assert len(synthetic_demand) == 2
+    assert len(real_demand) == 2
+
+
+def test_demand_reservation_excess_tasks():
+    """2 H100 reservation + 5 H100 tasks = 2 synthetic + 5 real task demand."""
+    state = ControllerState()
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=5,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+
+    assert len(synthetic_demand) == 2
+    assert len(real_demand) == 5
+
+
+def test_demand_reservation_holder_uses_entry_resources():
+    """Holder tasks use the reservation entry's resource spec, not the parent's.
+
+    Each reservation entry carries its own resources and constraints. The
+    holder job uses the entry's resources so the autoscaler provisions the
+    correct device type even when the parent job differs.
+    """
+    state = ControllerState()
+    # Job tasks request A100, but reservation entries specify H100.
+    # Holder job should use the entry's H100 resource spec.
+    req = _make_reservation_job_request(
+        task_device=_a100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+
+    assert len(synthetic_demand) == 2
+    assert len(real_demand) == 2
+    # Holder demand uses entry's H100 device, not parent's A100
+    for d in synthetic_demand:
+        assert d.normalized.device_variants == frozenset({"h100"})
+
+
+def test_demand_reservation_mixed_jobs():
+    """Reservation job + regular job: demand is independent per job."""
+    state = ControllerState()
+
+    # h100-job: 3 H100 tasks + 3 reservation entries
+    h100_req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device(), _h100_device()],
+        replicas=3,
+    )
+    submit_job(state, "h100-job", h100_req)
+
+    a100_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="a100-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_a100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    submit_job(state, "a100-job", a100_req)
+
+    demand = compute_demand_entries(state)
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+
+    # 3 synthetic holder tasks from h100-job's reservation
+    assert len(synthetic_demand) == 3
+
+    # h100-job: 3 real tasks + a100-job: 2 tasks = 5 real demand
+    assert len(real_demand) == 5
+    a100_demand = [d for d in real_demand if d.normalized.device_variants == frozenset({"a100"})]
+    assert len(a100_demand) == 2
+
+
+def test_demand_no_reservation_passes_all_tasks():
+    """Job without reservation emits all task demand entries (no synthetic tasks)."""
+    state = ControllerState()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="regular-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=3,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 3
+    for d in demand:
+        assert not _is_synthetic_demand(state, d)
+
+
+def test_demand_reservation_independent_per_job():
+    """Each job's demand is independent — no cross-job interference."""
+    state = ControllerState()
+
+    # Job A: 2 H100 reservation, 2 H100 tasks
+    job_a_req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "job-a", job_a_req)
+
+    # Job B: no reservation, 2 H100 tasks (must all pass through)
+    job_b_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="job-b",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    submit_job(state, "job-b", job_b_req)
+
+    demand = compute_demand_entries(state)
+    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
+    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+
+    # Job A's 2 synthetic holder tasks
+    assert len(synthetic_demand) == 2
+    # Job A's 2 real tasks + Job B's 2 tasks = 4 real demand
+    assert len(real_demand) == 4
+
+
+# =============================================================================
 # Depth-First Scheduling Priority Tests
 # =============================================================================
 
@@ -1612,13 +1908,13 @@ def test_peek_pending_tasks_deeper_job_before_shallow(job_request):
 
     # Submit root job and child job (both with 1 CPU)
     submit_job(state, "root", job_request("root"), timestamp_ms=1000)
-    submit_job(state, "/root/child", job_request("child"), timestamp_ms=2000)
+    submit_job(state, "/test-user/root/child", job_request("child"), timestamp_ms=2000)
 
     pending = state.peek_pending_tasks()
     assert len(pending) == 2
     # Child (depth 2) should come first
-    assert pending[0].job_id == JobName.from_string("/root/child")
-    assert pending[1].job_id == JobName.root("root")
+    assert pending[0].job_id == JobName.from_string("/test-user/root/child")
+    assert pending[1].job_id == JobName.root("test-user", "root")
 
 
 def test_peek_pending_tasks_older_root_tree_preferred(job_request):
@@ -1635,8 +1931,8 @@ def test_peek_pending_tasks_older_root_tree_preferred(job_request):
     pending = state.peek_pending_tasks()
     assert len(pending) == 2
     # user-a-job submitted first, should come first
-    assert pending[0].job_id == JobName.root("user-a-job")
-    assert pending[1].job_id == JobName.root("user-b-job")
+    assert pending[0].job_id == JobName.root("test-user", "user-a-job")
+    assert pending[1].job_id == JobName.root("test-user", "user-b-job")
 
 
 def test_peek_pending_tasks_child_of_older_tree_beats_newer_root(job_request):
@@ -1650,15 +1946,15 @@ def test_peek_pending_tasks_child_of_older_tree_beats_newer_root(job_request):
     submit_job(state, "new-tree", job_request("new-tree"), timestamp_ms=2000)
 
     # Submit child of old tree (depth 2) after new tree
-    submit_job(state, "/old-tree/child", job_request("child"), timestamp_ms=3000)
+    submit_job(state, "/test-user/old-tree/child", job_request("child"), timestamp_ms=3000)
 
     pending = state.peek_pending_tasks()
     assert len(pending) == 3
 
     # Expected order: child (depth 2), old-tree (depth 1, older), new-tree (depth 1, newer)
-    assert pending[0].job_id == JobName.from_string("/old-tree/child")
-    assert pending[1].job_id == JobName.root("old-tree")
-    assert pending[2].job_id == JobName.root("new-tree")
+    assert pending[0].job_id == JobName.from_string("/test-user/old-tree/child")
+    assert pending[1].job_id == JobName.root("test-user", "old-tree")
+    assert pending[2].job_id == JobName.root("test-user", "new-tree")
 
 
 def test_peek_pending_tasks_fifo_within_same_depth_and_tree(job_request):
@@ -1669,17 +1965,17 @@ def test_peek_pending_tasks_fifo_within_same_depth_and_tree(job_request):
     submit_job(state, "tree", job_request("tree"), timestamp_ms=1000)
 
     # Submit two children at different times
-    submit_job(state, "/tree/child-a", job_request("child-a"), timestamp_ms=2000)
-    submit_job(state, "/tree/child-b", job_request("child-b"), timestamp_ms=3000)
+    submit_job(state, "/test-user/tree/child-a", job_request("child-a"), timestamp_ms=2000)
+    submit_job(state, "/test-user/tree/child-b", job_request("child-b"), timestamp_ms=3000)
 
     pending = state.peek_pending_tasks()
     assert len(pending) == 3
 
     # Both children at depth 2, same root tree — child-a submitted first
-    child_tasks = [t for t in pending if t.job_id.parent == JobName.root("tree")]
+    child_tasks = [t for t in pending if t.job_id.parent == JobName.root("test-user", "tree")]
     assert len(child_tasks) == 2
-    assert child_tasks[0].job_id == JobName.from_string("/tree/child-a")
-    assert child_tasks[1].job_id == JobName.from_string("/tree/child-b")
+    assert child_tasks[0].job_id == JobName.from_string("/test-user/tree/child-a")
+    assert child_tasks[1].job_id == JobName.from_string("/test-user/tree/child-b")
 
 
 def test_child_job_inherits_root_submitted_at(job_request):
@@ -1689,13 +1985,13 @@ def test_child_job_inherits_root_submitted_at(job_request):
     # Submit parent at known time
     parent_req = job_request("parent")
     submit_job(state, "parent", parent_req, timestamp_ms=1000)
-    parent_job = state.get_job(JobName.root("parent"))
+    parent_job = state.get_job(JobName.root("test-user", "parent"))
     parent_submitted = parent_job.submitted_at
 
     # Submit child later
     child_req = job_request("child")
-    submit_job(state, "/parent/child", child_req, timestamp_ms=2000)
-    child_job = state.get_job(JobName.from_string("/parent/child"))
+    submit_job(state, "/test-user/parent/child", child_req, timestamp_ms=2000)
+    child_job = state.get_job(JobName.from_string("/test-user/parent/child"))
 
     # Child's root_submitted_at should equal parent's
     assert child_job.root_submitted_at == parent_submitted
@@ -1709,19 +2005,19 @@ def test_requeued_task_maintains_priority_position(job_request, worker_metadata)
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
     # Submit a deep job and a shallow job
-    submit_job(state, "/tree/deep", job_request("deep"), timestamp_ms=1000)
+    submit_job(state, "/test-user/tree/deep", job_request("deep"), timestamp_ms=1000)
     submit_job(state, "shallow", job_request("shallow"), timestamp_ms=2000)
 
     # Initially: deep job comes first
     pending = state.peek_pending_tasks()
     assert len(pending) == 2
-    assert pending[0].job_id == JobName.from_string("/tree/deep")
-    assert pending[1].job_id == JobName.root("shallow")
+    assert pending[0].job_id == JobName.from_string("/test-user/tree/deep")
+    assert pending[1].job_id == JobName.root("test-user", "shallow")
 
     # Dispatch and fail the deep job's task (with retries enabled)
     deep_req = job_request("deep")
     deep_req.max_retries_failure = 1
-    deep_tasks = submit_job(state, "/tree/deep-retry", deep_req, timestamp_ms=3000)
+    deep_tasks = submit_job(state, "/test-user/tree/deep-retry", deep_req, timestamp_ms=3000)
     submit_job(state, "shallow-2", job_request("shallow-2"), timestamp_ms=4000)
 
     dispatch_task(state, deep_tasks[0], worker_id)
@@ -1733,8 +2029,8 @@ def test_requeued_task_maintains_priority_position(job_request, worker_metadata)
 
     # Check queue order — requeued deep job should still come before shallow
     pending = state.peek_pending_tasks()
-    deep_pending = [t for t in pending if t.job_id == JobName.from_string("/tree/deep-retry")]
-    shallow_pending = [t for t in pending if t.job_id == JobName.root("shallow-2")]
+    deep_pending = [t for t in pending if t.job_id == JobName.from_string("/test-user/tree/deep-retry")]
+    shallow_pending = [t for t in pending if t.job_id == JobName.root("test-user", "shallow-2")]
 
     assert len(deep_pending) == 1
     assert len(shallow_pending) == 1
@@ -1743,70 +2039,6 @@ def test_requeued_task_maintains_priority_position(job_request, worker_metadata)
     deep_idx = pending.index(deep_pending[0])
     shallow_idx = pending.index(shallow_pending[0])
     assert deep_idx < shallow_idx, "Requeued deep task should still come before shallow task"
-
-
-# =============================================================================
-# Concurrent Access Race Condition Tests
-# =============================================================================
-
-
-def test_running_tasks_safe_iteration_prevents_race(worker_metadata):
-    """Verify that list(worker.running_tasks) prevents race conditions.
-
-    The fix is to create a snapshot of the set before iteration using list().
-    This ensures the iterator operates on a stable copy even if the original
-    set is modified concurrently.
-    """
-    import concurrent.futures
-
-    state = ControllerState()
-    worker_id = register_worker(state, "w1", "addr1:8080", worker_metadata())
-    worker = state.get_worker(worker_id)
-
-    errors = []
-    stop_flag = threading.Event()
-    barrier = threading.Barrier(3)
-
-    def iterate_safely():
-        """Iterate over a snapshot of the set (SAFE - no race)."""
-        try:
-            barrier.wait()
-            while not stop_flag.is_set():
-                try:
-                    # SAFE: create snapshot before iteration
-                    _ = [tid for tid in list(worker.running_tasks)]
-                except RuntimeError as e:
-                    errors.append(e)
-                    return
-        except Exception as e:
-            errors.append(e)
-
-    def modify_running_tasks():
-        """Modify the set rapidly."""
-        try:
-            barrier.wait()
-            for i in range(10000):
-                fake_tid = JobName.from_string(f"/test-job/{i % 500}")
-                worker.running_tasks.add(fake_tid)
-                if i % 3 == 0 and worker.running_tasks:
-                    try:
-                        worker.running_tasks.pop()
-                    except KeyError:
-                        pass
-            stop_flag.set()
-        except Exception as e:
-            errors.append(e)
-            stop_flag.set()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(iterate_safely)
-        f2 = executor.submit(modify_running_tasks)
-        barrier.wait()
-        f2.result()
-        f1.result()
-
-    # With list() snapshot, no race condition occurs
-    assert not errors, f"Unexpected error with safe iteration: {errors}"
 
 
 # =============================================================================
@@ -1835,7 +2067,7 @@ def test_fail_heartbeat_clears_dispatch_when_worker_fails(job_request, worker_me
     dispatch_task(state, tasks[0], worker_id)
 
     # Buffer a dispatch for the worker
-    fake_request = cluster_pb2.Worker.RunTaskRequest(task_id="/fake/0")
+    fake_request = cluster_pb2.Worker.RunTaskRequest(task_id="/test-user/fake/0")
     state.buffer_dispatch(worker_id, fake_request)
 
     # Verify dispatch is buffered
@@ -1868,39 +2100,57 @@ def test_fail_heartbeat_clears_dispatch_when_worker_fails(job_request, worker_me
     )
 
 
-def test_fail_heartbeat_requeues_dispatch_when_worker_healthy(job_request, worker_metadata):
-    """Dispatch buffer is repopulated when worker remains healthy after failure.
+def test_fail_heartbeat_requeues_dispatch_for_retry(job_request, worker_metadata):
+    """Heartbeat failure re-queues dispatches for the next heartbeat.
 
-    When heartbeat fails but worker is still below failure threshold,
-    the dispatches should be requeued for the next heartbeat attempt.
+    We cannot tell whether the worker received the previous heartbeat (RPC
+    timeout ≠ delivery failure), so we re-send the same RunTaskRequests.
+    If the worker did receive them, it will reject re-sends as benign
+    duplicates. If it did not, it will start them fresh.
     """
 
     state = ControllerState()
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
-    # Submit and dispatch a task
-    tasks = submit_job(state, "j1", job_request("job1"))
-    dispatch_task(state, tasks[0], worker_id)
+    req = job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
 
-    # Buffer a dispatch
-    fake_request = cluster_pb2.Worker.RunTaskRequest(task_id="/fake/0")
-    state.buffer_dispatch(worker_id, fake_request)
+    # Assign the task (creates attempt, commits resources)
+    state.handle_event(TaskAssignedEvent(task_id=task.task_id, worker_id=worker_id))
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
+    assert task.current_attempt_id == 0
 
-    # Take snapshot
+    # Buffer the dispatch for delivery
+    run_request = cluster_pb2.Worker.RunTaskRequest(
+        task_id=task.task_id.to_wire(),
+        attempt_id=0,
+    )
+    state.buffer_dispatch(worker_id, run_request)
+
+    # Take snapshot (drains buffer)
     snapshot = state.begin_heartbeat(worker_id)
     assert snapshot is not None
+    assert len(snapshot.tasks_to_run) == 1
 
     # Fail heartbeat (worker stays healthy - below threshold)
     state.fail_heartbeat(snapshot, "Timeout")
 
-    # Verify worker is still healthy
     worker = state.get_worker(worker_id)
     assert worker.healthy
     assert worker.consecutive_failures == 1
 
-    # Verify dispatch was requeued
-    assert worker_id in state._pending_dispatch
-    assert len(state._pending_dispatch[worker_id].tasks_to_run) == 1
+    # Task stays ASSIGNED — we don't know if the worker received it
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
+    assert task.preemption_count == 0
+    assert task.failure_count == 0
+
+    # Dispatch re-queued for the next heartbeat (same attempt_id)
+    pending_dispatch = state._pending_dispatch.get(worker_id)
+    assert pending_dispatch is not None
+    assert len(pending_dispatch.tasks_to_run) == 1
+    assert pending_dispatch.tasks_to_run[0].attempt_id == 0
 
 
 def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
@@ -1918,14 +2168,15 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
 
     # Create a mock response with completed task
     response = cluster_pb2.HeartbeatResponse(
-        completed_tasks=[
-            cluster_pb2.Controller.CompletedTaskEntry(
+        worker_healthy=True,
+        tasks=[
+            cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=tasks[0].task_id.to_wire(),
                 state=cluster_pb2.TASK_STATE_SUCCEEDED,
                 exit_code=0,
                 attempt_id=0,
             )
-        ]
+        ],
     )
 
     # Complete heartbeat
@@ -1938,3 +2189,647 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
     # Verify job is succeeded
     job = state.get_job(tasks[0].job_id)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_worker_failed_from_assigned_is_delivery_failure(job_request, worker_metadata):
+    """WORKER_FAILED on a task still in ASSIGNED state is a delivery failure.
+
+    When a task was assigned but never confirmed running (BUILDING/RUNNING),
+    a WORKER_FAILED is a delivery failure — no budget is consumed. This
+    prevents preemption count inflation from repeated 'Task not found' reports.
+    """
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # Assign but do NOT transition to RUNNING
+    state.handle_event(TaskAssignedEvent(task_id=task.task_id, worker_id=worker_id))
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
+
+    # Worker reports WORKER_FAILED (e.g., "Task not found on worker")
+    transition_task(
+        state,
+        task.task_id,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        error="Task not found on worker",
+    )
+
+    # Delivery failure: no budget consumed at all
+    assert task.preemption_count == 0
+    assert task.failure_count == 0
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.can_be_scheduled()
+
+
+def test_worker_failed_from_running_counts_as_preemption(job_request, worker_metadata):
+    """WORKER_FAILED on a task in RUNNING state counts as a preemption."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # Full lifecycle: assign and transition to RUNNING
+    dispatch_task(state, task, worker_id)
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Worker dies
+    transition_task(
+        state,
+        task.task_id,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        error="Worker crashed",
+    )
+
+    # Real preemption: counts against preemption budget
+    assert task.preemption_count == 1
+    assert task.failure_count == 0
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.can_be_scheduled()
+
+
+def test_worker_failed_from_building_counts_as_preemption(job_request, worker_metadata):
+    """WORKER_FAILED on a task in BUILDING state counts as a preemption."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # Assign and transition to BUILDING (worker confirmed it received the task)
+    state.handle_event(TaskAssignedEvent(task_id=task.task_id, worker_id=worker_id))
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_BUILDING)
+    assert task.state == cluster_pb2.TASK_STATE_BUILDING
+
+    # Worker dies
+    transition_task(
+        state,
+        task.task_id,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        error="Worker crashed",
+    )
+
+    # Real preemption: worker had started processing the task
+    assert task.preemption_count == 1
+    assert task.failure_count == 0
+
+
+def test_fail_heartbeat_kills_requeue_only(job_request, worker_metadata):
+    """Kill requests are still requeued on heartbeat failure (idempotent)."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    tasks = submit_job(state, "j1", job_request("job1"))
+    dispatch_task(state, tasks[0], worker_id)
+
+    # Buffer a kill
+    state.buffer_kill(worker_id, tasks[0].task_id.to_wire())
+
+    snapshot = state.begin_heartbeat(worker_id)
+    assert snapshot is not None
+    assert len(snapshot.tasks_to_kill) == 1
+
+    # Fail heartbeat
+    state.fail_heartbeat(snapshot, "Timeout")
+
+    worker = state.get_worker(worker_id)
+    assert worker.healthy
+
+    # Kills should be requeued
+    pd = state._pending_dispatch.get(worker_id)
+    assert pd is not None
+    assert len(pd.tasks_to_kill) == 1
+
+
+# =============================================================================
+# Demand Dry-Run Scheduling Tests
+#
+# These tests verify that compute_demand_entries runs a dry-run scheduling pass
+# to absorb tasks into existing worker capacity, and only emits demand for
+# truly unschedulable tasks (not building-limited ones).
+# =============================================================================
+
+
+def _gpu_worker_metadata(
+    *,
+    cpu: int = 128,
+    memory_gb: int = 256,
+    variant: str = "H100",
+    gpu_count: int = 8,
+) -> cluster_pb2.WorkerMetadata:
+    """Create worker metadata for a GPU worker with scheduling attributes."""
+    return cluster_pb2.WorkerMetadata(
+        hostname="gpu-worker",
+        ip_address="10.0.0.1",
+        cpu_count=cpu,
+        memory_bytes=memory_gb * 1024**3,
+        disk_bytes=100 * 1024**3,
+        device=cluster_pb2.DeviceConfig(
+            gpu=cluster_pb2.GpuDevice(variant=variant, count=gpu_count),
+        ),
+        attributes={
+            WellKnownAttribute.DEVICE_TYPE: cluster_pb2.AttributeValue(string_value="gpu"),
+            WellKnownAttribute.DEVICE_VARIANT: cluster_pb2.AttributeValue(string_value=variant.lower()),
+            WellKnownAttribute.PREEMPTIBLE: cluster_pb2.AttributeValue(string_value="false"),
+        },
+    )
+
+
+def _tpu_worker_metadata(
+    *,
+    cpu: int = 128,
+    memory_gb: int = 256,
+    variant: str = "v5litepod-16",
+    chip_count: int = 8,
+) -> cluster_pb2.WorkerMetadata:
+    """Create worker metadata for a TPU worker with scheduling attributes."""
+    return cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="10.0.0.1",
+        cpu_count=cpu,
+        memory_bytes=memory_gb * 1024**3,
+        disk_bytes=100 * 1024**3,
+        device=cluster_pb2.DeviceConfig(
+            tpu=cluster_pb2.TpuDevice(variant=variant, chip_count=chip_count),
+        ),
+        attributes={
+            WellKnownAttribute.DEVICE_TYPE: cluster_pb2.AttributeValue(string_value="tpu"),
+            WellKnownAttribute.DEVICE_VARIANT: cluster_pb2.AttributeValue(string_value=variant.lower()),
+            WellKnownAttribute.PREEMPTIBLE: cluster_pb2.AttributeValue(string_value="false"),
+        },
+    )
+
+
+def _cpu_worker_metadata(
+    *,
+    cpu: int = 128,
+    memory_gb: int = 256,
+) -> cluster_pb2.WorkerMetadata:
+    return cluster_pb2.WorkerMetadata(
+        hostname="cpu-worker",
+        ip_address="10.0.0.1",
+        cpu_count=cpu,
+        memory_bytes=memory_gb * 1024**3,
+        disk_bytes=100 * 1024**3,
+        device=cluster_pb2.DeviceConfig(
+            cpu=cluster_pb2.CpuDevice(variant="cpu"),
+        ),
+        attributes={
+            WellKnownAttribute.DEVICE_TYPE: cluster_pb2.AttributeValue(string_value="cpu"),
+            WellKnownAttribute.PREEMPTIBLE: cluster_pb2.AttributeValue(string_value="false"),
+        },
+    )
+
+
+def test_demand_excludes_building_limited_tasks():
+    """Worker has resources but is at building limit -> no demand emitted."""
+    state = ControllerState()
+    scheduler = Scheduler(max_building_tasks_per_worker=2)
+
+    # Register a CPU worker with plenty of capacity
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _cpu_worker_metadata(cpu=128, memory_gb=256))
+
+    # Submit a job with 1 pending CPU task
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="cpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    # Fill the worker with 2 building tasks (at the building limit).
+    # These use minimal resources so the worker still has plenty of capacity.
+    build_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="build-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=100,
+            memory_bytes=1024**2,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    build_tasks = submit_job(state, "build-job", build_req)
+    for bt in build_tasks:
+        dispatch_task(state, bt, wid)
+        transition_task(state, bt.task_id, cluster_pb2.TASK_STATE_BUILDING)
+
+    # Now w1 has 2 building tasks (at limit), but has plenty of CPU/memory.
+    # The pending task from j1 should be building-limited, not truly unschedulable.
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    assert len(task_demand) == 0, "Building-limited task should not generate demand"
+
+
+def test_demand_includes_truly_unschedulable_tasks():
+    """No worker with matching device type -> demand IS emitted."""
+    state = ControllerState()
+    scheduler = Scheduler()
+
+    # Register a CPU-only worker
+    register_worker(state, "w1", "10.0.0.1:8080", _cpu_worker_metadata())
+
+    # Submit a job requiring H100 GPUs
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    assert len(task_demand) == 1, "Task with no matching device should generate demand"
+
+
+def test_demand_includes_resource_exhausted_tasks():
+    """Worker has right device but insufficient CPU -> demand IS emitted."""
+    state = ControllerState()
+    scheduler = Scheduler()
+
+    # Register a GPU worker with only 1 CPU core
+    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata(cpu=1))
+
+    # Submit a job requiring 4 CPU cores
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=4000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    assert len(task_demand) == 1, "Task exceeding worker CPU should generate demand"
+
+
+def test_demand_holders_absorbed_by_dry_run():
+    """Holder tasks participate in the dry-run and are absorbed when workers exist.
+
+    Unlike the old design where holders always generated demand, they now
+    participate in the dry-run like normal tasks and are absorbed when matching
+    workers have available capacity.
+    """
+    state = ControllerState()
+    scheduler = Scheduler()
+
+    # Register a large GPU worker with capacity for 1 task
+    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata(cpu=2, memory_gb=4))
+
+    # Submit a job with reservation (2 entries) and 2 tasks.
+    # Worker can fit 1 task — so 1 task absorbed, 3 remain as demand.
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device(), _h100_device()],
+        replicas=2,
+    )
+    submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    # Worker fits 1 task (holder or real). 3 remaining generate demand.
+    assert len(demand) == 3
+
+
+def test_demand_absorbs_capacity_before_emitting():
+    """2 workers fit 1 task each, 3 pending tasks -> only 1 demand entry."""
+    state = ControllerState()
+    scheduler = Scheduler()
+
+    # Register 2 GPU workers, each with enough capacity for 1 task
+    register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata(cpu=2, memory_gb=4))
+    register_worker(state, "w2", "10.0.0.2:8080", _gpu_worker_metadata(cpu=2, memory_gb=4))
+
+    # Submit 3 tasks each needing 2 CPU cores (each worker fits exactly 1)
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=2000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=3,
+    )
+    submit_job(state, "j1", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    assert len(task_demand) == 1, "Only 1 of 3 tasks should generate demand (2 absorbed)"
+
+
+def test_demand_no_workers_falls_back_to_all_pending():
+    """When no workers provided, all pending tasks generate demand (backward compat)."""
+    state = ControllerState()
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="gpu-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=3,
+    )
+    submit_job(state, "j1", req)
+
+    # No scheduler, no workers -> all tasks become demand
+    demand = compute_demand_entries(state)
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    assert len(task_demand) == 3
+
+
+def test_demand_building_limited_with_multiple_workers():
+    """All matching workers at building limit -> no demand, even with multiple workers."""
+    state = ControllerState()
+    scheduler = Scheduler(max_building_tasks_per_worker=1)
+
+    # Register 2 CPU workers
+    wid1 = register_worker(state, "w1", "10.0.0.1:8080", _cpu_worker_metadata())
+    wid2 = register_worker(state, "w2", "10.0.0.2:8080", _cpu_worker_metadata())
+
+    # Fill both workers with 1 building task each (at limit since max=1).
+    # Use minimal resources so workers retain plenty of capacity.
+    for i, wid in enumerate([wid1, wid2]):
+        build_req = cluster_pb2.Controller.LaunchJobRequest(
+            name=f"build-{i}",
+            entrypoint=_make_test_entrypoint(),
+            resources=cluster_pb2.ResourceSpecProto(
+                cpu_millicores=100,
+                memory_bytes=1024**2,
+            ),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        build_tasks = submit_job(state, f"build-{i}", build_req)
+        dispatch_task(state, build_tasks[0], wid)
+        transition_task(state, build_tasks[0].task_id, cluster_pb2.TASK_STATE_BUILDING)
+
+    # Submit a new task
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="pending-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "pending-job", req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    assert len(task_demand) == 0, "All workers at building limit -> no demand"
+
+
+def test_demand_mixed_building_limited_and_unschedulable():
+    """Some tasks building-limited, some truly unschedulable -> only unschedulable emit demand."""
+    state = ControllerState()
+    scheduler = Scheduler(max_building_tasks_per_worker=1)
+
+    # Register 1 GPU worker at building limit.
+    # Use a minimal CPU task to fill the building slot so GPU capacity stays intact.
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    build_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="build-0",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=100,
+            memory_bytes=1024**2,
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    build_tasks = submit_job(state, "build-0", build_req)
+    dispatch_task(state, build_tasks[0], wid)
+    transition_task(state, build_tasks[0].task_id, cluster_pb2.TASK_STATE_BUILDING)
+
+    # Task 1: H100 job (building-limited, worker has resources but at limit)
+    h100_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="h100-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_h100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "h100-job", h100_req)
+
+    # Task 2: A100 job (truly unschedulable, no A100 workers exist)
+    a100_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="a100-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            device=_a100_device(),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "a100-job", a100_req)
+
+    workers = state.get_available_workers()
+    demand = compute_demand_entries(state, scheduler, workers)
+    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+
+    assert len(task_demand) == 1
+    assert "a100-job" in task_demand[0].task_ids[0], "Only A100 task should emit demand"
+
+
+# =============================================================================
+# Holder Task Zero-Resource Tests
+# =============================================================================
+
+
+def test_holder_tasks_consume_zero_resources():
+    """Holder tasks consume zero resources when assigned to workers."""
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+
+    worker_before = state.get_worker(wid)
+    gpus_before = worker_before.available_gpus
+
+    # Assign holder task
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+
+    # Worker's available GPUs should NOT decrease (zero resources)
+    worker_after = state.get_worker(wid)
+    assert worker_after.available_gpus == gpus_before
+
+    # But the task should be tracked in running_tasks
+    assert holder_tasks[0].task_id in worker_after.running_tasks
+
+
+def test_holder_task_cleanup_releases_no_resources():
+    """When a holder task finishes, it doesn't release resources it never committed."""
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+
+    # Assign holder task
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+
+    worker_before = state.get_worker(wid)
+    gpus_before = worker_before.available_gpus
+
+    # Kill the holder task via parent job cancellation
+    parent_job_id = JobName.root("test-user", "j1")
+    state.handle_event(JobCancelledEvent(job_id=parent_job_id, reason="test"))
+
+    # Worker GPUs should be unchanged (nothing to release)
+    worker_after = state.get_worker(wid)
+    assert worker_after.available_gpus == gpus_before
+    assert holder_tasks[0].task_id not in worker_after.running_tasks
+
+
+def test_holder_tasks_excluded_from_building_counts():
+    """Holder tasks in ASSIGNED state should not consume building slots.
+
+    Without this exclusion, a worker holding only a reservation task would be
+    permanently "at building limit" and the real reserved task could never be
+    assigned to that otherwise idle worker.
+    """
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+
+    # Assign holder task — it goes to ASSIGNED state
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+    assert holder_tasks[0].state == cluster_pb2.TASK_STATE_ASSIGNED
+
+    # Building counts should NOT include the holder task
+    building_counts = state.snapshot_building_counts()
+    assert building_counts.get(wid, 0) == 0
+
+
+def test_holder_tasks_excluded_from_heartbeat_expected_tasks():
+    """Holder tasks must not appear in heartbeat expected_tasks.
+
+    Holder tasks are virtual — never dispatched to the worker. If included
+    in expected_tasks the worker reports "Task not found on worker", causing
+    a worker_failed → retry loop (GH-3178).
+    """
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_worker_metadata())
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_tasks = state.get_job_tasks(holder_job_id)
+    assert len(holder_tasks) == 1
+
+    # Assign holder task to worker
+    state.handle_event(TaskAssignedEvent(task_id=holder_tasks[0].task_id, worker_id=wid))
+
+    # Heartbeat snapshot must NOT include the holder task
+    snapshot = state.begin_heartbeat(wid)
+    assert snapshot is not None
+    running_task_ids = {entry.task_id for entry in snapshot.running_tasks}
+    assert holder_tasks[0].task_id not in running_task_ids
+
+
+def test_snapshot_round_trip_preserves_reservation_holder():
+    """Snapshot save/restore round-trip preserves is_reservation_holder flag."""
+    from iris.cluster.controller.snapshot import create_snapshot, restore_snapshot
+
+    state = ControllerState()
+
+    req = _make_reservation_job_request(
+        task_device=_h100_device(),
+        reservation_devices=[_h100_device()],
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
+    holder_job = state.get_job(holder_job_id)
+    assert holder_job is not None
+    assert holder_job.is_reservation_holder is True
+
+    # Save and restore
+    snap_result = create_snapshot(state, reservation_claims={})
+    restored_state = ControllerState()
+    restore_snapshot(snap_result.proto, restored_state)
+
+    restored_holder = restored_state.get_job(holder_job_id)
+    assert restored_holder is not None
+    assert restored_holder.is_reservation_holder is True
+
+    # Parent should not be a holder
+    parent_job_id = JobName.root("test-user", "j1")
+    restored_parent = restored_state.get_job(parent_job_id)
+    assert restored_parent is not None
+    assert restored_parent.is_reservation_holder is False

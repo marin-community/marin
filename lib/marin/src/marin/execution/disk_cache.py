@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Run a function once, cache the result, and return it on subsequent calls."""
@@ -8,16 +8,14 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
-import os
 from collections.abc import Callable
 from typing import Generic, TypeVar, ParamSpec
 
 import cloudpickle
-import fsspec
-from iris.temp_buckets import get_temp_bucket_path
+from iris.marin_fs import marin_temp_bucket, open_url
 
-from marin.execution.distributed_lock import StepAlreadyDone
 from marin.execution.executor_step_status import (
+    StepAlreadyDone,
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
@@ -100,15 +98,13 @@ class disk_cache(Generic[P, T]):
         output_path = self._output_path
         if output_path is None:
             args_fingerprint = fingerprint_args(*args, **kwargs)
-            output_path = get_temp_bucket_path(1, f"disk_cache_{args_fingerprint}")
-            if output_path is None:
-                output_path = os.environ["MARIN_PREFIX"] + f"/disk_cache_{args_fingerprint}"
+            output_path = marin_temp_bucket(1, f"disk_cache_{args_fingerprint}")
 
         def load_result() -> T:
             assert output_path is not None
             if self._load_fn is not None:
                 return self._load_fn(output_path)
-            with fsspec.open(output_path + "/data.pkl", "rb") as f:
+            with open_url(output_path + "/data.pkl", "rb") as f:
                 return cloudpickle.loads(f.read())
 
         status_file = StatusFile(output_path, worker_id())
@@ -130,7 +126,7 @@ class disk_cache(Generic[P, T]):
         if self._save_fn is not None:
             self._save_fn(result, output_path)
         else:
-            with fsspec.open(output_path + "/data.pkl", "wb") as f:
+            with open_url(output_path + "/data.pkl", "wb") as f:
                 f.write(cloudpickle.dumps(result))
 
         StatusFile(output_path, worker_id()).write_status(STATUS_SUCCESS)

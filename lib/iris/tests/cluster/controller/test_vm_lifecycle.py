@@ -1,7 +1,7 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ from unittest.mock import patch
 import pytest
 
 from iris.cluster.controller.vm_lifecycle import (
+    _build_controller_vm_config,
     start_controller,
     stop_controller,
 )
@@ -126,6 +127,9 @@ class FakePlatform:
         self._existing_vms = existing_vms or []
         self._vm_to_create = vm_to_create or FakeWorkerHandle()
         self.created_vms: list[FakeWorkerHandle] = []
+
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
 
     def create_vm(self, config: config_pb2.VmConfig) -> FakeWorkerHandle:
         self.created_vms.append(self._vm_to_create)
@@ -308,3 +312,14 @@ def test_stop_controller_duplicate_vms_raises(config):
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
         stop_controller(platform, config)
+
+
+def test_gcp_controller_vm_config_defaults_to_100gb_disk():
+    """GCP controller VM defaults to 100GB disk."""
+    config = config_pb2.IrisClusterConfig()
+    config.platform.label_prefix = "test"
+    config.controller.gcp.zone = "us-central1-a"
+
+    vm_config = _build_controller_vm_config(config)
+
+    assert vm_config.gcp.boot_disk_size_gb == 100

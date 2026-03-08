@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2ECluster: context manager for running Controller + Worker clusters in tests.
@@ -52,14 +52,13 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
         name="local-cpu",
         min_slices=num_workers,
         max_slices=num_workers,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(
-            cpu=8,
+            cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
-            gpu_count=0,
-            tpu_count=0,
+            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            device_count=0,
         ),
     )
     config.scale_groups["local-cpu"].CopyFrom(sg)
@@ -84,7 +83,7 @@ class E2ECluster:
             When None, a fresh temp directory is created per cluster.
         env_provider_factory: Optional factory for creating per-worker
             EnvironmentProviders. Signature: (worker_id, num_workers) -> provider.
-            Use TPUSimEnvironmentProvider for TPU simulation tests.
+            Use FixedEnvironmentProvider for TPU simulation tests.
     """
 
     def __init__(
@@ -165,7 +164,6 @@ class E2ECluster:
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),
                 default_task_image="iris-task:latest",
-                log_prefix=f"file://{(cache_path / 'iris-logs').as_posix()}",
             )
             env_provider = None
             if self._env_provider_factory:
@@ -248,7 +246,7 @@ class E2ECluster:
             return (
                 JobName.from_string(job_or_id).to_wire()
                 if job_or_id.startswith("/")
-                else JobName.root(job_or_id).to_wire()
+                else JobName.root("test-user", job_or_id).to_wire()
             )
         return str(job_or_id.job_id)
 

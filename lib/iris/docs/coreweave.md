@@ -271,7 +271,9 @@ runaway autoscaling from system pods.
 
 The controller runs as a single-replica Deployment scheduled onto the configured
 `scale_group` NodePool. Workers discover it via K8s Service DNS. The controller
-Pod uses in-cluster ServiceAccount auth for all kubectl operations.
+Pod uses in-cluster ServiceAccount auth for all kubectl operations and requests
+dedicated `cpu: 2` and `memory: 4Gi` (with matching limits) so it runs with
+Guaranteed QoS instead of BestEffort.
 
 Cost note: the smallest CoreWeave CPU instance (`cd-gp-i64-erapids`, 64 vCPU,
 256 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
@@ -335,7 +337,6 @@ The platform detects fatal errors before the full timeout expires:
 
 | Variable | Source | Description |
 |----------|--------|-------------|
-| `IRIS_VM_ADDRESS` | Downward API (`status.podIP`) | Pod's own IP address |
 | `IRIS_WORKER_NODE_NAME` | Downward API (`spec.nodeName`) | Kubernetes node name |
 | `IRIS_POD_NAMESPACE` | Downward API (`metadata.namespace`) | Pod's namespace |
 | `IRIS_POD_NAME` | Downward API (`metadata.name`) | Pod's name |

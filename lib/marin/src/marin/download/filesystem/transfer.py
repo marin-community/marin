@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -6,7 +6,7 @@ import random
 import time
 from dataclasses import dataclass
 
-import fsspec
+from iris.marin_fs import url_to_fs
 from zephyr import Dataset, ZephyrContext
 
 from marin.utils import fsspec_exists, fsspec_glob
@@ -36,7 +36,7 @@ def transfer_files(config: TransferConfig) -> None:
 
     print(f"Downloading {input_path} from GCS.")
     start_time: float = time.time()
-    fs, _ = fsspec.core.url_to_fs(input_path)
+    fs, _ = url_to_fs(input_path)
     if not fs.exists(input_path):
         raise FileNotFoundError(f"{input_path} does not exist.")
 

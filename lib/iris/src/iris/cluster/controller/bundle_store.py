@@ -1,14 +1,15 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Bundle storage utilities for the controller."""
 
 import hashlib
 import logging
+import threading
 
-import fsspec.core
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.marin_fs import url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class BundleStore:
 
     def __init__(self, bundle_prefix: str):
         self._prefix = bundle_prefix.rstrip("/")
+        self._lock = threading.Lock()
 
     @property
     def prefix(self) -> str:
@@ -43,13 +45,18 @@ class BundleStore:
         """
         bundle_hash = hashlib.sha256(blob).hexdigest()
         bundle_path = f"{self._prefix}/{bundle_hash}/bundle.zip"
-        try:
-            fs, path = fsspec.core.url_to_fs(bundle_path)
-            parent_dir = path.rsplit("/", 1)[0]
-            fs.makedirs(parent_dir, exist_ok=True)
-            with fs.open(path, "wb") as f:
-                f.write(blob)
-            logger.info("Uploaded bundle for job %s to %s (%d bytes)", job_id, bundle_path, len(blob))
-            return bundle_path
-        except Exception as e:
-            raise ConnectError(Code.INTERNAL, f"Failed to store bundle: {e}") from e
+
+        with self._lock:
+            try:
+                fs, path = url_to_fs(bundle_path)
+                if fs.exists(path):
+                    logger.info("Bundle for job %s already exists at %s, skipping upload", job_id, bundle_path)
+                    return bundle_path
+                parent_dir = path.rsplit("/", 1)[0]
+                fs.makedirs(parent_dir, exist_ok=True)
+                with fs.open(path, "wb") as f:
+                    f.write(blob)
+                logger.info("Uploaded bundle for job %s to %s (%d bytes)", job_id, bundle_path, len(blob))
+                return bundle_path
+            except Exception as e:
+                raise ConnectError(Code.INTERNAL, f"Failed to store bundle: {e}") from e

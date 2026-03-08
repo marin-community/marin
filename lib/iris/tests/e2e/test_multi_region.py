@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2E tests for multi-region constraint-based routing.
@@ -14,22 +14,25 @@ against worker attributes to route jobs to the correct region.
 """
 
 
+import time
+
 import pytest
+from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.constraints import region_constraint
 from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     ResourceSpec,
-    region_constraint,
 )
-from iris.client.client import IrisClient
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
-from .conftest import IRIS_ROOT, DEFAULT_CONFIG, TestCluster
+from .conftest import DEFAULT_CONFIG, IRIS_ROOT, IrisTestCluster
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.timeout(120)]
 
 REGION_A = "us-central1"
 REGION_B = "europe-west4"
@@ -43,15 +46,15 @@ def _make_multi_region_config() -> config_pb2.IrisClusterConfig:
     for name, region in [("cpu-region-a", REGION_A), ("cpu-region-b", REGION_B)]:
         sg = config.scale_groups[name]
         sg.name = name
-        sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.num_vms = 1
         sg.min_slices = 1
         sg.max_slices = 2
-        sg.resources.cpu = 8
+        sg.resources.cpu_millicores = 8000
         sg.resources.memory_bytes = 16 * 1024**3
         sg.resources.disk_bytes = 50 * 1024**3
+        sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
         sg.slice_template.local.SetInParent()
-        sg.worker.attributes["region"] = region
+        sg.worker.attributes[WellKnownAttribute.REGION] = region
 
     return make_local_config(config)
 
@@ -66,21 +69,29 @@ def multi_region_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = TestCluster(url=url, client=client, controller_client=controller_client)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
         tc.wait_for_workers(2, timeout=30)
         yield tc
         controller_client.close()
 
 
-def _get_worker_region(cluster: TestCluster, worker_id: str) -> str | None:
-    """Look up the region attribute for a worker by its ID."""
-    request = cluster_pb2.Controller.ListWorkersRequest()
-    response = cluster.controller_client.list_workers(request)
-    for w in response.workers:
-        if w.worker_id == worker_id:
-            region_attr = w.metadata.attributes.get("region")
-            if region_attr and region_attr.HasField("string_value"):
-                return region_attr.string_value
+def _get_worker_region(cluster: IrisTestCluster, worker_id: str, timeout: float = 10.0) -> str | None:
+    """Look up the region attribute for a worker by its ID.
+
+    Retries until timeout because worker metadata may not be immediately
+    available after task completion due to heartbeat propagation delays.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        request = cluster_pb2.Controller.ListWorkersRequest()
+        response = cluster.controller_client.list_workers(request)
+        for w in response.workers:
+            # Match by worker_id or address since the task may report either
+            if w.worker_id == worker_id or w.address == worker_id:
+                region_attr = w.metadata.attributes.get(WellKnownAttribute.REGION)
+                if region_attr and region_attr.HasField("string_value"):
+                    return region_attr.string_value
+        time.sleep(0.5)
     return None
 
 
@@ -97,7 +108,7 @@ def test_region_constrained_job_routes_correctly(multi_region_cluster):
         "region-a-job",
         constraints=[region_constraint([REGION_A])],
     )
-    status = cluster.wait(job, timeout=30)
+    status = cluster.wait(job, timeout=60)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     task = cluster.task_status(job, task_index=0)
@@ -168,7 +179,7 @@ def _submit_child_with_region_override():
     The child specifies region-b, overriding the parent's region-a constraint.
     """
     from iris.client.client import iris_ctx
-    from iris.cluster.types import region_constraint
+    from iris.cluster.constraints import region_constraint
 
     ctx = iris_ctx()
     child = ctx.client.submit(

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Top-level Iris CLI entry point.
@@ -19,12 +19,11 @@ logger = _logging_module.getLogger(__name__)
 
 
 def _configure_client_s3(config) -> None:
-    """Configure S3 env vars so client-side fsspec reads (log streaming) work.
+    """Configure S3 env vars for fsspec access (e.g. bundle downloads).
 
-    The CLI reads task logs directly from S3 via LogReader/fsspec. fsspec needs
-    AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from R2_ACCESS_KEY_ID/
-    R2_SECRET_ACCESS_KEY), AWS_ENDPOINT_URL, and FSSPEC_S3 with the correct
-    endpoint. Without these, log streaming fails with NoCredentialsError.
+    fsspec needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from
+    R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY), AWS_ENDPOINT_URL, and FSSPEC_S3
+    with the correct endpoint.
     """
     from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
 
@@ -65,6 +64,7 @@ def require_controller_url(ctx: click.Context) -> str:
 
         iris_config = IrisConfig(config)
         platform = iris_config.platform()
+        ctx.obj["platform"] = platform
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
             from iris.cluster.controller.local import LocalController

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2E test: GPU worker metadata propagation.
@@ -20,6 +20,7 @@ from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
+from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration
@@ -40,13 +41,13 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
 
     sg = config.scale_groups["placeholder"]
     sg.name = "placeholder"
-    sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.num_vms = 1
     sg.min_slices = 0
     sg.max_slices = 0
-    sg.resources.cpu = 1
+    sg.resources.cpu_millicores = 1000
     sg.resources.memory_bytes = 1 * 1024**3
     sg.resources.disk_bytes = 10 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
     sg.slice_template.local.SetInParent()
 
     return make_local_config(config)
@@ -119,10 +120,14 @@ def test_gpu_worker_metadata_visible_to_controller(tmp_path):
 
                 # Worker attributes map (used by dashboard and constraint scheduler)
                 attrs = meta.attributes
-                assert "gpu-variant" in attrs, f"Expected 'gpu-variant' in attributes, got keys: {sorted(attrs.keys())}"
-                assert "H100" in attrs["gpu-variant"].string_value
-                assert "gpu-count" in attrs, f"Expected 'gpu-count' in attributes, got keys: {sorted(attrs.keys())}"
-                assert attrs["gpu-count"].int_value == 8
+                assert (
+                    WellKnownAttribute.GPU_VARIANT in attrs
+                ), f"Expected 'gpu-variant' in attributes, got keys: {sorted(attrs.keys())}"
+                assert "H100" in attrs[WellKnownAttribute.GPU_VARIANT].string_value
+                assert (
+                    WellKnownAttribute.GPU_COUNT in attrs
+                ), f"Expected 'gpu-count' in attributes, got keys: {sorted(attrs.keys())}"
+                assert attrs[WellKnownAttribute.GPU_COUNT].int_value == 8
 
                 controller_client.close()
             finally:

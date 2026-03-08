@@ -39,7 +39,6 @@ platform:
 
 storage:
   bundle_prefix: s3://marin-test/iris/bundles
-  log_prefix: s3://marin-test/iris/logs
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
@@ -49,11 +48,6 @@ controller:
     scale_group: cpu-erapids
 
 defaults:
-  timeouts:
-    boot_timeout:
-      milliseconds: 1800000    # 30 min — bare metal boot takes 20-30 min
-    init_timeout:
-      milliseconds: 1800000
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -63,23 +57,22 @@ defaults:
       milliseconds: 300000
     startup_grace_period:
       milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
-  default_task_image: ghcr.io/marin-community/iris-task:latest
-  bootstrap:
+  worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
-    worker_port: 10001
+    port: 10001
     cache_dir: /mnt/local/iris-cache
     runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
 
 scale_groups:
   # CPU general-purpose — used for data processing, orchestration, etc.
   cpu-erapids:
-    accelerator_type: cpu
     num_vms: 1
     resources:
       cpu: 64
       ram: 256GB
-      gpu_count: 0
       disk: 1TB
+      device_type: cpu
     worker:
       attributes:
         region: US-WEST-04A
@@ -88,7 +81,6 @@ scale_groups:
     max_slices: 1  # Cost-safe default; increase for production workloads
     priority: 100
     slice_template:
-      accelerator_type: cpu
       num_vms: 1
       coreweave:
         region: US-WEST-04A
@@ -96,14 +88,14 @@ scale_groups:
 
   # 8x H100 with InfiniBand — primary training workhorse
   h100-8x:
-    accelerator_type: gpu
-    accelerator_variant: H100
     num_vms: 1
     resources:
       cpu: 128
       ram: 2048GB
-      gpu_count: 8
       disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
     worker:
       attributes:
         region: US-WEST-04A
@@ -112,8 +104,6 @@ scale_groups:
     max_slices: 1  # Cost-safe default; increase for production workloads
     priority: 50
     slice_template:
-      accelerator_type: gpu
-      accelerator_variant: H100
       num_vms: 1
       coreweave:
         region: US-WEST-04A

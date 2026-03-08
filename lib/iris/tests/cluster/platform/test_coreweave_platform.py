@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Behavioral tests for CoreweavePlatform.
@@ -25,7 +25,11 @@ from iris.cluster.platform.base import (
     Labels,
     PlatformError,
 )
-from iris.cluster.platform.coreweave import CoreweavePlatform
+from iris.cluster.platform.coreweave import (
+    _CONTROLLER_CPU_REQUEST,
+    _CONTROLLER_MEMORY_REQUEST,
+    CoreweavePlatform,
+)
 from iris.cluster.platform.factory import create_platform
 from iris.rpc import config_pb2
 
@@ -53,7 +57,6 @@ def _make_slice_config(
         name_prefix=name_prefix,
         num_vms=1,
         gpu_count=gpu_count,
-        accelerator_variant="H100",
         coreweave=config_pb2.CoreweaveSliceConfig(
             region="LGA1",
             instance_type=instance_type,
@@ -62,10 +65,10 @@ def _make_slice_config(
     )
 
 
-def _make_bootstrap_config() -> config_pb2.BootstrapConfig:
-    return config_pb2.BootstrapConfig(
+def _make_worker_config() -> config_pb2.WorkerConfig:
+    return config_pb2.WorkerConfig(
         docker_image="ghcr.io/marin-community/iris-worker:latest",
-        worker_port=10001,
+        port=10001,
         cache_dir="/var/cache/iris",
         runtime="kubernetes",
     )
@@ -491,7 +494,7 @@ def test_create_slice_returns_handle_in_creating_state(fake_kubectl: FakeKubectl
     """create_slice() returns a handle immediately in CREATING state."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     status = handle.describe()
@@ -507,7 +510,7 @@ def test_slice_lifecycle_happy_path(fake_kubectl: FakeKubectl):
     """Simulate the full lifecycle: CREATING -> BOOTSTRAPPING -> READY."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
 
@@ -530,7 +533,7 @@ def test_slice_transitions_through_bootstrapping(fake_kubectl: FakeKubectl):
     """Verify the BOOTSTRAPPING state is observed between CREATING and READY."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
 
@@ -552,7 +555,7 @@ def test_slice_failure_on_pod_apply_error(fake_kubectl: FakeKubectl):
     """When Pod apply fails, handle transitions to FAILED."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     # Fail on the first apply (which will be the Pod apply)
     fake_kubectl.set_failure("apply", "node provisioning failed")
@@ -634,12 +637,12 @@ def test_discover_controller_defaults():
     platform.shutdown()
 
 
-def test_create_slice_requires_bootstrap_config(fake_kubectl: FakeKubectl):
-    """create_slice() raises ValueError when bootstrap_config is not provided."""
+def test_create_slice_requires_worker_config(fake_kubectl: FakeKubectl):
+    """create_slice() raises ValueError when worker_config is not provided."""
     platform = _make_platform()
     config = _make_slice_config()
 
-    with pytest.raises(ValueError, match="bootstrap_config is required"):
+    with pytest.raises(ValueError, match="worker_config is required"):
         platform.create_slice(config)
     platform.shutdown()
 
@@ -648,7 +651,7 @@ def test_terminate_deletes_pod_only(fake_kubectl: FakeKubectl):
     """terminate() deletes the Pod but does not touch NodePools."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     slice_id = handle.slice_id
@@ -676,7 +679,7 @@ def test_worker_handle_status(fake_kubectl: FakeKubectl):
     """CoreweaveWorkerHandle.status() maps Pod phase to CloudWorkerState."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -708,7 +711,7 @@ def test_run_command_on_line_streams_output(fake_kubectl: FakeKubectl):
     """run_command() with on_line streams output line-by-line via Popen."""
     platform = _make_platform()
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -744,7 +747,7 @@ def test_node_selector_uses_label_override_not_name_prefix(fake_kubectl: FakeKub
     iris_labels = Labels("iris")
     config = _make_slice_config(name_prefix="iris-h100_8x")
     config.labels[iris_labels.iris_scale_group] = "h100_8x"
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     assert handle.scale_group == "h100_8x"
@@ -764,7 +767,6 @@ def test_create_slice_rejects_multi_node(fake_kubectl: FakeKubectl):
         name_prefix="h100-8x",
         num_vms=2,
         gpu_count=8,
-        accelerator_variant="H100",
         coreweave=config_pb2.CoreweaveSliceConfig(
             region="LGA1",
             instance_type="gd-8xh100ib-i128",
@@ -1013,6 +1015,8 @@ def test_start_controller_creates_all_resources(fake_kubectl: FakeKubectl):
     assert "AWS_ACCESS_KEY_ID" in env_names
     assert "AWS_SECRET_ACCESS_KEY" in env_names
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_names
+    assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+    assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
 
     t.join(timeout=5)
     platform.shutdown()
@@ -1184,14 +1188,14 @@ def test_worker_pod_has_gpu_resource_limits_with_docker_runtime(fake_kubectl: Fa
     """Worker Pods request nvidia.com/gpu resource limits when runtime is docker."""
     platform = _make_platform()
     config = _make_slice_config(gpu_count=8)
-    bootstrap = config_pb2.BootstrapConfig(
+    wc = config_pb2.WorkerConfig(
         docker_image="ghcr.io/marin-community/iris-worker:latest",
-        worker_port=10001,
+        port=10001,
         cache_dir="/var/cache/iris",
         runtime="docker",
     )
 
-    handle = platform.create_slice(config, bootstrap)
+    handle = platform.create_slice(config, wc)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
     pod_name = f"iris-worker-{handle.slice_id}"
@@ -1205,7 +1209,7 @@ def test_worker_pod_no_gpu_limits_with_kubernetes_runtime(fake_kubectl: FakeKube
     """With kubernetes runtime, worker Pods must not request GPU resources (task Pods claim them)."""
     platform = _make_platform()
     config = _make_slice_config(gpu_count=8)
-    bootstrap = _make_bootstrap_config()  # runtime="kubernetes"
+    bootstrap = _make_worker_config()  # runtime="kubernetes"
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -1220,7 +1224,7 @@ def test_worker_pod_no_gpu_limits_when_zero(fake_kubectl: FakeKubectl):
     """Worker Pods omit nvidia.com/gpu when gpu_count is 0 (CPU-only)."""
     platform = _make_platform()
     config = _make_slice_config(gpu_count=0)
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
@@ -1236,7 +1240,7 @@ def test_worker_pod_has_s3_env_vars(fake_kubectl: FakeKubectl):
     platform = _make_platform()
     platform._s3_enabled = True
     config = _make_slice_config()
-    bootstrap = _make_bootstrap_config()
+    bootstrap = _make_worker_config()
 
     handle = platform.create_slice(config, bootstrap)
 
@@ -1539,17 +1543,17 @@ def _make_cluster_config_with_workers(
     service_name: str = "iris-controller-svc",
     bundle_prefix: str = "gs://test-bucket/bundles",
 ) -> config_pb2.IrisClusterConfig:
-    """Build a cluster config with scale_groups and bootstrap config for reload tests."""
+    """Build a cluster config with scale_groups and worker config for reload tests."""
     config = _make_cluster_config(
         port=port,
         service_name=service_name,
         image=controller_image,
         bundle_prefix=bundle_prefix,
     )
-    config.defaults.bootstrap.CopyFrom(
-        config_pb2.BootstrapConfig(
+    config.defaults.worker.CopyFrom(
+        config_pb2.WorkerConfig(
             docker_image=worker_image,
-            worker_port=10001,
+            port=10001,
             cache_dir="/var/cache/iris",
             runtime="kubernetes",
         )
@@ -1561,7 +1565,6 @@ def _make_cluster_config_with_workers(
         config_pb2.SliceConfig(
             name_prefix=scale_group_name,
             num_vms=1,
-            accelerator_variant="H100",
             coreweave=config_pb2.CoreweaveSliceConfig(
                 region="LGA1",
                 instance_type="gd-8xh100ib-i128",
@@ -1569,7 +1572,7 @@ def _make_cluster_config_with_workers(
             ),
         )
     )
-    sg.resources.CopyFrom(config_pb2.ScaleGroupResources(gpu_count=8))
+    sg.resources.CopyFrom(config_pb2.ScaleGroupResources(device_count=8, device_type=config_pb2.ACCELERATOR_TYPE_GPU))
     return config
 
 
@@ -1624,97 +1627,6 @@ def _seed_controller_deployment(fake_kubectl: FakeKubectl, image: str = "ghcr.io
         },
         "status": {"availableReplicas": 1},
     }
-
-
-def test_reload_updates_configmap_and_controller(fake_kubectl: FakeKubectl):
-    """reload() updates ConfigMap with new config and performs rolling update on controller Deployment."""
-    platform = _make_platform()
-    _seed_controller_deployment(fake_kubectl)
-
-    cluster_config = _make_cluster_config_with_workers(controller_image="ghcr.io/marin-community/iris-controller:v2")
-
-    address = platform.reload(cluster_config)
-
-    # ConfigMap should be updated
-    assert "iris-cluster-config" in fake_kubectl._configmaps
-    cm_data = fake_kubectl._configmaps["iris-cluster-config"]["data"]
-    config_dict = json.loads(cm_data["config.json"])
-    assert config_dict["controller"]["image"] == "ghcr.io/marin-community/iris-controller:v2"
-
-    # Controller Deployment image should be updated via set_image
-    container = fake_kubectl._deployments["iris-controller"]["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"] == "ghcr.io/marin-community/iris-controller:v2"
-
-    assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
-    platform.shutdown()
-
-
-def test_reload_replaces_worker_pods(fake_kubectl: FakeKubectl):
-    """reload() deletes old worker Pod and recreates it with updated image."""
-    platform = _make_platform()
-    _seed_controller_deployment(fake_kubectl)
-    _seed_worker_pod(fake_kubectl, slice_id="iris-h100-8x-1000", scale_group="h100-8x")
-
-    pod_name = "iris-worker-iris-h100-8x-1000"
-    assert pod_name in fake_kubectl._pods
-
-    cluster_config = _make_cluster_config_with_workers(
-        scale_group_name="h100-8x",
-        worker_image="ghcr.io/marin-community/iris-worker:v2",
-    )
-
-    # The reload will: delete old Pod, create new Pod via apply, then wait for readiness.
-    deleted = threading.Event()
-    original_delete = fake_kubectl._handle_delete_pod
-
-    def tracking_delete(args, namespace):
-        result = original_delete(args, namespace)
-        deleted.set()
-        return result
-
-    fake_kubectl._handle_delete_pod = tracking_delete
-
-    def auto_ready_new_pod():
-        deleted.wait(timeout=10)
-        # Wait for the Pod to be re-created via apply
-        _wait_for_condition(lambda: pod_name in fake_kubectl._pods, timeout=10)
-        fake_kubectl.make_pod_ready(pod_name)
-
-    t = threading.Thread(target=auto_ready_new_pod, daemon=True)
-    t.start()
-
-    platform.reload(cluster_config)
-
-    # The recreated worker Pod should have the updated image
-    assert pod_name in fake_kubectl._pods
-    container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
-    assert container["image"] == "ghcr.io/marin-community/iris-worker:v2"
-
-    t.join(timeout=5)
-    platform.shutdown()
-
-
-def test_reload_skips_missing_scale_group(fake_kubectl: FakeKubectl):
-    """reload() warns and skips Pod recreation when scale group is not in config."""
-    platform = _make_platform()
-    _seed_controller_deployment(fake_kubectl)
-    # Seed a worker with scale_group "unknown-group" which won't be in config
-    _seed_worker_pod(fake_kubectl, slice_id="iris-unknown-group-2000", scale_group="unknown-group")
-
-    old_pod_name = "iris-worker-iris-unknown-group-2000"
-    assert old_pod_name in fake_kubectl._pods
-
-    # Config only has "h100-8x" scale group, not "unknown-group"
-    cluster_config = _make_cluster_config_with_workers(scale_group_name="h100-8x")
-
-    platform.reload(cluster_config)
-
-    # Old Pod should be deleted (always happens)
-    assert old_pod_name not in fake_kubectl._pods
-    # No new Pod should be created (scale group not in config)
-    worker_pods = [k for k in fake_kubectl._pods if k.startswith("iris-worker-")]
-    assert len(worker_pods) == 0
-    platform.shutdown()
 
 
 # ============================================================================

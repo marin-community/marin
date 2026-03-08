@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -15,10 +15,17 @@ from typing import Any
 
 import jmp
 from fray.v2 import ResourceConfig
+from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, PreferenceLmDataConfig, TextLmDatasetFormat
+from levanter.data.text import (
+    BlockShuffleConfig,
+    LmDatasetFormatBase,
+    LMMixtureDatasetConfig,
+    PreferenceLmDataConfig,
+    TextLmDatasetFormat,
+)
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -49,6 +56,7 @@ from marin.execution.executor import (
     ensure_versioned,
     this_output_path,
     unwrap_versioned_value,
+    versioned,
 )
 from marin.processing.tokenize import (
     HfDatasetSpec,
@@ -67,7 +75,15 @@ from marin.training.training import (
     run_levanter_train_lm,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
+    io_block_size=256,
+    window_blocks=512,
+    perm_type="feistel",
+)
+"""Hierarchical block-shuffle default for newly constructed training runs."""
 
 
 def _truncate_wandb_name(name: str) -> str:
@@ -206,16 +222,18 @@ def default_tokenize(
     return ExecutorStep(
         name=os.path.join("tokenized", name),
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=tokenize,
+        fn=remote(
+            tokenize,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+            pip_dependency_groups=["cpu"],
+            env_vars={
+                "TRANSFORMERS_NO_TORCH": "1",
+                "TRANSFORMERS_NO_TORCHVISION": "1",
+                "USE_TORCH": "0",
+                "TORCH_DISABLE_GLOBAL_DEPS": "1",
+            },
+        ),
         config=config,
-        resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
-        pip_dependency_groups=["cpu"],
-        env_vars={
-            "TRANSFORMERS_NO_TORCH": "1",
-            "TRANSFORMERS_NO_TORCHVISION": "1",
-            "USE_TORCH": "0",
-            "TORCH_DISABLE_GLOBAL_DEPS": "1",
-        },
     )
 
 
@@ -378,8 +396,6 @@ def default_train(
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
             profiler=train_config.profiler,
-            profiler_start_step=train_config.profiler_start_step,
-            profiler_num_steps=train_config.profiler_num_steps,
             use_explicit_mesh_axes=train_config.explicit_mesh_axes,
         ),
         initialize_from_checkpoint_path=(
@@ -675,6 +691,7 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
+            shuffle=versioned(DEFAULT_NEW_RUN_DATA_SHUFFLE),
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures

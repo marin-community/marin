@@ -12,11 +12,14 @@
 ## Shared Workflow Playbooks
 
 - Begin with the agent-friendly recipes in `docs/recipes/`.
+- For PR descriptions, testing, specifications, and review workflow, follow [pull-request.md](docs/recipes/pull-request.md).
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
 - For long-running benchmark/research threads, follow [agent_research.md](docs/recipes/agent_research.md).
+- For canary/daily ferry proposal, launch, and monitoring workflow, follow [ferries.md](docs/recipes/ferries.md).
 - When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
 - For TPU hill-climbing work on Gated DeltaNet kernels, follow [optimize_gdn_pallas_tpu.md](docs/recipes/optimize_gdn_pallas_tpu.md).
+- For profiling ingestion and agent-driven optimization workflows, follow [agent_profiling.md](docs/recipes/agent_profiling.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
 
 ## Shared Coding Practices
@@ -25,7 +28,8 @@
 
 - Assume Python >=3.11.
 - Always use `uv run` for Python entry points. If that fails, try `.venv/bin/python` directly.
-- Run `./infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
+- Run `./infra/pre-commit.py --all-files --fix` before sending changes; formatting and linting are enforced with `ruff`.
+- `./infra/pre-commit.py` is the required lint entry point for this repo. Do not replace it with `uv run pre-commit ...` (the `pre-commit` CLI may be unavailable in some environments).
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
 ### Communication & Commits
@@ -116,3 +120,4 @@ DO NOT:
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
+- NEVER EVER stop, restart, or otherwise bounce a Ray cluster unless the user has given express permission for that exact action.

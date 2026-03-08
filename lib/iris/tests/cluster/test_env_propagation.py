@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for environment variable propagation from parent jobs to child jobs.
@@ -17,11 +17,8 @@ import pytest
 
 from iris.client import IrisClient, IrisContext, LocalClientConfig, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
+from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.types import (
-    PREEMPTIBLE_ATTRIBUTE_KEY,
-    REGION_ATTRIBUTE_KEY,
-    Constraint,
-    ConstraintOp,
     Entrypoint,
     EnvironmentSpec,
     JobName,
@@ -44,7 +41,7 @@ def local_client():
 def parent_context(local_client):
     """Simulate running inside a parent Iris job."""
     return IrisContext(
-        job_id=JobName.root("parent-job"),
+        job_id=JobName.root("test-user", "parent-job"),
         client=local_client,
     )
 
@@ -70,7 +67,7 @@ def test_child_job_inherits_parent_env(local_client, parent_context):
         job = local_client.submit(entrypoint, "child-job", resources)
 
     job.wait(timeout=30)
-    assert job.job_id == JobName.root("parent-job").child("child-job")
+    assert job.job_id == JobName.root("test-user", "parent-job").child("child-job")
 
 
 def test_child_job_does_not_inherit_os_environ(local_client, parent_context):
@@ -161,8 +158,8 @@ def test_child_job_inherits_parent_constraints(local_client, parent_context):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
     parent_constraints = [
-        Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="us-west4"),
-        Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="true"),
+        Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4"),
+        Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value="true"),
     ]
 
     captured_constraints = []
@@ -182,15 +179,15 @@ def test_child_job_inherits_parent_constraints(local_client, parent_context):
         finally:
             local_client._cluster_client.submit_job = original_submit
 
-    assert any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "us-west4" for c in captured_constraints)
-    assert any(c.key == PREEMPTIBLE_ATTRIBUTE_KEY and c.value.string_value == "true" for c in captured_constraints)
+    assert any(c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in captured_constraints)
+    assert any(c.key == WellKnownAttribute.PREEMPTIBLE and c.value.string_value == "true" for c in captured_constraints)
 
 
 def test_child_explicit_constraints_override_parent(local_client, parent_context):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-    parent_constraints = [Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="us-west4")]
-    child_constraints = [Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value="europe-west4")]
+    parent_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
+    child_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
 
     captured_constraints = []
     original_submit = local_client._cluster_client.submit_job
@@ -209,8 +206,12 @@ def test_child_explicit_constraints_override_parent(local_client, parent_context
         finally:
             local_client._cluster_client.submit_job = original_submit
 
-    assert any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "europe-west4" for c in captured_constraints)
-    assert not any(c.key == REGION_ATTRIBUTE_KEY and c.value.string_value == "us-west4" for c in captured_constraints)
+    assert any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "europe-west4" for c in captured_constraints
+    )
+    assert not any(
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in captured_constraints
+    )
 
 
 # ---------------------------------------------------------------------------

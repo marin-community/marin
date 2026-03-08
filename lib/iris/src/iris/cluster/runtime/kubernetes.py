@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Kubernetes-native runtime for task execution.
@@ -27,10 +27,17 @@ from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    build_pyspy_dump_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerStats, ContainerStatus
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerErrorKind,
+    ContainerPhase,
+    ContainerStats,
+    ContainerStatus,
+)
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
 from iris.time_utils import Deadline, Duration
@@ -68,6 +75,7 @@ def _build_task_script(config: ContainerConfig) -> str:
     """Build a shell script that prepares workdir, then runs the task."""
     lines = [
         "set -e",
+        "ulimit -c 0",
         'echo "iris-task starting (git_hash=${IRIS_GIT_HASH:-unknown})"',
         f"mkdir -p {shlex.quote(config.workdir)}",
         f"cd {shlex.quote(config.workdir)}",
@@ -334,7 +342,7 @@ class KubernetesContainerHandle:
 
     def status(self) -> ContainerStatus:
         if not self._pod_name:
-            return ContainerStatus(running=False, error="Pod not started")
+            return ContainerStatus(phase=ContainerPhase.STOPPED, error="Pod not started")
 
         pod = self.kubectl.get_json("pod", self._pod_name)
         if pod is None:
@@ -350,11 +358,11 @@ class KubernetesContainerHandle:
                     self._pod_not_found_count,
                     _POD_NOT_FOUND_RETRY_COUNT,
                 )
-                return ContainerStatus(running=True)
+                return ContainerStatus(phase=ContainerPhase.PENDING)
 
             attempt = self.config.attempt_id if self.config.attempt_id is not None else -1
             return ContainerStatus(
-                running=False,
+                phase=ContainerPhase.STOPPED,
                 error=(
                     "Task pod not found after retry window: "
                     f"name={self._pod_name}, namespace={self.kubectl.namespace}, "
@@ -369,8 +377,10 @@ class KubernetesContainerHandle:
         self._pod_not_found_deadline = None
 
         phase = pod.get("status", {}).get("phase", "")
-        if phase in ("Pending", "Running"):
-            return ContainerStatus(running=True)
+        if phase == "Pending":
+            return ContainerStatus(phase=ContainerPhase.PENDING)
+        if phase == "Running":
+            return ContainerStatus(phase=ContainerPhase.RUNNING)
 
         statuses = pod.get("status", {}).get("containerStatuses", [])
         terminated = {}
@@ -388,7 +398,7 @@ class KubernetesContainerHandle:
             error = message or reason or None
         oom_killed = reason == "OOMKilled"
         return ContainerStatus(
-            running=False,
+            phase=ContainerPhase.STOPPED,
             exit_code=exit_code if isinstance(exit_code, int) else 1,
             error=error,
             oom_killed=oom_killed,
@@ -398,22 +408,42 @@ class KubernetesContainerHandle:
         return KubernetesLogReader(self.kubectl, self._pod_name, "task")
 
     def stats(self) -> ContainerStats:
-        # This can be implemented via metrics.k8s.io when available.
-        return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        if not self._pod_name:
+            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        metrics = self.kubectl.top_pod(self._pod_name)
+        if metrics is None:
+            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+        cpu_mc, mem_bytes = metrics
+        return ContainerStats(
+            memory_mb=mem_bytes // (1024 * 1024),
+            cpu_percent=cpu_mc // 10,
+            process_count=1,
+            available=True,
+        )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory)."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         if not self._pod_name:
             raise RuntimeError("Cannot profile: no running pod")
 
         profile_id = uuid.uuid4().hex[:8]
 
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            return self._profile_threads()
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu, profile_id)
         elif profile_type.HasField("memory"):
             return self._profile_memory(duration_seconds, profile_type.memory, profile_id)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+
+    def _profile_threads(self) -> bytes:
+        """Collect thread stacks from the pod using py-spy dump."""
+        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="py-spy")
+        result = self.kubectl.exec(self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"py-spy dump failed: {result.stderr}")
+        return result.stdout.encode("utf-8")
 
     def _wrap_in_venv_shell(self, cmd: list[str]) -> list[str]:
         """Wrap a command to run inside the task venv via a login shell.
@@ -441,7 +471,7 @@ class KubernetesContainerHandle:
         )
         try:
             result = self.kubectl.exec(
-                self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=duration_seconds + 5
+                self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=duration_seconds + 30
             )
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
@@ -551,9 +581,6 @@ class KubernetesRuntime:
             if pod_name:
                 self._kubectl.delete("pod", pod_name, force=True)
         return len(pods)
-
-    def remove(self, container_id: str) -> None:
-        """No-op: pod lifecycle is managed by ContainerHandle.stop() / delete()."""
 
     def cleanup(self) -> None:
         for handle in self._handles:

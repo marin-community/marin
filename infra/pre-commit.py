@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run --script
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -237,17 +237,28 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
                 break
 
         comment_block = "\n".join(comment_lines)
-        if license_template not in comment_block:
+        has_current_header = license_template in comment_block
+        if not has_current_header:
             files_without_header.append(file_path)
 
             if fix:
                 has_shebang = content.startswith("#!")
+                shebang_line = ""
                 if has_shebang:
                     shebang_line = lines[0]
                     rest_content = "\n".join(lines[1:])
-                    new_content = f"{shebang_line}\n{expected_header}\n{rest_content}"
                 else:
-                    new_content = f"{expected_header}\n{content}"
+                    rest_content = content
+
+                if not rest_content.startswith(expected_header):
+                    new_rest_content = f"{expected_header}\n{rest_content}" if rest_content else expected_header
+                else:
+                    new_rest_content = rest_content
+
+                if has_shebang:
+                    new_content = f"{shebang_line}\n{new_rest_content}"
+                else:
+                    new_content = new_rest_content
 
                 with open(file_path, "w") as f:
                     f.write(new_content)
@@ -521,7 +532,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    args = ["uvx", "pyrefly@0.40.0", "check", "--baseline", ".pyrefly-baseline.json"]
+    args = ["uvx", "pyrefly@0.42.0", "check", "--baseline", ".pyrefly-baseline.json"]
     result = run_cmd(args)
     output = (result.stdout + result.stderr).strip()
     return _record("Pyrefly type checker", result.returncode, output)

@@ -1,12 +1,12 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """HTTP dashboard with Connect RPC and web UI.
 
 The dashboard serves:
-- Web UI at / (main dashboard with tabs: jobs, workers, endpoints, vms, autoscaler, logs)
+- Web UI at / (main dashboard with tabs: jobs, fleet, endpoints, autoscaler, logs, transactions)
 - Web UI at /job/{job_id} (job detail page)
-- Web UI at /vm/{vm_id} (VM detail page)
+- Web UI at /worker/{id} (worker detail page)
 - Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
 - Health check at /health
 
@@ -16,7 +16,6 @@ The Python layer only serves HTML shells; all rendering is done client-side.
 
 import logging
 
-import uvicorn
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -25,8 +24,8 @@ from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
+from iris.rpc.interceptors import RequestTimingInterceptor
 
 logger = logging.getLogger(__name__)
 
@@ -50,20 +49,23 @@ class ControllerDashboard:
         self._host = host
         self._port = port
         self._app = self._create_app()
-        self._server: uvicorn.Server | None = None
 
     @property
     def port(self) -> int:
         return self._port
 
+    @property
+    def app(self) -> Starlette:
+        return self._app
+
     def _create_app(self) -> Starlette:
-        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service)
+        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=[RequestTimingInterceptor()])
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
             Route("/", self._dashboard),
             Route("/job/{job_id:path}", self._job_detail_page),
-            Route("/vm/{vm_id:path}", self._vm_detail_page),
+            Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
@@ -76,32 +78,9 @@ class ControllerDashboard:
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Job Detail", "/static/controller/job-detail.js"))
 
-    def _vm_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("VM Detail", "/static/controller/vm-detail.js"))
+    def _worker_detail_page(self, _request: Request) -> HTMLResponse:
+        return HTMLResponse(html_shell("Worker Detail", "/static/controller/worker-detail.js"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
-        workers_resp = self._service.list_workers(cluster_pb2.Controller.ListWorkersRequest(), None)
-        jobs_resp = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
-        worker_count = len(workers_resp.workers)
-        job_count = len(jobs_resp.jobs)
-
-        response = {
-            "status": "ok",
-            "workers": worker_count,
-            "jobs": job_count,
-        }
-
-        return JSONResponse(response)
-
-    def run(self) -> None:
-        uvicorn.run(self._app, host=self._host, port=self._port)
-
-    async def run_async(self) -> None:
-        config = uvicorn.Config(self._app, host=self._host, port=self._port)
-        self._server = uvicorn.Server(config)
-        await self._server.serve()
-
-    async def shutdown(self) -> None:
-        if self._server:
-            self._server.should_exit = True
+        return JSONResponse({"status": "ok"})

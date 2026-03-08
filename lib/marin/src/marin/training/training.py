@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -6,7 +6,6 @@ import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from pathlib import PurePath
 from typing import TypeVar
 
 import draccus
@@ -21,15 +20,13 @@ from fray.v2 import (
     create_environment,
     current_client,
 )
-from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.main import train_dpo
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
-from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
-from iris.temp_buckets import get_temp_bucket_path
+from iris.marin_fs import check_gcs_paths_same_region, marin_temp_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +186,38 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return replace(config, train_config=inner_config)
 
 
+def _normalize_jax_compilation_cache_dir(path: str) -> str:
+    """Normalize cache dir to a form accepted by JAX's compilation cache.
+
+    JAX's ``LRUCache`` delegates I/O to ``etils.epath.Path`` which supports
+    local paths, ``gs://`` (via gcsfs), and ``s3://`` (via s3fs/fsspec).
+    The only scheme that causes problems is ``file://`` which raises during
+    initialization.
+    """
+    if path.startswith("file://"):
+        return path.removeprefix("file://")
+    return path
+
+
+def _disable_xla_autotune_subcache(env: dict) -> None:
+    """Disable XLA's per-fusion autotune sub-cache for remote compilation caches.
+
+    JAX automatically places XLA sub-caches (autotune, kernel cache) as
+    subdirectories of the compilation cache dir.  The autotune cache uses
+    XLA's C++ ``tsl::Env`` which only supports local paths — it crashes on
+    ``gs://`` and ``s3://``.  Since the autotune cache is ephemeral (skipped
+    entirely on a JAX cache hit) and only saves minutes on cold compiles,
+    we disable it via the JAX config rather than trying to redirect it.
+    """
+    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", "")
+    if "://" not in cache_dir:
+        return
+    if "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" in env:
+        return
+    env["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
+    logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
+
+
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -223,15 +252,24 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        temp_cache_path = get_temp_bucket_path(ttl_days=30, prefix="compilation-cache")
-        if temp_cache_path is not None:
-            env["JAX_COMPILATION_CACHE_DIR"] = temp_cache_path
-            logger.info("JAX compilation cache on temp bucket: %s", temp_cache_path)
-        else:
-            logger.warning("No temp bucket available; JAX compilation cache will not be configured.")
+        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
+            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        )
+        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
+    _disable_xla_autotune_subcache(env)
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    model_config = config.train_config.model
+    logger.info(
+        "Model config: type=%s seq_len=%d hidden=%d batch=%s device=%s",
+        type(model_config).__name__,
+        model_config.max_seq_len,
+        model_config.Embed.size,
+        config.train_config.trainer.train_batch_size,
+        config.resources.device,
+    )
 
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
@@ -289,12 +327,11 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        marin_prefix = os.environ.get("MARIN_PREFIX")
-        if marin_prefix:
-            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
-        else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
+            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+        )
+        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
+    _disable_xla_autotune_subcache(env)
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
@@ -338,72 +375,11 @@ def _doublecheck_paths(config: TrainOnPodConfigT):
     """
     local_ok = not isinstance(config.resources.device, TpuConfig)
 
-    try:
-        region = get_vm_region()
-    except ValueError as e:
-        if local_ok:
-            logger.warning("Could not determine the region of the VM. This is fine if you're running locally.")
-            return
-        raise ValueError("Could not determine the region of the VM. This is required for path checks.") from e
-
-    # Recursively check all paths in the config
-    _check_paths_recursively(config.train_config, "", region, local_ok)
-
+    check_gcs_paths_same_region(
+        config.train_config,
+        local_ok=local_ok,
+    )
     return config
-
-
-def _check_paths_recursively(obj, path_prefix, region, local_ok):
-    """
-    Check all strings in the config object that look like GCS paths appear to respect same-region constraints.
-
-    Args:
-        obj: The object to check (could be a dict, list, or other object)
-        path_prefix: The prefix for the current path (e.g., "config.trainer")
-        region: The region of the VM
-        local_ok: Whether local paths are allowed
-    """
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            new_prefix = f"{path_prefix}.{key}" if path_prefix else key
-            _check_paths_recursively(value, new_prefix, region, local_ok)
-    elif isinstance(obj, list | tuple):
-        for i, item in enumerate(obj):
-            new_prefix = f"{path_prefix}[{i}]"
-            _check_paths_recursively(item, new_prefix, region, local_ok)
-    elif isinstance(obj, str | os.PathLike):
-        if isinstance(obj, os.PathLike):
-            path_str = os.fspath(obj)
-            if isinstance(obj, PurePath):
-                parts = obj.parts
-                if parts and parts[0] == "gs:" and not path_str.startswith("gs://"):
-                    remainder = "/".join(parts[1:])
-                    path_str = f"gs://{remainder}" if remainder else "gs://"
-        else:
-            path_str = obj
-
-        if path_str.startswith("gs://"):
-            # Source URLs are always read-and-cached, so they may be out of region.
-            if "train_urls" in path_prefix or "validation_urls" in path_prefix:
-                return
-            _check_path_in_region(
-                path_prefix,
-                path_str,
-                region=region,
-                local_ok=local_ok,
-            )
-    elif dataclasses.is_dataclass(obj):
-        for field in dataclasses.fields(obj):
-            new_prefix = f"{path_prefix}.{field.name}" if path_prefix else field.name
-            value = getattr(obj, field.name)
-            _check_paths_recursively(
-                value,
-                new_prefix,
-                region,
-                local_ok,
-            )
-    # allow primitives through, warn on other types
-    elif not isinstance(obj, str | int | float | bool | type(None)):
-        logger.warning(f"Found unexpected type {type(obj)} at {path_prefix}. Skipping.")
 
 
 def _add_default_env_variables(env: dict, default_env: dict | None):
@@ -455,6 +431,11 @@ def _add_run_env_variables(env: dict):
     if "TPU_STDERR_LOG_LEVEL" not in env:
         env["TPU_STDERR_LOG_LEVEL"] = "2"
 
+    # Allow the caller (or iris -e) to override the compilation cache dir.
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        if val := os.environ.get("JAX_COMPILATION_CACHE_DIR"):
+            env["JAX_COMPILATION_CACHE_DIR"] = val
+
     return env
 
 
@@ -470,25 +451,6 @@ def _check_for_wandb_key(env):
                     "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
                     "WANDB_API_KEY=..., or add it to the env dict."
                 )
-
-
-def _check_path_in_region(key, path, region, local_ok):
-
-    if not path.startswith("gs://"):
-        if local_ok:
-            logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")
-            return
-        else:
-            raise ValueError(f"{key} must be a GCS path, not {path}")
-    try:
-        bucket_region = get_bucket_location(path)
-        if region.lower() != bucket_region.lower():
-            raise ValueError(
-                f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
-                f"This can cause performance issues and billing surprises."
-            )
-    except GcpForbiddenException:
-        logger.warning(f"Could not check region for {key}. Be sure it's in the same region as the VM.", exc_info=True)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Lightweight job metadata container without client instances or context logic.
@@ -8,13 +8,18 @@ For the full IrisContext with client/registry/resolver, use iris.client.
 
 import json
 import os
+import getpass
+import logging
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from google.protobuf import json_format
 
-from iris.cluster.types import Constraint, JobName
+from iris.cluster.constraints import Constraint
+from iris.cluster.types import JobName
 from iris.rpc import cluster_pb2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -51,6 +56,10 @@ class JobInfo:
     @property
     def job_id(self) -> JobName:
         return self.task_id.parent or self.task_id
+
+    @property
+    def user(self) -> str:
+        return self.task_id.user
 
     @property
     def task_index(self) -> int:
@@ -106,8 +115,31 @@ def get_job_info() -> JobInfo | None:
     return None
 
 
-def set_job_info(info: JobInfo) -> None:
+def set_job_info(info: JobInfo | None) -> None:
     _job_info.set(info)
+
+
+def resolve_job_user(explicit_user: str | None = None) -> str:
+    """Resolve the submitting user for a new top-level job."""
+    if explicit_user is not None:
+        if not explicit_user.strip():
+            raise ValueError("Job user must not be empty")
+        return explicit_user
+
+    info = get_job_info()
+    if info is not None:
+        return info.user
+
+    try:
+        resolved = getpass.getuser()
+    except (OSError, KeyError, ImportError) as exc:
+        logger.warning("Falling back to default Iris job user 'root': could not resolve local user (%s)", exc)
+        return "root"
+
+    if not resolved or not resolved.strip():
+        logger.warning("Falling back to default Iris job user 'root': local user was empty")
+        return "root"
+    return resolved
 
 
 def _parse_ports_from_env(env: dict[str, str] | None = None) -> dict[str, int]:

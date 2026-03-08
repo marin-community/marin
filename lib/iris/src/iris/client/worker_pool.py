@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """WorkerPool for task dispatch.
@@ -224,7 +224,7 @@ class WorkerDispatcher:
                 self._actor_client = ActorClient(
                     resolver=self._resolver,
                     name=self.state.worker_name,
-                    resolve_timeout=self._timeout,
+                    call_timeout=self._timeout,
                 )
 
             task = self._get_task()
@@ -247,7 +247,7 @@ class WorkerDispatcher:
             self._actor_client = ActorClient(
                 resolver=self._resolver,
                 name=self.state.worker_name,
-                resolve_timeout=self._timeout,
+                call_timeout=self._timeout,
             )
             logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:

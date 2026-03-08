@@ -35,7 +35,7 @@ For a new kernel `K`, you should produce:
 
 Tokamax uses a pattern that works well for kernel development:
 - a single public API entrypoint (`api.py`) that dispatches to implementations
-- a default “best available” backend order (e.g. TPU Pallas, then XLA)
+- a default backend order chosen for robustness in production (for example, XLA first with optional Pallas override)
 - optional imports for accelerated backends so CPU-only users can still import modules
 
 For Levanter kernels, we recommend the same pattern:
@@ -155,6 +155,8 @@ Guidelines:
 - If a specific implementation is selected (e.g. `implementation="pallas_tpu"`), **error** on unsupported shapes or
   non-TPU backends.
 - If the default implementation order is used, **warn and fallback** to XLA/reference.
+- For fused CE specifically, TPU defaults are intentionally XLA-first; use `implementation="pallas_tpu"` when you are
+  explicitly benchmarking/tuning shape-dependent Pallas behavior.
 
 **Z-loss/logsumexp penalty:**
 - Have the kernel return both per-example loss and `logsumexp`.
@@ -238,6 +240,24 @@ Replace:
 The cluster you use will vary depending on TPU generation/availability; most kernel work should start with a single
 node (e.g. `*-8`) unless you’re explicitly targeting multi-slice behavior.
 
+##### Scoped VMEM flag policy (kernel benchmarking/tuning)
+
+When running TPU Pallas microbenches/tuning, set `LIBTPU_INIT_ARGS` explicitly by TPU generation:
+
+- `v5p`/`v5e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"`
+- `v6e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"`
+- `v4`: do **not** set a special scoped VMEM limit flag (use default platform behavior).
+
+Examples:
+
+```sh
+# v5p / v5e
+-e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"
+
+# v6e
+-e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"
+```
+
 ##### Listing available TPU clusters
 
 If you’re not sure which cluster has which TPU types, use the cluster CLI:
@@ -290,10 +310,10 @@ Levanter trackers (e.g. Weights & Biases):
 - See `lib/levanter/docs/Performance-Guide.md` for details.
 - Levanter uses JAX profiling and uploads a `jax_profile` artifact to W&B when profiling is enabled.
 - If your benchmark is implemented as (or inside) a Levanter training loop, prefer flags like:
-  - `--trainer.profiler true`
-  - `--trainer.profiler_start_step 5`
-  - `--trainer.profiler_num_steps 50`
-  - `--trainer.profiler_perfetto_link false` (enable if you want a Perfetto URL; see the guide)
+  - `--trainer.profiler.enabled true`
+  - `--trainer.profiler.start_step 5`
+  - `--trainer.profiler.num_steps 50`
+  - `--trainer.profiler.perfetto_link false` (enable if you want a Perfetto URL; see the guide)
 
 If you’re writing a standalone microbench script, prefer invoking the profiler directly with
 `levanter.callbacks.profile_ctx` (rather than trying to plumb trainer flags through a non-trainer script). See
@@ -307,6 +327,45 @@ You will need to set up wandb logging by initializing a Levanter [levanter.track
 Always report at least:
 - time-to-first-step (includes compilation) vs steady-state step time (after warmup)
 - the exact TPU type and shape/dtype grid tested
+
+##### Capturing compiler diagnostics early (recommended)
+
+For Pallas TPU work, capture compiler diagnostics on every serious benchmark/tuning run:
+
+1. Enable HLO text dumps with `--xla-dump-dir`.
+2. Tee stdout/stderr to a file with `--compiler-log-path`.
+3. Record the exact `XLA_FLAGS` and `LIBTPU_INIT_ARGS` used (the benchmark/tuning scripts print these now).
+
+These hooks are available in:
+- `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py`
+- `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`
+
+Example (bench):
+
+```sh
+uv run --package levanter --extra tpu \
+  python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py \
+  --implementation pallas_tpu \
+  --batch 64 --pos 1024 --embed 1024 --vocab 128256 \
+  --xla-dump-dir /tmp/ce_hlo_dumps \
+  --compiler-log-path /tmp/ce_compile.log
+```
+
+Example (tune):
+
+```sh
+uv run --package levanter --extra tpu \
+  python lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py \
+  --implementation pallas_tpu \
+  --batch 64 --seq-len 1024 --embed 1024 --vocab 128256 \
+  --xla-dump-dir /tmp/ce_tune_hlo_dumps \
+  --compiler-log-path /tmp/ce_tune_compile.log
+```
+
+When a kernel unexpectedly underperforms, this is the first triage loop:
+- compare Pallas vs XLA HLO dumps on the same shape,
+- scan compiler logs for VMEM pressure / verifier errors / lowering warnings,
+- then run the microbench ladder (`matmul-only`, `streaming-lse-only`, `fused matmul+lse`) before retuning blocks.
 
 ##### Tokamax comparison (optional)
 
@@ -380,6 +439,122 @@ The iteration loop should look like:
 
 Use `agent_driven_profiling` tooling as it matures.
 
+### 7) TPU dump-driven workflow (generic)
+
+When TPU performance is unclear, use a dump-first workflow and compare multiple variants on the exact same shape.
+
+Recommended comparison set:
+- baseline/reference implementation (usually XLA path)
+- full Pallas implementation
+- one or more decomposition variants (for example, "matmul-only", "skip softmax", or "skip extra reductions")
+
+The decomposition variants are temporary benchmark/debug toggles. They help answer: is the bottleneck the core matmul/scheduling, or surrounding math/data movement?
+
+#### Required dump flags
+
+Set these before JAX initializes TPU:
+
+```bash
+export XLA_FLAGS="\
+  --xla_dump_to=${HLO_DIR} \
+  --xla_dump_hlo_as_text"
+
+export LIBTPU_INIT_ARGS="\
+  --xla_jf_dump_to=${LLO_DIR} \
+  --xla_jf_dump_hlo_text=true \
+  --xla_jf_dump_llo_text=true \
+  --xla_jf_dump_llo_html=false \
+  --xla_jf_dump_llo_static_gaps=true \
+  --xla_jf_emit_annotations=true \
+  --xla_jf_debug_level=2 \
+  --xla_mosaic_dump_to=${MOSAIC_DIR} \
+  --xla_mosaic_enable_dump_debug_info=true \
+  --xla_mosaic_enable_llo_source_annotations=true"
+```
+
+Use separate dump directories per variant so files are comparable and not mixed:
+- `${ROOT}/hlo_<variant>`
+- `${ROOT}/llo_<variant>`
+- `${ROOT}/mosaic_<variant>`
+
+#### Analysis checklist
+
+1) Record steady-state throughput first (`tokens/s`, `bwd_tokens/s`, or your kernel metric).
+2) Inspect HLO:
+   - identify where custom-calls/fusions are
+   - confirm expected path is being used
+3) Inspect LLO schedule summaries:
+   - open `*schedule-analysis_final_bundles.txt`
+   - capture total/non-empty scheduled bundle counts for the target kernels
+4) Compare variants:
+   - if decomposition variant is fast but full kernel is slow, bottleneck is in the removed stage(s)
+   - if decomposition is still slow, focus on core tiling/scheduling/layout
+5) Map back to source:
+   - use `metadata={... source_file=... source_line=...}` in dump files
+   - connect expensive kernels directly to code regions
+6) Keep a short artifact summary in the project notes/PR:
+   - shape/config
+   - throughput table
+   - dump paths
+   - bundle-count comparison
+   - next hypothesis
+
+#### XLA-LLO Replication Playbook (generic)
+
+When the goal is “make Pallas match or beat XLA,” the highest-signal workflow is:
+
+1) **Start from one exact shape and freeze it**
+   - pick one representative production shape and keep it fixed until you understand the gap.
+   - compare only on that shape while iterating on structure.
+
+2) **Dump both sides first**
+   - collect dumps for:
+     - XLA/reference path
+     - current Pallas path
+     - one decomposition variant
+   - use separate dump directories per variant and the same benchmark harness/flags.
+
+3) **Infer algorithm structure from XLA fusions**
+   - inspect HLO/LLO to identify stage boundaries (for example: delta/softmax stage vs GEMM update stages).
+   - treat XLA fusion boundaries as a hint for where to split your Pallas/JAX pipeline.
+   - look for input/output aliasing and dynamic-update-slice patterns; these often reveal intended writeback structure.
+
+4) **Replicate the simplest stage first**
+   - do not port everything at once.
+   - first match the stage that should dominate runtime (often backward GEMMs).
+   - temporarily bypass or simplify surrounding math (for example, skip/rewrite softmax pieces) to verify the core stage can hit XLA-like throughput.
+
+5) **Then add complexity incrementally**
+   - add one missing stage at a time (for example, rematerialized logits -> softmax/logsumexp -> label subtraction).
+   - after each addition:
+     - run correctness checks
+     - rerun throughput
+     - re-dump LLO if performance regresses
+   - this makes the first bad step obvious.
+
+6) **Use LLO counters as diagnostics, not just timings**
+   - track changes in:
+     - lane-rotation-heavy ops (`vrot.*`)
+     - select/mask-heavy ops (`vsel`)
+     - expensive transcendental counts (`vpow2.*`, etc.)
+     - spill slots and vreg pressure in bundle reports
+   - if throughput drops and these rise sharply, your structure likely diverged from XLA’s efficient schedule.
+
+7) **Prefer structural fixes before tile sweeps**
+   - if a decomposition variant is fast but the full kernel is slow, fix structure first.
+   - block-size sweeps usually help after structure is right, not before.
+
+8) **Validate numerics with more than one metric**
+   - report at least:
+     - absolute max error (`abs_linf`)
+     - relative L2 (`rel_l2`)
+     - loss delta
+   - `rel_linf` alone can look noisy, especially with bf16-scale reference values.
+
+9) **Retune after structural convergence**
+   - once the algorithm shape matches XLA well, rerun block-size tuning.
+   - expect optimal block sizes to move (or constraints to relax) after major structural changes.
+
 ## Starter template
 
 Use the starter template under `lib/levanter/src/levanter/kernels/pallas/`:
@@ -417,6 +592,13 @@ favor a bit more copy-paste and explicitness for agents.
 
 JAX has some built-in kernels that use Pallas under the hood; these can be
 good references for patterns. `.venv/lib/python3.11/site-packages/jax/experimental/pallas/ops`
+
+### Deep Dives
+
+- [When XLA Isn't Enough: From Pallas to VLIW](https://patricktoulme.substack.com/p/when-xla-isnt-enough-from-pallas)
+  This post has a deep dive into the splash attention kernel for JAX Pallas TPU. In particular, it
+  tells you how to get low level code dumps so you can see XLA's decisions on TPU etc.
+
 
 
 ## Misc Tips

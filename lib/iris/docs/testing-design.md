@@ -6,9 +6,9 @@ Iris has three overlapping test surfaces that evolved independently:
 
 | Surface | Location | What it tests | Cluster setup |
 |---------|----------|---------------|---------------|
-| **Chaos tests** | `tests/chaos/` | Failure injection (RPC, heartbeat, task lifecycle, VM) | `connect_cluster()` with `demo.yaml` + `make_local_config()` |
+| **Chaos tests** | `tests/chaos/` | Failure injection (RPC, heartbeat, task lifecycle, VM) | `connect_cluster()` with `test.yaml` + `make_local_config()` |
 | **E2E tests** | `tests/cluster/test_e2e.py` | Job lifecycle, scheduling, ports, endpoints, Docker, TPU sim | `E2ECluster` context manager (manual Controller+Worker or LocalController) |
-| **Screenshot script** | `scripts/screenshot-dashboard.py` | Visual dashboard rendering | `connect_cluster()` with `demo.yaml` + Playwright |
+| **Screenshot script** | `scripts/screenshot-dashboard.py` | Visual dashboard rendering | `connect_cluster()` with `test.yaml` + Playwright |
 
 These share significant infrastructure (cluster boot, job submission, wait loops)
 but use incompatible fixtures and patterns. The screenshot script isn't a test at
@@ -71,7 +71,7 @@ lib/iris/tests/e2e/
 #### `cluster` fixture
 
 Boots a local Iris cluster using `connect_cluster()` with a test config derived
-from `demo.yaml`. Yields a `TestCluster` dataclass that wraps the url and client:
+from `test.yaml`. Yields a `TestCluster` dataclass that wraps the url and client:
 
 ```python
 @dataclass
@@ -299,14 +299,14 @@ def test_job_detail_page(cluster, page, screenshot):
     assert page.locator("text=SUCCEEDED").is_visible(timeout=5000)
     screenshot("job-detail-succeeded")
 
-def test_workers_tab(cluster, page, screenshot):
-    """Workers tab shows healthy workers."""
+def test_fleet_tab(cluster, page, screenshot):
+    """Fleet tab shows machines with health status."""
     page.goto(f"{cluster.url}/")
     _wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Workers")')
+    page.click('button.tab-btn:has-text("Fleet")')
 
-    assert page.locator("text=healthy").first.is_visible(timeout=5000)
-    screenshot("workers-tab")
+    assert page.locator("text=ready").first.is_visible(timeout=5000)
+    screenshot("fleet-tab")
 
 def test_autoscaler_tab(cluster, page, screenshot):
     """Autoscaler tab shows scale groups."""
@@ -337,12 +337,12 @@ def test_quota_exceeded_retry():
     # Uses FakePlatform directly — no cluster needed
     ...
 
-def test_vm_tab_shows_states(cluster, page, screenshot):
-    """VMs tab renders VM states from autoscaler."""
+def test_fleet_tab_shows_states(cluster, page, screenshot):
+    """Fleet tab renders machine states from autoscaler."""
     page.goto(f"{cluster.url}/")
     _wait_for_dashboard_ready(page)
-    page.click('button.tab-btn:has-text("Vms")')
-    screenshot("vms-tab")
+    page.click('button.tab-btn:has-text("Fleet")')
+    screenshot("fleet-tab")
 ```
 
 ### What Gets Deleted

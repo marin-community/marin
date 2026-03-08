@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """E2E test for local cluster mode via the CLI.
@@ -35,9 +35,9 @@ def cluster_config_file(tmp_path: Path) -> Path:
                     }
                 },
                 "defaults": {
-                    "bootstrap": {
+                    "worker": {
                         "docker_image": "test-image:latest",
-                        "worker_port": 10001,
+                        "port": 10001,
                         "controller_address": "127.0.0.1:10000",
                     },
                 },
@@ -48,7 +48,6 @@ def cluster_config_file(tmp_path: Path) -> Path:
                 },
                 "scale_groups": {
                     "local-cpu": {
-                        "accelerator_type": "ACCELERATOR_TYPE_CPU",
                         "min_slices": 1,
                         "max_slices": 1,
                         "num_vms": 1,
@@ -56,8 +55,8 @@ def cluster_config_file(tmp_path: Path) -> Path:
                             "cpu": 1,
                             "ram": "1GB",
                             "disk": 0,
-                            "gpu_count": 0,
-                            "tpu_count": 0,
+                            "device_type": "cpu",
+                            "device_count": 0,
                         },
                         "slice_template": {
                             "accelerator_type": "ACCELERATOR_TYPE_CPU",

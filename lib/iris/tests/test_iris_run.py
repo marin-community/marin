@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Integration tests for iris job CLI helpers."""
@@ -16,9 +16,10 @@ from iris.cli.job import (
     build_resources,
     load_env_vars,
     parse_gpu_spec,
+    parse_reservation_spec,
     run_iris_job,
 )
-from iris.cluster.types import ConstraintOp
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute
 
 # Unit tests for error handling and edge cases (not trivial assertions)
 
@@ -55,8 +56,8 @@ def test_iris_config_empty_file(tmp_path):
         ("H100x8", ("H100", 8)),
         ("4", ("", 4)),
         ("A100", ("A100", 1)),
-        ("rtx4090", ("rtx4090", 1)),
-        ("rtx4090x2", ("rtx4090", 2)),
+        ("rtx4090", ("RTX4090", 1)),
+        ("rtx4090x2", ("RTX4090", 2)),
         ("H100", ("H100", 1)),
     ],
 )
@@ -68,6 +69,43 @@ def test_parse_gpu_spec(spec, expected):
 def test_parse_gpu_spec_rejects_invalid(spec):
     with pytest.raises(ValueError):
         parse_gpu_spec(spec)
+
+
+def test_parse_reservation_spec_single_gpu():
+    entries = parse_reservation_spec("H100x8")
+    assert len(entries) == 1
+    device = entries[0].resources.device
+    assert device.HasField("gpu")
+    assert device.gpu.variant == "H100"
+    assert device.gpu.count == 8
+
+
+def test_parse_reservation_spec_multiple_gpu():
+    entries = parse_reservation_spec("4:H100x8")
+    assert len(entries) == 4
+    for entry in entries:
+        assert entry.resources.device.gpu.variant == "H100"
+        assert entry.resources.device.gpu.count == 8
+
+
+def test_parse_reservation_spec_single_tpu():
+    entries = parse_reservation_spec("v5litepod-16")
+    assert len(entries) == 1
+    device = entries[0].resources.device
+    assert device.HasField("tpu")
+    assert device.tpu.variant == "v5litepod-16"
+
+
+def test_parse_reservation_spec_multiple_tpu():
+    entries = parse_reservation_spec("2:v5litepod-16")
+    assert len(entries) == 2
+    for entry in entries:
+        assert entry.resources.device.tpu.variant == "v5litepod-16"
+
+
+def test_parse_reservation_spec_rejects_zero_count():
+    with pytest.raises(ValueError, match="must be >= 1"):
+        parse_reservation_spec("0:H100")
 
 
 def test_build_resources_gpu():
@@ -95,9 +133,9 @@ def test_build_resources_gpu():
 def local_cluster_and_config(tmp_path):
     """Start local cluster and create config file for it."""
     iris_root = Path(__file__).resolve().parents[1]
-    demo_config_path = iris_root / "examples" / "demo.yaml"
+    test_config_path = iris_root / "examples" / "test.yaml"
 
-    config = load_config(demo_config_path)
+    config = load_config(test_config_path)
     config = make_local_config(config)
 
     with connect_cluster(config) as url:
@@ -109,21 +147,19 @@ def local_cluster_and_config(tmp_path):
                 {
                     "platform": {"local": {}},
                     "defaults": {
-                        "bootstrap": {"controller_address": url},
+                        "worker": {"controller_address": url},
                     },
                     "scale_groups": {
                         "local-cpu": {
                             "min_slices": 1,
                             "max_slices": 1,
-                            "accelerator_type": "cpu",
-                            "vm_type": "local_vm",
                             "num_vms": 1,
                             "resources": {
                                 "cpu": 1,
                                 "ram": "1GB",
                                 "disk": 0,
-                                "gpu_count": 0,
-                                "tpu_count": 0,
+                                "device_type": "cpu",
+                                "device_count": 0,
                             },
                         }
                     },
@@ -223,9 +259,36 @@ def test_run_iris_job_adds_zone_constraint(monkeypatch):
     constraints = captured["constraints"]
     assert constraints is not None
     assert len(constraints) == 1
-    assert constraints[0].key == "zone"
+    assert constraints[0].key == WellKnownAttribute.ZONE
     assert constraints[0].op == ConstraintOp.EQ
     assert constraints[0].value == "us-central2-b"
+
+
+def test_run_iris_job_passes_reservation(monkeypatch):
+    """run_iris_job forwards parsed reservation entries."""
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+        reserve=("4:H100x8",),
+    )
+
+    assert exit_code == 0
+    reservation = captured["reservation"]
+    assert reservation is not None
+    assert len(reservation) == 4
+    for entry in reservation:
+        assert entry.resources.device.gpu.variant == "H100"
+        assert entry.resources.device.gpu.count == 8
 
 
 def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
@@ -252,12 +315,12 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert constraints is not None
     assert len(constraints) == 2
 
-    region_constraints = [c for c in constraints if c.key == "region"]
+    region_constraints = [c for c in constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1
     assert region_constraints[0].op == ConstraintOp.EQ
     assert region_constraints[0].value == "us-central2"
 
-    zone_constraints = [c for c in constraints if c.key == "zone"]
+    zone_constraints = [c for c in constraints if c.key == WellKnownAttribute.ZONE]
     assert len(zone_constraints) == 1
     assert zone_constraints[0].op == ConstraintOp.EQ
     assert zone_constraints[0].value == "us-central2-b"

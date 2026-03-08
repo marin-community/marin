@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Task lifecycle and scheduling E2E tests.
@@ -10,6 +10,7 @@ import time
 
 import pytest
 from iris.chaos import enable_chaos
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import CoschedulingConfig
 from iris.rpc import cluster_pb2
 from iris.test_util import SentinelFile
@@ -47,7 +48,7 @@ def test_coscheduled_sibling_failure(cluster):
     job = cluster.submit(
         _quick,
         "cosched-fail",
-        coscheduling=CoschedulingConfig(group_by="tpu-name"),
+        coscheduling=CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
         replicas=2,
         scheduling_timeout=Duration.from_seconds(5),
     )
