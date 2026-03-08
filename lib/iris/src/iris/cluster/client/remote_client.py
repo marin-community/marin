@@ -254,6 +254,9 @@ class RemoteClusterClient:
         job_id: JobName,
         metadata: dict[str, str] | None = None,
     ) -> str:
+        # The service expects a task_id in the job_id field so it can
+        # associate the endpoint with the specific task for retry cleanup.
+        # For backward compatibility, a plain job_id is also accepted.
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,

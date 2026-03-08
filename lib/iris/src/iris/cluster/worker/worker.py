@@ -602,7 +602,15 @@ class Worker:
                             if reported_state == cluster_pb2.TASK_STATE_PENDING:
                                 reported_state = cluster_pb2.TASK_STATE_BUILDING
 
-                            log_entries = task.drain_heartbeat_logs()
+                            # For terminal tasks, use drain_terminal_logs to
+                            # ensure all remaining logs are forwarded (this is
+                            # the last heartbeat that will carry logs for this
+                            # attempt).  For non-terminal tasks, use the normal
+                            # delta drain with a smaller cap.
+                            if task.status in self._TERMINAL_STATES:
+                                log_entries = task.drain_terminal_logs()
+                            else:
+                                log_entries = task.drain_heartbeat_logs()
                             entry = cluster_pb2.Controller.WorkerTaskStatus(
                                 task_id=task_id,
                                 attempt_id=task_proto.current_attempt_id,

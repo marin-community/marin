@@ -786,12 +786,30 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         """Register a service endpoint.
 
-        Endpoints are registered regardless of job state, but only become visible to clients
-        (via lookup/list) when the job is executing (not in a terminal state).
+        The ``job_id`` field carries the calling task's wire-format task ID
+        (e.g. ``/user/job/0``).  The endpoint is associated with the owning
+        task so that retry cleanup removes stale endpoints from earlier
+        attempts.
+
+        Endpoints are registered regardless of job state, but only become
+        visible to clients (via lookup/list) when the job is executing (not
+        in a terminal state).
         """
         endpoint_id = str(uuid.uuid4())
 
-        job = self._state.get_job(JobName.from_wire(request.job_id))
+        # Derive task_id and job_id from the wire ID passed by the caller.
+        # Callers send their task_id (e.g. "/user/job/0"); we look up the
+        # parent job.  Fall back to treating the value as a job_id for
+        # backward compatibility.
+        wire_id = JobName.from_wire(request.job_id)
+        task_id: JobName | None = None
+        try:
+            job_id, _task_index = wire_id.require_task()
+            task_id = wire_id
+        except ValueError:
+            job_id = wire_id
+
+        job = self._state.get_job(job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
@@ -799,12 +817,12 @@ class ControllerServiceImpl:
             endpoint_id=endpoint_id,
             name=request.name,
             address=request.address,
-            job_id=JobName.from_wire(request.job_id),
+            job_id=job_id,
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
         )
 
-        self._state.add_endpoint(endpoint)
+        self._state.add_endpoint(endpoint, task_id=task_id)
 
         return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 

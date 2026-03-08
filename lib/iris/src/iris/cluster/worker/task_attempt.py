@@ -340,6 +340,27 @@ class TaskAttempt:
         """Return log entries appended since the last call, for delta forwarding."""
         return self._heartbeat_cursor.read(max_entries=max_entries)
 
+    def drain_terminal_logs(self, max_entries: int = 50000) -> list[logging_pb2.LogEntry]:
+        """Return all remaining log entries for a terminal task.
+
+        Uses the heartbeat cursor to get pending deltas, but falls back to
+        tail-reading from the log store when the delta exceeds *max_entries*.
+        Inserts a truncation marker when logs are capped so operators can tell
+        that earlier output was dropped.
+        """
+        entries = self._heartbeat_cursor.read(max_entries=max_entries)
+        if len(entries) >= max_entries:
+            # Delta overflowed — grab the last max_entries from the store
+            # so we keep the most recent (and most useful) lines.
+            tail = self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries).entries
+            marker = logging_pb2.LogEntry(
+                source="iris",
+                data="<logs truncated — earlier output exceeded heartbeat log quota>",
+            )
+            marker.timestamp.epoch_ms = tail[0].timestamp.epoch_ms if tail else 0
+            return [marker, *tail]
+        return entries
+
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
         self.should_stop = True

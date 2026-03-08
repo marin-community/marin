@@ -41,10 +41,12 @@ def _register_endpoint_job(prefix):
     client = ControllerServiceClientSync(address=info.controller_address, timeout_ms=5000)
     try:
         endpoint_name = f"{prefix}/actor1"
+        # Pass task_id so the controller associates the endpoint with this
+        # specific task for retry cleanup.
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=endpoint_name,
             address="localhost:5000",
-            job_id=info.job_id.to_wire(),
+            job_id=info.task_id.to_wire(),
             metadata={"type": "actor"},
         )
         response = client.register_endpoint(request)
@@ -52,8 +54,7 @@ def _register_endpoint_job(prefix):
 
         list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{prefix}/")
         list_response = client.list_endpoints(list_request)
-        # Use >= because worker preemption/retry can leave stale endpoints from earlier attempts
-        assert len(list_response.endpoints) >= 1
+        assert len(list_response.endpoints) == 1
         names = [ep.name for ep in list_response.endpoints]
         assert endpoint_name in names
         matched = [ep for ep in list_response.endpoints if ep.name == endpoint_name]
@@ -91,21 +92,22 @@ def _register_multiple_endpoints(ns1_prefix, ns2_prefix):
             request = cluster_pb2.Controller.RegisterEndpointRequest(
                 name=name,
                 address=addr,
-                job_id=info.job_id.to_wire(),
+                job_id=info.task_id.to_wire(),
             )
             client.register_endpoint(request)
 
-        # Use >= because worker preemption/retry can leave stale endpoints from earlier attempts
+        # Endpoints are now associated with the task, so stale ones from
+        # earlier attempts are cleaned up.
         ns1_all = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{ns1_prefix}/"))
-        assert len(ns1_all.endpoints) >= 3
+        assert len(ns1_all.endpoints) == 3
 
         ns1_service = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{ns1_prefix}/service/"))
-        assert len(ns1_service.endpoints) >= 1
+        assert len(ns1_service.endpoints) == 1
         service_names = [ep.name for ep in ns1_service.endpoints]
         assert f"{ns1_prefix}/service/actor3" in service_names
 
         ns2_all = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{ns2_prefix}/"))
-        assert len(ns2_all.endpoints) >= 1
+        assert len(ns2_all.endpoints) == 1
 
         time.sleep(0.5)
     finally:
@@ -233,7 +235,7 @@ def _register_and_hold(prefix):
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=f"{prefix}/dashboard-check",
             address="localhost:9999",
-            job_id=info.job_id.to_wire(),
+            job_id=info.task_id.to_wire(),
             metadata={"purpose": "dashboard-test"},
         )
         client.register_endpoint(request)
