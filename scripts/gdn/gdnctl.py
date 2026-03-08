@@ -92,6 +92,9 @@ ITERATION_MS_DELTA_RE = re.compile(
 FUSED_CE_SELECTED_RE = re.compile(r"Fused cross-entropy selected implementation:\s*(?P<impl>\S+)")
 FUSED_CE_IMPLEMENTATION_ENV = "LEVANTER_FUSED_CE_IMPLEMENTATION"
 FUSED_CE_IMPLEMENTATION_CHOICES = ("auto", "xla", "reference", "pallas_tpu", "pallas_gpu")
+PALLAS_TPU_CE_BWD_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
+PALLAS_TPU_CE_BWD_MODE_CHOICES = ("pallas", "xla_streaming")
+PALLAS_TPU_CE_BWD_MODE_COMPARE_CHOICES = ("off", *PALLAS_TPU_CE_BWD_MODE_CHOICES)
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -546,6 +549,7 @@ def _collect_profile_metrics(
     metric_keys = [key for key in dict.fromkeys(metric_keys) if key]
     ce_backend_selected = _extract_ce_backend_selected(output_text)
     requested_ce_impl = _normalize_ce_implementation(getattr(args, "ce_implementation", "auto"))
+    requested_ce_bwd_mode = _normalize_ce_bwd_mode(getattr(args, "ce_bwd_mode", "pallas"))
 
     run_url = _extract_last_wandb_run_url(output_text)
     warnings: list[str] = []
@@ -616,6 +620,10 @@ def _collect_profile_metrics(
     if summary_warning is not None and args.perf_metric not in metrics:
         warnings.append(summary_warning)
 
+    duration_seconds = _coerce_float(metrics.get("throughput/duration"))
+    if duration_seconds is not None:
+        metrics["step_duration_ms"] = duration_seconds * 1000.0
+
     return {
         "profile_prefix": profile_prefix,
         "run_url": run_url,
@@ -624,11 +632,17 @@ def _collect_profile_metrics(
         "metric_points": metric_points,
         "ce_backend_selected": ce_backend_selected,
         "ce_requested_implementation": requested_ce_impl,
+        "ce_bwd_mode": requested_ce_bwd_mode,
         "warnings": warnings,
     }
 
 
-def _profile_metric_args(args: argparse.Namespace, *, ce_implementation: str) -> argparse.Namespace:
+def _profile_metric_args(
+    args: argparse.Namespace,
+    *,
+    ce_implementation: str,
+    ce_bwd_mode: str,
+) -> argparse.Namespace:
     return argparse.Namespace(
         perf_metric=args.perf_metric,
         perf_aggregation=args.perf_aggregation,
@@ -640,6 +654,7 @@ def _profile_metric_args(args: argparse.Namespace, *, ce_implementation: str) ->
         perf_wandb_project=args.perf_wandb_project,
         validation_profile_wandb_mode=args.validation_profile_wandb_mode,
         ce_implementation=ce_implementation,
+        ce_bwd_mode=ce_bwd_mode,
     )
 
 
@@ -680,6 +695,10 @@ def _normalize_iteration_metric_label(label: str) -> str | None:
         return "control_budget_ms"
     if normalized.startswith("train-path budget"):
         return "train_path_budget_ms"
+    if normalized.startswith("step duration"):
+        return "step_duration_ms"
+    if normalized.startswith("remainder budget"):
+        return "remainder_budget_ms"
     if normalized.startswith("shard_map"):
         return "shard_map_ms"
     if normalized.startswith("all-gather"):
@@ -717,6 +736,11 @@ def _parse_iteration_hotspot_metrics(lines: Sequence[str]) -> dict[str, float]:
     control_budget = _coerce_float(metrics.get("control_budget_ms"))
     if "train_path_budget_ms" not in metrics and kernel_budget is not None and control_budget is not None:
         metrics["train_path_budget_ms"] = kernel_budget + control_budget
+
+    step_duration = _coerce_float(metrics.get("step_duration_ms"))
+    train_path_budget = _coerce_float(metrics.get("train_path_budget_ms"))
+    if "remainder_budget_ms" not in metrics and step_duration is not None and train_path_budget is not None:
+        metrics["remainder_budget_ms"] = step_duration - train_path_budget
 
     return metrics
 
@@ -797,6 +821,16 @@ def _latest_hotspot_metrics_from_history(history: Sequence[object]) -> dict[str,
     return {}
 
 
+def _latest_metrics_from_history(history: Sequence[object]) -> dict[str, object]:
+    for entry in reversed(history):
+        if not isinstance(entry, dict):
+            continue
+        metrics = entry.get("metrics")
+        if isinstance(metrics, dict) and metrics:
+            return metrics
+    return {}
+
+
 def _resolve_hotspot_baseline(
     *,
     validation_info: dict[str, object],
@@ -817,6 +851,54 @@ def _resolve_hotspot_baseline(
         return latest_history, "history"
 
     return {}, "unavailable"
+
+
+def _resolve_metric_baseline(
+    *,
+    champion: dict[str, object] | None,
+    history: Sequence[object],
+    preferred_source: str,
+) -> dict[str, object]:
+    if preferred_source == "previous-log-entry":
+        return _latest_metrics_from_history(history)
+
+    if preferred_source == "champion" and champion is not None:
+        champion_metrics = champion.get("metrics")
+        if isinstance(champion_metrics, dict) and champion_metrics:
+            return champion_metrics
+
+    if preferred_source == "history":
+        return _latest_metrics_from_history(history)
+
+    if champion is not None:
+        champion_metrics = champion.get("metrics")
+        if isinstance(champion_metrics, dict) and champion_metrics:
+            return champion_metrics
+
+    return _latest_metrics_from_history(history)
+
+
+def _with_step_and_remainder_metrics(
+    hotspot_metrics: dict[str, object],
+    *,
+    profile_metrics: dict[str, object],
+) -> dict[str, object]:
+    augmented = dict(hotspot_metrics)
+    step_duration_ms = _coerce_float(augmented.get("step_duration_ms"))
+    if step_duration_ms is None:
+        step_duration_ms = _coerce_float(profile_metrics.get("step_duration_ms"))
+    if step_duration_ms is None:
+        duration_seconds = _coerce_float(profile_metrics.get("throughput/duration"))
+        if duration_seconds is not None:
+            step_duration_ms = duration_seconds * 1000.0
+    if step_duration_ms is not None:
+        augmented["step_duration_ms"] = step_duration_ms
+
+    train_path_budget_ms = _coerce_float(augmented.get("train_path_budget_ms"))
+    if train_path_budget_ms is not None and step_duration_ms is not None:
+        augmented["remainder_budget_ms"] = step_duration_ms - train_path_budget_ms
+
+    return augmented
 
 
 def _evaluate_control_flow_gate(
@@ -861,6 +943,32 @@ def _evaluate_control_flow_gate(
                 f"`train_path_budget_ms` increased by {train_increase:.3f} ms "
                 f"({baseline_train:.3f} -> {candidate_train:.3f})"
             )
+
+        candidate_step = _coerce_float(candidate_hotspots.get("step_duration_ms"))
+        baseline_step = _coerce_float(baseline_hotspots.get("step_duration_ms"))
+        if candidate_step is not None and baseline_step is not None:
+            train_drop = baseline_train - candidate_train
+            step_drop = baseline_step - candidate_step
+            if (
+                train_drop >= args.perf_min_train_path_drop_ms
+                and step_drop < args.perf_step_duration_improvement_margin_ms
+            ):
+                reasons.append(
+                    f"`train_path_budget_ms` improved by {train_drop:.3f} ms "
+                    f"({baseline_train:.3f} -> {candidate_train:.3f}) but `step_duration_ms` did not "
+                    f"improve materially ({baseline_step:.3f} -> {candidate_step:.3f}); "
+                    "classify as off-critical-path or overlap-loss"
+                )
+
+        candidate_remainder = _coerce_float(candidate_hotspots.get("remainder_budget_ms"))
+        baseline_remainder = _coerce_float(baseline_hotspots.get("remainder_budget_ms"))
+        if candidate_remainder is not None and baseline_remainder is not None:
+            remainder_increase = candidate_remainder - baseline_remainder
+            if remainder_increase > args.perf_max_remainder_budget_increase_ms:
+                reasons.append(
+                    f"`remainder_budget_ms` increased by {remainder_increase:.3f} ms "
+                    f"({baseline_remainder:.3f} -> {candidate_remainder:.3f})"
+                )
 
     return reasons
 
@@ -910,6 +1018,8 @@ def _apply_performance_policy(
     ce_backend_selected = str(ce_backend_selected_obj) if isinstance(ce_backend_selected_obj, str) else None
     ce_requested_impl_obj = validation_info.get("ce_requested_implementation")
     ce_requested_implementation = str(ce_requested_impl_obj) if isinstance(ce_requested_impl_obj, str) else None
+    ce_bwd_mode_obj = validation_info.get("ce_bwd_mode")
+    ce_bwd_mode = str(ce_bwd_mode_obj) if isinstance(ce_bwd_mode_obj, str) else None
     ce_ab_compare_obj = validation_info.get("ce_ab_compare")
     ce_ab_compare = ce_ab_compare_obj if isinstance(ce_ab_compare_obj, dict) else None
     hotspot_metrics_obj = validation_info.get("hotspot_metrics")
@@ -925,10 +1035,15 @@ def _apply_performance_policy(
         print(f"[gdnctl] WARNING: {warning}", file=sys.stderr)
     if ce_backend_selected is not None:
         requested_text = ce_requested_implementation or "auto"
-        print(f"[gdnctl] validation profile fused CE backend: selected={ce_backend_selected} requested={requested_text}")
+        bwd_text = ce_bwd_mode or "unknown"
+        print(
+            "[gdnctl] validation profile fused CE backend: "
+            f"selected={ce_backend_selected} requested={requested_text} ce_bwd_mode={bwd_text}"
+        )
     if ce_ab_compare is not None:
         compare_selected = ce_ab_compare.get("ce_backend_selected")
         compare_requested = ce_ab_compare.get("ce_requested_implementation")
+        compare_bwd_mode = ce_ab_compare.get("ce_bwd_mode")
         compare_metrics = ce_ab_compare.get("metrics")
         compare_metric_value = None
         if isinstance(compare_metrics, dict):
@@ -937,9 +1052,13 @@ def _apply_performance_policy(
             details = f"selected={compare_selected}"
             if compare_requested is not None:
                 details += f" requested={compare_requested}"
+            if compare_bwd_mode is not None:
+                details += f" ce_bwd_mode={compare_bwd_mode}"
             if compare_metric_value is not None:
                 details += f" {args.perf_metric}={compare_metric_value:.6g}"
             print(f"[gdnctl] validation profile CE compare run: {details}")
+
+    hotspot_metrics = _with_step_and_remainder_metrics(hotspot_metrics, profile_metrics=metrics)
 
     if metric_value is None:
         print(
@@ -973,6 +1092,7 @@ def _apply_performance_policy(
         "metric_points": metric_points,
         "ce_backend_selected": ce_backend_selected,
         "ce_requested_implementation": ce_requested_implementation,
+        "ce_bwd_mode": ce_bwd_mode,
         "ce_ab_compare": ce_ab_compare,
         "metrics": metrics,
         "hotspot_metrics": hotspot_metrics,
@@ -1016,6 +1136,12 @@ def _apply_performance_policy(
         champion=champion,
         history=history,
     )
+    baseline_profile_metrics = _resolve_metric_baseline(
+        champion=champion,
+        history=history,
+        preferred_source=hotspot_baseline_source,
+    )
+    hotspot_baseline = _with_step_and_remainder_metrics(hotspot_baseline, profile_metrics=baseline_profile_metrics)
     candidate_record["hotspot_baseline_source"] = hotspot_baseline_source
     if hotspot_baseline:
         candidate_record["hotspot_baseline_metrics"] = hotspot_baseline
@@ -1735,17 +1861,24 @@ def _validation_gate_session_directive(args: argparse.Namespace) -> str:
 def _ce_backend_session_directive(args: argparse.Namespace) -> str:
     primary_impl = _normalize_ce_implementation(args.validation_profile_ce_implementation)
     compare_impl = _normalize_ce_implementation(args.validation_profile_ce_compare_implementation)
+    primary_bwd_mode = _normalize_ce_bwd_mode(args.validation_profile_ce_bwd_mode)
+    compare_bwd_mode = args.validation_profile_ce_bwd_compare_mode
     return (
-        "Cross-entropy backend evidence is now first-class for this run.\n\n"
-        "- Treat residual `while` as potentially CE/XLA-attributed unless trace evidence says otherwise.\n"
+        "Cross-entropy training-shell evidence is now first-class for this run.\n\n"
+        "- Treat residual `while` as potentially CE-backward/custom-VJP-attributed unless "
+        "trace evidence says otherwise.\n"
         f"- Primary validation profile CE implementation request: `{primary_impl}`.\n"
-        f"- Secondary CE compare profile request: `{compare_impl}`.\n"
+        f"- Primary validation profile CE backward mode: `{primary_bwd_mode}`.\n"
+        f"- Secondary CE compare implementation request: `{compare_impl}`.\n"
+        f"- Secondary CE compare backward mode: `{compare_bwd_mode}`.\n"
         "- Every iteration writeup must record:\n"
         "  - `CE backend selected: <impl>`\n"
+        "  - `CE bwd mode: pallas | xla_streaming`\n"
         "  - whether the change class is `CE backend`, `outer control structure`, or `inner kernel math`\n"
         "  - whether the candidate should be rejected if `while_ms` remains flat.\n"
-        "- If CE backend remains `xla` and `while_ms` stays large, the next iteration should be CE/backend, Macro O, "
-        "or Macro M rather than another inner-kernel-only attempt."
+        "- Lock CE settings explicitly for experiment hygiene.\n"
+        "- Before resuming major GDN structural work, prefer the CE backward A/B matrix "
+        "(`pallas_tpu` + `pallas` bwd vs `pallas_tpu` + `xla_streaming` bwd)."
     )
 
 
@@ -1773,10 +1906,13 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - `while: <before> ms -> <after> ms`\n"
         "  - `conditional: <before> ms -> <after> ms`\n"
         "  - `CE backend selected: <impl>`\n"
+        "  - `CE bwd mode: pallas | xla_streaming`\n"
         "  - `CE-attributed while: <before> ms -> <after> ms` when trace attribution can isolate it\n"
         "  - `Kernel budget: <before> ms -> <after> ms`\n"
         "  - `Control budget: <before> ms -> <after> ms`\n"
         "  - `Train-path budget: <before> ms -> <after> ms`\n"
+        "  - `Step duration: <before> ms -> <after> ms`\n"
+        "  - `Remainder budget: <before> ms -> <after> ms`\n"
         "- Classification is mandatory in the iteration writeup:\n"
         "  - `Change class: CE backend | outer control structure | inner kernel math`\n"
         "  - `Expected effect on while_ms: ...`\n"
@@ -1787,8 +1923,15 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         f"`{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
         f"- Reject candidates when a new `conditional_ms` bucket >= {args.perf_new_conditional_ms:.3f} ms appears, "
         f"unless `{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
+        "- Reject candidates as off-critical-path / overlap-loss when `train_path_budget_ms` drops by >= "
+        f"{args.perf_min_train_path_drop_ms:.3f} ms but `step_duration_ms` does not improve by at least "
+        f"{args.perf_step_duration_improvement_margin_ms:.3f} ms.\n"
+        "- Reject candidates when `remainder_budget_ms` grows by > "
+        f"{args.perf_max_remainder_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
         f"- Validation profile CE implementation request: `{args.validation_profile_ce_implementation}`.\n"
+        f"- Validation profile CE backward mode: `{args.validation_profile_ce_bwd_mode}`.\n"
         f"- Validation profile CE compare implementation: `{args.validation_profile_ce_compare_implementation}`.\n"
+        f"- Validation profile CE compare backward mode: `{args.validation_profile_ce_bwd_compare_mode}`.\n"
         f"- State file: `{perf_state_path}`"
         f"{window_line}"
     )
@@ -2022,6 +2165,20 @@ def _parse_profile_env(profile_env: Sequence[str]) -> list[tuple[str, str]]:
     return parsed
 
 
+def _normalize_ce_bwd_mode(mode: str | None) -> str:
+    if mode is None:
+        return "pallas"
+
+    normalized = mode.strip().lower().replace("-", "_")
+    if normalized in {"", "default", "pallas"}:
+        return "pallas"
+    if normalized in {"xla_streaming", "xla"}:
+        return "xla_streaming"
+    raise SystemExit(
+        f"[gdnctl] unsupported CE backward mode {mode!r}; expected one of {', '.join(PALLAS_TPU_CE_BWD_MODE_CHOICES)}"
+    )
+
+
 def _append_profile_env(cmd: list[str], args: argparse.Namespace) -> None:
     cmd += ["-e", "EQX_ON_ERROR=nan"]
     cmd += ["-e", f"WANDB_MODE={args.wandb_mode}"]
@@ -2040,6 +2197,8 @@ def _append_profile_env(cmd: list[str], args: argparse.Namespace) -> None:
     ce_implementation = _normalize_ce_implementation(getattr(args, "ce_implementation", "auto"))
     if ce_implementation != "auto":
         cmd += ["-e", f"{FUSED_CE_IMPLEMENTATION_ENV}={ce_implementation}"]
+    ce_bwd_mode = _normalize_ce_bwd_mode(getattr(args, "ce_bwd_mode", "pallas"))
+    cmd += ["-e", f"{PALLAS_TPU_CE_BWD_STREAMING_ENV}={'1' if ce_bwd_mode == 'xla_streaming' else '0'}"]
     extra_env = _parse_profile_env(getattr(args, "profile_env", []))
     for key, value in extra_env:
         cmd += ["-e", f"{key}={value}"]
@@ -2530,6 +2689,7 @@ def _run_validation_ray_profile_once(
     cluster: str,
     run_name_prefix: str,
     ce_implementation: str,
+    ce_bwd_mode: str,
 ) -> tuple[int, bool, str]:
     cmd = [
         *RAY_RUN,
@@ -2551,6 +2711,7 @@ def _run_validation_ray_profile_once(
         segment_size=args.validation_profile_segment_size,
         profile_env=args.validation_profile_env,
         ce_implementation=ce_implementation,
+        ce_bwd_mode=ce_bwd_mode,
     )
     _append_profile_env(cmd, profile_env_args)
 
@@ -2575,11 +2736,31 @@ def _run_validation_ray_profile_once(
 def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) -> tuple[int, bool, dict[str, object]]:
     profile_prefix = f"{args.validation_profile_run_name_prefix}_iter{iteration:03d}"
     primary_ce_impl = _normalize_ce_implementation(args.validation_profile_ce_implementation)
+    primary_ce_bwd_mode = _normalize_ce_bwd_mode(args.validation_profile_ce_bwd_mode)
     compare_ce_impl = _normalize_ce_implementation(args.validation_profile_ce_compare_implementation)
+    compare_ce_bwd_mode_raw = getattr(args, "validation_profile_ce_bwd_compare_mode", "off")
+    compare_ce_bwd_mode = None
+    if compare_ce_bwd_mode_raw != "off":
+        compare_ce_bwd_mode = _normalize_ce_bwd_mode(compare_ce_bwd_mode_raw)
+    should_run_compare = compare_ce_impl != "auto" or compare_ce_bwd_mode is not None
+    compare_ce_impl_effective = primary_ce_impl if compare_ce_impl == "auto" else compare_ce_impl
+    compare_ce_bwd_mode_effective = primary_ce_bwd_mode if compare_ce_bwd_mode is None else compare_ce_bwd_mode
+    if (
+        should_run_compare
+        and compare_ce_impl_effective == primary_ce_impl
+        and compare_ce_bwd_mode_effective == primary_ce_bwd_mode
+    ):
+        should_run_compare = False
     active_cluster = getattr(args, "active_dev_tpu_cluster", None)
     if args.dev_tpu_name and active_cluster is not None:
 
-        def _run_on_cluster(cluster: str, *, run_name_prefix: str, ce_implementation: str) -> tuple[int, str]:
+        def _run_on_cluster(
+            cluster: str,
+            *,
+            run_name_prefix: str,
+            ce_implementation: str,
+            ce_bwd_mode: str,
+        ) -> tuple[int, str]:
             dev_profile_args = argparse.Namespace(
                 cluster=cluster,
                 tpu_name=args.dev_tpu_name,
@@ -2598,6 +2779,7 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
                 dry_run=args.validation_profile_dry_run,
                 no_sync=args.validation_dev_no_sync,
                 ce_implementation=ce_implementation,
+                ce_bwd_mode=ce_bwd_mode,
             )
             cmd = [
                 *DEV_TPU,
@@ -2626,24 +2808,34 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             active_cluster,
             run_name_prefix=profile_prefix,
             ce_implementation=primary_ce_impl,
+            ce_bwd_mode=primary_ce_bwd_mode,
         )
         if rc == 0:
             primary_info = _collect_profile_metrics(
-                _profile_metric_args(args, ce_implementation=primary_ce_impl),
+                _profile_metric_args(
+                    args,
+                    ce_implementation=primary_ce_impl,
+                    ce_bwd_mode=primary_ce_bwd_mode,
+                ),
                 output_text=output_text,
                 profile_prefix=profile_prefix,
             )
-            if compare_ce_impl != "auto":
-                compare_prefix = f"{profile_prefix}_ce_{compare_ce_impl}"
+            if should_run_compare:
+                compare_prefix = f"{profile_prefix}_ce_{compare_ce_impl_effective}_bwd_{compare_ce_bwd_mode_effective}"
                 compare_rc, compare_output = _run_on_cluster(
                     active_cluster,
                     run_name_prefix=compare_prefix,
-                    ce_implementation=compare_ce_impl,
+                    ce_implementation=compare_ce_impl_effective,
+                    ce_bwd_mode=compare_ce_bwd_mode_effective,
                 )
                 if compare_rc != 0:
                     return compare_rc, True, primary_info
                 compare_info = _collect_profile_metrics(
-                    _profile_metric_args(args, ce_implementation=compare_ce_impl),
+                    _profile_metric_args(
+                        args,
+                        ce_implementation=compare_ce_impl_effective,
+                        ce_bwd_mode=compare_ce_bwd_mode_effective,
+                    ),
                     output_text=compare_output,
                     profile_prefix=compare_prefix,
                 )
@@ -2656,24 +2848,36 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
                     retry_cluster,
                     run_name_prefix=profile_prefix,
                     ce_implementation=primary_ce_impl,
+                    ce_bwd_mode=primary_ce_bwd_mode,
                 )
                 if rc == 0:
                     primary_info = _collect_profile_metrics(
-                        _profile_metric_args(args, ce_implementation=primary_ce_impl),
+                        _profile_metric_args(
+                            args,
+                            ce_implementation=primary_ce_impl,
+                            ce_bwd_mode=primary_ce_bwd_mode,
+                        ),
                         output_text=output_text,
                         profile_prefix=profile_prefix,
                     )
-                    if compare_ce_impl != "auto":
-                        compare_prefix = f"{profile_prefix}_ce_{compare_ce_impl}"
+                    if should_run_compare:
+                        compare_prefix = (
+                            f"{profile_prefix}_ce_{compare_ce_impl_effective}_bwd_{compare_ce_bwd_mode_effective}"
+                        )
                         compare_rc, compare_output = _run_on_cluster(
                             retry_cluster,
                             run_name_prefix=compare_prefix,
-                            ce_implementation=compare_ce_impl,
+                            ce_implementation=compare_ce_impl_effective,
+                            ce_bwd_mode=compare_ce_bwd_mode_effective,
                         )
                         if compare_rc != 0:
                             return compare_rc, True, primary_info
                         compare_info = _collect_profile_metrics(
-                            _profile_metric_args(args, ce_implementation=compare_ce_impl),
+                            _profile_metric_args(
+                                args,
+                                ce_implementation=compare_ce_impl_effective,
+                                ce_bwd_mode=compare_ce_bwd_mode_effective,
+                            ),
                             output_text=compare_output,
                             profile_prefix=compare_prefix,
                         )
@@ -2701,25 +2905,35 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             cluster=cluster,
             run_name_prefix=profile_prefix,
             ce_implementation=primary_ce_impl,
+            ce_bwd_mode=primary_ce_bwd_mode,
         )
         if rc == 0:
             primary_info = _collect_profile_metrics(
-                _profile_metric_args(args, ce_implementation=primary_ce_impl),
+                _profile_metric_args(
+                    args,
+                    ce_implementation=primary_ce_impl,
+                    ce_bwd_mode=primary_ce_bwd_mode,
+                ),
                 output_text=output_text,
                 profile_prefix=profile_prefix,
             )
-            if compare_ce_impl != "auto":
-                compare_prefix = f"{profile_prefix}_ce_{compare_ce_impl}"
+            if should_run_compare:
+                compare_prefix = f"{profile_prefix}_ce_{compare_ce_impl_effective}_bwd_{compare_ce_bwd_mode_effective}"
                 compare_rc, compare_retryable, compare_output = _run_validation_ray_profile_once(
                     args,
                     cluster=cluster,
                     run_name_prefix=compare_prefix,
-                    ce_implementation=compare_ce_impl,
+                    ce_implementation=compare_ce_impl_effective,
+                    ce_bwd_mode=compare_ce_bwd_mode_effective,
                 )
                 if compare_rc != 0:
                     return compare_rc, retryable or compare_retryable, primary_info
                 compare_info = _collect_profile_metrics(
-                    _profile_metric_args(args, ce_implementation=compare_ce_impl),
+                    _profile_metric_args(
+                        args,
+                        ce_implementation=compare_ce_impl_effective,
+                        ce_bwd_mode=compare_ce_bwd_mode_effective,
+                    ),
                     output_text=compare_output,
                     profile_prefix=compare_prefix,
                 )
@@ -2733,7 +2947,11 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             last_rc,
             retryable,
             _collect_profile_metrics(
-                _profile_metric_args(args, ce_implementation=primary_ce_impl),
+                _profile_metric_args(
+                    args,
+                    ce_implementation=primary_ce_impl,
+                    ce_bwd_mode=primary_ce_bwd_mode,
+                ),
                 output_text=last_output,
                 profile_prefix=profile_prefix,
             ),
@@ -3033,6 +3251,12 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
         raise SystemExit("[gdnctl] --perf-new-conditional-ms must be >= 0.")
     if args.perf_max_train_path_budget_increase_ms < 0:
         raise SystemExit("[gdnctl] --perf-max-train-path-budget-increase-ms must be >= 0.")
+    if args.perf_min_train_path_drop_ms < 0:
+        raise SystemExit("[gdnctl] --perf-min-train-path-drop-ms must be >= 0.")
+    if args.perf_step_duration_improvement_margin_ms < 0:
+        raise SystemExit("[gdnctl] --perf-step-duration-improvement-margin-ms must be >= 0.")
+    if args.perf_max_remainder_budget_increase_ms < 0:
+        raise SystemExit("[gdnctl] --perf-max-remainder-budget-increase-ms must be >= 0.")
     if args.perf_control_gate_override_pct < 0:
         raise SystemExit("[gdnctl] --perf-control-gate-override-pct must be >= 0.")
     if args.perf_history_step_start < 0:
@@ -3329,6 +3553,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Requested fused cross-entropy implementation for the profiled run.",
     )
+    dev_profile.add_argument(
+        "--ce-bwd-mode",
+        choices=PALLAS_TPU_CE_BWD_MODE_CHOICES,
+        default="pallas",
+        help="Backward mode for TPU Pallas fused cross-entropy during the profiled run.",
+    )
     dev_profile.add_argument("--run-name-prefix", default="gdn_tinyprof", help="Run name prefix")
     dev_profile.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     dev_profile.add_argument(
@@ -3366,6 +3596,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=FUSED_CE_IMPLEMENTATION_CHOICES,
         default="auto",
         help="Requested fused cross-entropy implementation for the profiled run.",
+    )
+    ray_profile.add_argument(
+        "--ce-bwd-mode",
+        choices=PALLAS_TPU_CE_BWD_MODE_CHOICES,
+        default="pallas",
+        help="Backward mode for TPU Pallas fused cross-entropy during the profiled run.",
     )
     ray_profile.add_argument("--run-name-prefix", default="gdn_tinyprof", help="Run name prefix")
     ray_profile.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
@@ -3627,16 +3863,31 @@ def build_parser() -> argparse.ArgumentParser:
     codex_loop.add_argument(
         "--validation-profile-ce-implementation",
         choices=FUSED_CE_IMPLEMENTATION_CHOICES,
-        default="auto",
+        default="pallas_tpu",
         help="Requested fused cross-entropy implementation for the primary validation profile run.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-ce-bwd-mode",
+        choices=PALLAS_TPU_CE_BWD_MODE_CHOICES,
+        default="pallas",
+        help="Requested TPU fused CE backward mode for the primary validation profile run.",
     )
     codex_loop.add_argument(
         "--validation-profile-ce-compare-implementation",
         choices=FUSED_CE_IMPLEMENTATION_CHOICES,
-        default="pallas_tpu",
+        default="auto",
         help=(
             "Optional second CE implementation profiled for A/B comparison each iteration. "
             "Set to `auto` to disable the compare run."
+        ),
+    )
+    codex_loop.add_argument(
+        "--validation-profile-ce-bwd-compare-mode",
+        choices=PALLAS_TPU_CE_BWD_MODE_COMPARE_CHOICES,
+        default="xla_streaming",
+        help=(
+            "Optional second TPU fused CE backward mode profiled for A/B comparison each iteration. "
+            "Set to `off` to disable the backward-mode compare run."
         ),
     )
     codex_loop.add_argument(
@@ -3754,6 +4005,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=5.0,
         help="Reject candidates when `train_path_budget_ms` grows by more than this unless overridden.",
+    )
+    codex_loop.add_argument(
+        "--perf-min-train-path-drop-ms",
+        type=float,
+        default=1.0,
+        help=(
+            "Classify candidates as off-critical-path when `train_path_budget_ms` drops by at least this much "
+            "but step duration does not improve materially."
+        ),
+    )
+    codex_loop.add_argument(
+        "--perf-step-duration-improvement-margin-ms",
+        type=float,
+        default=0.25,
+        help="Minimum `step_duration_ms` improvement required to avoid off-critical-path classification.",
+    )
+    codex_loop.add_argument(
+        "--perf-max-remainder-budget-increase-ms",
+        type=float,
+        default=2.0,
+        help="Reject candidates when `remainder_budget_ms` grows by more than this unless overridden.",
     )
     codex_loop.add_argument(
         "--perf-control-gate-override-pct",

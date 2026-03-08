@@ -38,17 +38,43 @@ def test_append_profile_env_includes_ce_override_only_when_requested() -> None:
         chunk_size=None,
         segment_size=None,
         profile_env=[],
+        ce_bwd_mode="pallas",
     )
 
     cmd = ["execute"]
     args = argparse.Namespace(**vars(base_args), ce_implementation="pallas_tpu")
     gdnctl._append_profile_env(cmd, args)
     assert f"{gdnctl.FUSED_CE_IMPLEMENTATION_ENV}=pallas_tpu" in cmd
+    assert f"{gdnctl.PALLAS_TPU_CE_BWD_STREAMING_ENV}=0" in cmd
 
     cmd_auto = ["execute"]
     args_auto = argparse.Namespace(**vars(base_args), ce_implementation="auto")
     gdnctl._append_profile_env(cmd_auto, args_auto)
     assert not any(item.startswith(f"{gdnctl.FUSED_CE_IMPLEMENTATION_ENV}=") for item in cmd_auto)
+    assert f"{gdnctl.PALLAS_TPU_CE_BWD_STREAMING_ENV}=0" in cmd_auto
+
+
+def test_append_profile_env_supports_xla_streaming_ce_backward_mode() -> None:
+    args = argparse.Namespace(
+        wandb_mode="offline",
+        size="130m",
+        num_steps=20,
+        profile_start_step=2,
+        profile_num_steps=6,
+        run_name_prefix="demo",
+        tpu="v5p-8",
+        batch_size=8,
+        chunk_size=None,
+        segment_size=None,
+        profile_env=[],
+        ce_implementation="pallas_tpu",
+        ce_bwd_mode="xla_streaming",
+    )
+
+    cmd = ["execute"]
+    gdnctl._append_profile_env(cmd, args)
+    assert f"{gdnctl.FUSED_CE_IMPLEMENTATION_ENV}=pallas_tpu" in cmd
+    assert f"{gdnctl.PALLAS_TPU_CE_BWD_STREAMING_ENV}=1" in cmd
 
 
 @pytest.mark.parametrize(

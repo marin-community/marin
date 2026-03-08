@@ -39,6 +39,10 @@ What to do differently now:
   inside a new outer train-path structure or explicitly removes the `while`/`conditional` bottleneck.
 - After Iterations 64-66, also treat fused cross-entropy backend selection as a first-class bottleneck split.
 - If residual `while` is still CE/XLA-attributed, do not keep spending mainline budget on standalone GDN-local work.
+- Track these derived metrics for every profiled run:
+  - `step_duration_ms = throughput/duration * 1000`
+  - `remainder_budget_ms = step_duration_ms - train_path_budget_ms`
+- If train-path budget improves but step duration does not, classify the candidate as `off-critical-path` / `overlap-loss`.
 
 ## CE-first pivot (March 2026)
 
@@ -59,6 +63,35 @@ Interpretation:
 - the remaining wall is no longer primarily inside the GDN train shell,
 - the residual `while` is likely at least partly a CE/XLA backend-selection issue,
 - the next budget should go first to CE/backend A/B and Macro O/M style control-arm work.
+
+## Post-CE regime (March 2026, after Iterations 67-69)
+
+The regime changed again once CE moved to TPU Pallas by default:
+
+- Iteration 67 forced TPU fused CE to `pallas_tpu` and cut CE-attributed `while` from about `31.6 ms`
+  to about `10.1 ms`, producing the first large post-review end-to-end win.
+- Iteration 68 then reduced GDN forward closed-call and total tracked train-path budget materially while
+  MFU still fell slightly.
+- Iteration 69 confirmed that a full-XLA chunk control arm is diagnostic but clearly regressive as a
+  deployable path.
+
+Interpretation:
+
+- CE implementation choice was the last giant false wall, and removing it was first-order.
+- The next CE-specific target is the residual CE backward/custom-VJP shell.
+- GDN remains expensive, but `GDN budget down` is no longer a reliable proxy for `step faster`.
+- The loop must now track step remainder explicitly instead of inferring everything from GDN-labeled buckets.
+
+Current mainline priority order:
+1. CE backward mode A/B with `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` fixed.
+2. Remainder-budget instrumentation and promotion policy based on `step_duration_ms`.
+3. Macro O as a diagnostic control arm only.
+4. Macro M only after CE backward and remainder-budget work.
+
+What not to do:
+- Do not spend mainline budget on forward-only GDN wins that do not move `step_duration_ms`.
+- Do not promote candidates whose train-path budget improves but whose `remainder_budget_ms` grows.
+- Do not treat Macro O as a near-champion if it only shifts work out of the tracked GDN path.
 
 The current baseline bottlenecks (from issue [#1884 comment 3714287157](https://github.com/marin-community/marin/issues/1884#issuecomment-3714287157), updated January 6, 2026):
 - strict lower-triangular inversion is expensive on TPU; sequential dependencies hurt MXU occupancy,
@@ -230,17 +263,18 @@ Risk:
 
 These moves supersede the previous priority order for upcoming iterations.
 
-### P) Force and benchmark TPU Pallas CE on the real train run
-Target: determine whether the residual `while ~31.6 ms` is mostly a CE/XLA backend issue.
+### P) CE backward-mode A/B on the real train run
+Target: determine whether the remaining CE-attributed control cost is best reduced by switching the TPU CE backward mode.
 
 Required matrix:
-- champion code + CE default
-- champion code + CE forced `pallas_tpu`
-- current head + CE default
-- current head + CE forced `pallas_tpu`
+- current deployable head + `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` + Pallas CE backward
+- current deployable head + `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` + XLA-streaming CE backward
+- optional sanity run: explicit `xla` CE when bottleneck attribution is unclear
 
 Implementation note:
-- use `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` to force the TPU Pallas CE path.
+- keep the CE implementation fixed at `pallas_tpu` while toggling the backward mode env:
+  - `LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0`
+  - `LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=1`
 - profile the exact same train run; do not rely on microbenchmarks only.
 
 ### L) Associative chunk summaries / affine scan reformulation

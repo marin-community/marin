@@ -63,6 +63,9 @@ def _perf_args(*, regression_policy: str = "revert-count-failure") -> argparse.N
         perf_max_while_increase_ms=5.0,
         perf_new_conditional_ms=5.0,
         perf_max_train_path_budget_increase_ms=5.0,
+        perf_min_train_path_drop_ms=1.0,
+        perf_step_duration_improvement_margin_ms=0.25,
+        perf_max_remainder_budget_increase_ms=2.0,
         perf_control_gate_override_pct=5.0,
     )
 
@@ -269,14 +272,23 @@ def test_collect_profile_metrics_parses_ce_backend_selection() -> None:
         perf_wandb_project="marin",
         validation_profile_wandb_mode="offline",
         ce_implementation="pallas_tpu",
+        ce_bwd_mode="xla_streaming",
     )
     info = gdnctl._collect_profile_metrics(
         args,
-        output_text="INFO Fused cross-entropy selected implementation: pallas_tpu\nthroughput/mfu=5.1\n",
+        output_text=(
+            "INFO Fused cross-entropy selected implementation: pallas_tpu\n"
+            "throughput/mfu=5.1\n"
+            "throughput/duration=0.167\n"
+        ),
         profile_prefix="demo",
     )
     assert info["ce_backend_selected"] == "pallas_tpu"
     assert info["ce_requested_implementation"] == "pallas_tpu"
+    assert info["ce_bwd_mode"] == "xla_streaming"
+    metrics = info["metrics"]
+    assert isinstance(metrics, dict)
+    assert metrics["step_duration_ms"] == 167.0
 
 
 def test_perf_policy_reverts_candidate_when_while_growth_outweighs_small_metric_gain(tmp_path: Path) -> None:
@@ -444,6 +456,99 @@ def test_perf_policy_reverts_new_conditional_bucket(tmp_path: Path) -> None:
     assert count_failure
     assert rc == 0
     assert _run_git(repo, "rev-parse", "HEAD") != candidate_commit
+
+
+def test_latest_iteration_hotspot_context_parses_step_and_remainder_metrics(tmp_path: Path) -> None:
+    log_path = tmp_path / "hillclimb.md"
+    log_path.write_text(
+        "\n".join(
+            [
+                "### Iteration 13 - Candidate",
+                "- `Kernel budget`: `33.789 ms -> 29.078 ms`",
+                "- `Control budget`: `10.176 ms -> 10.095 ms`",
+                "- `Train-path budget`: `43.965 ms -> 39.173 ms`",
+                "- `Step duration`: `167.098 ms -> 168.073 ms`",
+                "- `Remainder budget`: `123.133 ms -> 128.900 ms`",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    context = gdnctl._latest_iteration_hotspot_context(log_path)
+    current = context["hotspot_metrics"]
+    assert current["step_duration_ms"] == 168.073
+    assert current["remainder_budget_ms"] == 128.9
+
+
+def test_perf_policy_reverts_off_critical_path_candidate(tmp_path: Path) -> None:
+    repo, baseline_commit = _init_repo(tmp_path)
+    state_path = tmp_path / "perf_state.json"
+    args = _perf_args(regression_policy="revert-count-failure")
+
+    baseline_hotspots = {
+        "forward_closed_call_ms": 20.663,
+        "backward_closed_call_ms": 13.126,
+        "while_ms": 10.150,
+        "conditional_ms": 0.026,
+        "kernel_budget_ms": 33.789,
+        "control_budget_ms": 10.176,
+        "train_path_budget_ms": 43.965,
+        "step_duration_ms": 167.098,
+        "remainder_budget_ms": 123.133,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=1,
+        commit_sha=baseline_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.061863, "throughput/duration": 0.167098},
+            "warnings": [],
+            "hotspot_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert not count_failure
+    assert rc == 0
+
+    candidate_commit = _commit_change(repo, "candidate\n", "candidate")
+    candidate_hotspots = {
+        "forward_closed_call_ms": 15.952,
+        "backward_closed_call_ms": 13.126,
+        "while_ms": 10.081,
+        "conditional_ms": 0.014,
+        "kernel_budget_ms": 29.078,
+        "control_budget_ms": 10.095,
+        "train_path_budget_ms": 39.173,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=2,
+        commit_sha=candidate_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.026688, "throughput/duration": 0.168073},
+            "warnings": [],
+            "hotspot_metrics": candidate_hotspots,
+            "hotspot_baseline_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert count_failure
+    assert rc == 0
+    assert _run_git(repo, "rev-parse", "HEAD") != candidate_commit
+
+    state = _read_state(state_path)
+    last = state["history"][-1]
+    assert last["decision"] == "control_flow_regression"
+    reasons = last["control_gate_reasons"]
+    assert isinstance(reasons, list)
+    assert any("off-critical-path" in reason for reason in reasons)
 
 
 def test_extract_wandb_run_url_supports_slug_with_underscore() -> None:

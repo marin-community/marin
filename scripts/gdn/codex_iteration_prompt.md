@@ -6,8 +6,10 @@ Iteration metadata:
 
 Primary objective:
 - Reach major end-to-end train-step speedups and push MFU toward ~50%.
-- The current evidence says the main bottleneck is no longer just kernel math. It is the lowered train-path control structure around the kernels.
-- The latest evidence says the residual `while ~31.6 ms` may now be mostly fused CE on XLA rather than GDN-train-shell work.
+- The current evidence says CE backend selection was the last giant false wall, and that has already been partly fixed.
+- The next bottlenecks are:
+  - the residual CE backward/custom-VJP shell, and
+  - the untracked post-train-path remainder of the step.
 - Optimize the training chunk path (`chunk_gated_delta_rule` / flash train kernels) first.
 
 Repo context:
@@ -20,11 +22,13 @@ Repo context:
 - Pallas docs: <https://docs.jax.dev/en/latest/pallas/tpu/index.html>
 
 Current diagnosis to optimize against:
-- Multiple recent variants cut train-path forward/backward `shard_map/pallas_call` closed-call time by ~40-52%.
-- End-to-end throughput still regressed because device-side `while` grew to about `31.5-31.7 ms`.
-- Treat that as the dominant failure mode unless new evidence disproves it.
-- A candidate that halves closed-call time but worsens train-path control flow is not a win.
-- After Iterations 64-66, treat CE backend selection as a first-class bottleneck split, not background noise.
+- Iteration 67 was the regime change: forcing TPU fused CE to `pallas_tpu` cut CE-attributed `while` from about `31.6 ms` to about `10.1 ms` and improved MFU by about `10.9%`.
+- Iteration 68 then reduced GDN forward closed-call and train-path budget materially while MFU still regressed slightly.
+- Iteration 69 showed a full-XLA chunk control arm is useful as diagnosis, but clearly worse than the deployable head.
+- Therefore:
+  - `GDN budget down` is no longer a reliable proxy for `step faster`,
+  - the residual CE backward/custom-VJP shell is a first-class target,
+  - `remainder_budget_ms = step_duration_ms - train_path_budget_ms` must be tracked explicitly.
 
 Required behavior for this iteration:
 1. Read the latest entries in the running log and identify the current train-path control bottleneck.
@@ -34,12 +38,18 @@ Required behavior for this iteration:
    - `CE backend`
    - `outer control structure`
    - `inner kernel math`
-5. Prefer a CE/backend or outer-control move over a kernel-math move unless you can explain why the current CE/control-shell evidence does not apply.
-6. State what you expect to happen to `while_ms`, and whether the candidate should be rejected if `while_ms` remains flat.
-7. Implement one concrete high-upside candidate.
-8. Validate correctness on TPU.
-9. Launch a lightweight profiled training run on TPU.
-10. Analyze the profile, update the running log with structured hotspot metrics, and commit exactly one commit.
+5. Unless you are explicitly running the CE backward A/B matrix, keep CE fixed at:
+   - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`
+   - one explicit CE backward mode (`pallas` or `xla_streaming`)
+6. State what you expect to happen to:
+   - `while_ms`
+   - `step_duration_ms`
+   - `remainder_budget_ms`
+7. State whether the candidate should be rejected if `while_ms` remains flat or if `remainder_budget_ms` grows.
+8. Implement one concrete high-upside candidate.
+9. Validate correctness on TPU.
+10. Launch a lightweight profiled training run on TPU.
+11. Analyze the profile, update the running log with structured hotspot metrics, and commit exactly one commit.
 
 Session directives:
 - If this prompt includes an extra "Session directives for this codex-loop run" block, treat it as mandatory guidance for this run.
@@ -47,9 +57,9 @@ Session directives:
 Macro-move category (pick ONE per iteration):
 
 Highest priority:
-- `P` CE backend forcing / A/B benchmark on the real train run (default CE vs forced `pallas_tpu`).
-- `O` Control arm / reduced-Pallas benchmark branch to test whether the current train-path abstraction boundary is fundamentally wrong.
-- `M` XLA-first outer train path with Pallas only as leaf chunk kernels.
+- `P` CE backward-mode A/B on the real train run (`pallas_tpu` CE + `pallas` backward vs `pallas_tpu` CE + `xla_streaming` backward).
+- `O` Control arm / reduced-Pallas benchmark branch to diagnose whether the current train-path abstraction boundary is fundamentally wrong. This is diagnostic, not a mainline promotion target.
+- `M` XLA-first outer train path with Pallas only as leaf chunk kernels. This is lower priority than `P` unless CE backward evidence is exhausted.
 
 High priority only when nested inside `M`/`O` or justified by new CE evidence:
 - `N` Backward tape-contract redesign: compressed summaries, new remat/checkpoint boundaries, or another backward structure that reduces scanned residual state.
@@ -66,7 +76,8 @@ Deprioritized unless you explain why the new control-flow diagnosis does not app
 - standalone kernel-local wins that preserve the same train-path `scan` / `while` shell,
 - standalone associative-summary work with no CE/backend change,
 - runtime branchy hot-path variants,
-- more iterations whose only visible success metric is lower closed-call time.
+- more iterations whose only visible success metric is lower closed-call time,
+- forward-only GDN wins that do not move `step_duration_ms` or `remainder_budget_ms`.
 
 Major-bet requirement:
 - The optimization must materially change algorithmic decomposition, outer train-path orchestration, backward tape structure, or the lowering-visible control structure.
@@ -91,13 +102,15 @@ Hot-path control-flow checklist (answer this in your writeup):
 - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
 - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
 - What do you expect to happen to `while_ms`?
-- Should this candidate be rejected if `while_ms` remains flat? Why?
+- What do you expect to happen to `remainder_budget_ms`?
+- Should this candidate be rejected if `while_ms` remains flat or `remainder_budget_ms` grows? Why?
 
 Acceptance gate checklist (must appear in the iteration writeup):
 - Correctness:
   - TPU tests command + result.
 - Perf:
   - `CE backend selected: ...`
+  - `CE bwd mode: pallas | xla_streaming`
   - `CE-attributed while: ... ms -> ... ms` when the trace can isolate it.
   - Forward closed-call `... ms -> ... ms`.
   - Backward closed-call `... ms -> ... ms`.
@@ -106,11 +119,14 @@ Acceptance gate checklist (must appear in the iteration writeup):
   - `Kernel budget: ... ms -> ... ms`.
   - `Control budget: ... ms -> ... ms`.
   - `Train-path budget: ... ms -> ... ms`.
+  - `Step duration: ... ms -> ... ms`.
+  - `Remainder budget: ... ms -> ... ms`.
   - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration` deltas.
 - Governance:
   - If `while` or `conditional` grows materially and MFU does not improve strongly, revert.
   - If CE backend is still `xla` and residual `while` stays large, treat the result as incomplete bottleneck attribution, not closure.
-  - If train-path budget worsens, do not treat the candidate as promising even if closed-call time improved.
+  - If train-path budget improves but step duration does not, classify it as `off-critical-path` / `overlap-loss`.
+  - If remainder budget grows materially, do not treat the candidate as promising even if train-path budget improved.
 
 Failed-attempt handling:
 - If the profile run fails, correctness fails deterministically, or control-flow overhead dominates and MFU regresses, do not leave speculative code changes in the tree.
@@ -124,9 +140,9 @@ Constraints:
 - If blocked on infra, document the blocker with exact commands and stop without speculative code changes.
 
 Preferred commands:
-- `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --no-sync`
+- `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --no-sync`
+- `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode xla_streaming --no-sync`
 - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
-- `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-sync`
 - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
 - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --no-wait`
 - `uv run python scripts/gdn/gdnctl.py lint-log`
