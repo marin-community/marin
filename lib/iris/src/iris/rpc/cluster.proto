@@ -439,8 +439,7 @@ message Controller {
 
     // Bundle information - either provide bundle_id OR blob (not both)
     string bundle_id = 5;  // Canonical bundle identifier (SHA256 of zip bytes)
-    reserved 6;
-    bytes bundle_blob = 7;  // Direct bundle upload (controller writes to bundle store)
+    bytes bundle_blob = 6;  // Direct bundle upload (controller writes to bundle store)
 
     // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
     // If not set or milliseconds=0, no timeout (wait forever)

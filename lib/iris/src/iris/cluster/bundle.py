@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import posixpath
 import re
 import sqlite3
@@ -17,6 +18,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 _BUNDLE_ID_RE = r"^[0-9a-f]{64}$"
+logger = logging.getLogger(__name__)
 
 
 def validate_bundle_id(bundle_id: str) -> None:
@@ -65,6 +67,8 @@ class BundleStore:
         self._lock = threading.RLock()
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        # We intentionally share one sqlite connection across threads; every
+        # public DB operation must hold self._lock.
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -136,17 +140,25 @@ class BundleStore:
             self.get_zip(bundle_id)
             return
         except FileNotFoundError:
-            pass
+            logger.error("Bundle %s not found in local store, fetching from controller", bundle_id)
 
         if not self._controller_address:
             raise RuntimeError(f"Bundle {bundle_id} is not cached and controller address is not configured")
 
         url = f"{self._controller_address}/bundles/{bundle_id}.zip"
-        try:
-            with urlopen(url, timeout=120) as resp:
-                blob = resp.read()
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch bundle {bundle_id}: {e}") from e
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                with urlopen(url, timeout=120) as resp:
+                    blob = resp.read()
+                break
+            except Exception as e:
+                last_exc = e
+                if attempt == 2:
+                    raise RuntimeError(f"Failed to fetch bundle {bundle_id}: {e}") from e
+                time.sleep(0.25 * (2**attempt))
+        else:
+            raise RuntimeError(f"Failed to fetch bundle {bundle_id}: {last_exc}")
 
         actual = bundle_id_for_zip(blob)
         if actual != bundle_id:
@@ -177,22 +189,25 @@ class BundleStore:
     def _evict_if_needed_locked(self) -> None:
         if self._max_items <= 0 and self._max_total_bytes <= 0:
             return
+        victims: list[str] = []
         while True:
             row = self._conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM bundles",
             ).fetchone()
             if row is None:
-                return
+                break
             count = int(row[0])
             total = int(row[1])
             over_items = self._max_items > 0 and count > self._max_items
             over_bytes = self._max_total_bytes > 0 and total > self._max_total_bytes
             if not (over_items or over_bytes):
-                return
+                break
             victim = self._conn.execute(
                 "SELECT bundle_id FROM bundles ORDER BY last_access_ms ASC LIMIT 1",
             ).fetchone()
             if victim is None:
-                return
+                break
+            victims.append(str(victim[0]))
             self._conn.execute("DELETE FROM bundles WHERE bundle_id = ?", (str(victim[0]),))
+        if victims:
             self._conn.commit()

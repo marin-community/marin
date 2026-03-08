@@ -15,13 +15,12 @@ from __future__ import annotations
 import base64
 import logging
 import os
-import posixpath
 import shlex
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from iris.cluster.bundle import BundleStore
+from iris.cluster.bundle import BundleStore, normalize_workdir_relative_path
 from iris.cluster.k8s.kubectl import Kubectl, KubectlLogLine
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -85,19 +84,6 @@ def _build_task_script(config: ContainerConfig) -> str:
     run_cmd = " ".join(shlex.quote(arg) for arg in config.entrypoint.run_command.argv)
     lines.append(f"exec {run_cmd}")
     return "\n".join(lines)
-
-
-def _normalize_workdir_relative_path(path: str) -> str:
-    """Return a normalized relative path safe to write under the task workdir."""
-    candidate = path.replace("\\", "/")
-    if candidate.startswith("/"):
-        raise ValueError(f"Invalid workdir file path (absolute paths are not allowed): {path}")
-    normalized = posixpath.normpath(candidate)
-    if normalized in {"", "."}:
-        raise ValueError(f"Invalid workdir file path: {path}")
-    if normalized.startswith("../") or normalized == "..":
-        raise ValueError(f"Invalid workdir file path (path traversal): {path}")
-    return normalized
 
 
 def _build_stage_init_script() -> str:
@@ -287,7 +273,7 @@ class KubernetesContainerHandle:
             binary_data: dict[str, str] = {}
             config_items: list[dict[str, str]] = []
             for i, (path, data) in enumerate(workdir_files.items()):
-                normalized = _normalize_workdir_relative_path(path)
+                normalized = normalize_workdir_relative_path(path)
                 key = f"f{i:04d}"
                 binary_data[key] = base64.b64encode(data).decode("ascii")
                 config_items.append({"key": key, "path": normalized})
