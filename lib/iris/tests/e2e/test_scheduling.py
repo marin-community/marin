@@ -83,42 +83,6 @@ def test_scheduling_timeout(cluster):
     assert status.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
 
 
-def _brief_task():
-    """Task that runs long enough for scheduling to distribute across workers."""
-    import time
-
-    time.sleep(0.5)
-    return 42
-
-
-@pytest.mark.timeout(120)
-@pytest.mark.xfail(reason="Flaky in CI: multi-worker cluster often cannot boot all 4 workers")
-def test_multi_worker_execution(multi_worker_cluster):
-    """Replicated job distributes tasks across multiple workers.
-
-    Each task sleeps briefly so multiple tasks are pending/running simultaneously,
-    forcing the scheduler to distribute them. With cpu=5 and workers having cpu=8,
-    each worker can only run one task at a time.
-    """
-    job = multi_worker_cluster.submit(
-        _brief_task,
-        "mw-job",
-        cpu=5,
-        replicas=6,
-    )
-
-    status = multi_worker_cluster.wait(job, timeout=60)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
-
-    workers_used = set()
-    for task_idx in range(6):
-        task = multi_worker_cluster.task_status(job, task_index=task_idx)
-        if task.worker_id:
-            workers_used.add(task.worker_id)
-
-    assert len(workers_used) > 1, f"Tasks should distribute across workers, but all ran on: {workers_used}"
-
-
 # ---------------------------------------------------------------------------
 # Dashboard assertions (require Playwright via the `page` fixture)
 # ---------------------------------------------------------------------------

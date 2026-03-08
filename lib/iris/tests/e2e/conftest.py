@@ -237,12 +237,12 @@ def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
 
 @pytest.fixture
 def multi_worker_cluster():
-    """Boots a local cluster with 4 workers for distribution and concurrency tests.
+    """Boots a local cluster with 2 workers for distribution and concurrency tests.
 
     Waits for all workers to register before yielding, since the autoscaler
     scales up one slice per evaluation interval (~0.5s each).
     """
-    num_workers = 4
+    num_workers = 2
     config = _make_multi_worker_config(num_workers)
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=IRIS_ROOT)

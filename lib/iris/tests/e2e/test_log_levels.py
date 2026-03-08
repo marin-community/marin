@@ -43,7 +43,7 @@ def _emit_multi_level_logs():
     log.error("error-marker")
 
 
-@pytest.mark.xfail(reason="Flaky in CI: log propagation via heartbeat is unreliable under load")
+@pytest.mark.xfail(reason="Heartbeat-based log propagation is unreliable in CI")
 def test_task_logs_have_level_field(cluster):
     """Task emitting logs at different levels gets level fields populated."""
     job = cluster.submit(_emit_multi_level_logs, "log-levels")
@@ -84,7 +84,7 @@ def test_task_logs_have_level_field(cluster):
     assert markers_found.get("error-marker") == logging_pb2.LOG_LEVEL_ERROR
 
 
-@pytest.mark.xfail(reason="Flaky in CI: log propagation via heartbeat is unreliable under load")
+@pytest.mark.xfail(reason="Heartbeat-based log propagation is unreliable in CI")
 def test_log_level_filter(cluster):
     """Controller filters logs by minimum level."""
     job = cluster.submit(_emit_multi_level_logs, "log-level-filter")
