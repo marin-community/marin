@@ -10,54 +10,11 @@ itself (default).
 
 
 import click
+import humanfriendly
 
 from iris.cli.main import require_controller_url
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-
-
-def _format_bytes(n: int) -> str:
-    """Format byte count in human-readable form (e.g. 1.2 GB)."""
-    if n < 1024:
-        return f"{n} B"
-    if n < 1024 * 1024:
-        return f"{n / 1024:.1f} KB"
-    if n < 1024 * 1024 * 1024:
-        return f"{n / (1024 * 1024):.1f} MB"
-    return f"{n / (1024 * 1024 * 1024):.1f} GB"
-
-
-def _format_uptime(ms: int) -> str:
-    """Format milliseconds as human-readable uptime (e.g. 2d 5h 30m)."""
-    seconds = ms // 1000
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes}m {seconds % 60}s"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h {minutes % 60}m"
-    days = hours // 24
-    return f"{days}d {hours % 24}h {minutes % 60}m"
-
-
-def _build_target(worker: str | None) -> str:
-    """Build the RPC target string from CLI flags.
-
-    Returns /system/worker/<id> for a specific worker, or empty string
-    (meaning controller) when no worker is specified.
-    """
-    if worker:
-        return f"/system/worker/{worker}"
-    return ""
-
-
-def _target_label(worker: str | None) -> str:
-    """Human-readable label for the target."""
-    if worker:
-        return f"Worker {worker}"
-    return "Controller"
 
 
 def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> None:
@@ -67,11 +24,11 @@ def _print_status(resp: cluster_pb2.GetProcessStatusResponse, label: str) -> Non
     click.echo(f"Hostname:        {info.hostname}")
     click.echo(f"PID:             {info.pid}")
     click.echo(f"Python:          {info.python_version}")
-    click.echo(f"Uptime:          {_format_uptime(info.uptime_ms)}")
+    click.echo(f"Uptime:          {humanfriendly.format_timespan(info.uptime_ms / 1000)}")
     click.echo(f"CPU:             {info.cpu_percent:.1f}% ({info.cpu_count} cores)")
-    click.echo(f"Memory RSS:      {_format_bytes(info.memory_rss_bytes)}")
-    click.echo(f"Memory VMS:      {_format_bytes(info.memory_vms_bytes)}")
-    click.echo(f"Memory Total:    {_format_bytes(info.memory_total_bytes)}")
+    click.echo(f"Memory RSS:      {humanfriendly.format_size(info.memory_rss_bytes, binary=True)}")
+    click.echo(f"Memory VMS:      {humanfriendly.format_size(info.memory_vms_bytes, binary=True)}")
+    click.echo(f"Memory Total:    {humanfriendly.format_size(info.memory_total_bytes, binary=True)}")
     click.echo(f"Threads:         {info.thread_count}")
     click.echo(f"Open FDs:        {info.open_fd_count}")
 
@@ -91,12 +48,13 @@ def status(ctx, worker: str | None, as_json: bool):
 
     url = require_controller_url(ctx)
     client = ControllerServiceClientSync(url)
-    target = _build_target(worker)
+    target = f"/system/worker/{worker}" if worker else ""
     resp = client.get_process_status(cluster_pb2.GetProcessStatusRequest(max_log_lines=0, target=target))
+    label = f"Worker {worker}" if worker else "Controller"
     if as_json:
         click.echo(json_format.MessageToJson(resp.process_info, preserving_proto_field_name=True, indent=2))
     else:
-        _print_status(resp, _target_label(worker))
+        _print_status(resp, label)
 
 
 @process_group.command()
@@ -171,7 +129,7 @@ def profile(ctx, worker: str | None, profiler: str, duration: int, output: str |
 
     # Target: /system/worker/<id> for workers, /system/process for controller
     target = f"/system/worker/{worker}" if worker else "/system/process"
-    label = _target_label(worker)
+    label = f"Worker {worker}" if worker else "Controller"
 
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
     resp = client.profile_task(
