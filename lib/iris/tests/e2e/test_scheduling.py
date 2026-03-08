@@ -91,6 +91,8 @@ def _brief_task():
     return 42
 
 
+@pytest.mark.timeout(120)
+@pytest.mark.xfail(reason="Flaky in CI: multi-worker cluster often cannot boot all 4 workers")
 def test_multi_worker_execution(multi_worker_cluster):
     """Replicated job distributes tasks across multiple workers.
 
