@@ -162,6 +162,17 @@ def test_launch_job_returns_job_id(service, job_request):
     assert status_response.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
+def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, job_request):
+    request = job_request("bundle-job")
+    request.bundle_blob = b"bundle-bytes"
+    service.launch_job(request, None)
+
+    job = service._state.get_job(JobName.root("test-user", "bundle-job"))
+    assert job is not None
+    assert job.request.bundle_blob == b""
+    assert len(job.request.bundle_id) == 64
+
+
 def test_launch_job_rejects_duplicate_name(service, job_request):
     """Verify launch_job rejects duplicate job names for running jobs."""
     request = job_request("duplicate-job")

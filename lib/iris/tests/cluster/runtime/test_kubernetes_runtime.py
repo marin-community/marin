@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import subprocess
 
-
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerPhase
 from iris.rpc import cluster_pb2
@@ -63,6 +62,14 @@ def _capture_manifest(monkeypatch) -> list[dict]:
     return manifests
 
 
+def _pod_manifest(manifests: list[dict]) -> dict:
+    return next(m for m in manifests if m.get("kind") == "Pod")
+
+
+def _configmap_manifest(manifests: list[dict]) -> dict:
+    return next(m for m in manifests if m.get("kind") == "ConfigMap")
+
+
 def test_run_builds_pod_manifest(monkeypatch):
     manifests = _capture_manifest(monkeypatch)
 
@@ -71,11 +78,56 @@ def test_run_builds_pod_manifest(monkeypatch):
     handle.run()
 
     assert manifests, "expected kubectl invocation"
-    manifest = manifests[0]
+    manifest = _pod_manifest(manifests)
     assert manifest["metadata"]["namespace"] == "iris"
     assert manifest["metadata"]["labels"]["iris.managed"] == "true"
     assert manifest["spec"]["containers"][0]["name"] == "task"
     assert manifest["spec"]["containers"][0]["imagePullPolicy"] == "Always"
+
+
+def test_workdir_files_are_staged_via_configmap(monkeypatch):
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config()
+    config.entrypoint.workdir_files["inline.txt"] = b"hello"
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    task_script = pod["spec"]["containers"][0]["command"][2]
+    assert "IRIS_WORKDIR_FILE_" not in task_script
+    assert "base64 -d" not in task_script
+
+    cfg = _configmap_manifest(manifests)
+    assert cfg["kind"] == "ConfigMap"
+    assert "binaryData" in cfg
+    assert len(cfg["binaryData"]) == 1
+    assert pod["spec"]["volumes"][-1]["name"] == "workdir-files"
+
+
+def test_bundle_fetch_init_container_is_present(monkeypatch):
+    manifests = _capture_manifest(monkeypatch)
+
+    config = _make_config()
+    config.env["IRIS_BUNDLE_ID"] = "a" * 64
+    config.env["IRIS_CONTROLLER_URL"] = "http://controller.internal:10000"
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    spec = _pod_manifest(manifests)["spec"]
+    assert "initContainers" in spec
+    init = spec["initContainers"][0]
+    assert init["name"] == "stage-workdir"
+    assert init["command"][:2] == ["bash", "-lc"]
+    script = init["command"][2]
+    assert "curl -fsSL" in script
+    assert "IRIS_BUNDLE_ID" in script
+    assert "IRIS_CONTROLLER_URL" in script
+    env = init["env"]
+    assert {"name": "IRIS_BUNDLE_ID", "value": "a" * 64} in env
+    assert {"name": "IRIS_CONTROLLER_URL", "value": "http://controller.internal:10000"} in env
 
 
 def test_host_network_enabled_by_default(monkeypatch):
@@ -85,7 +137,7 @@ def test_host_network_enabled_by_default(monkeypatch):
     handle = runtime.create_container(_make_config(network_mode="host"))
     handle.run()
 
-    spec = manifests[0]["spec"]
+    spec = _pod_manifest(manifests)["spec"]
     assert spec["hostNetwork"] is True
     assert spec["dnsPolicy"] == "ClusterFirstWithHostNet"
 
@@ -97,7 +149,7 @@ def test_host_network_disabled_when_not_host(monkeypatch):
     handle = runtime.create_container(_make_config(network_mode="bridge"))
     handle.run()
 
-    spec = manifests[0]["spec"]
+    spec = _pod_manifest(manifests)["spec"]
     assert "hostNetwork" not in spec
     assert "dnsPolicy" not in spec
 
@@ -109,7 +161,7 @@ def test_gpu_resources_and_tolerations(monkeypatch):
     handle = runtime.create_container(_make_config(gpu_count=8, gpu_name="H100"))
     handle.run()
 
-    manifest = manifests[0]
+    manifest = _pod_manifest(manifests)
     container = manifest["spec"]["containers"][0]
     limits = container["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "8"
@@ -125,7 +177,7 @@ def test_no_gpu_resources_when_zero_gpus(monkeypatch):
     handle = runtime.create_container(_make_config(gpu_count=0))
     handle.run()
 
-    spec = manifests[0]["spec"]
+    spec = _pod_manifest(manifests)["spec"]
     # No GPU resources requested
     container = spec["containers"][0]
     if "resources" in container:
@@ -144,7 +196,7 @@ def test_service_account_name(monkeypatch):
     handle = runtime.create_container(_make_config())
     handle.run()
 
-    assert manifests[0]["spec"]["serviceAccountName"] == "iris-controller"
+    assert _pod_manifest(manifests)["spec"]["serviceAccountName"] == "iris-controller"
 
 
 def test_no_service_account_when_unset(monkeypatch):
@@ -154,7 +206,7 @@ def test_no_service_account_when_unset(monkeypatch):
     handle = runtime.create_container(_make_config())
     handle.run()
 
-    assert "serviceAccountName" not in manifests[0]["spec"]
+    assert "serviceAccountName" not in _pod_manifest(manifests)["spec"]
 
 
 def test_s3_secret_env_vars(monkeypatch):
@@ -167,7 +219,7 @@ def test_s3_secret_env_vars(monkeypatch):
     handle = runtime.create_container(_make_config())
     handle.run()
 
-    env = manifests[0]["spec"]["containers"][0]["env"]
+    env = _pod_manifest(manifests)["spec"]["containers"][0]["env"]
     secret_envs = [e for e in env if "valueFrom" in e and "secretKeyRef" in e.get("valueFrom", {})]
     secret_keys = {e["name"] for e in secret_envs}
     assert "AWS_ACCESS_KEY_ID" in secret_keys
@@ -183,7 +235,7 @@ def test_no_s3_env_when_unset(monkeypatch):
     handle = runtime.create_container(_make_config())
     handle.run()
 
-    env = manifests[0]["spec"]["containers"][0]["env"]
+    env = _pod_manifest(manifests)["spec"]["containers"][0]["env"]
     secret_envs = [e for e in env if "valueFrom" in e and "secretKeyRef" in e.get("valueFrom", {})]
     assert len(secret_envs) == 0
 
@@ -200,7 +252,7 @@ def test_advertise_host_uses_downward_api(monkeypatch):
     handle = runtime.create_container(config)
     handle.run()
 
-    env = manifests[0]["spec"]["containers"][0]["env"]
+    env = _pod_manifest(manifests)["spec"]["containers"][0]["env"]
     advertise = [e for e in env if e["name"] == "IRIS_ADVERTISE_HOST"]
     assert len(advertise) == 1
     assert advertise[0] == {"name": "IRIS_ADVERTISE_HOST", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}}

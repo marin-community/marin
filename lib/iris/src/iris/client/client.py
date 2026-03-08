@@ -535,7 +535,7 @@ class IrisClient:
         controller_address: str,
         *,
         workspace: Path | None = None,
-        bundle_gcs_path: str | None = None,
+        bundle_id: str | None = None,
         timeout_ms: int = 30000,
     ) -> "IrisClient":
         """Create an IrisClient for RPC-based cluster execution.
@@ -545,8 +545,8 @@ class IrisClient:
             workspace: Path to workspace directory containing pyproject.toml.
                 If provided, this directory will be bundled and sent to workers.
                 Required for external job submission.
-            bundle_gcs_path: GCS path to workspace bundle for sub-job inheritance.
-                When set, sub-jobs use this path instead of creating new bundles.
+            bundle_id: Workspace bundle identifier for sub-job inheritance.
+                When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
 
         Returns:
@@ -560,7 +560,7 @@ class IrisClient:
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,
-            bundle_gcs_path=bundle_gcs_path,
+            bundle_id=bundle_id,
             bundle_blob=bundle_blob,
             timeout_ms=timeout_ms,
         )
@@ -1037,10 +1037,10 @@ def get_iris_ctx() -> IrisContext | None:
     # Set up client if controller address is available
     client = None
     if job_info.controller_address:
-        bundle_gcs_path = job_info.bundle_gcs_path
+        bundle_id = job_info.bundle_id
         client = IrisClient.remote(
             controller_address=job_info.controller_address,
-            bundle_gcs_path=bundle_gcs_path,
+            bundle_id=bundle_id,
         )
 
     ctx = IrisContext.from_job_info(job_info, client=client)

@@ -64,13 +64,24 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-class _LocalBundleProvider:
+class _LocalBundleStore:
     def __init__(self, bundle_path: Path):
         self._bundle_path = bundle_path
 
-    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
-        del gcs_path, expected_hash
+    def write_zip(self, blob: bytes) -> str:
+        del blob
+        raise NotImplementedError("_LocalBundleStore.write_zip is not used in local platform tests")
+
+    def get_zip(self, bundle_id: str) -> bytes:
+        del bundle_id
+        raise NotImplementedError("_LocalBundleStore.get_zip is not used in local platform tests")
+
+    def get_bundle(self, bundle_id: str) -> Path:
+        del bundle_id
         return self._bundle_path
+
+    def prefetch_bundle(self, bundle_id: str) -> None:
+        del bundle_id
 
 
 # ============================================================================
@@ -436,7 +447,7 @@ class LocalPlatform:
                 logger.debug("Unknown accelerator variant %r; TPU topology not available", config.accelerator_variant)
 
         for tpu_worker_id in range(worker_count):
-            bundle_provider = _LocalBundleProvider(self._fake_bundle)
+            bundle_store = _LocalBundleStore(self._fake_bundle)
             container_runtime = ProcessRuntime()
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
             worker_port = find_free_port()
@@ -504,7 +515,7 @@ class LocalPlatform:
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
             worker = Worker(
                 wc,
-                bundle_provider=bundle_provider,
+                bundle_store=bundle_store,
                 container_runtime=container_runtime,
                 environment_provider=env_provider,
                 port_allocator=self._port_allocator,

@@ -17,7 +17,7 @@ from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerRuntime
 from iris.cluster.types import JobName
-from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
+from iris.cluster.bundle import BundleStore, LocalBundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -112,7 +112,7 @@ class Worker:
     def __init__(
         self,
         config: WorkerConfig,
-        bundle_provider: BundleProvider | None = None,
+        bundle_store: BundleStore | None = None,
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
@@ -127,7 +127,11 @@ class Worker:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Use overrides if provided, otherwise create defaults
-        self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
+        self._bundle_store = bundle_store or LocalBundleStore(
+            self._cache_dir,
+            controller_address=config.controller_address,
+            max_bundles=100,
+        )
         self._runtime = container_runtime or DockerRuntime()
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
@@ -444,6 +448,14 @@ class Worker:
 
         task_id.require_task()
 
+        bundle_prefetch_error: str | None = None
+        if request.bundle_id:
+            try:
+                self._bundle_store.prefetch_bundle(request.bundle_id)
+            except Exception as e:
+                bundle_prefetch_error = f"Bundle prefetch failed for {request.bundle_id}: {e}"
+                logger.warning(bundle_prefetch_error)
+
         # Create a minimal TaskAttemptConfig. Expensive setup (port allocation,
         # workdir creation, log sink init) is deferred to TaskAttempt.run() so
         # the heartbeat RPC returns quickly.
@@ -453,11 +465,12 @@ class Worker:
             attempt_id=attempt_id,
             request=request,
             cache_dir=self._cache_dir,
+            bundle_prefetch_error=bundle_prefetch_error,
         )
 
         attempt = TaskAttempt(
             config=config,
-            bundle_provider=self._bundle_cache,
+            bundle_store=self._bundle_store,
             container_runtime=self._runtime,
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,

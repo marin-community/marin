@@ -510,9 +510,8 @@ class ControllerConfig:
     """Port to bind the HTTP server to. Use 0 for auto-assign."""
 
     bundle_prefix: str | None = None
-    """URI prefix for storing job bundles (e.g., gs://bucket/path or file:///var/cache/iris/bundles).
-    Uses fsspec for storage, so supports both GCS and local filesystems. For distributed deployments,
-    use a GCS path so workers can download bundles."""
+    """URI prefix for storing job bundles (e.g., file:///var/cache/iris/bundles).
+    Uses fsspec for storage, so it can target local or remote object stores."""
 
     scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
     """How often to run the scheduling loop."""
@@ -1013,7 +1012,7 @@ class Controller:
                     num_tasks=job.num_tasks,
                     entrypoint=job.request.entrypoint,
                     environment=job.request.environment,
-                    bundle_gcs_path=job.request.bundle_gcs_path,
+                    bundle_id=job.request.bundle_id,
                     resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,

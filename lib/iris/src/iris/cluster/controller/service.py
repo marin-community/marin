@@ -18,7 +18,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.controller.bundle_store import BundleStore
+from iris.cluster.bundle import ControllerBundleStore, validate_bundle_id
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -258,7 +258,10 @@ class ControllerServiceImpl:
     ):
         self._state = state
         self._controller = controller
-        self._bundle_store = BundleStore(bundle_prefix)
+        self._bundle_store = ControllerBundleStore(bundle_prefix)
+
+    def bundle_zip(self, bundle_id: str) -> bytes:
+        return self._bundle_store.get_zip(bundle_id)
 
     def _get_autoscaler_pending_hints(self) -> dict[str, str]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -280,6 +283,7 @@ class ControllerServiceImpl:
         The job is expanded into tasks based on the replicas field
         (defaulting to 1). Each task has ID "/job/.../index".
         """
+        del ctx
         if not request.name:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
 
@@ -313,8 +317,7 @@ class ControllerServiceImpl:
             else:
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
-        # Handle bundle_blob: upload to bundle store, then replace blob
-        # with the resulting GCS path (preserving all other fields).
+        # Handle bundle_blob: upload to bundle store and persist only bundle_id.
         if request.bundle_blob:
             # Validate bundle size
             bundle_size = len(request.bundle_blob)
@@ -326,13 +329,15 @@ class ControllerServiceImpl:
                     f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
                 )
 
-            bundle_path = self._bundle_store.write_bundle(job_id.to_wire(), request.bundle_blob)
+            bundle_id = self._bundle_store.write_zip(request.bundle_blob)
 
             new_request = cluster_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             new_request.ClearField("bundle_blob")
-            new_request.bundle_gcs_path = bundle_path
+            new_request.bundle_id = bundle_id
             request = new_request
+        elif request.bundle_id:
+            validate_bundle_id(request.bundle_id)
 
         # Auto-inject device constraints from the resource spec.
         # Explicit user constraints for canonical keys (device-type,

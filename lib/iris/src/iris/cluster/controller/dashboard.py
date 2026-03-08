@@ -19,7 +19,7 @@ import logging
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -66,6 +66,7 @@ class ControllerDashboard:
             Route("/", self._dashboard),
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
+            Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
@@ -84,3 +85,8 @@ class ControllerDashboard:
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
         return JSONResponse({"status": "ok"})
+
+    def _bundle_download(self, request: Request) -> Response:
+        bundle_id = request.path_params["bundle_id"]
+        data = self._service.bundle_zip(bundle_id)
+        return Response(data, media_type="application/zip")

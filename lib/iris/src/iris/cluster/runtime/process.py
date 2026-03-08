@@ -29,12 +29,11 @@ import tempfile
 import threading
 import uuid
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.runtime.bundle import stage_bundle_to_local
+from iris.cluster.bundle import BundleStore, stage_bundle_to_local
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -43,7 +42,13 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, ContainerStats, ContainerStatus, RuntimeLogReader
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerPhase,
+    ContainerStats,
+    ContainerStatus,
+    RuntimeLogReader,
+)
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
 from iris.rpc import cluster_pb2
@@ -598,17 +603,17 @@ class ProcessRuntime:
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
         stage_bundle_to_local(
-            bundle_gcs_path=bundle_gcs_path,
+            bundle_id=bundle_id,
             workdir=workdir,
             workdir_files=workdir_files,
-            fetch_bundle=fetch_bundle,
+            bundle_store=bundle_store,
         )
 
     def list_containers(self) -> list[ProcessContainerHandle]:
