@@ -23,6 +23,7 @@ from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
     HostMetricsCollector,
     build_worker_metadata,
+    check_worker_health,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -645,9 +646,17 @@ class Worker:
                 resource_snapshot.running_task_count = running_count
                 resource_snapshot.total_process_count = total_processes
 
+            # Run health checks to detect local faults (disk full, write failure)
+            with slow_log(logger, "heartbeat health_check", threshold_ms=100):
+                health = check_worker_health(disk_path=str(self._cache_dir))
+                if not health.healthy:
+                    logger.warning("Worker health check failed: %s", health.error)
+
             return cluster_pb2.HeartbeatResponse(
                 tasks=tasks,
                 resource_snapshot=resource_snapshot,
+                worker_healthy=health.healthy,
+                health_error=health.error,
             )
 
     def _kill_task_attempt(
@@ -727,11 +736,30 @@ class Worker:
             return False
         return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
 
-    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile a running task by delegating to its container handle."""
-        attempt = self._get_current_attempt(task_id)
-        if not attempt:
-            raise ValueError(f"Task {task_id} not found")
+    def profile_task(
+        self,
+        task_id: str,
+        duration_seconds: int,
+        profile_type: cluster_pb2.ProfileType,
+        attempt_id: int | None = None,
+    ) -> bytes:
+        """Profile a running task by delegating to its container handle.
+
+        Args:
+            task_id: Bare task ID (e.g. ``/alice/job/0``).
+            duration_seconds: How long to sample.
+            profile_type: CPU, memory, or threads profiler config.
+            attempt_id: Specific attempt to profile.  When ``None``, the
+                current (most recent) attempt is used.
+        """
+        if attempt_id is not None:
+            attempt = self._tasks.get((task_id, attempt_id))
+            if not attempt:
+                raise ValueError(f"Task {task_id} attempt {attempt_id} not found")
+        else:
+            attempt = self._get_current_attempt(task_id)
+            if not attempt:
+                raise ValueError(f"Task {task_id} not found")
         if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
             raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)

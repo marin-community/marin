@@ -115,23 +115,29 @@ class MemoryProfile(_message.Message):
     leaks: bool
     def __init__(self, format: _Optional[_Union[MemoryProfile.Format, str]] = ..., leaks: _Optional[bool] = ...) -> None: ...
 
+class ThreadsProfile(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
 class ProfileType(_message.Message):
-    __slots__ = ("cpu", "memory")
+    __slots__ = ("cpu", "memory", "threads")
     CPU_FIELD_NUMBER: _ClassVar[int]
     MEMORY_FIELD_NUMBER: _ClassVar[int]
+    THREADS_FIELD_NUMBER: _ClassVar[int]
     cpu: CpuProfile
     memory: MemoryProfile
-    def __init__(self, cpu: _Optional[_Union[CpuProfile, _Mapping]] = ..., memory: _Optional[_Union[MemoryProfile, _Mapping]] = ...) -> None: ...
+    threads: ThreadsProfile
+    def __init__(self, cpu: _Optional[_Union[CpuProfile, _Mapping]] = ..., memory: _Optional[_Union[MemoryProfile, _Mapping]] = ..., threads: _Optional[_Union[ThreadsProfile, _Mapping]] = ...) -> None: ...
 
 class ProfileTaskRequest(_message.Message):
-    __slots__ = ("task_id", "duration_seconds", "profile_type")
-    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("target", "duration_seconds", "profile_type")
+    TARGET_FIELD_NUMBER: _ClassVar[int]
     DURATION_SECONDS_FIELD_NUMBER: _ClassVar[int]
     PROFILE_TYPE_FIELD_NUMBER: _ClassVar[int]
-    task_id: str
+    target: str
     duration_seconds: int
     profile_type: ProfileType
-    def __init__(self, task_id: _Optional[str] = ..., duration_seconds: _Optional[int] = ..., profile_type: _Optional[_Union[ProfileType, _Mapping]] = ...) -> None: ...
+    def __init__(self, target: _Optional[str] = ..., duration_seconds: _Optional[int] = ..., profile_type: _Optional[_Union[ProfileType, _Mapping]] = ...) -> None: ...
 
 class ProfileTaskResponse(_message.Message):
     __slots__ = ("profile_data", "error")
@@ -1013,9 +1019,13 @@ class HeartbeatRequest(_message.Message):
     def __init__(self, tasks_to_run: _Optional[_Iterable[_Union[Worker.RunTaskRequest, _Mapping]]] = ..., tasks_to_kill: _Optional[_Iterable[str]] = ..., expected_tasks: _Optional[_Iterable[_Union[Controller.WorkerTaskStatus, _Mapping]]] = ...) -> None: ...
 
 class HeartbeatResponse(_message.Message):
-    __slots__ = ("tasks", "resource_snapshot")
+    __slots__ = ("tasks", "resource_snapshot", "worker_healthy", "health_error")
     TASKS_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
+    WORKER_HEALTHY_FIELD_NUMBER: _ClassVar[int]
+    HEALTH_ERROR_FIELD_NUMBER: _ClassVar[int]
     tasks: _containers.RepeatedCompositeFieldContainer[Controller.WorkerTaskStatus]
     resource_snapshot: WorkerResourceSnapshot
-    def __init__(self, tasks: _Optional[_Iterable[_Union[Controller.WorkerTaskStatus, _Mapping]]] = ..., resource_snapshot: _Optional[_Union[WorkerResourceSnapshot, _Mapping]] = ...) -> None: ...
+    worker_healthy: bool
+    health_error: str
+    def __init__(self, tasks: _Optional[_Iterable[_Union[Controller.WorkerTaskStatus, _Mapping]]] = ..., resource_snapshot: _Optional[_Union[WorkerResourceSnapshot, _Mapping]] = ..., worker_healthy: _Optional[bool] = ..., health_error: _Optional[str] = ...) -> None: ...

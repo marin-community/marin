@@ -60,6 +60,7 @@ from iris.cluster.platform.base import (
     StandaloneWorkerHandle,
     WorkerStatus,
     find_free_port,
+    generate_slice_suffix,
 )
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
@@ -629,7 +630,7 @@ class CoreweavePlatform:
         # the scale-group label to just sg_name. The nodeSelector must match the
         # NodePool's nodeLabels, which use the bare scale-group name.
         scale_group_name = config.name_prefix
-        slice_id = f"{self._label_prefix}-{scale_group_name}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{self._label_prefix}-{scale_group_name}-{generate_slice_suffix()}"
         labels = self._resource_labels(scale_group_name, slice_id)
 
         if config.labels:
