@@ -802,19 +802,35 @@ def _stream_subprocess_output_to_file(
     output_path: Path,
     ready_markers: Sequence[str],
     ready_event: threading.Event,
+    suppress_output_after_ready: bool = False,
 ) -> threading.Thread:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _worker() -> None:
+        ready_seen = False
         with output_path.open("a", encoding="utf-8") as fout:
             stdout = proc.stdout
             if stdout is None:
                 return
             for line in stdout:
+                matched_ready = any(marker in line for marker in ready_markers)
+                if matched_ready and not ready_seen:
+                    ready_seen = True
+                    ready_event.set()
+                    if suppress_output_after_ready:
+                        fout.write(line)
+                        fout.write(
+                            "[gdnctl] dev TPU became active; suppressing further allocation log output "
+                            "while keeping the hold process drained.\n"
+                        )
+                        fout.flush()
+                        continue
+
+                if suppress_output_after_ready and ready_seen:
+                    continue
+
                 fout.write(line)
                 fout.flush()
-                if any(marker in line for marker in ready_markers):
-                    ready_event.set()
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
@@ -909,6 +925,7 @@ def _try_reacquire_managed_dev_tpu(args: argparse.Namespace, *, reason: str) -> 
                 output_path=allocation_log,
                 ready_markers=DEV_TPU_READY_MARKERS,
                 ready_event=ready_event,
+                suppress_output_after_ready=True,
             )
 
             deadline = time.time() + args.dev_tpu_ready_timeout
@@ -1015,6 +1032,7 @@ def _hold_dev_tpu_for_loop(
                 output_path=allocation_log,
                 ready_markers=DEV_TPU_READY_MARKERS,
                 ready_event=ready_event,
+                suppress_output_after_ready=True,
             )
 
             deadline = time.time() + args.dev_tpu_ready_timeout
