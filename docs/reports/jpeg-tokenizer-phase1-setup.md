@@ -102,3 +102,23 @@ The `K=8` longer trial is now active:
 
 Let the `K=8` trial finish, then compare its terminal eval against `K=4` and decide whether the next bounded rung
 should be a `K=16` smoke or a width/depth adjustment at `K=8`.
+
+## K16 Staging
+
+The `K=16` coefficient rung has now been staged:
+
+- Token store:
+  `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k16_v0`
+- Sequence length:
+  `16384`
+- Store size:
+  about `839 MiB`
+- Smoke step:
+  `tokexplore/jpeg-tokenizer-k16-smoke`
+- Smoke Ray job:
+  `ray-run-dlwh-launch-20260308-101439`
+- Smoke output path:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k16-smoke-276795`
+
+The `K=16` smoke has passed packaging, executor launch, and Fray TPU dispatch on `v6e-8`. The remaining question is
+whether trainer startup and the first eval complete cleanly at batch size `64`.

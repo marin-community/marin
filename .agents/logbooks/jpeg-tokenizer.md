@@ -182,3 +182,28 @@
   - future tokenizer runs should stop emitting the false-positive config-artifact stack trace
   - this is a global cleanup in Levanter, not just a JPEG-specific workaround
 - Next action: commit the tracker fix, then build the `K=16` coefficient store and add a smoke step only if the artifact size still looks modest.
+
+### 2026-03-09 03:30 - K=16 store mirrored and smoke launched
+
+- Hypothesis: `K=16` should still be operationally feasible on `v6e-8` if the smoke run uses batch size `64`, which keeps tokens per update roughly aligned with the successful `K=8` smoke.
+- Command:
+  - `uv run python scripts/jpeg_tokenizer/build_coeff_token_store.py --k 16 --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k16_v0`
+  - `gsutil -m rsync -r artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k16_v0 gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k16_v0`
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k16-smoke"]'`
+- Config:
+  - token store: `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k16_v0`
+  - sequence length: `16384`
+  - artifact size: `839 MiB`
+  - smoke batch size: `64`
+  - smoke steps: `64`
+  - eval every `32` steps with eval batch size `16`
+- Result so far:
+  - local store built successfully and mirrored to regional GCS
+  - launch config now includes `tokexplore/jpeg-tokenizer-k16-smoke`
+  - Ray job submitted: `ray-run-dlwh-launch-20260308-101439`
+  - executor step output path: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k16-smoke-276795`
+  - status reached executor launch and Fray TPU dispatch for `grug-train-jpeg-tokenizer-k16-smoke`
+- Interpretation:
+  - `K=16` is now staged end to end with bounded additional storage cost
+  - the next meaningful checkpoint is whether the worker reaches W&B/trainer startup and first eval, not whether packaging works
+- Next action: monitor the `K=16` smoke through trainer bring-up, then decide whether the next commit should include only launch/staging or also a completed smoke result.
