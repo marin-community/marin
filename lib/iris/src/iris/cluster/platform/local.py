@@ -575,6 +575,8 @@ class LocalPlatform:
 
     def shutdown(self) -> None:
         """Stop all worker threads. Critical for clean test teardown."""
+        for s in self._slices.values():
+            s.terminate()
         self._threads.stop(timeout=Duration.from_seconds(5.0))
         self._slices.clear()
         self._vms.clear()
