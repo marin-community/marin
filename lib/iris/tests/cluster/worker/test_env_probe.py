@@ -13,6 +13,7 @@ from iris.cluster.worker.env_probe import (
     HostMetricsCollector,
     _read_net_dev_bytes,
     build_worker_metadata,
+    check_worker_health,
 )
 from iris.rpc import config_pb2
 
@@ -315,3 +316,27 @@ def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
     snapshot = collector.collect()
     assert snapshot.net_recv_bps == 0
     assert snapshot.net_sent_bps == 0
+
+
+def test_check_worker_health_recreates_missing_cache_dir(tmp_path):
+    """Health probes should recreate transiently missing local cache dirs."""
+    cache_dir = tmp_path / "cache"
+
+    result = check_worker_health(str(cache_dir))
+
+    assert result.healthy
+    assert cache_dir.is_dir()
+
+
+def test_check_worker_health_ignores_transient_probe_enoent(monkeypatch, tmp_path):
+    """Transient ENOENT during probe should not mark the worker unhealthy."""
+    cache_dir = tmp_path / "cache"
+
+    def _raise_enoent(self, *_args, **_kwargs):
+        raise OSError(2, "gone")
+
+    monkeypatch.setattr(type(cache_dir), "write_text", _raise_enoent)
+
+    result = check_worker_health(str(cache_dir))
+
+    assert result.healthy

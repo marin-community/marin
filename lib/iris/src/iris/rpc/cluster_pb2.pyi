@@ -722,10 +722,16 @@ class Controller(_message.Message):
         accepted: bool
         def __init__(self, worker_id: _Optional[str] = ..., accepted: _Optional[bool] = ...) -> None: ...
     class NotifyTaskUpdateRequest(_message.Message):
-        __slots__ = ("worker_id",)
+        __slots__ = ("worker_id", "task_id", "attempt_id", "log_entries")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+        LOG_ENTRIES_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
-        def __init__(self, worker_id: _Optional[str] = ...) -> None: ...
+        task_id: str
+        attempt_id: int
+        log_entries: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
+        def __init__(self, worker_id: _Optional[str] = ..., task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., log_entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ...) -> None: ...
     class Endpoint(_message.Message):
         __slots__ = ("endpoint_id", "name", "address", "job_id", "metadata")
         class MetadataEntry(_message.Message):

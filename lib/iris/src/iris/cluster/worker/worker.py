@@ -351,17 +351,20 @@ class Worker:
         """Notify controller that task state changed.
 
         Sends a lightweight ping to the controller, triggering a priority heartbeat.
+        Terminal task updates also include the full attempt log snapshot so logs
+        survive worker churn before the next heartbeat.
         """
         if not self._controller_client or not self._worker_id:
             return
 
-        # Send a lightweight ping to trigger priority heartbeat (best-effort)
         try:
-            self._controller_client.notify_task_update(
-                cluster_pb2.Controller.NotifyTaskUpdateRequest(
-                    worker_id=self._worker_id,
-                )
-            )
+            request = cluster_pb2.Controller.NotifyTaskUpdateRequest(worker_id=self._worker_id)
+            if task.status in self._TERMINAL_STATES:
+                request.task_id = task.task_id.to_wire()
+                request.attempt_id = task.attempt_id
+                request.log_entries.extend(task.recent_logs())
+
+            self._controller_client.notify_task_update(request)
         except Exception as e:
             # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
             logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)

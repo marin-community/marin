@@ -626,6 +626,9 @@ message Controller {
 
   message NotifyTaskUpdateRequest {
     string worker_id = 1;
+    string task_id = 2;
+    int32 attempt_id = 3;
+    repeated iris.logging.LogEntry log_entries = 4;
   }
 
   // --- Endpoint Registry ---

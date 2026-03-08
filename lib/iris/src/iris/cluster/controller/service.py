@@ -747,9 +747,14 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Empty:
         """Hint from worker that it has new completions. Triggers priority heartbeat.
 
-        This is a lightweight ping - the actual completion data comes via the next
-        heartbeat response.
+        Terminal task updates may also carry the full attempt log stream so the
+        controller can preserve logs even if the next heartbeat never arrives.
         """
+        if request.task_id and request.log_entries:
+            self._state.log_store.replace_batch(
+                [(task_log_key(JobName.from_wire(request.task_id), request.attempt_id), list(request.log_entries))]
+            )
+
         # Just wake the scheduler; it will trigger a priority heartbeat for this worker
         self._controller.wake()
         return cluster_pb2.Empty()

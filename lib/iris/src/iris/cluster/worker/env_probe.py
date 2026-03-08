@@ -3,6 +3,7 @@
 
 """Environment probing for worker registration."""
 
+import errno
 import logging
 import os
 import re
@@ -465,21 +466,24 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
     Docker probing is implicit: if the worker is processing heartbeats
     and fetching task status, Docker is operational.
 
-    If disk_path does not exist (e.g. during teardown), the probe is
-    skipped and the worker is considered healthy.
+    If disk_path does not exist (e.g. during teardown or local-cluster cache
+    cleanup), recreate it before probing so transient directory removal does
+    not look like a dead worker.
     """
     dp = Path(disk_path)
-    if not dp.exists():
-        return HealthCheckResult(healthy=True)
 
     errors: list[str] = []
 
     # Check tempfile write
     try:
+        dp.mkdir(parents=True, exist_ok=True)
         probe_path = dp / ".iris_health_probe"
         probe_path.write_text("ok")
         probe_path.unlink()
     except OSError as e:
+        if e.errno == errno.ENOENT:
+            logger.debug("Skipping worker health probe for transiently missing path %s", dp)
+            return HealthCheckResult(healthy=True)
         errors.append(f"tempfile write failed: {e}")
 
     # Check disk free space
@@ -491,6 +495,9 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
                 pct = free_fraction * 100
                 errors.append(f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%")
     except OSError as e:
+        if e.errno == errno.ENOENT:
+            logger.debug("Skipping worker disk usage probe for transiently missing path %s", dp)
+            return HealthCheckResult(healthy=True)
         errors.append(f"disk usage check failed: {e}")
 
     if errors:
