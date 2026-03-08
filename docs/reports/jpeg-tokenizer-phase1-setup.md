@@ -45,8 +45,9 @@ This note records the first runnable training setup for the `K=4` coefficient ba
 - The file-backed store round-trips through the Levanter causal LM path in tests.
 - A one-step CPU smoke test runs successfully from the file-backed store.
 - The launch module now resolves the token store at runtime rather than import time, so the code remains importable in clean checkouts.
+- The TPU smoke run `tokexplore/jpeg-tokenizer-k4-smoke` completed successfully on `marin-eu-west4-a` with eval loss improving from `8.508` to `4.694`.
 
 ## Next Step
 
-Use `tokexplore/jpeg-tokenizer-k4-smoke` as the first TPU-backed bring-up run, then move to
-`tokexplore/jpeg-tokenizer-k4-trial` once the smoke path confirms the remote token-store and trainer wiring.
+Use `tokexplore/jpeg-tokenizer-k4-trial` as the first longer baseline run now that the smoke path has confirmed the
+remote token-store and trainer wiring.

@@ -71,3 +71,18 @@
   - disabled `compute_bpb` for the JPEG smoke/trial eval configs
 - Interpretation: the pipeline now matches the actual execution boundary. The remaining test is a fresh cluster smoke submit from the worker-side token-store path.
 - Next action: commit the worker-side materialization fix and rerun `tokexplore/jpeg-tokenizer-k4-smoke`.
+
+### 2026-03-08 23:00 - Smoke run succeeded on eu-west4
+
+- Hypothesis: after fixing worker-side token-store loading and disabling `compute_bpb`, the `K=4` smoke run should complete without TPU/runtime bring-up failures.
+- Command:
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k4-smoke"]'`
+- Config: `v6e-8`, batch size `256`, `128` train steps, eval every `64` steps, `compute_bpb=False`.
+- Result:
+  - Ray job: `ray-run-dlwh-launch-20260308-084426`
+  - W&B run: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k4-smoke`
+  - eval loss: `8.508 -> 5.118 -> 4.694`
+  - train progress snapshots: step `11/128` loss `6.93`, step `106/128` loss `5.25`, final step `128/128` loss `4.85`
+  - checkpoint written to `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k4-smoke-3cabe7/checkpoints/step-128`
+- Interpretation: the basic K=4 coefficient pipeline is now healthy on the production path. Remaining warning is the non-fatal `draccus` config-artifact dump issue in tracker setup.
+- Next action: launch the `tokexplore/jpeg-tokenizer-k4-trial` baseline and monitor early progress.
