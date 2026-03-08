@@ -47,7 +47,26 @@ This note records the first runnable training setup for the `K=4` coefficient ba
 - The launch module now resolves the token store at runtime rather than import time, so the code remains importable in clean checkouts.
 - The TPU smoke run `tokexplore/jpeg-tokenizer-k4-smoke` completed successfully on `marin-eu-west4-a` with eval loss improving from `8.508` to `4.694`.
 
+## Completed Baseline
+
+- Ray job:
+  `ray-run-dlwh-launch-20260308-085237`
+- W&B run:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k4-trial`
+- Final status:
+  `SUCCEEDED`
+- Eval loss trajectory:
+  `8.476` at startup, `4.376` at step `1000`, `4.417` at step `2000`
+- Final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k4-trial-603f95/checkpoints/step-2000`
+- Wall time:
+  `2778.14s`
+
+The `K=4` coefficient baseline is now proven on the production Ray + TPU path. The main remaining warnings are
+non-fatal tracker/config-artifact serialization noise and a W&B `BrokenPipeError` during shutdown after the run had
+already synced successfully.
+
 ## Next Step
 
-Use `tokexplore/jpeg-tokenizer-k4-trial` as the first longer baseline run now that the smoke path has confirmed the
-remote token-store and trainer wiring.
+Build the `K=8` coefficient token store in `eu-west4` and submit the smallest safe `K=8` smoke run on `v6e-8` to
+measure the sequence-length and memory step-up before spending another full trial.

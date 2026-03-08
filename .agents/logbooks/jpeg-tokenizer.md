@@ -104,3 +104,23 @@
     - `143/2000`, loss `5.31`
 - Interpretation: the longer baseline is past bring-up and optimizing normally. The remaining known issue is still the non-fatal tracker config-artifact dump warning.
 - Next action: leave the trial running and inspect the first scheduled eval at step `1000`.
+
+### 2026-03-09 01:45 - K=4 baseline completed successfully
+
+- Hypothesis: the full `K=4` baseline should reach terminal success on `v6e-8` without new infrastructure fixes, giving a usable first comparison point for future coefficient ablations.
+- Command:
+  - monitoring only via `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a ...`
+- Config: `tokexplore/jpeg-tokenizer-k4-trial`, `v6e-8`, batch size `512`, `2000` train steps, eval every `1000`, token store `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k4_v0`.
+- Result:
+  - Ray job: `ray-run-dlwh-launch-20260308-085237`
+  - W&B run: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k4-trial`
+  - terminal status: `SUCCEEDED`
+  - eval loss: `8.476` at startup, `4.376` at step `1000`, `4.417` at step `2000`
+  - checkpoints written at steps `421`, `887`, `1000`, `1464`, `1928`, and final `2000`
+  - final checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k4-trial-603f95/checkpoints/step-2000`
+  - wall-clock executor time: `2778.14s` (`44.3` minutes)
+- Interpretation:
+  - the `K=4` coefficient baseline is now proven end to end on the production Ray + TPU path
+  - optimization is stable and the final eval is close to the best mid-run eval, so this config is good enough to use as the reference point for the next ablation
+  - there is still background Ray worker churn on unrelated nodes plus two non-fatal warnings: the `draccus` config-artifact dump failure and a final W&B `BrokenPipeError` during process teardown
+- Next action: build and mirror the `K=8` coefficient store, then launch the smallest safe `K=8` smoke run on `v6e-8`.
