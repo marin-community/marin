@@ -70,6 +70,14 @@ def _use_single_expert_pipeline_barrier() -> bool:
     return bool(_env_int("GRUG_SPARSECORE_EXPERT_PIPELINE_BARRIER", 0))
 
 
+def _ep_return_implementation() -> str:
+    return os.environ.get("GRUG_MOE_EP_RETURN_IMPL", "scatter_psum_scatter")
+
+
+def _ep_return_owner_bucket_factor() -> float:
+    return _env_float("GRUG_MOE_EP_OWNER_BUCKET_FACTOR", 1.25)
+
+
 def _sparsecore_expert_pipeline_bucket_sizes(chunk_capacity: int) -> tuple[int, ...]:
     sizes = {1, chunk_capacity}
     for numerator in (1, 2, 3, 4, 5, 6, 7):
@@ -591,10 +599,70 @@ def _moe_mlp_ep_ring_local(
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
     with jax.named_scope("scatter"):
-        out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
-        # #2710 ring EP strategy: collect only this shard's token slice after
-        # reducing contributions from experts across the EP mesh.
-        out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        weighted_dispatch = out_dispatch * weight_dispatch[:, None]
+        return_impl = _ep_return_implementation()
+        if return_impl == "scatter_psum_scatter":
+            out_global = jnp.zeros_like(x_global).at[token_local].add(weighted_dispatch, mode="drop")
+            # #2710 ring EP strategy: collect only this shard's token slice after
+            # reducing contributions from experts across the EP mesh.
+            out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        elif return_impl == "sorted_scatter_psum_scatter":
+            order = jnp.argsort(token_local, stable=True)
+            sorted_token_local = jnp.take(token_local, order, axis=0)
+            sorted_weighted_dispatch = jnp.take(weighted_dispatch, order, axis=0)
+            out_global = jnp.zeros_like(x_global).at[sorted_token_local].add(sorted_weighted_dispatch, mode="drop")
+            out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+        elif return_impl == "owner_bucket_psum_scatter":
+            local_tokens = x_local.shape[0]
+            owner = jnp.floor_divide(token_local, local_tokens)
+            owner_token = token_local - owner * local_tokens
+            out_by_owner = jnp.zeros((ep_size, local_tokens, x_local.shape[1]), dtype=x_local.dtype)
+            out_by_owner = out_by_owner.at[owner, owner_token].add(weighted_dispatch, mode="drop")
+            out_local = jax.lax.psum_scatter(out_by_owner, "expert", scatter_dimension=0, tiled=True)
+            out_local = jnp.squeeze(out_local, axis=0)
+        elif return_impl == "owner_bucket_all_to_all_local_scatter":
+            local_tokens = x_local.shape[0]
+            owner = jnp.floor_divide(token_local, local_tokens)
+            owner_token = token_local - owner * local_tokens
+            bucket = max(1, math.ceil(local_capacity / ep_size * _ep_return_owner_bucket_factor()))
+            bucket_pos = jnp.arange(bucket, dtype=jnp.int32)
+            row_pos = jnp.arange(local_capacity, dtype=jnp.int32)
+            key_base = local_capacity - row_pos
+
+            send_tokens = []
+            send_values = []
+            bucket_overflow_local = jnp.array(0, dtype=jnp.int32)
+            for owner_idx in range(ep_size):
+                owner_mask = owner == owner_idx
+                owner_total = jnp.sum(owner_mask.astype(jnp.int32), dtype=jnp.int32)
+                owner_accept = jnp.minimum(owner_total, bucket)
+                bucket_overflow_local = bucket_overflow_local + jnp.maximum(owner_total - bucket, 0)
+                selection_key = jnp.where(owner_mask, key_base, -1)
+                _, owner_rows = jax.lax.top_k(selection_key, bucket)
+                owner_valid = bucket_pos < owner_accept
+
+                owner_tokens = jnp.take(owner_token, owner_rows, axis=0)
+                owner_updates = jnp.take(weighted_dispatch, owner_rows, axis=0)
+                owner_tokens = jnp.where(owner_valid, owner_tokens, 0)
+                owner_updates = jnp.where(owner_valid[:, None], owner_updates, jnp.zeros_like(owner_updates))
+                send_tokens.append(owner_tokens)
+                send_values.append(owner_updates)
+
+            send_tokens_arr = jnp.stack(send_tokens, axis=0)
+            send_values_arr = jnp.stack(send_values, axis=0)
+            recv_tokens = jax.lax.all_to_all(send_tokens_arr, "expert", split_axis=0, concat_axis=0, tiled=True)
+            recv_values = jax.lax.all_to_all(send_values_arr, "expert", split_axis=0, concat_axis=0, tiled=True)
+            recv_tokens = recv_tokens.reshape(ep_size * bucket)
+            recv_values = recv_values.reshape(ep_size * bucket, x_local.shape[1])
+            out_local = jnp.zeros_like(x_local).at[recv_tokens].add(recv_values, mode="drop")
+            dropped_local = dropped_local + bucket_overflow_local
+        else:
+            raise ValueError(
+                "GRUG_MOE_EP_RETURN_IMPL must be one of "
+                "{'scatter_psum_scatter', 'sorted_scatter_psum_scatter', 'owner_bucket_psum_scatter', "
+                "'owner_bucket_all_to_all_local_scatter'}, "
+                f"got {return_impl!r}"
+            )
         dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
     return out_local, dropped_total
 
