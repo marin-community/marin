@@ -19,16 +19,26 @@ Repo context:
 - Running log: `lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md`
 - Infra CLI: `scripts/gdn/gdnctl.py`
 - Reference code: `~/Projects/Work/Marin/flash-linear-attention/fla/ops/gated_delta_rule/`
+- Additional local references:
+  - `~/Projects/Work/Marin/ejkernel/ejkernel/modules/operations/gated_delta_rule.py`
+  - `~/Projects/Work/Marin/ejkernel/ejkernel/kernels/_pallas/tpu/gated_delta_rule/_pallas_impl_fwd.py`
+  - `~/Projects/Work/Marin/ejkernel/ejkernel/kernels/_pallas/tpu/gated_delta_rule/_pallas_impl_bwd.py`
+  - `~/Projects/Work/Marin/EasyDeL/easydel/operations/kernels/gated_delta_rule.py`
 - Pallas docs: <https://docs.jax.dev/en/latest/pallas/tpu/index.html>
 
 Current diagnosis to optimize against:
 - Iteration 67 was the regime change: forcing TPU fused CE to `pallas_tpu` cut CE-attributed `while` from about `31.6 ms` to about `10.1 ms` and improved MFU by about `10.9%`.
 - Iteration 68 then reduced GDN forward closed-call and train-path budget materially while MFU still regressed slightly.
 - Iteration 69 showed a full-XLA chunk control arm is useful as diagnosis, but clearly worse than the deployable head.
+- External review of local `ejkernel` / `EasyDeL` references points to one new high-value idea:
+  - smaller backward residual contract,
+  - recompute-heavy backward from raw inputs plus chunk-start state,
+  - simpler chunk-first experimental control surface.
 - Therefore:
   - `GDN budget down` is no longer a reliable proxy for `step faster`,
   - the residual CE backward/custom-VJP shell is a first-class target,
-  - `remainder_budget_ms = step_duration_ms - train_path_budget_ms` must be tracked explicitly.
+  - `remainder_budget_ms = step_duration_ms - train_path_budget_ms` must be tracked explicitly,
+  - the next control arm should validate the ejkernel-style backward/tape tradeoff before returning to kernel-local tuning.
 
 Required behavior for this iteration:
 1. Read the latest entries in the running log and identify the current train-path control bottleneck.
@@ -57,6 +67,11 @@ Session directives:
 Macro-move category (pick ONE per iteration):
 
 Highest priority:
+- `R` ejkernel-style training control arm:
+  - minimize saved residuals/tape,
+  - recompute chunk prepare intermediates in backward from raw inputs + saved chunk-start state,
+  - prefer a plain chunked experimental surface before reintroducing any `segment_size` hierarchy,
+  - if the arm changes geometry, try chunk-size candidates `{32, 64}` first.
 - `P` CE backward-mode A/B on the real train run (`pallas_tpu` CE + `pallas` backward vs `pallas_tpu` CE + `xla_streaming` backward).
 - `O` Control arm / reduced-Pallas benchmark branch to diagnose whether the current train-path abstraction boundary is fundamentally wrong. This is diagnostic, not a mainline promotion target.
 - `M` XLA-first outer train path with Pallas only as leaf chunk kernels. This is lower priority than `P` unless CE backward evidence is exhausted.
@@ -82,6 +97,10 @@ Deprioritized unless you explain why the new control-flow diagnosis does not app
 Major-bet requirement:
 - The optimization must materially change algorithmic decomposition, outer train-path orchestration, backward tape structure, or the lowering-visible control structure.
 - Equivalent mathematical reformulations are allowed if semantics remain correct and end-to-end training improves.
+- If you use the `ejkernel` / `EasyDeL` reference arm:
+  - copy the backward/tape idea first, not the entire stack,
+  - keep inference conclusions separate from training conclusions,
+  - state exactly which residuals are removed and which intermediates are recomputed instead.
 - At least one of these must be true:
   - fewer device-side loop/control-flow regions in the hot train path,
   - less scanned residual state in backward,
@@ -93,7 +112,8 @@ Disallowed as a standalone iteration:
 - only tweaking scalar constants,
 - only toggling config flags/checkpointing/remat with no train-path structural change,
 - only reducing forward/backward closed-call time while leaving control-flow overhead worse,
-- only logging/plumbing changes.
+- only logging/plumbing changes,
+- only copying external `ejkernel` / `EasyDeL` code without adapting it to this train path.
 
 Hot-path control-flow checklist (answer this in your writeup):
 - Change class: `CE backend` | `outer control structure` | `inner kernel math`

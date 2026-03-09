@@ -88,6 +88,33 @@ Current mainline priority order:
 3. Macro O as a diagnostic control arm only.
 4. Macro M only after CE backward and remainder-budget work.
 
+## ejkernel / EasyDeL takeaways (March 2026)
+
+Local reference repos:
+- `~/Projects/Work/Marin/ejkernel`
+- `~/Projects/Work/Marin/EasyDeL`
+
+Most relevant takeaway from those references:
+- the strongest TPU-relevant difference is not a brand-new training algorithm,
+  but a different backward tradeoff:
+  - smaller saved residual contract,
+  - recompute-heavy backward from raw inputs plus chunk-start state,
+  - simpler chunk-level control surface.
+
+How to use that evidence:
+- do not blindly port the entire stack;
+- build a control arm that steals the backward/tape idea first;
+- treat it as a chunk-first experimental branch:
+  - minimize saved residuals,
+  - recompute prepare/intermediate tensors in backward,
+  - prefer a plain chunked path before reintroducing segment hierarchy,
+  - try chunk sizes `{32, 64}` if the arm changes geometry.
+
+What not to over-interpret:
+- the wrapper spans multiple backends,
+- inference fast paths are not direct evidence about the TPU training path,
+- benchmark inference and training separately if you explore those paths.
+
 What not to do:
 - Do not spend mainline budget on forward-only GDN wins that do not move `step_duration_ms`.
 - Do not promote candidates whose train-path budget improves but whose `remainder_budget_ms` grows.
@@ -258,6 +285,24 @@ Idea:
 
 Risk:
 - High algorithmic complexity. Attempt only after G/H/I are fully explored.
+
+### R) ejkernel-style minimal-tape backward recompute arm
+Target: validate whether a smaller residual contract plus recompute-heavy backward produces a better train-step tradeoff on TPU than the current save-heavy path.
+
+Core idea:
+- save raw inputs plus the minimum chunk-start state,
+- do not carry large per-chunk tapes such as `v_pseudo`, `k_cumdecay`, or `solve_transform` unless measurement says they are still necessary,
+- recompute prepare intermediates in backward instead,
+- keep the experimental control surface chunk-first and simple.
+
+Expected upside:
+- lower tape traffic, smaller custom-VJP residuals, and a train-shell boundary that better matches TPU tradeoffs.
+
+Implementation notes:
+- this is a control arm, not a blind port;
+- compare against the current deployable head under fixed CE settings;
+- if the arm changes chunk geometry, sweep chunk sizes `{32, 64}` first;
+- if train-path budget drops but step duration does not, classify it as `off-critical-path` and revert.
 
 ## Current high-priority macro moves (post-control-flow diagnosis)
 
