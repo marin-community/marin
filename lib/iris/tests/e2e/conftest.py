@@ -68,6 +68,7 @@ class IrisTestCluster:
     client: IrisClient
     controller_client: ControllerServiceClientSync
     job_timeout: float = 60.0
+    is_cloud: bool = False
 
     def submit(
         self,

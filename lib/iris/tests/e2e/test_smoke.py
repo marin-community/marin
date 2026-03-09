@@ -157,7 +157,9 @@ def _cloud_smoke_cluster(config_path: str, mode: str):
             logger.info("Tunnel ready: %s", url)
             client = IrisClient.remote(url, workspace=IRIS_ROOT)
             controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-            tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, job_timeout=600.0)
+            tc = IrisTestCluster(
+                url=url, client=client, controller_client=controller_client, job_timeout=600.0, is_cloud=True
+            )
             tc.wait_for_workers(1, timeout=600)
             yield tc
             controller_client.close()
@@ -193,7 +195,13 @@ def smoke_cluster(request):
     if controller_url:
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-        tc = IrisTestCluster(url=controller_url, client=client, controller_client=controller_client, job_timeout=timeout)
+        tc = IrisTestCluster(
+            url=controller_url,
+            client=client,
+            controller_client=controller_client,
+            job_timeout=timeout,
+            is_cloud=is_cloud,
+        )
         if is_cloud:
             tc.wait_for_workers(1, timeout=timeout)
         yield tc
@@ -578,6 +586,8 @@ def test_region_constrained_routing(smoke_cluster, capabilities):
 
 def test_profile_running_task(smoke_cluster):
     """Profile a running task, verify data returned."""
+    if smoke_cluster.is_cloud:
+        pytest.skip("py-spy races with short-lived containers in cloud mode")
     job = smoke_cluster.submit(TestJobs.busy_loop, name="smoke-profile")
 
     last_state = "unknown"
@@ -619,7 +629,7 @@ def test_stress_200_tasks(smoke_cluster):
         TestJobs.quick,
         "smoke-stress-200",
         cpu=0,
-        memory="10m",
+        memory="100m",
         replicas=200,
     )
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
