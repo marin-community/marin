@@ -12,11 +12,11 @@ stale worker state or chaos bleed. Chaos state is also reset per-test via an
 autouse fixture.
 """
 
-import os
 import shutil
 import subprocess
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,7 +26,7 @@ from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.constraints import Constraint
+from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -45,6 +45,18 @@ IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
+def pytest_addoption(parser):
+    """Cloud mode CLI options for running smoke tests against remote clusters."""
+    parser.addoption("--iris-config", default=None, help="Path to cluster config YAML for cloud mode")
+    parser.addoption(
+        "--iris-mode",
+        default="local",
+        choices=["local", "full", "keep", "redeploy"],
+        help="Cluster mode: local (in-process), full (start+stop), keep, redeploy",
+    )
+    parser.addoption("--iris-controller-url", default=None, help="Connect to existing controller")
+
+
 @dataclass
 class IrisTestCluster:
     """Wraps a booted local cluster with convenience methods for E2E tests.
@@ -56,6 +68,8 @@ class IrisTestCluster:
     url: str
     client: IrisClient
     controller_client: ControllerServiceClientSync
+    job_timeout: float = 60.0
+    is_cloud: bool = False
 
     def submit(
         self,
@@ -150,6 +164,19 @@ class IrisTestCluster:
             time.sleep(poll_interval)
         raise TimeoutError(f"Job {job.job_id} did not reach state {state} in {timeout}s " f"(current: {status.state})")
 
+    @contextmanager
+    def launched_job(self, fn, name: str, *args, **kwargs):
+        """Submit a job and guarantee it's killed on exit, even if the test fails.
+
+        kill() is safe on already-finished jobs (controller silently returns),
+        so this works for both pending and completed jobs.
+        """
+        job = self.submit(fn, name, *args, **kwargs)
+        try:
+            yield job
+        finally:
+            self.kill(job)
+
     def kill(self, job: Job) -> None:
         """Terminate a running job."""
         job_id = job.job_id.to_wire()
@@ -178,6 +205,56 @@ class IrisTestCluster:
             for entry in batch.logs:
                 lines.append(f"{entry.source}: {entry.data}")
         return lines
+
+
+@dataclass(frozen=True)
+class ClusterCapabilities:
+    """What the smoke cluster fleet provides, discovered from live workers."""
+
+    regions: tuple[str, ...]
+    device_types: frozenset[str]
+    has_coscheduling: bool
+
+    @property
+    def has_multi_region(self) -> bool:
+        return len(self.regions) > 1
+
+    @property
+    def has_gpu(self) -> bool:
+        return "gpu" in self.device_types
+
+    @property
+    def has_tpu(self) -> bool:
+        return "tpu" in self.device_types
+
+
+def discover_capabilities(controller_client: ControllerServiceClientSync) -> ClusterCapabilities:
+    """Probe the live worker fleet to determine cluster capabilities."""
+    request = cluster_pb2.Controller.ListWorkersRequest()
+    response = controller_client.list_workers(request)
+    healthy = [w for w in response.workers if w.healthy]
+
+    regions: set[str] = set()
+    device_types: set[str] = set()
+    tpu_names: set[str] = set()
+
+    for w in healthy:
+        attrs = w.metadata.attributes
+        region_attr = attrs.get(WellKnownAttribute.REGION)
+        if region_attr and region_attr.HasField("string_value"):
+            regions.add(region_attr.string_value)
+        device_attr = attrs.get(WellKnownAttribute.DEVICE_TYPE)
+        if device_attr and device_attr.HasField("string_value"):
+            device_types.add(device_attr.string_value)
+        tpu_attr = attrs.get(WellKnownAttribute.TPU_NAME)
+        if tpu_attr and tpu_attr.HasField("string_value"):
+            tpu_names.add(tpu_attr.string_value)
+
+    return ClusterCapabilities(
+        regions=tuple(sorted(regions)),
+        device_types=frozenset(device_types),
+        has_coscheduling=len(tpu_names) > 0,
+    )
 
 
 def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
@@ -284,6 +361,9 @@ class _NoOpPage:
     def click(self, selector, **kwargs):
         pass
 
+    def fill(self, selector, value, **kwargs):
+        pass
+
     def wait_for_selector(self, selector, **kwargs):
         pass
 
@@ -314,16 +394,6 @@ class _NoOpLocator:
         return 0
 
 
-class _NoOpBrowser:
-    """Stub browser that provides no-op methods."""
-
-    def new_page(self, **kwargs):
-        return _NoOpPage()
-
-    def close(self):
-        pass
-
-
 def _is_noop_page(page) -> bool:
     return isinstance(page, _NoOpPage)
 
@@ -349,26 +419,6 @@ def dashboard_goto(page, url: str) -> None:
     page.goto(url)
 
 
-@pytest.fixture
-def browser():
-    """Lazily launches a Chromium browser for Playwright-based tests.
-
-    Returns a no-op stub if playwright is not installed or browser executable
-    is missing (common in CI without 'playwright install'), allowing tests to
-    run but skip screenshot operations.
-    """
-    try:
-        import playwright.sync_api as pw
-
-        with pw.sync_playwright() as p:
-            b = p.chromium.launch()
-            yield b
-            b.close()
-    except (ImportError, Exception):
-        # Playwright not available or browser not installed - return stub
-        yield _NoOpBrowser()
-
-
 def wait_for_dashboard_ready(page) -> None:
     """Wait for Preact to render the dashboard root.
 
@@ -382,52 +432,6 @@ def wait_for_dashboard_ready(page) -> None:
         " && !document.getElementById('root').textContent.includes('Loading...')",
         timeout=30000,
     )
-
-
-@pytest.fixture
-def page(browser, cluster):
-    """Per-test Playwright page pointed at the cluster dashboard.
-
-    Returns a no-op stub if Playwright is unavailable, allowing tests to
-    run but skip dashboard assertions.
-    """
-    pg = browser.new_page(viewport={"width": 1400, "height": 900})
-    if not isinstance(browser, _NoOpBrowser):
-        pg.goto(f"{cluster.url}/")
-        pg.wait_for_load_state("domcontentloaded")
-    yield pg
-    pg.close()
-
-
-@pytest.fixture
-def screenshot(page, request, tmp_path):
-    """Capture labeled screenshots. Set IRIS_SCREENSHOT_DIR to persist them.
-
-    Returns a no-op callable if Playwright is unavailable, allowing tests to
-    run but skip screenshot capture.
-    """
-    # Check if page is a no-op stub
-    if isinstance(page, _NoOpPage):
-
-        def noop_capture(label: str) -> Path:
-            return tmp_path / f"{request.node.name}-{label}.png"
-
-        return noop_capture
-
-    output_dir = Path(
-        os.environ.get(
-            "IRIS_SCREENSHOT_DIR",
-            str(tmp_path / "screenshots"),
-        )
-    )
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    def capture(label: str) -> Path:
-        path = output_dir / f"{request.node.name}-{label}.png"
-        page.screenshot(path=str(path), full_page=True)
-        return path
-
-    return capture
 
 
 # ---------------------------------------------------------------------------
