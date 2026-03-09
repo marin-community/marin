@@ -642,3 +642,28 @@ The next two comparisons are now well-defined:
 
 That gets us the first real answer to the representation question outside the original floating-point reference
 coefficient ladder.
+
+## Exact Libjpeg Runtime Fix
+
+The exact-libjpeg launch failure was a runtime-env issue, not a modeling issue. Fray was building the worker
+environment from the exported `marin` package environment, so the root-level `jpeglib` dependency never reached the
+training worker unless it was passed explicitly on the job request.
+
+The fix was:
+
+- add `pip_packages` threading from the JPEG launch config into `dispatch_grug_training_run(...)`
+- set `pip_packages=("jpeglib>=1.0.2",)` on the exact-libjpeg smoke/trial steps
+- lazy-import `jpeglib` inside the exact coefficient extraction helper so byte/reference-coefficient runs do not
+  require the package at module import time
+
+After that change, the relaunched exact smoke succeeded:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260309-080827`
+- Executor step:
+  `tokexplore/jpeg-tokenizer-k8-libjpeg-smoke_1fb75879`
+- Final status:
+  `SUCCEEDED`
+
+This is enough to treat the exact JPEG coefficient baseline as operational on the production Ray + TPU path. The next
+step is the full `K=8` exact-libjpeg trial.

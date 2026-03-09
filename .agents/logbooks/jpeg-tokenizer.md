@@ -542,3 +542,25 @@
   - the libjpeg smoke failure is packaging hygiene, not a modeling or infra issue
 - Next action: commit the new dependency + libjpeg launch surface, then relaunch `tokexplore/jpeg-tokenizer-k8-libjpeg-smoke`
   from the updated commit.
+
+### 2026-03-09 01:10 - Exact libjpeg smoke fixed on the worker runtime
+
+- Hypothesis: the exact `K=8` libjpeg smoke only needs explicit `pip_packages` on the Fray job request because the
+  worker runtime env is exported from the `marin` package rather than the repository root lockfile.
+- Command:
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k8-libjpeg-smoke"]'`
+- Config:
+  - threaded `pip_packages=("jpeglib>=1.0.2",)` from `JpegTokenizerLaunchConfig` through the JPEG train config into
+    `dispatch_grug_training_run(...)`
+  - moved the `jpeglib` import in `jpeg_codecs.py` inside the exact-libjpeg extraction helper so non-libjpeg runs do
+    not require the package at module import time
+- Result:
+  - the old exact smoke failed on worker import with `ModuleNotFoundError: No module named 'jpeglib'`
+  - after the runtime-env fix, `ray-run-dlwh-launch-20260309-080827` completed successfully
+  - executor step `tokexplore/jpeg-tokenizer-k8-libjpeg-smoke_1fb75879` reached terminal `SUCCEEDED`
+- Interpretation:
+  - the exact JPEG coefficient path is now operational on the production Ray + TPU stack rather than just locally
+  - the next meaningful comparison is no longer a packaging check; it is the full exact `K=8` baseline versus the
+    earlier reference `K=8` baseline
+- Next action: launch `tokexplore/jpeg-tokenizer-k8-libjpeg-trial` from the fixed commit and monitor it through the
+  first eval/checkpoint boundary.
