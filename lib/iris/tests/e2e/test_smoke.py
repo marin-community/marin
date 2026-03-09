@@ -38,12 +38,14 @@ from iris.time_utils import Duration, ExponentialBackoff
 from .conftest import (
     DEFAULT_CONFIG,
     IRIS_ROOT,
+    ClusterCapabilities,
     IrisTestCluster,
     _NoOpPage,
     _add_coscheduling_group,
     assert_visible,
     dashboard_click,
     dashboard_goto,
+    discover_capabilities,
     wait_for_dashboard_ready,
 )
 from .helpers import TestJobs
@@ -247,6 +249,12 @@ def verbose_job(smoke_cluster):
     return job
 
 
+@pytest.fixture(scope="module")
+def capabilities(smoke_cluster) -> ClusterCapabilities:
+    """Discover cluster capabilities from live workers for topology-dependent tests."""
+    return discover_capabilities(smoke_cluster.controller_client)
+
+
 # ============================================================================
 # Cluster readiness
 # ============================================================================
@@ -357,7 +365,7 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
 def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
     """Scheduling diagnostic shows 'Insufficient CPU' for oversized job."""
     smoke_cluster.wait_for_workers(1, timeout=30)
-    job = smoke_cluster.submit(TestJobs.quick, "smoke-diag-cpu", cpu=10000)
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-diag-cpu", cpu=999_999)
 
     status = smoke_cluster.status(job)
     assert status.state == cluster_pb2.JOB_STATE_PENDING
@@ -452,7 +460,9 @@ def test_reservation_gates_scheduling(smoke_cluster):
     reserved = smoke_cluster.submit(
         TestJobs.quick,
         "smoke-reserved",
-        reservation=[ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("H100", 8)))],
+        reservation=[
+            ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("NONEXISTENT-GPU-9999", 99)))
+        ],
     )
     reserved_status = smoke_cluster.status(reserved)
     assert reserved_status.state == cluster_pb2.JOB_STATE_PENDING
@@ -516,12 +526,16 @@ def test_log_level_filter(smoke_cluster, verbose_job):
 # ============================================================================
 
 
-def test_region_constrained_routing(smoke_cluster):
+def test_region_constrained_routing(smoke_cluster, capabilities):
     """Job with region constraint lands on correct worker."""
+    if not capabilities.has_multi_region:
+        pytest.skip("No multi-region workers in cluster")
+
+    target_region = capabilities.regions[0]
     job = smoke_cluster.submit(
         TestJobs.noop,
-        "smoke-region-a",
-        constraints=[region_constraint(["us-central1"])],
+        "smoke-region",
+        constraints=[region_constraint([target_region])],
     )
     smoke_cluster.wait(job, timeout=30)
 
@@ -537,7 +551,7 @@ def test_region_constrained_routing(smoke_cluster):
     assert worker is not None
     region_attr = worker.metadata.attributes.get(WellKnownAttribute.REGION)
     if region_attr and region_attr.HasField("string_value"):
-        assert region_attr.string_value == "us-central1", f"Expected us-central1, got {region_attr.string_value}"
+        assert region_attr.string_value == target_region, f"Expected {target_region}, got {region_attr.string_value}"
 
 
 # ============================================================================
