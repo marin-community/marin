@@ -255,7 +255,7 @@ def test_snapshot_preserves_endpoints():
         endpoint_id="ep-1",
         name="/alice/running-job/my-actor",
         address="10.0.0.1:8080",
-        job_id=JobName.from_string("/alice/running-job"),
+        task_id=JobName.from_string("/alice/running-job/0"),
         metadata={"role": "primary"},
         registered_at=Timestamp.from_ms(3000),
     )
@@ -529,7 +529,7 @@ def test_endpoint_task_association_survives_roundtrip():
         endpoint_id="ep-1",
         name="/alice/serve-job/my-actor",
         address="10.0.0.1:8080",
-        job_id=job_id,
+        task_id=task.task_id,
         metadata={"role": "primary"},
         registered_at=Timestamp.from_ms(2000),
     )

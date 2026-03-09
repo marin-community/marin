@@ -648,7 +648,7 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
         endpoint_id="ep1",
         name="j1/actor",
         address="a:1",
-        job_id=JobName.root("test-user", "j1"),
+        task_id=task.task_id,
     )
     state.add_endpoint(ep, task.task_id)
 
@@ -678,7 +678,7 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
     )
     state.add_endpoint(ep)
 
@@ -717,7 +717,7 @@ def test_namespace_isolation(job_request, worker_metadata):
             endpoint_id="ep-1",
             name="ns-1/actor",
             address="10.0.0.1:8080",
-            job_id=JobName.root("test-user", "ns-1"),
+            task_id=tasks1[0].task_id,
         )
     )
     state.add_endpoint(
@@ -725,7 +725,7 @@ def test_namespace_isolation(job_request, worker_metadata):
             endpoint_id="ep-2",
             name="ns-2/actor",
             address="10.0.0.2:8080",
-            job_id=JobName.root("test-user", "ns-2"),
+            task_id=tasks2[0].task_id,
         )
     )
 
