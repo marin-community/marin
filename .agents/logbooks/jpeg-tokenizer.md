@@ -366,3 +366,30 @@
   - quality keeps improving with larger `K`, but each rung doubles sequence length, so the next useful work is analysis rather than more launch plumbing
   - there is no remaining evidence of a resume/checkpoint correctness bug on the current path
 - Next action: write up the K-rung comparison and decide whether the next experiment should be `K=16` follow-up training analysis, a bytes/symbols baseline, or a WebVision-style robustness pass.
+
+### 2026-03-08 21:54 - Matched-budget K4 rerun staged and submitted
+
+- Hypothesis: the original `K=4` baseline is directionally useful but not compute-matched, because it trained at
+  `4096 * 512 = 2,097,152` tokens/step while `K=8` and `K=16` both trained at `1,048,576` tokens/step. A rerun at
+  batch size `256` should give the apples-to-apples coefficient comparison we actually want.
+- Command:
+  - local edit of `experiments/jpeg_tokenizer/base/launch.py`
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k4-trial-matched"]'`
+- Config:
+  - new step: `tokexplore/jpeg-tokenizer-k4-trial-matched`
+  - run id: `jpeg-tokenizer-k4-trial-matched`
+  - sequence length: `4096`
+  - batch size: `256`
+  - tokens per step: `1,048,576`
+  - token store: `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k4_v0`
+  - W&B group/tags: `tokexplore-jpeg-tokenizer-k4-matched`, `["jpeg-tokenizer", "coeff-k4", "matched-budget"]`
+- Result:
+  - launch config committed as `d6c58996b` (`Add matched-budget K4 JPEG trial`)
+  - new Ray submission: `ray-run-dlwh-launch-20260309-045325`
+  - immediate controller state: `PENDING`
+  - immediate message: `Job has not started yet. It may be waiting for the runtime environment to be set up.`
+- Interpretation:
+  - the next experiment is now exactly the one we wanted: same model family, same dataset, same training length, same
+    token budget per step as `K=8/K=16`, but shorter `K=4` sequences
+  - no new code-level issue is visible yet; early state looks like ordinary runtime-env setup
+- Next action: monitor `ray-run-dlwh-launch-20260309-045325` through executor startup and the first training/checkpoint lines.

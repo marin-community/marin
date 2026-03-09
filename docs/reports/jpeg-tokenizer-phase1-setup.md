@@ -364,3 +364,53 @@ unit cost?" The main candidates are:
 - analyze the `K=4/K=8/K=16` tradeoff explicitly
 - introduce one non-coefficient baseline (`bytes` or `symbols`)
 - move to a broader robustness corpus once the comparison target is chosen
+
+## Matched-Budget K4 Rerun
+
+The next step after the completed `K=16` baseline is now in flight: rerun `K=4` at the same token budget per step as
+`K=8` and `K=16`.
+
+That matters because the original `K=4` baseline was not compute-matched:
+
+- original `K=4` trial:
+  `seq_len=4096`, `batch_size=512`, `tokens/step=2,097,152`
+- `K=8` trial:
+  `seq_len=8192`, `batch_size=128`, `tokens/step=1,048,576`
+- `K=16` trial:
+  `seq_len=16384`, `batch_size=64`, `tokens/step=1,048,576`
+
+So the matched rerun uses:
+
+- executor step:
+  `tokexplore/jpeg-tokenizer-k4-trial-matched`
+- run id:
+  `jpeg-tokenizer-k4-trial-matched`
+- sequence length:
+  `4096`
+- batch size:
+  `256`
+- tokens per step:
+  `1,048,576`
+
+The code for that launch surface was committed as:
+
+- `d6c58996b`
+  `Add matched-budget K4 JPEG trial`
+
+And the new Ray submission is:
+
+- `ray-run-dlwh-launch-20260309-045325`
+
+At the first check, the controller state is still just:
+
+- status:
+  `PENDING`
+- message:
+  `Job has not started yet. It may be waiting for the runtime environment to be set up.`
+
+That is normal for these Ray submissions on `marin-eu-west4-a`; it does not indicate a fresh launch bug. Once this run
+finishes, we will have the comparison that actually matters:
+
+- `K=4` at matched token budget
+- `K=8` at matched token budget
+- `K=16` at matched token budget
