@@ -81,7 +81,8 @@ class ClusterClient(Protocol):
         self,
         name: str,
         address: str,
-        job_id: JobName,
+        task_id: JobName,
+        attempt_id: int = 0,
         metadata: dict[str, str] | None = None,
     ) -> str: ...
 

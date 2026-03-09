@@ -269,9 +269,15 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     state.get_job(succeeded_id).state = cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Add endpoints for each
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep1", name="pending-svc", address="h:1", job_id=pending_id))
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep2", name="running-svc", address="h:2", job_id=running_id))
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep3", name="done-svc", address="h:3", job_id=succeeded_id))
+    state.add_endpoint(
+        ControllerEndpoint(endpoint_id="ep1", name="pending-svc", address="h:1", task_id=pending_id.task(0))
+    )
+    state.add_endpoint(
+        ControllerEndpoint(endpoint_id="ep2", name="running-svc", address="h:2", task_id=running_id.task(0))
+    )
+    state.add_endpoint(
+        ControllerEndpoint(endpoint_id="ep3", name="done-svc", address="h:3", task_id=succeeded_id.task(0))
+    )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
