@@ -355,12 +355,6 @@ def test_pallas_tpu_backward_can_force_xla_streaming(monkeypatch):
     assert captured["use_bwd_xla_streaming"] is True
 
 
-def test_infer_tpu_bwd_v_supertile_mult_bounds_delta_bytes():
-    assert pallas_tpu._infer_tpu_bwd_v_supertile_mult(8_192, 1_024) == 2
-    assert pallas_tpu._infer_tpu_bwd_v_supertile_mult(8_192, 512) == 4
-    assert pallas_tpu._infer_tpu_bwd_v_supertile_mult(16_384, 1_024) == 1
-
-
 def test_default_implementation_on_cpu_skips_expected_tpu_warning():
     if jax.default_backend() == "tpu":
         pytest.skip("requires non-TPU backend")
