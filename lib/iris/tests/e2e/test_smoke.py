@@ -3,13 +3,9 @@
 
 """Comprehensive smoke tests exercising Iris cluster features.
 
-All tests share a single module-scoped cluster (smoke_cluster). In local mode
-the cluster has workers across CPU, TPU coscheduling, and multi-region scale
-groups. Tests are numbered for execution order and share a module-level _jobs
-dict for cross-test job handle passing.
-
-Order dependency: test_02 submits all jobs and stores handles in _jobs.
-Later tests reference _jobs to inspect status, task logs, and dashboard state.
+All tests share a single module-scoped cluster (smoke_cluster). Each test
+submits its own jobs and is independently runnable. In local mode the cluster
+has workers across CPU, TPU coscheduling, and multi-region scale groups.
 """
 
 import os
@@ -22,7 +18,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from iris.client.client import IrisClient, Job
+from iris.client.client import IrisClient
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.manager import connect_cluster
@@ -53,8 +49,6 @@ from .conftest import (
 from .helpers import TestJobs
 
 pytestmark = pytest.mark.e2e
-
-_jobs: dict[str, Job] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -245,15 +239,21 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+@pytest.fixture(scope="module")
+def verbose_job(smoke_cluster):
+    """Shared verbose log job — submits once, used by log-related tests."""
+    job = smoke_cluster.submit(TestJobs.log_verbose, "smoke-verbose")
+    smoke_cluster.wait(job, timeout=60)
+    return job
+
+
 # ============================================================================
-# Phase 1: Cluster readiness
+# Cluster readiness
 # ============================================================================
 
 
-def test_smoke_01_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
+def test_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
     """Verify workers are healthy, screenshot fleet tab."""
-    # The fixture already waited for SMOKE_WORKER_COUNT in local mode.
-    # In cloud mode it waits for >=1. Just verify health here.
     request = cluster_pb2.Controller.ListWorkersRequest()
     response = smoke_cluster.controller_client.list_workers(request)
     healthy = [w for w in response.workers if w.healthy]
@@ -263,115 +263,64 @@ def test_smoke_01_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
     wait_for_dashboard_ready(smoke_page)
     dashboard_click(smoke_page, 'button.tab-btn:has-text("Workers")')
     assert_visible(smoke_page, "text=healthy")
-    smoke_screenshot("01-workers-ready")
+    smoke_screenshot("workers-ready")
 
 
 # ============================================================================
-# Phase 2: Submit diverse jobs
+# Dashboard tests
 # ============================================================================
 
 
-def test_smoke_02_submit_diverse_jobs(smoke_cluster, smoke_page, smoke_screenshot):
-    """Submit diverse jobs in parallel and wait for expected states."""
-    _jobs["simple"] = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
-
-    for i in range(3):
-        _jobs[f"task-{i}"] = smoke_cluster.submit(TestJobs.sleep, f"smoke-task-{i}", 2)
-
-    # Single verbose job covers both substring filtering and structured log levels
-    _jobs["verbose"] = smoke_cluster.submit(TestJobs.log_verbose, "smoke-verbose")
-    _jobs["failed"] = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
-    _jobs["running"] = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 120)
-
-    prefix = f"smoke-ep-{uuid.uuid4().hex[:8]}"
-    _jobs["_ep_prefix"] = prefix  # type: ignore[assignment]
-    _jobs["endpoint"] = smoke_cluster.submit(TestJobs.register_endpoint, "smoke-endpoint", prefix)
-
-    _jobs["ports"] = smoke_cluster.submit(TestJobs.validate_ports, "smoke-ports", ports=["http", "grpc"])
-
-    _jobs["region"] = smoke_cluster.submit(
-        TestJobs.noop,
-        "smoke-region-a",
-        constraints=[region_constraint(["us-central1"])],
-    )
-
-    _jobs["unschedulable"] = smoke_cluster.submit(
-        TestJobs.quick,
-        "smoke-unsched",
-        cpu=9999,
-        scheduling_timeout=Duration.from_seconds(5),
-    )
-
-    _jobs["reserved"] = smoke_cluster.submit(
-        TestJobs.quick,
-        "smoke-reserved",
-        reservation=[ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("H100", 8)))],
-    )
-
-    for key in ["simple", "task-0", "task-1", "task-2", "verbose", "endpoint", "ports", "region"]:
-        status = smoke_cluster.wait(_jobs[key], timeout=60)
-        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job {key} failed: {status}"
-
-    status = smoke_cluster.wait(_jobs["failed"], timeout=30)
-    assert status.state == cluster_pb2.JOB_STATE_FAILED
-
-    status = smoke_cluster.wait(_jobs["unschedulable"], timeout=15)
-    assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
-
-    smoke_cluster.wait_for_state(_jobs["running"], cluster_pb2.JOB_STATE_RUNNING, timeout=15)
-
-    reserved_status = smoke_cluster.status(_jobs["reserved"])
-    assert reserved_status.state == cluster_pb2.JOB_STATE_PENDING
-
-    smoke_screenshot("02-jobs-submitted")
-
-
-# ============================================================================
-# Phase 3: Dashboard screenshots
-# ============================================================================
-
-
-def test_smoke_03_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Jobs tab shows diverse states."""
+    quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
+    failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
+    running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 30)
+
+    smoke_cluster.wait(quick, timeout=30)
+    smoke_cluster.wait(failed, timeout=30)
+    smoke_cluster.wait_for_state(running, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
+
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
-    smoke_screenshot("03-jobs-tab")
+    smoke_screenshot("jobs-tab")
+
+    smoke_cluster.kill(running)
 
 
-def test_smoke_04_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     """SUCCEEDED job detail page."""
-    job = _jobs["simple"]
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")
+    smoke_cluster.wait(job, timeout=30)
+
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
     wait_for_dashboard_ready(smoke_page)
     assert_visible(smoke_page, "text=SUCCEEDED")
-    smoke_screenshot("04-job-detail")
+    smoke_screenshot("job-detail")
 
 
-def test_smoke_05_dashboard_task_logs(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
     """Task logs show lines, truncation buttons, substring filter."""
-    job = _jobs["verbose"]
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{verbose_job.job_id.to_wire()}")
     wait_for_dashboard_ready(smoke_page)
 
-    # Wait for all log lines to render
     smoke_page.wait_for_function(
         "() => document.querySelector('pre') && "
         "document.querySelector('pre').textContent.includes('DONE: all lines emitted')",
         timeout=10000,
     )
-    smoke_screenshot("05-task-logs-default")
+    smoke_screenshot("task-logs-default")
 
-    # Test truncation
     smoke_page.click("button:has-text('100')")
     smoke_page.wait_for_function(
         "() => document.querySelector('span') && document.body.textContent.includes('(truncated)')",
         timeout=5000,
     )
-    smoke_screenshot("05-task-logs-truncated")
+    smoke_screenshot("task-logs-truncated")
 
-    # Test substring filter: "validation failed" only appears in ERROR lines
+    # "validation failed" only appears in ERROR lines
     smoke_page.fill("input[placeholder='substring']", "validation failed")
     smoke_page.click("button:has-text('Apply')")
     smoke_page.wait_for_function(
@@ -380,10 +329,10 @@ def test_smoke_05_dashboard_task_logs(smoke_cluster, smoke_page, smoke_screensho
         "!document.querySelector('pre').textContent.includes('processing data batch')",
         timeout=5000,
     )
-    smoke_screenshot("05-task-logs-filtered")
+    smoke_screenshot("task-logs-filtered")
 
 
-def test_smoke_06_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
     """Constraint chips rendered on job detail."""
     constraints = [
         Constraint(key="region", op=ConstraintOp.EQ, value="local"),
@@ -402,10 +351,10 @@ def test_smoke_06_dashboard_constraints(smoke_cluster, smoke_page, smoke_screens
         timeout=5000,
     )
     assert_visible(smoke_page, "text=region = local")
-    smoke_screenshot("06-constraints")
+    smoke_screenshot("constraints")
 
 
-def test_smoke_07_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
     """Scheduling diagnostic shows 'Insufficient CPU' for oversized job."""
     smoke_cluster.wait_for_workers(1, timeout=30)
     job = smoke_cluster.submit(TestJobs.quick, "smoke-diag-cpu", cpu=10000)
@@ -418,21 +367,23 @@ def test_smoke_07_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smo
     wait_for_dashboard_ready(smoke_page)
     assert_visible(smoke_page, "text=Scheduling Diagnostic")
     assert_visible(smoke_page, "text=Insufficient CPU")
-    smoke_screenshot("07-scheduling-diagnostic")
+    smoke_screenshot("scheduling-diagnostic")
 
 
-def test_smoke_08_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Workers tab shows healthy workers."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
     dashboard_click(smoke_page, 'button.tab-btn:has-text("Workers")')
     assert_visible(smoke_page, "text=healthy")
-    smoke_screenshot("08-workers-tab")
+    smoke_screenshot("workers-tab")
 
 
-def test_smoke_09_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
     """Worker detail page shows info, task history, metric cards."""
-    job = _jobs["simple"]
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
+    smoke_cluster.wait(job, timeout=30)
+
     task_status = smoke_cluster.task_status(job)
     worker_id = task_status.worker_id
     assert worker_id
@@ -446,32 +397,32 @@ def test_smoke_09_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_scree
     assert_visible(smoke_page, f"text={worker_id}")
     assert_visible(smoke_page, "text=Healthy")
     assert_visible(smoke_page, "text=Task History")
-    smoke_screenshot("09-worker-detail")
+    smoke_screenshot("worker-detail")
 
 
-def test_smoke_10_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
     dashboard_click(smoke_page, 'button.tab-btn:has-text("Autoscaler")')
-    smoke_screenshot("10-autoscaler-tab")
+    smoke_screenshot("autoscaler-tab")
 
 
-def test_smoke_11_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
+def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Status tab renders process info and log viewer."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
     dashboard_click(smoke_page, 'button.tab-btn:has-text("Status")')
     smoke_page.wait_for_selector(".log-container", timeout=10000)
-    smoke_screenshot("11-status-tab")
+    smoke_screenshot("status-tab")
 
 
 # ============================================================================
-# Phase 4: Scheduling & endpoint verification
+# Scheduling & endpoint verification
 # ============================================================================
 
 
-def test_smoke_12_small_job_skips_oversized(smoke_cluster):
+def test_small_job_skips_oversized(smoke_cluster):
     """Small job gets scheduled even when a large unschedulable job is queued."""
     big_job = smoke_cluster.submit(TestJobs.quick, "smoke-big", cpu=10000)
     small_job = smoke_cluster.submit(TestJobs.quick, "smoke-small", cpu=1)
@@ -481,23 +432,29 @@ def test_smoke_12_small_job_skips_oversized(smoke_cluster):
     assert big_status.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_smoke_13_endpoint_registration(smoke_cluster):
-    """Endpoint registration from inside job succeeded."""
-    assert _jobs["endpoint"] is not None
-    status = smoke_cluster.status(_jobs["endpoint"])
+def test_endpoint_registration(smoke_cluster):
+    """Endpoint registered from inside job via RPC."""
+    prefix = f"smoke-ep-{uuid.uuid4().hex[:8]}"
+    job = smoke_cluster.submit(TestJobs.register_endpoint, "smoke-endpoint", prefix)
+    status = smoke_cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_smoke_14_port_allocation(smoke_cluster):
+def test_port_allocation(smoke_cluster):
     """Port allocation job succeeded."""
-    assert _jobs["ports"] is not None
-    status = smoke_cluster.status(_jobs["ports"])
+    job = smoke_cluster.submit(TestJobs.validate_ports, "smoke-ports", ports=["http", "grpc"])
+    status = smoke_cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_smoke_15_reservation_gates_scheduling(smoke_cluster):
+def test_reservation_gates_scheduling(smoke_cluster):
     """Unsatisfiable reservation blocks scheduling; regular jobs proceed."""
-    reserved_status = smoke_cluster.status(_jobs["reserved"])
+    reserved = smoke_cluster.submit(
+        TestJobs.quick,
+        "smoke-reserved",
+        reservation=[ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("H100", 8)))],
+    )
+    reserved_status = smoke_cluster.status(reserved)
     assert reserved_status.state == cluster_pb2.JOB_STATE_PENDING
 
     regular = smoke_cluster.submit(TestJobs.quick, "smoke-regular-while-reserved")
@@ -506,14 +463,13 @@ def test_smoke_15_reservation_gates_scheduling(smoke_cluster):
 
 
 # ============================================================================
-# Phase 5: Log level verification (uses the merged verbose job)
+# Log level verification
 # ============================================================================
 
 
-def test_smoke_16_log_levels_populated(smoke_cluster):
+def test_log_levels_populated(smoke_cluster, verbose_job):
     """Task logs have level field (INFO, WARNING, ERROR)."""
-    job = _jobs["verbose"]
-    task_id = job.job_id.task(0).to_wire()
+    task_id = verbose_job.job_id.task(0).to_wire()
 
     deadline = time.monotonic() + 60
     entries = []
@@ -539,10 +495,9 @@ def test_smoke_16_log_levels_populated(smoke_cluster):
     assert markers_found.get("error-marker") == logging_pb2.LOG_LEVEL_ERROR
 
 
-def test_smoke_17_log_level_filter(smoke_cluster):
+def test_log_level_filter(smoke_cluster, verbose_job):
     """min_level=WARNING excludes INFO."""
-    job = _jobs["verbose"]
-    task_id = job.job_id.task(0).to_wire()
+    task_id = verbose_job.job_id.task(0).to_wire()
 
     request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
     response = smoke_cluster.controller_client.get_task_logs(request)
@@ -557,13 +512,19 @@ def test_smoke_17_log_level_filter(smoke_cluster):
 
 
 # ============================================================================
-# Phase 6: Multi-region routing
+# Multi-region routing
 # ============================================================================
 
 
-def test_smoke_18_region_constrained_routing(smoke_cluster):
+def test_region_constrained_routing(smoke_cluster):
     """Job with region constraint lands on correct worker."""
-    job = _jobs["region"]
+    job = smoke_cluster.submit(
+        TestJobs.noop,
+        "smoke-region-a",
+        constraints=[region_constraint(["us-central1"])],
+    )
+    smoke_cluster.wait(job, timeout=30)
+
     task = smoke_cluster.task_status(job, task_index=0)
     assert task.worker_id
 
@@ -580,11 +541,11 @@ def test_smoke_18_region_constrained_routing(smoke_cluster):
 
 
 # ============================================================================
-# Phase 7: Profiling
+# Profiling
 # ============================================================================
 
 
-def test_smoke_19_profile_running_task(smoke_cluster):
+def test_profile_running_task(smoke_cluster):
     """Profile a running task, verify data returned."""
     job = smoke_cluster.submit(TestJobs.busy_loop, name="smoke-profile")
 
@@ -616,12 +577,12 @@ def test_smoke_19_profile_running_task(smoke_cluster):
 
 
 # ============================================================================
-# Phase 8: Stress test
+# Stress test
 # ============================================================================
 
 
 @pytest.mark.timeout(120)
-def test_smoke_20_stress_200_tasks(smoke_cluster):
+def test_stress_200_tasks(smoke_cluster):
     """200 tasks exercises scheduler concurrency and bin-packing."""
     job = smoke_cluster.submit(
         TestJobs.quick,
@@ -727,18 +688,3 @@ def test_gpu_worker_metadata(tmp_path):
             finally:
                 worker.stop()
                 threads.stop(timeout=Duration.from_seconds(5.0))
-
-
-# ============================================================================
-# Cleanup
-# ============================================================================
-
-
-def test_smoke_99_cleanup(smoke_cluster):
-    """Kill any long-running jobs."""
-    for key in ["running", "reserved"]:
-        if key in _jobs and isinstance(_jobs[key], Job):
-            try:
-                smoke_cluster.kill(_jobs[key])
-            except Exception:
-                pass
