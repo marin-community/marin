@@ -77,4 +77,4 @@ This script ensure that:
 - The working directory is set appropriately.
 - Any subpaths under submodules are appended to PYTHONPATH.
 
-> Agent-friendly skills are available in `.agents/skills/`. See [add-dataset](../../.agents/skills/add-dataset/SKILL.md) for a guide to dataset schema inspection and addition.
+> Agents can use the `add-dataset` skill for a guide to dataset schema inspection and addition.
