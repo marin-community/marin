@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import os
 import uuid
 from typing import Any, Protocol
 
@@ -1113,6 +1114,7 @@ class ControllerServiceImpl:
             total_workers=len(workers),
             healthy_workers=healthy,
             total_users=len(self._state.list_user_stats()),
+            controller_git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
         )
 
     def list_users(

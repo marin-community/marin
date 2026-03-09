@@ -117,6 +117,7 @@ message ProcessInfo {
   int32 open_fd_count = 9;      // Open file descriptors
   int64 memory_total_bytes = 10; // Total system memory
   int32 cpu_count = 11;          // Number of CPU cores
+  string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
 }
 
 message GetProcessStatusRequest {
@@ -467,6 +468,10 @@ message WorkerMetadata {
   // VM IP address used for autoscaler slice/worker matching.
   // Self-discovered by the worker at startup via socket probe.
   string vm_address = 41;
+
+  // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
+  // Allows the controller to surface per-worker version info for debugging.
+  string git_hash = 42;
 }
 
 // ============================================================================
@@ -737,6 +742,8 @@ message Controller {
     int32 total_workers = 3;
     int32 healthy_workers = 4;
     int32 total_users = 5;
+    // Git commit hash of the running controller image (IRIS_GIT_HASH env var).
+    string controller_git_hash = 6;
   }
 
   message UserSummary {

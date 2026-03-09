@@ -51,6 +51,7 @@ def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
         open_fd_count=fd_count,
         memory_total_bytes=vm.total,
         cpu_count=os.cpu_count() or 0,
+        git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
     )
 
 
