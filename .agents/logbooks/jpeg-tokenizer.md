@@ -326,3 +326,23 @@
   - the next gating factor is TPU availability on `marin-eu-west4-a`, not checkpoint correctness
   - further stop/resubmit churn is unlikely to improve anything while the cluster is resource-constrained
 - Next action: leave the fixed `K=8` retry queued, keep `K=16` stopped, and resume monitoring once capacity is available.
+
+### 2026-03-08 17:47 - K=8 baseline completed; K=16 trial relaunched
+
+- Hypothesis: once the fixed `K=8` retry reaches a clean terminal success, the next bounded rung is to relaunch the
+  staged `K=16` trial and use the successful `K=8` run as the comparison anchor.
+- Command:
+  - monitoring via `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a ...`
+  - `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k16-trial"]'`
+- Result:
+  - the fixed `K=8` retry job `ray-run-dlwh-launch-20260308-180311` finished with controller status `SUCCEEDED`
+  - final `K=8` checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd/checkpoints/step-2000`
+  - final `K=8` eval loss: `3.253`
+  - final `K=8` output path remained `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd`
+  - a new `K=16` trial submission was created as `ray-run-dlwh-launch-20260309-003238`
+  - early `K=16` controller status is `PENDING` with runtime-env setup in progress and no trainer/W&B lines yet
+- Interpretation:
+  - `K=8` is now a complete baseline rather than a half-resumed infrastructure recovery run
+  - the next research question is whether the fidelity gain from `K=16` beats the sequence-length cost strongly enough to justify the larger context
+  - no new code issue is indicated by the early `K=16` submission state
+- Next action: monitor `ray-run-dlwh-launch-20260309-003238` through trainer startup and the first eval/checkpoint boundary.

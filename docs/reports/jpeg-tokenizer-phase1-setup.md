@@ -272,3 +272,52 @@ The new blocker is not another resume bug. The current scheduler message is:
 So the fixed retry is now waiting on TPU capacity rather than failing in the training code. That is the right place to
 pause: `K=16` stays stopped, the fixed `K=8` retry stays queued, and no more submission churn is warranted until the
 cluster can actually allocate a slice.
+
+## Completed K8 Baseline
+
+That fixed retry has now finished successfully.
+
+- Ray job:
+  `ray-run-dlwh-launch-20260308-180311`
+- Final status:
+  `SUCCEEDED`
+- Final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-trial-r2-ce64bd/checkpoints/step-2000`
+- Final eval loss:
+  `3.253`
+
+The important detail is that this was not just a healthy startup or a midpoint resume. The run made it all the way
+through `2000` steps, wrote the terminal checkpoint, and exited cleanly at the Ray level. A shutdown-time
+`BrokenPipeError` appeared only inside an ignored `atexit` callback and did not affect the job outcome.
+
+That makes the `K=8` rung a real baseline for the next comparison:
+
+- `K=4` trial final eval loss:
+  `4.417`
+- `K=8` trial-r2 final eval loss:
+  `3.253`
+
+So the first coefficient-fidelity increase looks materially useful on Imagenette, and the next reasonable question is
+whether `K=16` continues that trend enough to justify doubling sequence length again.
+
+## Relaunched K16 Trial
+
+With `K=8` complete, the next step is back to the staged `K=16` baseline run.
+
+- New `K=16` submission:
+  `ray-run-dlwh-launch-20260309-003238`
+- Executor step:
+  `tokexplore/jpeg-tokenizer-k16-trial`
+- Token store:
+  `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k16_v0`
+
+At the first post-submit check, the controller state is:
+
+- status:
+  `PENDING`
+- message:
+  `Job has not started yet. It may be waiting for the runtime environment to be set up.`
+
+That is consistent with the earlier TPU allocation and runtime-env delays on `marin-eu-west4-a`; there is no fresh
+code-level failure signal yet. The right next action is simply to monitor this submission through executor launch,
+trainer startup, and the first checkpoint/eval boundary.
