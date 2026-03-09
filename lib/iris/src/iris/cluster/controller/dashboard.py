@@ -88,5 +88,8 @@ class ControllerDashboard:
 
     def _bundle_download(self, request: Request) -> Response:
         bundle_id = request.path_params["bundle_id"]
-        data = self._service.bundle_zip(bundle_id)
+        try:
+            data = self._service.bundle_zip(bundle_id)
+        except FileNotFoundError:
+            return Response(f"Bundle not found: {bundle_id}", status_code=404)
         return Response(data, media_type="application/zip")

@@ -8,6 +8,7 @@ inline Python script in the init-container command. It runs inside the task
 image, so only stdlib imports are used.
 """
 
+import hashlib
 import io
 import os
 import zipfile
@@ -22,6 +23,9 @@ if bundle_id:
     controller_url = os.environ["IRIS_CONTROLLER_URL"]
     url = f"{controller_url}/bundles/{bundle_id}.zip"
     archive = urlopen(url, timeout=120).read()
+    actual_hash = hashlib.sha256(archive).hexdigest()
+    if actual_hash != bundle_id:
+        raise ValueError(f"Bundle hash mismatch: expected {bundle_id}, got {actual_hash}")
     with zipfile.ZipFile(io.BytesIO(archive), "r") as zf:
         for member in zf.infolist():
             target = (dest / member.filename).resolve()

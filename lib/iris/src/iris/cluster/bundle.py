@@ -130,7 +130,7 @@ class BundleStore:
             self.get_zip(bundle_id)
             return
         except FileNotFoundError:
-            logger.error("Bundle %s not found in local store, fetching from controller", bundle_id)
+            logger.info("Bundle %s not found in local store, fetching from controller", bundle_id)
 
         if not self._controller_address:
             raise RuntimeError(f"Bundle {bundle_id} is not cached and controller address is not configured")
