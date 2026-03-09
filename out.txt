@@ -1,721 +1,517 @@
-(<lambda> pid=21125, ip=10.164.0.206)  
-(<lambda> pid=21333, ip=10.164.1.38)            ^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=21333, ip=10.164.1.38)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=21333, ip=10.164.1.38)     raise self._exception
-(<lambda> pid=21333, ip=10.164.1.38)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
-(<lambda> pid=21333, ip=10.164.1.38)     return await fn()
-(<lambda> pid=21333, ip=10.164.1.38)            ^^^^^^^^^^
-(<lambda> pid=21333, ip=10.164.1.38)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
-(<lambda> pid=21333, ip=10.164.1.38)     await self._client.close()
-(<lambda> pid=21333, ip=10.164.1.38)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
-(<lambda> pid=21333, ip=10.164.1.38)     await self._writer.wait_closed()
-(<lambda> pid=21333, ip=10.164.1.38)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=21333, ip=10.164.1.38)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=21333, ip=10.164.1.38) BrokenPipeError: [Errno 32] Broken pipe
-(SliceActor pid=23519, ip=10.164.1.53) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(SliceActor pid=23519, ip=10.164.1.53)                      ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-(SliceActor pid=23519, ip=10.164.1.53)     while self._current_local_idx >= len(self._current_shard_data):
-(SliceActor pid=23519, ip=10.164.1.53)                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53) TypeError: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) The above exception was the direct cause of the following exception:
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=23519, ip=10.164.1.53)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-(SliceActor pid=23519, ip=10.164.1.53)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=23519, ip=10.164.1.53)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     super().__init__(
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=23519, ip=10.164.1.53)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=23519, ip=10.164.1.53)     return asyncio.run(coro)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return runner.run(main)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return self._loop.run_until_complete(task)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return (await self.get_batch([index]))[0]
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-(SliceActor pid=23519, ip=10.164.1.53)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-(SliceActor pid=23519, ip=10.164.1.53)     raise RuntimeError(
-(SliceActor pid=23519, ip=10.164.1.53) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=21481, ip=10.164.0.8)
-(SliceActor pid=23519, ip=10.164.1.53)                      ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-(SliceActor pid=23519, ip=10.164.1.53)     while self._current_local_idx >= len(self._current_shard_data):
-(SliceActor pid=23519, ip=10.164.1.53)                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53) TypeError: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) The above exception was the direct cause of the following exception:
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) ray::<lambda>() (pid=21481, ip=10.164.0.8)
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=23519, ip=10.164.1.53)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-(SliceActor pid=23519, ip=10.164.1.53)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=23519, ip=10.164.1.53)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     super().__init__(
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=23519, ip=10.164.1.53)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=23519, ip=10.164.1.53)     return asyncio.run(coro)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return runner.run(main)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return self._loop.run_until_complete(task)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return (await self.get_batch([index]))[0]
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-(SliceActor pid=23519, ip=10.164.1.53)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-(SliceActor pid=23519, ip=10.164.1.53)     raise RuntimeError(
-(SliceActor pid=23519, ip=10.164.1.53) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=21501, ip=10.164.1.47)
-(SliceActor pid=23519, ip=10.164.1.53)                      ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-(SliceActor pid=23519, ip=10.164.1.53)     while self._current_local_idx >= len(self._current_shard_data):
-(SliceActor pid=23519, ip=10.164.1.53)                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53) TypeError: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) The above exception was the direct cause of the following exception:
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) ray::<lambda>() (pid=21501, ip=10.164.1.47)
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=23519, ip=10.164.1.53)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-(SliceActor pid=23519, ip=10.164.1.53)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=23519, ip=10.164.1.53)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     super().__init__(
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=23519, ip=10.164.1.53)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=23519, ip=10.164.1.53)     return asyncio.run(coro)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return runner.run(main)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return self._loop.run_until_complete(task)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return (await self.get_batch([index]))[0]
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-(SliceActor pid=23519, ip=10.164.1.53)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-(SliceActor pid=23519, ip=10.164.1.53)     raise RuntimeError(
-(SliceActor pid=23519, ip=10.164.1.53) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=21333, ip=10.164.1.38)
-(SliceActor pid=23519, ip=10.164.1.53)                      ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-(SliceActor pid=23519, ip=10.164.1.53)     while self._current_local_idx >= len(self._current_shard_data):
-(SliceActor pid=23519, ip=10.164.1.53)                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53) TypeError: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) The above exception was the direct cause of the following exception:
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) ray::<lambda>() (pid=21333, ip=10.164.1.38)
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=23519, ip=10.164.1.53)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-(SliceActor pid=23519, ip=10.164.1.53)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=23519, ip=10.164.1.53)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     super().__init__(
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=23519, ip=10.164.1.53)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=23519, ip=10.164.1.53)     return asyncio.run(coro)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return runner.run(main)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return self._loop.run_until_complete(task)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return (await self.get_batch([index]))[0]
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-(SliceActor pid=23519, ip=10.164.1.53)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-(SliceActor pid=23519, ip=10.164.1.53)     raise RuntimeError(
-(SliceActor pid=23519, ip=10.164.1.53) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=21125, ip=10.164.0.206)
-(SliceActor pid=23519, ip=10.164.1.53)                      ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-(SliceActor pid=23519, ip=10.164.1.53)     while self._current_local_idx >= len(self._current_shard_data):
-(SliceActor pid=23519, ip=10.164.1.53)                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53) TypeError: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) The above exception was the direct cause of the following exception:
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) ray::<lambda>() (pid=21125, ip=10.164.0.206)
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=23519, ip=10.164.1.53)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-(SliceActor pid=23519, ip=10.164.1.53)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=23519, ip=10.164.1.53)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     super().__init__(
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=23519, ip=10.164.1.53)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=23519, ip=10.164.1.53)     return asyncio.run(coro)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return runner.run(main)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return self._loop.run_until_complete(task)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return (await self.get_batch([index]))[0]
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-(SliceActor pid=23519, ip=10.164.1.53)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-(SliceActor pid=23519, ip=10.164.1.53)     raise RuntimeError(
-(SliceActor pid=23519, ip=10.164.1.53) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=21018, ip=10.164.0.47)
-(SliceActor pid=23519, ip=10.164.1.53)                      ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-(SliceActor pid=23519, ip=10.164.1.53)     while self._current_local_idx >= len(self._current_shard_data):
-(SliceActor pid=23519, ip=10.164.1.53)                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53) TypeError: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) The above exception was the direct cause of the following exception:
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) ray::<lambda>() (pid=21018, ip=10.164.0.47)
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=23519, ip=10.164.1.53)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-(SliceActor pid=23519, ip=10.164.1.53)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=23519, ip=10.164.1.53)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     super().__init__(
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=23519, ip=10.164.1.53)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=23519, ip=10.164.1.53)     return asyncio.run(coro)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return runner.run(main)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return self._loop.run_until_complete(task)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return (await self.get_batch([index]))[0]
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-(SliceActor pid=23519, ip=10.164.1.53)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-(SliceActor pid=23519, ip=10.164.1.53)     raise RuntimeError(
-(SliceActor pid=23519, ip=10.164.1.53) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=21170, ip=10.164.1.41)
-(SliceActor pid=23519, ip=10.164.1.53)                      ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-(SliceActor pid=23519, ip=10.164.1.53)     while self._current_local_idx >= len(self._current_shard_data):
-(SliceActor pid=23519, ip=10.164.1.53)                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53) TypeError: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) The above exception was the direct cause of the following exception:
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) ray::<lambda>() (pid=21170, ip=10.164.1.41)
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=23519, ip=10.164.1.53)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-(SliceActor pid=23519, ip=10.164.1.53)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=23519, ip=10.164.1.53)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     super().__init__(
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=23519, ip=10.164.1.53)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=23519, ip=10.164.1.53)     return asyncio.run(coro)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return runner.run(main)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return self._loop.run_until_complete(task)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return (await self.get_batch([index]))[0]
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-(SliceActor pid=23519, ip=10.164.1.53)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-(SliceActor pid=23519, ip=10.164.1.53)     raise RuntimeError(
-(SliceActor pid=23519, ip=10.164.1.53) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=21328, ip=10.164.0.232)
-(SliceActor pid=23519, ip=10.164.1.53)                      ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-(SliceActor pid=23519, ip=10.164.1.53)     while self._current_local_idx >= len(self._current_shard_data):
-(SliceActor pid=23519, ip=10.164.1.53)                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53) TypeError: object of type 'NoneType' has no len()
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) The above exception was the direct cause of the following exception:
-(SliceActor pid=23519, ip=10.164.1.53) 
-(SliceActor pid=23519, ip=10.164.1.53) ray::<lambda>() (pid=21328, ip=10.164.0.232)
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-(SliceActor pid=23519, ip=10.164.1.53)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-(SliceActor pid=23519, ip=10.164.1.53)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-(SliceActor pid=23519, ip=10.164.1.53)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     super().__init__(
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-(SliceActor pid=23519, ip=10.164.1.53)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=23519, ip=10.164.1.53)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=23519, ip=10.164.1.53)     return asyncio.run(coro)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return runner.run(main)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     return self._loop.run_until_complete(task)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return await dataset.getitem_async(dataset_index)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-(SliceActor pid=23519, ip=10.164.1.53)     return (await self.get_batch([index]))[0]
-(SliceActor pid=23519, ip=10.164.1.53)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-(SliceActor pid=23519, ip=10.164.1.53)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-(SliceActor pid=23519, ip=10.164.1.53)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)     result = self.fn(*self.args, **self.kwargs)
-(SliceActor pid=23519, ip=10.164.1.53)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=23519, ip=10.164.1.53)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-(SliceActor pid=23519, ip=10.164.1.53)     raise RuntimeError(
-(SliceActor pid=23519, ip=10.164.1.53) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-(run_on_pod_ray pid=11532, ip=10.164.1.40) Task error ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(run_on_pod_ray pid=11532, ip=10.164.1.40) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     return func(*args, **kwargs)
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=11532, ip=10.164.1.40) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(run_on_pod_ray pid=11532, ip=10.164.1.40) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(<lambda> pid=21481, ip=10.164.0.8) E0218 19:55:17.051828   22102 slice_configuration.cc:637] tpu22:pe4:3:p2:y has unexpectedly gone down.
-(<lambda> pid=21481, ip=10.164.0.8) E0218 19:55:17.992082   22099 slice_configuration.cc:637] tpu22:pe4:1:p2:y has unexpectedly gone down.
-(<lambda> pid=21094, ip=10.164.0.74) 2026-02-18T19:55:13 - 57 - levanter.compat.hf_checkpoints - hf_checkpoints.py:719 - WARNING :: Model vocab size (151936) does not match tokenizer vocab size (151669). Using model vocab size (151936). [repeated 10x across cluster]
-(<lambda> pid=21481, ip=10.164.0.8) E0218 19:55:18.197918   21676 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=21481, ip=10.164.0.8) F0218 19:55:18.198046   21481 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to disconnect from coordination service with status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=21481, ip=10.164.0.8) 
-(<lambda> pid=21481, ip=10.164.0.8) RPC: /tensorflow.CoordinationService/ShutdownTask [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(<lambda> pid=21328, ip=10.164.0.232) 
-(<lambda> pid=21501, ip=10.164.1.47) F0218 19:55:18.198626   21695 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=21501, ip=10.164.1.47) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=21501, ip=10.164.1.47) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
-(<lambda> pid=21333, ip=10.164.1.38) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
-(<lambda> pid=22131, ip=10.164.0.81) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) Failed 2 times. Continuing to retry.
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     return func(*args, **kwargs)
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=11532, ip=10.164.1.40) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(run_on_pod_ray pid=11532, ip=10.164.1.40) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(run_on_pod_ray pid=11532, ip=10.164.1.40) Failed too many times
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     return func(*args, **kwargs)
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=11532, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=11532, ip=10.164.1.40)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=11532, ip=10.164.1.40) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(run_on_pod_ray pid=11532, ip=10.164.1.40) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) 
-(run_on_pod_ray pid=11532, ip=10.164.1.40) ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(autoscaler +5h39m37s) Adding 2 node(s) of type tpu_worker.
-(autoscaler +5h39m37s) Resized to 8400 CPUs, 280 TPUs.
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40) Job 140225337073488 failed with message: ray::run_on_pod_ray() (pid=11532, ip=10.164.1.40)
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     raise problem or RuntimeError("TPU job failed too many times")
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40) 
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40) 
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40) ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(<lambda> pid=21094, ip=10.164.0.74) 2026-02-18T19:55:15 - 57 - levanter.main.train_vlm - train_vlm.py:833 - INFO :: Loaded complete VLM weights (vision encoder + projector + LLM) [repeated 5x across cluster]
-(<lambda> pid=21094, ip=10.164.0.74) 2026-02-18T19:55:15 - 57 - levanter.main.train_vlm - train_vlm.py:862 - INFO :: Evaluation disabled (--no_eval). Skipping eval hooks to save memory. [repeated 5x across cluster]
-(<lambda> pid=21094, ip=10.164.0.74) 2026-02-18T19:55:15 - 57 - levanter.main.train_vlm - train_vlm.py:922 - INFO :: Using streaming mode with ImageDataLoader (prefetch_size=8, max_buffered=16) [repeated 5x across cluster]
-(<lambda> pid=21424, ip=10.164.0.9) 2026-02-18T19:55:16 - 45 - levanter.data.image - image.py:2773 - WARNING :: Prefetch failed (transient, attempt 4/5), rolling back iterator to shard 0 row 0: object of type 'NoneType' has no len() [repeated 245x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) 2026-02-18T19:55:16 - 5 - levanter.tracker.wandb - wandb.py:102 - INFO :: Finishing wandb run... [repeated 45x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) 2026-02-18T19:55:16 - 5 - levanter.data.image - image.py:2767 - ERROR :: Prefetch failed 5 times consecutively on same batch: object of type 'NoneType' has no len() [repeated 45x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb:  [repeated 84x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb: Run summary: [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb:                                 backend tpu [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb:                             num_devices 256 [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb:                               num_hosts 64 [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb:                         parameter_count 4444994288 [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb:                  throughput/device_kind TPU v5 lite [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb:            throughput/theoretical_flops 5.0432e+16 [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb: throughput/theoretical_flops_per_device 197000000000000.0 [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb: You can sync this run to the cloud by running: [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb: wandb sync /tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/wandb/offline-run-20260218_195439-vlm-official-qwen3-4b-stage2-50M-mixed-0-7459cb [repeated 42x across cluster]
-(<lambda> pid=20750, ip=10.164.1.13) wandb: Find logs at: ./wandb/offline-run-20260218_195439-vlm-official-qwen3-4b-stage2-50M-mixed-0-7459cb/logs [repeated 42x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7ee07d58de40> [repeated 7x across cluster]
-(run_on_pod_ray pid=11532, ip=10.164.1.40) Traceback (most recent call last): [repeated 10x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     conn.teardown(hooks.exit_code) [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     self._asyncer.run(publish_teardown_and_close) [repeated 7x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run [repeated 46x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     return future.result() [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)            ^^^^^^^^^^^^^^^ [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     return self.__get_result() [repeated 7x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 15x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     raise self._exception [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     return await fn() [repeated 7x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)                                                  ^^^^^^^^^^ [repeated 11x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     await self._client.close() [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     await self._writer.wait_closed() [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41)     await self._protocol._get_close_waiter(self) [repeated 7x across cluster]
-(<lambda> pid=21170, ip=10.164.1.41) BrokenPipeError: [Errno 32] Broken pipe [repeated 7x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)                      ^^^^^^^^^^^^^^^^^^^^^ [repeated 9x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     while self._current_local_idx >= len(self._current_shard_data): [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 10x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40) TypeError: object of type 'NoneType' has no len() [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40) The above exception was the direct cause of the following exception: [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__ [repeated 10x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     super().__init__( [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     initial_example = blocking_wait(self.data_store.getitem_async(0)) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     return asyncio.run(coro) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     return runner.run(main) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     return self._loop.run_until_complete(task) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async [repeated 10x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     return await dataset.getitem_async(dataset_index) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     return (await self.get_batch([index]))[0] [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     return await loop.run_in_executor(None, self._get_from_cache_or_process, indices) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     result = self.fn(*self.args, **self.kwargs) [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     raise RuntimeError( [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40) RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len() [repeated 5x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray [repeated 2x across cluster]
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_levanter_train_vlm pid=11454, ip=10.164.1.40) ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=22131, ip=10.164.0.81)
-(<lambda> pid=22131, ip=10.164.0.81) E0218 19:55:18.197991   22325 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task). [repeated 7x across cluster]
-(<lambda> pid=22131, ip=10.164.0.81) F0218 19:55:18.198134   22131 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to disconnect from coordination service with status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further. [repeated 2x across cluster]
-(<lambda> pid=22131, ip=10.164.0.81) RPC: /tensorflow.CoordinationService/ShutdownTask [type.googleapis.com/tensorflow.CoordinationServiceError=''] [repeated 2x across cluster]
-(<lambda> pid=21018, ip=10.164.0.47) F0218 19:55:18.197870   21214 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further. [repeated 4x across cluster]
-(<lambda> pid=21018, ip=10.164.0.47) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError: [repeated 4x across cluster]
-(<lambda> pid=21125, ip=10.164.0.206) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"} [repeated 2x across cluster]
-(<lambda> pid=21018, ip=10.164.0.47) :UNKNOWN:Error received from peer  {grpc_message:"recvmsg:Connection reset by peer", grpc_status:14}
-2026-02-18 19:55:28,731 WARNING cluster.py:350 -- Job 135662986668784 failed with message: ray::run_levanter_train_vlm() (pid=11454, ip=10.164.1.40)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140225337073488 failed with status failed and error: ray::run_on_pod_ray() (pid=11532, ip=10.164.1.40)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=22131, ip=10.164.0.81)
-                     ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-    while self._current_local_idx >= len(self._current_shard_data):
-                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-TypeError: object of type 'NoneType' has no len()
-
-The above exception was the direct cause of the following exception:
-
-ray::<lambda>() (pid=22131, ip=10.164.0.81)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-    train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-    super().__init__(
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-    return await dataset.getitem_async(dataset_index)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-    return (await self.get_batch([index]))[0]
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-    raise RuntimeError(
-RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-2026-02-18 19:55:28,731 INFO executor.py:796 -- Waiting for 135662986668784 to finish for step checkpoints/vlm-official-qwen3-4b-stage2-50M-mixed-0
-2026-02-18 19:55:28,731 - INFO - Starting wait for job 135662986668784
-2026-02-18 19:55:28,732 WARNING cluster.py:350 -- Job 135662986668784 failed with message: ray::run_levanter_train_vlm() (pid=11454, ip=10.164.1.40)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140225337073488 failed with status failed and error: ray::run_on_pod_ray() (pid=11532, ip=10.164.1.40)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=22131, ip=10.164.0.81)
-                     ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-    while self._current_local_idx >= len(self._current_shard_data):
-                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-TypeError: object of type 'NoneType' has no len()
-
-The above exception was the direct cause of the following exception:
-
-ray::<lambda>() (pid=22131, ip=10.164.0.81)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-    train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-    super().__init__(
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-    return await dataset.getitem_async(dataset_index)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-    return (await self.get_batch([index]))[0]
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-    raise RuntimeError(
-RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
-2026-02-18 19:55:28,732 - INFO - Job 135662986668784 completed with status failed
+eck if there are other processes listening to the port. [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) *** StackTrace Information *** [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x55f2d8be5eca] ray::operator<<() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x55f2d8be84e9] ray::RayLog::~RayLog() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x55f2d812ace9] ray::rpc::GrpcServer::Run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x55f2d80a703c] ray::ObjectManager::ObjectManager() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x55f2d7eea01e] std::make_unique<>() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x55f2d84dac5b] std::_Function_handler<>::_M_invoke() [repeated 11x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x55f2d8313e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x55f2d84e45db] EventTracker::RecordExecution() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x55f2d84dbffb] boost::asio::detail::executor_op<>::do_complete() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x55f2d8bb16cb] boost::asio::detail::scheduler::do_run_one() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x55f2d8bb3c79] boost::asio::detail::scheduler::run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x55f2d8bb4182] boost::asio::io_context::run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x55f2d7eae3d7] main [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f72d0577e40] __libc_start_main [repeated 2x across cluster]
+(raylet, ip=10.164.0.155) E0309 00:32:15.066803601    1067 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T00:32:15.066395331-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T00:32:15.066386921-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:32:15.066359721-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-09T00:32:15.066340531-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:32:15.066384201-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-09T00:32:15.066378811-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.98) E0309 00:31:07.430378720    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T00:31:07.429967381-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T00:31:07.42995879-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:31:07.42993173-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:31:07.42991231-07:00"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:31:07.429956041-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:31:07.42995051-07:00"}]}]}]}
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x55c7fd6860df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x55c7fda56aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x55c7fda691b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.98) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7ffba9d38d90]
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x55c7fd63d4f7]
+(raylet, ip=10.164.0.98) 
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x556a53b290df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x556a53ef9aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x556a53f0c1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.93) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f267f474d90]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x556a53ae04f7]
+(raylet, ip=10.164.0.93) 
+(raylet, ip=10.164.0.175) [2026-03-09 00:37:49,588 E 3882 3882] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 42x across cluster]
+(raylet, ip=10.164.0.93) [2026-03-09 00:31:07,524 C 1067 1067] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port. [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) *** StackTrace Information *** [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x556a547f5eca] ray::operator<<() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x556a547f84e9] ray::RayLog::~RayLog() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x556a53d3ace9] ray::rpc::GrpcServer::Run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x556a53cb703c] ray::ObjectManager::ObjectManager() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x556a53afa01e] std::make_unique<>() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x556a540eac5b] std::_Function_handler<>::_M_invoke() [repeated 8x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x556a53f23e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x556a540f45db] EventTracker::RecordExecution() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x556a540ebffb] boost::asio::detail::executor_op<>::do_complete() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x556a547c16cb] boost::asio::detail::scheduler::do_run_one() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x556a547c3c79] boost::asio::detail::scheduler::run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x556a547c4182] boost::asio::io_context::run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x556a53abe3d7] main [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f267f474e40] __libc_start_main [repeated 2x across cluster]
+(raylet, ip=10.164.0.93) E0309 00:31:07.447019988    1067 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T00:31:07.446686048-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T00:31:07.446677418-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:31:07.446649138-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:31:07.446629498-07:00"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:31:07.446674588-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:31:07.446669158-07:00"}]}]}]}
+(raylet, ip=10.164.0.102) [2026-03-09 00:37:55,099 E 3912 3912] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 23x across cluster]
+(raylet, ip=10.164.0.143) [2026-03-09 00:38:38,481 E 3884 3884] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.183) [2026-03-09 00:38:44,015 E 3884 3884] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(raylet, ip=10.164.0.157) [2026-03-09 00:38:51,160 E 3881 3881] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.211) [2026-03-09 00:35:02,359 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.200) [2026-03-09 00:39:36,706 E 3885 3885] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 11x across cluster]
+(raylet, ip=10.164.0.209) [2026-03-09 00:40:38,049 E 3887 3887] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(autoscaler +12h14m13s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +12h14m13s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +12h14m13s) Resized to 20280 CPUs, 676 TPUs.
+(autoscaler +12h14m13s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*2. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.210) [2026-03-09 00:40:48,707 E 3885 3885] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.0.16) [2026-03-09 00:31:50,247 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.19) [2026-03-09 00:31:50,146 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.15) [2026-03-09 00:41:04,061 E 6702 6702] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 22x across cluster]
+(raylet) The node with node id: 4c49df83179a59c90d788689119f47d1e94b5183f392fd48059795f1 and address: 10.164.1.8 and node name: 10.164.1.8 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(raylet, ip=10.164.0.19) [2026-03-09 00:42:05,549 E 6701 6701] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(raylet, ip=10.164.0.23) [2026-03-09 00:42:42,561 E 6702 6702] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.0.20) [2026-03-09 00:42:51,599 E 6703 6703] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.20) [2026-03-09 00:42:55,706 E 6703 6703] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.38) [2026-03-09 00:43:18,936 E 6871 6871] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +12h19m13s) Adding 3 node(s) of type tpu_worker.
+(autoscaler +12h19m13s) Resized to 19920 CPUs, 664 TPUs.
+(autoscaler +12h19m13s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*11, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(run_on_pod_ray pid=7246, ip=10.164.2.167) v5litepod-256 slices actor pool actor Actor(SliceActor, 0a95f8770d96602e7988d2951b000000) failed to start: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      class_name: SliceActor
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      actor_id: 0a95f8770d96602e7988d2951b000000
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      pid: 5629
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      namespace: b06f01b5-497b-4994-8c69-b6647af14fe3
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      ip: 10.164.0.187
+(run_on_pod_ray pid=7246, ip=10.164.2.167) The actor died because its node has died. Node Id: d9b207c9391d1f2adc4276d002451b04bb2f99d668fd8feba3135b5a
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      the actor's node was terminated expectedly: received SIGTERM
+(run_on_pod_ray pid=7246, ip=10.164.2.167) Traceback (most recent call last):
+(run_on_pod_ray pid=7246, ip=10.164.2.167)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 429, in _add_members_to_actor_pool
+(run_on_pod_ray pid=7246, ip=10.164.2.167)     actor_info = ray.get(actor_info_awaitable, timeout=0)
+(run_on_pod_ray pid=7246, ip=10.164.2.167)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=7246, ip=10.164.2.167)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=7246, ip=10.164.2.167)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=7246, ip=10.164.2.167)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=7246, ip=10.164.2.167)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=7246, ip=10.164.2.167)     return func(*args, **kwargs)
+(run_on_pod_ray pid=7246, ip=10.164.2.167)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=7246, ip=10.164.2.167)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=7246, ip=10.164.2.167)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=7246, ip=10.164.2.167)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=7246, ip=10.164.2.167)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=7246, ip=10.164.2.167)     raise value
+(run_on_pod_ray pid=7246, ip=10.164.2.167) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      class_name: SliceActor
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      actor_id: 0a95f8770d96602e7988d2951b000000
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      pid: 5629
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      namespace: b06f01b5-497b-4994-8c69-b6647af14fe3
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      ip: 10.164.0.187
+(run_on_pod_ray pid=7246, ip=10.164.2.167) The actor died because its node has died. Node Id: d9b207c9391d1f2adc4276d002451b04bb2f99d668fd8feba3135b5a
+(run_on_pod_ray pid=7246, ip=10.164.2.167)      the actor's node was terminated expectedly: received SIGTERM
+(run_on_pod_ray pid=7246, ip=10.164.2.167) Failed to prune dead slices or create new actors
+(run_on_pod_ray pid=7246, ip=10.164.2.167) Traceback (most recent call last):
+(run_on_pod_ray pid=7246, ip=10.164.2.167)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 806, in run_on_pod_ray
+(run_on_pod_ray pid=7246, ip=10.164.2.167)     slice_pool_manager.scale_multislice(num_slices)
+(run_on_pod_ray pid=7246, ip=10.164.2.167)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 510, in scale_multislice
+(run_on_pod_ray pid=7246, ip=10.164.2.167)     self._scale_actor_pool(num_slices)
+(run_on_pod_ray pid=7246, ip=10.164.2.167)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 482, in _scale_actor_pool
+(run_on_pod_ray pid=7246, ip=10.164.2.167)     raise Exception(msg)
+(run_on_pod_ray pid=7246, ip=10.164.2.167) Exception: v5litepod-256 slices actor pool wanted to scale to 1 actors, but scaled to 0 actors instead
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 5507b7cf1f567e10051618da1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, f358d8f56b0ed21a3aeade501b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 5c92fa100cf4fede989d2eab1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 9861dc4707b53e394fb616c11b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 8cb0d5715e2db720f33412741b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, e8b2c328c82ff3e114605ef11b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 9e2ca187478b8c5970ed09de1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, dce5aab9dec11d9c614a1bce1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, ede23ab61914b4040ee38b7a1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, b06ca26ae7522f870d3c04151b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 88fb526d5a246901240156321b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(raylet, ip=10.164.0.190) [2026-03-09 00:38:46,587 E 3888 3888] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.155) E0309 00:32:15.066803601    1067 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T00:32:15.066395331-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T00:32:15.066386921-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:32:15.066359721-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-09T00:32:15.066340531-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:32:15.066384201-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-09T00:32:15.066378811-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.155) [2026-03-09 00:32:15,144 C 1067 1067] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.155) *** StackTrace Information ***
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x55f2d8be5eca] ray::operator<<()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x55f2d8be84e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x55f2d812ace9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x55f2d80a703c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x55f2d7eea01e] std::make_unique<>()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x55f2d7f190df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x55f2d7f1bc29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x55f2d82e9aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x55f2d82fc1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x55f2d8313e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x55f2d84e45db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x55f2d84dbffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x55f2d8bb16cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x55f2d8bb3c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x55f2d8bb4182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x55f2d7eae3d7] main
+(raylet, ip=10.164.0.155) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f72d0577d90]
+(raylet, ip=10.164.0.155) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f72d0577e40] __libc_start_main
+(raylet, ip=10.164.0.155) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x55f2d7ed04f7]
+(raylet, ip=10.164.0.155) 
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 5507b7cf1f567e10051618da1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, f358d8f56b0ed21a3aeade501b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 5c92fa100cf4fede989d2eab1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 9861dc4707b53e394fb616c11b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 8cb0d5715e2db720f33412741b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, e8b2c328c82ff3e114605ef11b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 9e2ca187478b8c5970ed09de1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, dce5aab9dec11d9c614a1bce1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, ede23ab61914b4040ee38b7a1b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, b06ca26ae7522f870d3c04151b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187) slice ray-marin-eu-west4-worker-777ff933-tpu actor pool actor Actor(TPUHostActor, 88fb526d5a246901240156321b000000) failed to start: The actor died unexpectedly before finishing this task.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(SliceActor pid=5629, ip=10.164.0.187)  class_name: TPUHostActor
+(SliceActor pid=5629, ip=10.164.0.187) The actor never ran - it was cancelled before it started running.
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x563a7a52c0df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x563a7a8fcaaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x563a7a90f1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.149) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f0c5bed8d90]
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x563a7a4e34f7]
+(raylet, ip=10.164.0.149) 
+(raylet, ip=10.164.0.28) E0309 00:32:15.113803756    1067 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T00:32:15.113406346-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T00:32:15.113397836-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:32:15.113371016-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:32:15.113351326-07:00"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-09T00:32:15.113395126-07:00", fd:30, children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:32:15.113389806-07:00"}]}]}]}
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x55a77be2b0df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x55a77c1fbaaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x55a77c20e1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.28) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f2e85f95d90]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x55a77bde24f7]
+(raylet, ip=10.164.0.28) 
+(SliceActor pid=5629, ip=10.164.0.187)  actor_id: 88fb526d5a246901240156321b000000 [repeated 44x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)  namespace: b06f01b5-497b-4994-8c69-b6647af14fe3 [repeated 44x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187) The actor died because its node has died. Node Id: d9b207c9391d1f2adc4276d002451b04bb2f99d668fd8feba3135b5a [repeated 44x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)  the actor's node was terminated expectedly: received SIGTERM [repeated 44x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187) Traceback (most recent call last): [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 429, in _add_members_to_actor_pool [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)     return fn(*args, **kwargs) [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 44x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)     return func(*args, **kwargs) [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)            ^^^^^^^^^^^^^^^^^^^^^ [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)     values, debugger_breakpoint = worker.get_objects( [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187)     raise value [repeated 22x across cluster]
+(SliceActor pid=5629, ip=10.164.0.187) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task. [repeated 22x across cluster]
+(raylet, ip=10.164.0.143) [2026-03-09 00:46:19,998 E 6736 6736] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 63x across cluster]
+(raylet, ip=10.164.0.149) E0309 00:32:15.126820425    1069 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T00:32:15.126423335-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T00:32:15.126415035-07:00", children:[UNKNOWN:Unable to configure socket {created_time:"2026-03-09T00:32:15.126386355-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-09T00:32:15.126366275-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:32:15.126412195-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-09T00:32:15.126406845-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.28) [2026-03-09 00:32:15,191 C 1067 1067] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port. [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) *** StackTrace Information *** [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x55a77caf7eca] ray::operator<<() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x55a77cafa4e9] ray::RayLog::~RayLog() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x55a77c03cce9] ray::rpc::GrpcServer::Run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x55a77bfb903c] ray::ObjectManager::ObjectManager() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x55a77bdfc01e] std::make_unique<>() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x55a77c3ecc5b] std::_Function_handler<>::_M_invoke() [repeated 11x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x55a77c225e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x55a77c3f65db] EventTracker::RecordExecution() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x55a77c3edffb] boost::asio::detail::executor_op<>::do_complete() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x55a77cac36cb] boost::asio::detail::scheduler::do_run_one() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x55a77cac5c79] boost::asio::detail::scheduler::run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x55a77cac6182] boost::asio::io_context::run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x55a77bdc03d7] main [repeated 2x across cluster]
+(raylet, ip=10.164.0.28) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f2e85f95e40] __libc_start_main [repeated 2x across cluster]
+(raylet, ip=10.164.0.159) [2026-03-09 00:46:25,272 E 6741 6741] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 16x across cluster]
+(raylet, ip=10.164.0.98) E0309 00:31:07.430378720    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T00:31:07.429967381-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T00:31:07.42995879-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:31:07.42993173-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:31:07.42991231-07:00"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:31:07.429956041-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:31:07.42995051-07:00"}]}]}]}
+(raylet, ip=10.164.0.98) [2026-03-09 00:31:07,509 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.98) *** StackTrace Information ***
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x55c7fe352eca] ray::operator<<()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x55c7fe3554e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x55c7fd897ce9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x55c7fd81403c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x55c7fd65701e] std::make_unique<>()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x55c7fd6860df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x55c7fd688c29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x55c7fda56aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x55c7fda691b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x55c7fda80e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x55c7fdc515db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x55c7fdc48ffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x55c7fe31e6cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x55c7fe320c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x55c7fe321182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x55c7fd61b3d7] main
+(raylet, ip=10.164.0.98) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7ffba9d38d90]
+(raylet, ip=10.164.0.98) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7ffba9d38e40] __libc_start_main
+(raylet, ip=10.164.0.98) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x55c7fd63d4f7]
+(raylet, ip=10.164.0.98) 
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x556a53b290df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x556a53ef9aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x556a53f0c1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.93) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f267f474d90]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x556a53ae04f7]
+(raylet, ip=10.164.0.93) 
+(raylet) The node with node id: 6cf7147e6147fdbe2018b1ea1d486a14bbf7967e224348f17c818a40 and address: 10.164.0.17 and node name: 10.164.0.17 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(raylet, ip=10.164.0.100) [2026-03-09 00:46:30,661 E 6674 6674] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 18x across cluster]
+(raylet) The node with node id: b02ab0fc166b5cb5c80ee6ea6864f96435cf362c3daea8f1413a1c7a and address: 10.164.0.86 and node name: 10.164.0.86 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(raylet, ip=10.164.0.86) [2026-03-09 00:46:55,528 E 6670 6670] (raylet) runtime_env_agent_client.cc:345: Runtime Env Agent timed out in 30000ms. Status: NotFound: on_connect Connection refused, address: 10.164.0.86, port: 63250, existing immediately...
+(raylet, ip=10.164.0.86) [2026-03-09 00:46:55,528 E 6670 6670] (raylet) runtime_env_agent_client.cc:301: The raylet exited immediately because the runtime env agent timed out when Raylet try to connect to it. This can happen because the runtime env agent was never started, or is listening to the wrong port. Read the log `cat /tmp/ray/session_latest/logs/runtime_env_agent.log`. You can find the log file structure here https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#logging-directory-structure.
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.86) 
+(raylet, ip=10.164.0.93) E0309 00:31:07.447019988    1067 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T00:31:07.446686048-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T00:31:07.446677418-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:31:07.446649138-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:31:07.446629498-07:00"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T00:31:07.446674588-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-09T00:31:07.446669158-07:00"}]}]}]}
+(raylet, ip=10.164.0.93) [2026-03-09 00:31:07,524 C 1067 1067] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.93) *** StackTrace Information ***
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x556a547f5eca] ray::operator<<()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x556a547f84e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x556a53d3ace9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x556a53cb703c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x556a53afa01e] std::make_unique<>()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x556a540eac5b] std::_Function_handler<>::_M_invoke() [repeated 7x across cluster]
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x556a53f23e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x556a540f45db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x556a540ebffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x556a547c16cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x556a547c3c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x556a547c4182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.93) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x556a53abe3d7] main
+(raylet, ip=10.164.0.93) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f267f474e40] __libc_start_main
+(raylet, ip=10.164.0.200) [2026-03-09 00:35:02,911 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.86) [2026-03-09 00:46:55,529 E 6670 6670] (raylet) runtime_env_agent_client.cc:345: Runtime Env Agent timed out in 30000ms. Status: NotFound: on_connect Connection refused, address: 10.164.0.86, port: 63250, existing immediately... [repeated 8x across cluster]
+(raylet, ip=10.164.0.86) [2026-03-09 00:46:55,529 E 6670 6670] (raylet) runtime_env_agent_client.cc:301: The raylet exited immediately because the runtime env agent timed out when Raylet try to connect to it. This can happen because the runtime env agent was never started, or is listening to the wrong port. Read the log `cat /tmp/ray/session_latest/logs/runtime_env_agent.log`. You can find the log file structure here https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#logging-directory-structure. [repeated 8x across cluster]
+(raylet, ip=10.164.0.200) [2026-03-09 00:47:05,062 E 6739 6739] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 18x across cluster]
+(raylet, ip=10.164.0.156) [2026-03-09 00:47:22,048 E 6736 6736] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.166) [2026-03-09 00:47:27,164 E 6736 6736] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 8x across cluster]
+(autoscaler +12h21m22s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h21m22s) Resized to 19920 CPUs, 664 TPUs.
+(autoscaler +12h21m22s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*11, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.200) [2026-03-09 00:48:03,865 E 6739 6739] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 8x across cluster]
+(raylet, ip=10.164.0.199) [2026-03-09 00:48:10,454 E 6744 6744] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.202) [2026-03-09 00:48:16,423 E 6741 6741] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +12h22m12s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +12h22m12s) Resized to 18960 CPUs, 632 TPUs.
+(autoscaler +12h22m12s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h22m59s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h22m59s) Resized to 18960 CPUs, 632 TPUs.
+(autoscaler +12h22m59s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h23m37s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h23m37s) Resized to 18960 CPUs, 632 TPUs.
+(autoscaler +12h23m37s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h24m34s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h24m34s) Resized to 18960 CPUs, 632 TPUs.
+(autoscaler +12h24m34s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h25m15s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h25m15s) Resized to 18960 CPUs, 632 TPUs.
+(autoscaler +12h25m15s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.220) [2026-03-09 00:51:57,612 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +12h26m18s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h26m18s) Resized to 18960 CPUs, 632 TPUs.
+(autoscaler +12h26m18s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.76) [2026-03-09 00:52:57,903 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
+(autoscaler +12h27m25s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h27m25s) Removing 45 nodes of type tpu_slice_v5e_256 (idle).
+(autoscaler +12h27m25s) Removing 12 nodes of type tpu_slice_v5e_64 (idle).
+(autoscaler +12h27m25s) Resized to 13560 CPUs, 452 TPUs.
+(autoscaler +12h27m25s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h28m53s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h28m53s) Resized to 18360 CPUs, 612 TPUs.
+(autoscaler +12h28m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*3, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h29m56s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h29m56s) Resized to 13560 CPUs, 452 TPUs.
+(autoscaler +12h29m56s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*3, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.213) [2026-03-09 00:51:59,733 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.0.216) [2026-03-09 00:56:49,657 E 3891 3891] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(autoscaler +12h30m54s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h30m54s) Resized to 13560 CPUs, 452 TPUs.
+(autoscaler +12h30m54s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*3, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.7) [2026-03-09 00:57:51,081 E 3890 3890] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
+(raylet, ip=10.164.0.195) [2026-03-09 00:57:59,895 E 3888 3888] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(autoscaler +12h31m46s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h31m46s) Resized to 13440 CPUs, 448 TPUs.
+(autoscaler +12h31m46s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h34m40s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.215) [2026-03-09 00:52:00,072 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.0.193) [2026-03-09 01:02:31,984 E 6715 6715] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 14x across cluster]
+(raylet, ip=10.164.0.213) [2026-03-09 01:03:31,065 E 6718 6718] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +12h37m4s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h37m4s) Resized to 13440 CPUs, 448 TPUs.
+(autoscaler +12h37m4s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.194) [2026-03-09 01:03:35,007 E 6720 6720] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.7) [2026-03-09 01:04:11,832 E 6720 6720] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.192) [2026-03-09 01:04:17,106 E 6894 6894] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +12h37m57s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h37m57s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h37m57s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h39m19s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h39m19s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h39m19s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h40m17s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h40m17s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h40m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h41m9s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h41m9s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h41m9s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h41m51s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h41m51s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h41m51s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h42m38s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h42m38s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h42m38s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h43m46s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h43m46s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h43m46s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h45m4s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h45m4s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h45m4s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h46m6s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +12h46m6s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h46m6s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h47m24s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.62) E0309 01:14:03.272114818    4542 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-09T01:14:03.271712278-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-09T01:14:03.271704188-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-09T01:14:03.271676488-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-09T01:14:03.271655558-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-09T01:14:03.271701418-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-09T01:14:03.271695958-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.62) [2026-03-09 01:14:03,349 C 4542 4542] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.62) *** StackTrace Information ***
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x55f8be858eca] ray::operator<<()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x55f8be85b4e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x55f8bdd9dce9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x55f8bdd1a03c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x55f8bdb5d01e] std::make_unique<>()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x55f8bdb8c0df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x55f8bdb8ec29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x55f8bdf5caaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x55f8bdf6f1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x55f8bdf86e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x55f8be1575db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x55f8be14effb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x55f8be8246cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x55f8be826c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x55f8be827182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x55f8bdb213d7] main
+(raylet, ip=10.164.0.62) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f944df86d90]
+(raylet, ip=10.164.0.62) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f944df86e40] __libc_start_main
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x55f8bdb434f7]
+(raylet, ip=10.164.0.62) 
+(autoscaler +12h48m21s) Adding 2 node(s) of type tpu_worker.
+(autoscaler +12h48m21s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h48m21s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h49m3s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h49m3s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h49m3s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h49m36s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h49m36s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h49m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h50m23s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h50m23s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h50m23s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h51m15s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h51m15s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h51m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h52m13s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h52m13s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h52m13s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12h53m0s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +12h53m0s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +12h53m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-94877874-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-84f58d18-tpu': 1.0}*9, {'ray-marin-eu-west4-worker-777ff933-tpu': 1.0}*63, {'ray-marin-eu-west4-worker-4e343746-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-1f4f01d1-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+2026-03-09 01:20:48,444 WARNING cluster.py:350 -- Job 133602880941840 failed with message: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.167, node ID: 351065c962e52eac77ca3343599a71d3177c5d41408688fc01cbc553. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=351065c962e52eac77ca3343599a71d3177c5d41408688fc01cbc553`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.167`.
+2026-03-09 01:20:48,444 INFO executor.py:796 -- Waiting for 133602880941840 to finish for step checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0
+2026-03-09 01:20:48,444 - INFO - Starting wait for job 133602880941840
+2026-03-09 01:20:48,444 WARNING cluster.py:350 -- Job 133602880941840 failed with message: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.167, node ID: 351065c962e52eac77ca3343599a71d3177c5d41408688fc01cbc553. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=351065c962e52eac77ca3343599a71d3177c5d41408688fc01cbc553`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.167`.
+2026-03-09 01:20:48,444 - INFO - Job 133602880941840 completed with status failed
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/experiments/VLM/demo_vlm_train_round2_eu_west4_50M_4b.py", line 255, in <module>
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py", line 262, in <module>
     executor_main(steps=[vlm_training])
   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
     response = fn(cfg, *args, **kwargs)
                ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
     executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/marin/src/marin/execution/executor.py", line 743, in run
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/marin/src/marin/execution/executor.py", line 743, in run
     self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
     runner.wait()
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/marin/src/marin/execution/executor.py", line 207, in wait
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_86297e8721feceac/lib/marin/src/marin/execution/executor.py", line 207, in wait
     raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-RuntimeError: Job 135662986668784 failed: ray::run_levanter_train_vlm() (pid=11454, ip=10.164.1.40)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
-    cluster.wait(job_id, raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/base.py", line 631, in wait
-    return self._wait_single(job_id, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
-RuntimeError: Job 140225337073488 failed with status failed and error: ray::run_on_pod_ray() (pid=11532, ip=10.164.1.40)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 984, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(RuntimeError): ray::<lambda>() (pid=22131, ip=10.164.0.81)
-                     ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2669, in _get_next_item
-    while self._current_local_idx >= len(self._current_shard_data):
-                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-TypeError: object of type 'NoneType' has no len()
-
-The above exception was the direct cause of the following exception:
-
-ray::<lambda>() (pid=22131, ip=10.164.0.81)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/main/train_vlm.py", line 948, in main
-    train_loader = ImageDataLoader(train_dataset_mixture, **loader_kwargs).iter_from_step(state.step)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 4397, in __init__
-    super().__init__(
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/loader.py", line 136, in __init__
-    initial_example = blocking_wait(self.data_store.getitem_async(0))
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-    return asyncio.run(coro)
-           ^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/mixture.py", line 287, in getitem_async
-    return await dataset.getitem_async(dataset_index)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/dataset.py", line 97, in getitem_async
-    return (await self.get_batch([index]))[0]
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2852, in get_batch
-    return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/thread.py", line 58, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_3d1759fdfb16168b/lib/levanter/src/levanter/data/image.py", line 2815, in _get_from_cache_or_process
-    raise RuntimeError(
-RuntimeError: Prefetch thread died with error: object of type 'NoneType' has no len()
+RuntimeError: Job 133602880941840 failed: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.167, node ID: 351065c962e52eac77ca3343599a71d3177c5d41408688fc01cbc553. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=351065c962e52eac77ca3343599a71d3177c5d41408688fc01cbc553`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.167`.
+(raylet, ip=10.164.0.62) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x55f8be14dc5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
 (base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 
+
+
