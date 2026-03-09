@@ -909,6 +909,14 @@ class ScalingGroup:
                 return slice_id
         return None
 
+    def get_slice_vm_addresses(self, slice_id: str) -> list[str]:
+        """Get all VM addresses for a slice. Returns empty list if not found."""
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+        if state is None:
+            return []
+        return list(self._get_slice_vm_addresses(state))
+
     def terminate_all(self) -> None:
         """Terminate all slices in this scale group."""
         with self._slices_lock:
