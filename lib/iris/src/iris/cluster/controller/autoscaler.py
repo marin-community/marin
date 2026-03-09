@@ -565,10 +565,10 @@ def route_demand(
             continue
 
         if entry.coschedule_group_id and not any(g.num_vms == len(entry.task_ids) for g in matching_groups):
-            group_sizes = [g.num_vms for g in matching_groups]
+            group_detail = ", ".join(f"{g.name}={g.num_vms}" for g in matching_groups)
             reason = (
                 f"coschedule_mismatch: job needs {len(entry.task_ids)} tasks coscheduled"
-                f" but matching groups have num_vms={group_sizes}"
+                f" but no matching group has num_vms={len(entry.task_ids)} ({group_detail})"
             )
             unmet.append(UnmetDemand(entry=entry, reason=reason))
             continue
