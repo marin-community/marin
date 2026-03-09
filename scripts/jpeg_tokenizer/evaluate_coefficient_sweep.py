@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -249,6 +250,25 @@ def render_summary(results: list[dict[str, object]]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _write_json(path: str, payload: object) -> None:
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    parent = fs_path.rsplit("/", 1)[0]
+    if parent:
+        fs.makedirs(parent, exist_ok=True)
+    with fs.open(fs_path, "w") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def _write_text(path: str, text: str) -> None:
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    parent = fs_path.rsplit("/", 1)[0]
+    if parent:
+        fs.makedirs(parent, exist_ok=True)
+    with fs.open(fs_path, "w") as handle:
+        handle.write(text)
+
+
 def main(args: argparse.Namespace) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if not args.run_spec:
@@ -256,8 +276,7 @@ def main(args: argparse.Namespace) -> None:
 
     shared_prefixes = [int(value) for value in args.shared_prefixes.split(",") if value]
     run_specs = [parse_run_spec(text) for text in args.run_spec]
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = args.output_dir.rstrip("/")
     trainer = TrainerConfig(
         id="jpeg-tokenizer-sequence-eval",
         tracker=NoopConfig(),
@@ -285,14 +304,11 @@ def main(args: argparse.Namespace) -> None:
             )
         )
 
-    with (output_dir / "sequence_eval.json").open("w", encoding="utf-8") as handle:
-        json.dump({"runs": results}, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-
-    with (output_dir / "summary.md").open("w", encoding="utf-8") as handle:
-        handle.write(render_summary(results))
+    _write_json(f"{output_dir}/sequence_eval.json", {"runs": results})
+    _write_text(f"{output_dir}/summary.md", render_summary(results))
 
     jax.effects_barrier()
+    logger.info("%s", render_summary(results))
     logger.info("Wrote sweep evaluation to %s", output_dir)
 
 
