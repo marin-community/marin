@@ -321,3 +321,46 @@ At the first post-submit check, the controller state is:
 That is consistent with the earlier TPU allocation and runtime-env delays on `marin-eu-west4-a`; there is no fresh
 code-level failure signal yet. The right next action is simply to monitor this submission through executor launch,
 trainer startup, and the first checkpoint/eval boundary.
+
+## Completed K16 Baseline
+
+That monitoring pass is now complete too.
+
+- Ray job:
+  `ray-run-dlwh-launch-20260309-003238`
+- Final status:
+  `SUCCEEDED`
+- Final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k16-trial-a39c10/checkpoints/step-2000`
+- Final eval loss:
+  `2.668`
+- W&B run:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k16-trial`
+
+The executor-side result was also clean: `tokexplore/jpeg-tokenizer-k16-trial_166a0b35` finished successfully, the
+full `2000`-step training loop completed, and the final checkpoint was written before exit. As with the successful
+`K=8` finish, wandb emitted a shutdown-time `BrokenPipeError` inside an ignored `atexit` callback, but that did not
+change the Ray job outcome.
+
+At this point the first coefficient ladder on Imagenette has real terminal baselines:
+
+- `K=4` final eval loss:
+  `4.417`
+- `K=8` final eval loss:
+  `3.253`
+- `K=16` final eval loss:
+  `2.668`
+
+So the core Phase 1 outcome is now concrete:
+
+- increasing retained coefficients continues to help predictive loss on this setup
+- the gain from `K=8` to `K=16` is still material, though smaller than the gain from `K=4` to `K=8`
+- the implementation and resume/checkpoint path are stable enough that further work can focus on experimental choice,
+  not launcher hardening
+
+The next sensible decision is no longer "can we make `K=16` run?" but "what comparison gives the most information per
+unit cost?" The main candidates are:
+
+- analyze the `K=4/K=8/K=16` tradeoff explicitly
+- introduce one non-coefficient baseline (`bytes` or `symbols`)
+- move to a broader robustness corpus once the comparison target is chosen

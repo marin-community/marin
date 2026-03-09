@@ -346,3 +346,23 @@
   - the next research question is whether the fidelity gain from `K=16` beats the sequence-length cost strongly enough to justify the larger context
   - no new code issue is indicated by the early `K=16` submission state
 - Next action: monitor `ray-run-dlwh-launch-20260309-003238` through trainer startup and the first eval/checkpoint boundary.
+
+### 2026-03-08 21:08 - K=16 baseline completed cleanly
+
+- Hypothesis: if `K=16` runs to completion without new infra bugs, the first coefficient ladder on Imagenette is complete
+  enough to compare sequence-length tradeoffs directly.
+- Command:
+  - monitoring via `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a ...`
+- Result:
+  - `K=16` job `ray-run-dlwh-launch-20260309-003238` finished with controller status `SUCCEEDED`
+  - final `K=16` checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k16-trial-a39c10/checkpoints/step-2000`
+  - final `K=16` eval loss: `2.668`
+  - executor marked `tokexplore/jpeg-tokenizer-k16-trial_166a0b35` succeeded
+  - W&B run synced successfully at `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k16-trial`
+  - as with the successful `K=8` finish, wandb emitted an ignored shutdown-time `BrokenPipeError`, but the Ray submission still ended `SUCCEEDED`
+- Interpretation:
+  - the first coefficient ladder is now complete on Imagenette:
+    `K=4 -> 4.417`, `K=8 -> 3.253`, `K=16 -> 2.668`
+  - quality keeps improving with larger `K`, but each rung doubles sequence length, so the next useful work is analysis rather than more launch plumbing
+  - there is no remaining evidence of a resume/checkpoint correctness bug on the current path
+- Next action: write up the K-rung comparison and decide whether the next experiment should be `K=16` follow-up training analysis, a bytes/symbols baseline, or a WebVision-style robustness pass.
