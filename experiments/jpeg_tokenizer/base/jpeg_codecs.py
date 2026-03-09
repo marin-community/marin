@@ -50,6 +50,20 @@ V0_COEFFICIENT_CONFIG = CoefficientTokenizerConfig()
 
 
 @dataclass(frozen=True)
+class ByteWindowTokenizerConfig:
+    """Frozen V0 defaults for fixed-length canonical JPEG byte windows."""
+
+    window_size: int = 8192
+    pad_token_id: int = 256
+    append_eos: bool = True
+    stride: int = 8192
+    version: str = "v0"
+
+
+V0_BYTE_WINDOW_CONFIG = ByteWindowTokenizerConfig()
+
+
+@dataclass(frozen=True)
 class SymbolTokenizerConfig:
     """Frozen V0 defaults for the symbol-stream baseline."""
 
@@ -167,6 +181,12 @@ def coefficient_vocab_size(config: CoefficientTokenizerConfig = V0_COEFFICIENT_C
     return 2 * config.coefficient_bound + 1
 
 
+def byte_window_vocab_size(config: ByteWindowTokenizerConfig = V0_BYTE_WINDOW_CONFIG) -> int:
+    """Return the vocabulary size for byte windows with a reserved EOS/PAD token."""
+
+    return max(config.pad_token_id + 1, 257)
+
+
 def symbol_vocab_size(config: SymbolTokenizerConfig = V0_SYMBOL_CONFIG) -> int:
     """Return the explicit bounded symbol vocabulary size."""
 
@@ -223,6 +243,42 @@ def encode_jpeg_bytes(canonical_jpeg: CanonicalJpegRepresentation | bytes) -> np
     if isinstance(canonical_jpeg, CanonicalJpegRepresentation):
         canonical_jpeg = canonical_jpeg.jpeg_bytes
     return np.frombuffer(canonical_jpeg, dtype=np.uint8).astype(np.int32, copy=False)
+
+
+def window_byte_tokens(
+    byte_tokens: np.ndarray,
+    *,
+    config: ByteWindowTokenizerConfig = V0_BYTE_WINDOW_CONFIG,
+) -> list[np.ndarray]:
+    """Split canonical JPEG bytes into fixed-length windows with EOS/PAD filling."""
+
+    if config.window_size <= 0:
+        raise ValueError(f"window_size must be positive, got {config.window_size}")
+    if config.stride <= 0:
+        raise ValueError(f"stride must be positive, got {config.stride}")
+    if config.pad_token_id < 256:
+        raise ValueError(f"pad_token_id must reserve a non-byte token id, got {config.pad_token_id}")
+
+    byte_tokens = np.asarray(byte_tokens, dtype=np.int32)
+    if byte_tokens.ndim != 1:
+        raise ValueError(f"Expected rank-1 byte token array, got shape {byte_tokens.shape}")
+
+    payload = byte_tokens
+    if config.append_eos:
+        payload = np.concatenate([payload, np.asarray([config.pad_token_id], dtype=np.int32)])
+
+    windows: list[np.ndarray] = []
+    for start in range(0, max(len(payload), 1), config.stride):
+        chunk = payload[start : start + config.window_size]
+        if len(chunk) < config.window_size:
+            padded = np.full(config.window_size, config.pad_token_id, dtype=np.int32)
+            padded[: len(chunk)] = chunk
+            chunk = padded
+        windows.append(np.asarray(chunk, dtype=np.int32))
+        if start + config.window_size >= len(payload):
+            break
+
+    return windows
 
 
 def encode_jpeg_symbols(
@@ -390,14 +446,17 @@ def _scaled_luma_quant_table(quality: int) -> np.ndarray:
 
 
 __all__ = [
+    "V0_BYTE_WINDOW_CONFIG",
     "V0_CANONICAL_JPEG_CONFIG",
     "V0_COEFFICIENT_CONFIG",
     "V0_SYMBOL_CONFIG",
+    "ByteWindowTokenizerConfig",
     "CanonicalJpegConfig",
     "CanonicalJpegRepresentation",
     "CoefficientTokenizerConfig",
     "JpegTokenizerFamily",
     "SymbolTokenizerConfig",
+    "byte_window_vocab_size",
     "canonicalize_image",
     "coefficient_vocab_size",
     "encode_dct_coeffs",
@@ -406,4 +465,5 @@ __all__ = [
     "reconstruct_luma_from_coeff_tokens",
     "stable_byte_checksum",
     "symbol_vocab_size",
+    "window_byte_tokens",
 ]

@@ -44,6 +44,34 @@ The store contains:
 - sequence length: `4096`
 - vocab size: `4095`
 
+The current byte-window baseline store lives at:
+
+- `/Users/dlwh/.codex/worktrees/1bd2/marin/artifacts/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0`
+- `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0`
+
+It was built with:
+
+```bash
+uv run python scripts/jpeg_tokenizer/build_byte_token_store.py \
+  --log-every 1000 \
+  --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0
+```
+
+and mirrored to GCS with:
+
+```bash
+gsutil -m rsync -r \
+  artifacts/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0 \
+  gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0
+```
+
+The byte-window store contains:
+
+- train: `34191` windows
+- validation: `14264` windows
+- sequence length: `8192`
+- vocab size: `257`
+
 ## V0 Decisions
 
 This section freezes the initial assumptions for the Phase 0 feasibility spike so later scripts do not drift.
@@ -80,4 +108,4 @@ WebVision is useful for later robustness checks because it captures real web-ima
 
 1. Launch `tokexplore/jpeg-tokenizer-k4-smoke` on `v6e-8` against the regional `gs://marin-eu-west4/...` token store.
 2. If the smoke run is healthy, launch `tokexplore/jpeg-tokenizer-k4-trial` as the first real Phase 1 baseline.
-3. Add a windowing or reduced-resolution plan for byte and symbol baselines before trying matched training runs.
+3. Run `tokexplore/jpeg-tokenizer-bytes-w8192-smoke`, then promote it to a matched-budget byte trial if startup and the first eval look healthy.

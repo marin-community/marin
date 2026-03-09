@@ -26,6 +26,7 @@ from experiments.jpeg_tokenizer.base.train import JpegEvalConfig, JpegRunConfig,
 DEFAULT_COEFF_K4_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k4_v0"
 DEFAULT_COEFF_K8_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_v0"
 DEFAULT_COEFF_K16_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k16_v0"
+DEFAULT_BYTE_W8192_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0"
 DEFAULT_TPU_TYPE = "v6e-8"
 
 
@@ -130,6 +131,8 @@ RESOLVED_K8_RUN_ID = _resolve_run_id("jpeg-tokenizer-k8-trial")
 RESOLVED_K8_RETRY_RUN_ID = _resolve_run_id("jpeg-tokenizer-k8-trial-r2")
 RESOLVED_K16_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-k16-smoke")
 RESOLVED_K16_RUN_ID = _resolve_run_id("jpeg-tokenizer-k16-trial")
+RESOLVED_BYTES_W8192_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-bytes-w8192-smoke")
+RESOLVED_BYTES_W8192_RUN_ID = _resolve_run_id("jpeg-tokenizer-bytes-w8192-trial")
 
 coeff_k4_smoke = ExecutorStep(
     name="tokexplore/jpeg-tokenizer-k4-smoke",
@@ -517,6 +520,104 @@ coeff_k16_trial = ExecutorStep(
     ),
 )
 
+bytes_w8192_smoke = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-bytes-w8192-smoke",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(dataclasses.replace(JPEG_TOKENIZER_V0_MODEL, vocab_size=257, max_seq_len=8_192)),
+        token_store_path=str(DEFAULT_BYTE_W8192_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_BYTES_W8192_SMOKE_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(96),
+        batch_size=versioned(128),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-bytes-w8192-smoke",
+            tags=["jpeg-tokenizer", "bytes", "window-8192", "smoke"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=64,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=32,
+                steps_per_eval=48,
+                max_eval_batches=4,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
+bytes_w8192_trial = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-bytes-w8192-trial",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(dataclasses.replace(JPEG_TOKENIZER_V0_MODEL, vocab_size=257, max_seq_len=8_192)),
+        token_store_path=str(DEFAULT_BYTE_W8192_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_BYTES_W8192_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(2_000),
+        batch_size=versioned(128),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-bytes-w8192",
+            tags=["jpeg-tokenizer", "bytes", "window-8192", "baseline"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=1_000,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=32,
+                steps_per_eval=1_000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
 
 if __name__ == "__main__":
     executor_main(
@@ -529,6 +630,8 @@ if __name__ == "__main__":
             coeff_k8_trial_retry,
             coeff_k16_smoke,
             coeff_k16_trial,
+            bytes_w8192_smoke,
+            bytes_w8192_trial,
         ],
-        description="JPEG tokenizer coefficient runs on Imagenette token stores.",
+        description="JPEG tokenizer coefficient and byte-window runs on Imagenette token stores.",
     )

@@ -456,3 +456,38 @@
   - that means the earlier `prefix_4` and `prefix_8` improvements were driven by extra retained coefficients being useful autoregressive context for later low-frequency targets
   - the more surprising "larger K intrinsically models the first coefficients better in isolation" hypothesis is not supported by this ablation
 - Next action: update the Phase 1 report so the coefficient sweep conclusion is framed as a context-vs-length tradeoff, not a pure low-frequency representation win.
+
+### 2026-03-08 23:22 - Byte-window baseline staged and launched
+
+- Hypothesis: the next useful non-coefficient baseline is canonical JPEG bytes with an explicit fixed-window policy, so we can test whether raw byte syntax competes with the coefficient stream at the same token budget.
+- Command:
+  - local build:
+    `uv run python scripts/jpeg_tokenizer/build_byte_token_store.py --log-every 1000 --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0`
+  - regional mirror:
+    `gsutil -m rsync -r artifacts/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0 gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0`
+  - smoke launch:
+    `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-bytes-w8192-smoke"]'`
+- Result:
+  - added a frozen byte-window tokenizer config and helper in `experiments/jpeg_tokenizer/base/jpeg_codecs.py`
+  - added `scripts/jpeg_tokenizer/build_byte_token_store.py`
+  - added byte smoke/trial launch steps in `experiments/jpeg_tokenizer/base/launch.py`
+  - local byte-window store built at:
+    `artifacts/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0`
+  - regional mirror completed at:
+    `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0`
+  - store stats:
+    - sequence length: `8192`
+    - vocab size: `257` (`0..255` byte ids plus `256` as EOS/PAD)
+    - train windows: `34191`
+    - validation windows: `14264`
+    - on-disk size: about `1.5 GiB`
+  - smoke submission:
+    `ray-run-dlwh-launch-20260309-061949`
+  - executor step output:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-w8192-smoke-c5f441`
+  - latest observed status:
+    controller `RUNNING`, executor launched cleanly, Fray dispatch submitted `grug-train-jpeg-tokenizer-bytes-w8192-smoke`, but no trainer/W&B lines yet
+- Interpretation:
+  - the byte baseline is now concrete and cheap enough to run at the same `8192 * 128 = 1,048,576` tokens/step budget as the `K=8` coefficient baseline
+  - the main remaining question is empirical: whether the byte stream can train cleanly and where its eval loss lands relative to `K=8`
+- Next action: commit the byte builder/launch surface and keep an eye on `ray-run-dlwh-launch-20260309-061949` until trainer startup or a concrete failure signal appears.

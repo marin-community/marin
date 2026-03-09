@@ -33,12 +33,15 @@ from experiments.jpeg_tokenizer.base.eval import (
 from experiments.jpeg_tokenizer.base.model import JpegLmConfig
 from experiments.jpeg_tokenizer.base.train import JpegEvalConfig, JpegRunConfig, JpegTrainerConfig, run_jpeg_tokenizer
 from experiments.jpeg_tokenizer.base.jpeg_codecs import (
+    ByteWindowTokenizerConfig,
+    byte_window_vocab_size,
     canonicalize_image,
     encode_dct_coeffs,
     encode_jpeg_bytes,
     encode_jpeg_symbols,
     reconstruct_luma_from_coeff_tokens,
     stable_byte_checksum,
+    window_byte_tokens,
 )
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import DistributedConfig, RayConfig
@@ -88,6 +91,16 @@ def test_phase0_helpers_produce_stable_byte_tokens_and_stats():
     assert stats.max_length == 4
     assert stats.unique_tokens == 5
     assert stable_byte_checksum(b"jpeg") == stable_byte_checksum(b"jpeg")
+
+
+def test_byte_window_tokenizer_appends_eos_and_pads_tail():
+    windows = window_byte_tokens(
+        np.asarray([1, 2, 3, 4, 5], dtype=np.int32),
+        config=ByteWindowTokenizerConfig(window_size=4, stride=4, pad_token_id=256, append_eos=True),
+    )
+
+    assert [window.tolist() for window in windows] == [[1, 2, 3, 4], [5, 256, 256, 256]]
+    assert byte_window_vocab_size() == 257
 
 
 def test_canonicalization_and_reference_tokenizers_are_deterministic():
