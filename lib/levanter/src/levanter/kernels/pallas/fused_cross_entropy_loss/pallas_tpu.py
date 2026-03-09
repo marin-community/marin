@@ -30,6 +30,8 @@ class PallasUnsupportedError(NotImplementedError):
 
 NUM_LANES = 128
 _BWD_USE_XLA_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
+_TPU_BWD_SUPERTILE_MAX_DELTA_BYTES = 64 * 2**20
+_TPU_BWD_SUPERTILE_MAX_BLOCK_MULT = 4
 
 
 def _forward_lse_cost_reference(
@@ -250,6 +252,24 @@ def _infer_core_grid(b_dim: int, block_sizes: BlockSizes) -> tuple[int, int]:
                 num_cores = 1
     num_b_blocks_per_core = b_dim // (num_cores * block_sizes.b_block_size)
     return num_cores, num_b_blocks_per_core
+
+
+def _infer_tpu_bwd_v_supertile_mult(batch_size: int, v_block_size: int) -> int:
+    """Group a few vocab tiles per backward loop iteration without materializing oversized deltas."""
+    if batch_size <= 0 or v_block_size <= 0:
+        return 1
+
+    bytes_per_block = batch_size * v_block_size * jnp.dtype(jnp.float32).itemsize
+    if bytes_per_block <= 0:
+        return 1
+
+    max_mult = _TPU_BWD_SUPERTILE_MAX_DELTA_BYTES // bytes_per_block
+    max_mult = min(int(max_mult), _TPU_BWD_SUPERTILE_MAX_BLOCK_MULT)
+    if max_mult >= 4:
+        return 4
+    if max_mult >= 2:
+        return 2
+    return 1
 
 
 def linear_softmax_lse_forward_fori_pallas_kernel(
@@ -523,7 +543,7 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmu
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
-    """Default split backward path: XLA delta producer + matmul consumers."""
+    """Default split backward path: grouped XLA delta producer + matmul consumers."""
     _validate_inputs(x, labels, w, block_sizes)
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
@@ -533,23 +553,26 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmu
             f"softmax_v_block_size must be a multiple of {NUM_LANES}, got {softmax_v_block_size}."
         )
 
-    pad = (-v_dim) % softmax_v_block_size
+    softmax_v_supertile_mult = _infer_tpu_bwd_v_supertile_mult(b_dim, softmax_v_block_size)
+    softmax_v_supertile_size = softmax_v_block_size * softmax_v_supertile_mult
+
+    pad = (-v_dim) % softmax_v_supertile_size
     if pad:
         w_padded = jnp.pad(w, ((0, 0), (0, pad)), mode="constant", constant_values=0)
     else:
         w_padded = w
     v_padded = v_dim + pad
-    num_softmax_blocks = v_padded // softmax_v_block_size
+    num_softmax_supertiles = v_padded // softmax_v_supertile_size
     x_grad_init = jnp.zeros_like(x, dtype=jnp.float32)
     w_grad_padded_init = jnp.zeros((h_dim, v_padded), dtype=jnp.float32)
     lse_dtype = lse.dtype
     dout_loss_lse = dout_loss.astype(lse_dtype)
     dout_loss_plus_lse = (dout_loss_lse + dout_lse.astype(lse_dtype)).astype(lse_dtype)
 
-    def _softmax_body(softmax_block_index, state):
+    def _softmax_body(softmax_supertile_index, state):
         x_grad, w_grad_padded = state
-        v_start = (softmax_block_index * softmax_v_block_size).astype(jnp.int32)
-        w_supertile = jax.lax.dynamic_slice(w_padded, (0, v_start), (h_dim, softmax_v_block_size))
+        v_start = (softmax_supertile_index * softmax_v_supertile_size).astype(jnp.int32)
+        w_supertile = jax.lax.dynamic_slice(w_padded, (0, v_start), (h_dim, softmax_v_supertile_size))
         delta_supertile = _linear_softmax_cross_entropy_loss_bwd_xla_delta_supertile(
             dout_loss_lse,
             dout_loss_plus_lse,
@@ -582,7 +605,7 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmu
 
     x_grad_f32, w_grad_padded = jax.lax.fori_loop(
         0,
-        num_softmax_blocks,
+        num_softmax_supertiles,
         _softmax_body,
         (x_grad_init, w_grad_padded_init),
     )

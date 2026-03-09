@@ -4852,3 +4852,131 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Commit: `none (failed attempt; code reverted after measurement)`
 - Next bold hypothesis:
   - The main transferable idea from ejkernel is not the literal fused port; it is the backward tradeoff. If we revisit this family, keep the current Levanter control surface and selectively import the smaller-tape / recompute-heavy backward contract rather than the whole direct kernel structure.
+
+### Iteration 72 - Macro Move P / grouped CE backward supertiles in TPU pallas mode (validated, improved)
+
+- Coverage slot: `P`
+- Why this attacks the train-path control bottleneck:
+  - The current promoted head already keeps the GDN train path on the improved `M` boundary, but the largest carried-in control hotspot is still the CE backward/custom-VJP shell.
+  - The carried-in TPU:0 XLA Ops trace shows a single dominant `while.43` around `10.133 ms`, while the tracked GDN forward/backward closed-call sums are already flat around `20.663 ms` and `13.126 ms`.
+  - This move keeps CE fixed at the deployable `pallas_tpu` + `pallas` setting and changes only the CE backward shell: process multiple vocab tiles per backward iteration so the residual CE `WhileOp` does less loop/control work.
+- Hot-path scan/cond status:
+  - Hot-path `lax.scan`: no new GDN or CE `lax.scan`.
+  - Hot-path `lax.cond` / runtime dispatch: no new runtime dispatch; the tiny `conditional` bucket remains flat.
+  - The candidate preserves the existing CE backward `while`, but shortens it by grouping two `v_block_size=1024` vocab tiles into each iteration under a bounded delta-buffer budget.
+- Change class: `CE backend`
+
+- Codex loop iteration: `1 / 10`
+- Date: `2026-03-09T08:50:38Z`
+- Starting commit: `66add9699b5b605ff9d091fc5e276e0f40185214`
+- Dominant bottleneck carried in (current promoted baseline run `gdn_loopgate_iter003_130m_ch128_seg16_20steps-57cd12`, TPU:0 XLA Ops `pid=3, tid=3`, trace `scratch/artifacts_baseline/plugins/profile/2026_03_08_18_34_44/perfetto_trace.json.gz`):
+  - Forward closed-call: `20.663 ms`
+  - Backward closed-call: `13.126 ms`
+  - while: `10.133 ms`
+  - conditional: `0.026 ms`
+  - CE-attributed while: `10.133 ms`
+  - Kernel budget: `33.789 ms`
+  - Control budget: `10.159 ms`
+  - Train-path budget: `43.948 ms`
+  - Step duration: `167.311 ms`
+  - Remainder budget: `123.363 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro P (selected):** shrink the TPU Pallas CE backward shell by grouping multiple vocab tiles into each backward iteration while keeping CE fixed at `pallas_tpu` + `pallas` (`+0.5-2.0%`, medium risk).
+  2. **Macro R nested on `M`:** revisit smaller GDN tape work on the promoted outer shell, but previous `chunk_starts`-only recompute already regressed by growing remainder (`+0-1%`, high risk).
+  3. **Macro O diagnostic refresh:** another reduced-Pallas/XLA control arm to re-check step remainder attribution, but that remains a diagnostic path rather than a promotion candidate (`0%` deployable upside, high probe risk).
+
+- Selected macro-move category: **P) CE backward-mode / shell work on the real train run**.
+
+- Expected effect on `while_ms`: down materially, because the only carried-in hot `while` is the CE backward shell and this change reduces its loop trip count.
+- Expected effect on `step_duration_ms`: down, if the reduced CE control cost stays on the critical path.
+- Expected effect on `remainder_budget_ms`: down slightly or flat; this candidate should not push work out of the tracked CE/GDN path into a larger remainder.
+- Reject if `while_ms` remains flat? **Yes.** This move is only justified if the residual CE `while` falls materially.
+- Reject if `remainder_budget_ms` grows? **Yes.** Even with a CE-shell win, a larger remainder would make the result another off-critical-path / overlap-loss variant.
+
+- Change summary:
+  - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+    - Added `_infer_tpu_bwd_v_supertile_mult(...)` to bound CE backward delta materialization and choose a small grouped-vocab supertile factor.
+    - Changed the TPU Pallas CE backward loop to slice/update grouped vocab supertiles instead of a single `v_block_size` tile per iteration.
+    - Kept the CE mode deployable and explicit: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`, `LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0`.
+  - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+    - Added a focused unit test for the new CE backward supertile grouping heuristic.
+
+- Correctness checks:
+  - Local focused CE checks:
+    - `uv run pytest -q lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -k "pallas_tpu_backward_uses_pallas_by_default or pallas_tpu_backward_can_force_xla_streaming or infer_tpu_bwd_v_supertile_mult_bounds_delta_bytes"` -> `3 passed`
+    - `uv run pytest -q lib/levanter/tests/test_loss.py -k "gradient_block_cross_entropy"` -> `1 passed`
+  - TPU validation (`tests=both`, managed dev TPU):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped`
+
+- Profile run (managed dev TPU):
+  - first attempt:
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i01_P_ce_bwd_supertile --no-sync`
+    - failure: default `MARIN_PREFIX=gs://marin-us-east5-a` caused `FileNotFoundError` while writing `.executor_info`; reran with the known-good prefix.
+  - successful run:
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i01_P_ce_bwd_supertile --marin-prefix gs://marin-us-east5 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_i01_P_ce_bwd_supertile_130m_ch128_seg16_20steps-bbefb2`
+    - profiler artifact: `run-gdn_i01_P_ce_bwd_supertile_130m_ch128_seg16_20steps-bbefb2-profiler:v0`
+    - downloaded trace: `scratch/artifacts_candidate/plugins/profile/2026_03_09_08_39_43/perfetto_trace.json.gz`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+
+- Hotspot metrics (vs current promoted baseline trace, TPU:0 XLA Ops `pid=3, tid=3`):
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - CE-attributed while: `10.133 ms -> 8.864 ms`
+  - Forward closed-call: `20.663 ms -> 20.663 ms`
+  - Backward closed-call: `13.126 ms -> 13.128 ms`
+  - while: `10.133 ms -> 8.864 ms`
+  - conditional: `0.026 ms -> 0.026 ms`
+  - Kernel budget: `33.789 ms -> 33.791 ms`
+  - Control budget: `10.159 ms -> 8.890 ms`
+  - Train-path budget: `43.948 ms -> 42.681 ms`
+  - Step duration: `167.311 ms -> 165.404 ms`
+  - Remainder budget: `123.363 ms -> 122.724 ms`
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - Candidate vs current promoted baseline:
+    - `throughput/mfu`: `6.054169 -> 6.123944` (`+1.15%`)
+    - `throughput/tokens_per_second`: `195851.204 -> 198108.415` (`+1.15%`)
+    - `throughput/duration`: `0.167311s -> 0.165404s` (`-1.14%`)
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - The dominant `while.43` remains the CE backward/custom-VJP shell. No new GDN `while` appears, and `conditional` remains the same tiny CE/XLA bookkeeping bucket.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - No `lax.scan` is added. The CE backward keeps its existing loop shell.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - It remains the same CE `WhileOp`, but each iteration now covers a larger vocab supertile, so the shell executes fewer trips without introducing a second control region.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - The residual CE shell is the current first-class bottleneck. This is a targeted control-shell shortening on the already-deployable CE path, not another standalone GDN closed-call retune.
+  - Is the residual `while` still CE-attributed in this design?
+    - Yes. The only visible hot `while` is still the CE backward shell.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: 10.133 ms -> 8.864 ms`
+    - Forward closed-call `20.663 ms -> 20.663 ms`
+    - Backward closed-call `13.126 ms -> 13.128 ms`
+    - `while: 10.133 ms -> 8.864 ms`
+    - `conditional: 0.026 ms -> 0.026 ms`
+    - `Kernel budget: 33.789 ms -> 33.791 ms`
+    - `Control budget: 10.159 ms -> 8.890 ms`
+    - `Train-path budget: 43.948 ms -> 42.681 ms`
+    - `Step duration: 167.311 ms -> 165.404 ms`
+    - `Remainder budget: 123.363 ms -> 122.724 ms`
+    - `throughput/mfu +1.15%`, `throughput/tokens_per_second +1.15%`, `throughput/duration -1.14%`
+  - Governance:
+    - Hard control-flow gate passes: `while` falls by `-1.269 ms`, `conditional` stays flat, and `train_path_budget` falls by `-1.267 ms`.
+    - `remainder_budget_ms` also falls by `-0.639 ms`, so this is not another off-critical-path / overlap-loss result.
+    - Primary metric improvement clears the promotion threshold with CE fixed at the deployable `pallas_tpu` / `pallas` setting.
+
+- Assessment: **validated and improved**. The grouped-supertiling CE backward rewrite does what the session asked for: it leaves the GDN train-path closed-call budget essentially flat, cuts the residual CE-attributed `while` by about `1.27 ms`, and turns that directly into a faster end-to-end step with a slightly smaller remainder.
+- Next bold hypothesis:
+  - Keep CE fixed on this improved `pallas_tpu` / `pallas` path and refresh the CE backward comparison on the new head. If `xla_streaming` still trails materially, keep attacking the remaining CE backward shell before returning to another GDN-local structural retune.
