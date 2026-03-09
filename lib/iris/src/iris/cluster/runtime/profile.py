@@ -48,6 +48,7 @@ class CpuProfileSpec:
     rate_hz: int
     duration_seconds: int
     pid: str
+    native: bool = False
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ class MemoryProfileSpec:
 
 def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
     py_spy_format, ext = CPU_FORMAT_MAP.get(cpu_config.format, ("flamegraph", "svg"))
-    rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 100
+    rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 20
     return CpuProfileSpec(
         py_spy_format=py_spy_format,
         ext=ext,
@@ -102,6 +103,7 @@ def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> 
         "--output",
         output_path,
         "--subprocesses",
+        *(["--native"] if spec.native else []),
     ]
 
 
