@@ -2282,6 +2282,63 @@ def test_worker_failed_from_building_counts_as_preemption(job_request, worker_me
     assert task.failure_count == 0
 
 
+def test_fail_workers_by_vm_addresses_cascades_tasks(job_request, worker_metadata):
+    """fail_workers_by_vm_addresses fails sibling workers and cascades their tasks."""
+    state = ControllerState()
+
+    # Register two workers on the same "slice" with distinct vm_addresses
+    meta1 = worker_metadata()
+    meta1.vm_address = "10.0.1.0"
+    w1 = register_worker(state, "w1", "host1:8080", meta1)
+
+    meta2 = worker_metadata()
+    meta2.vm_address = "10.0.1.1"
+    w2 = register_worker(state, "w2", "host2:8080", meta2)
+
+    # Submit and dispatch a task to each worker
+    tasks1 = submit_job(state, "j1", job_request("job1"))
+    dispatch_task(state, tasks1[0], w1)
+
+    tasks2 = submit_job(state, "j2", job_request("job2"))
+    dispatch_task(state, tasks2[0], w2)
+
+    assert tasks1[0].state == cluster_pb2.TASK_STATE_RUNNING
+    assert tasks2[0].state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Fail the sibling worker (w2) by vm_address
+    failed = state.fail_workers_by_vm_addresses(["10.0.1.1"], reason="slice terminated")
+
+    assert len(failed) == 1
+    assert failed[0][0] == w2
+    assert failed[0][1] == "host2:8080"
+
+    # w2's task should be cascaded to WORKER_FAILED (or re-queued as PENDING for retry)
+    assert tasks2[0].state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PENDING)
+
+    # w1 should be unaffected
+    assert tasks1[0].state == cluster_pb2.TASK_STATE_RUNNING
+    assert state.get_worker(w1) is not None
+
+    # w2 should be pruned from state
+    assert state.get_worker(w2) is None
+
+
+def test_fail_workers_by_vm_addresses_skips_unknown(worker_metadata):
+    """fail_workers_by_vm_addresses returns empty for unknown VM addresses."""
+    state = ControllerState()
+    meta = worker_metadata()
+    meta.vm_address = "10.0.1.0"
+    register_worker(state, "w1", "host1:8080", meta)
+
+    failed = state.fail_workers_by_vm_addresses(["10.0.99.99"], reason="unknown")
+    assert failed == []
+
+    # Original worker should still be healthy
+    w = state.get_worker(WorkerId("w1"))
+    assert w is not None
+    assert w.healthy
+
+
 def test_fail_heartbeat_kills_requeue_only(job_request, worker_metadata):
     """Kill requests are still requeued on heartbeat failure (idempotent)."""
     state = ControllerState()

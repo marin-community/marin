@@ -439,6 +439,122 @@ The iteration loop should look like:
 
 Use `agent_driven_profiling` tooling as it matures.
 
+### 7) TPU dump-driven workflow (generic)
+
+When TPU performance is unclear, use a dump-first workflow and compare multiple variants on the exact same shape.
+
+Recommended comparison set:
+- baseline/reference implementation (usually XLA path)
+- full Pallas implementation
+- one or more decomposition variants (for example, "matmul-only", "skip softmax", or "skip extra reductions")
+
+The decomposition variants are temporary benchmark/debug toggles. They help answer: is the bottleneck the core matmul/scheduling, or surrounding math/data movement?
+
+#### Required dump flags
+
+Set these before JAX initializes TPU:
+
+```bash
+export XLA_FLAGS="\
+  --xla_dump_to=${HLO_DIR} \
+  --xla_dump_hlo_as_text"
+
+export LIBTPU_INIT_ARGS="\
+  --xla_jf_dump_to=${LLO_DIR} \
+  --xla_jf_dump_hlo_text=true \
+  --xla_jf_dump_llo_text=true \
+  --xla_jf_dump_llo_html=false \
+  --xla_jf_dump_llo_static_gaps=true \
+  --xla_jf_emit_annotations=true \
+  --xla_jf_debug_level=2 \
+  --xla_mosaic_dump_to=${MOSAIC_DIR} \
+  --xla_mosaic_enable_dump_debug_info=true \
+  --xla_mosaic_enable_llo_source_annotations=true"
+```
+
+Use separate dump directories per variant so files are comparable and not mixed:
+- `${ROOT}/hlo_<variant>`
+- `${ROOT}/llo_<variant>`
+- `${ROOT}/mosaic_<variant>`
+
+#### Analysis checklist
+
+1) Record steady-state throughput first (`tokens/s`, `bwd_tokens/s`, or your kernel metric).
+2) Inspect HLO:
+   - identify where custom-calls/fusions are
+   - confirm expected path is being used
+3) Inspect LLO schedule summaries:
+   - open `*schedule-analysis_final_bundles.txt`
+   - capture total/non-empty scheduled bundle counts for the target kernels
+4) Compare variants:
+   - if decomposition variant is fast but full kernel is slow, bottleneck is in the removed stage(s)
+   - if decomposition is still slow, focus on core tiling/scheduling/layout
+5) Map back to source:
+   - use `metadata={... source_file=... source_line=...}` in dump files
+   - connect expensive kernels directly to code regions
+6) Keep a short artifact summary in the project notes/PR:
+   - shape/config
+   - throughput table
+   - dump paths
+   - bundle-count comparison
+   - next hypothesis
+
+#### XLA-LLO Replication Playbook (generic)
+
+When the goal is “make Pallas match or beat XLA,” the highest-signal workflow is:
+
+1) **Start from one exact shape and freeze it**
+   - pick one representative production shape and keep it fixed until you understand the gap.
+   - compare only on that shape while iterating on structure.
+
+2) **Dump both sides first**
+   - collect dumps for:
+     - XLA/reference path
+     - current Pallas path
+     - one decomposition variant
+   - use separate dump directories per variant and the same benchmark harness/flags.
+
+3) **Infer algorithm structure from XLA fusions**
+   - inspect HLO/LLO to identify stage boundaries (for example: delta/softmax stage vs GEMM update stages).
+   - treat XLA fusion boundaries as a hint for where to split your Pallas/JAX pipeline.
+   - look for input/output aliasing and dynamic-update-slice patterns; these often reveal intended writeback structure.
+
+4) **Replicate the simplest stage first**
+   - do not port everything at once.
+   - first match the stage that should dominate runtime (often backward GEMMs).
+   - temporarily bypass or simplify surrounding math (for example, skip/rewrite softmax pieces) to verify the core stage can hit XLA-like throughput.
+
+5) **Then add complexity incrementally**
+   - add one missing stage at a time (for example, rematerialized logits -> softmax/logsumexp -> label subtraction).
+   - after each addition:
+     - run correctness checks
+     - rerun throughput
+     - re-dump LLO if performance regresses
+   - this makes the first bad step obvious.
+
+6) **Use LLO counters as diagnostics, not just timings**
+   - track changes in:
+     - lane-rotation-heavy ops (`vrot.*`)
+     - select/mask-heavy ops (`vsel`)
+     - expensive transcendental counts (`vpow2.*`, etc.)
+     - spill slots and vreg pressure in bundle reports
+   - if throughput drops and these rise sharply, your structure likely diverged from XLA’s efficient schedule.
+
+7) **Prefer structural fixes before tile sweeps**
+   - if a decomposition variant is fast but the full kernel is slow, fix structure first.
+   - block-size sweeps usually help after structure is right, not before.
+
+8) **Validate numerics with more than one metric**
+   - report at least:
+     - absolute max error (`abs_linf`)
+     - relative L2 (`rel_l2`)
+     - loss delta
+   - `rel_linf` alone can look noisy, especially with bf16-scale reference values.
+
+9) **Retune after structural convergence**
+   - once the algorithm shape matches XLA well, rerun block-size tuning.
+   - expect optimal block sizes to move (or constraints to relax) after major structural changes.
+
 ## Starter template
 
 Use the starter template under `lib/levanter/src/levanter/kernels/pallas/`:
@@ -476,6 +592,13 @@ favor a bit more copy-paste and explicitness for agents.
 
 JAX has some built-in kernels that use Pallas under the hood; these can be
 good references for patterns. `.venv/lib/python3.11/site-packages/jax/experimental/pallas/ops`
+
+### Deep Dives
+
+- [When XLA Isn't Enough: From Pallas to VLIW](https://patricktoulme.substack.com/p/when-xla-isnt-enough-from-pallas)
+  This post has a deep dive into the splash attention kernel for JAX Pallas TPU. In particular, it
+  tells you how to get low level code dumps so you can see XLA's decisions on TPU etc.
+
 
 
 ## Misc Tips

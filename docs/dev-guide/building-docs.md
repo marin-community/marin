@@ -14,7 +14,7 @@ Before you begin, ensure you have the following installed:
 
 1. Install the documentation dependencies:
    ```bash
-   uv sync --group docs
+   uv sync --package marin --group docs
    ```
 
 ## Building Documentation

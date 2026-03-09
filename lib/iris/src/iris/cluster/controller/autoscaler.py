@@ -805,20 +805,10 @@ class Autoscaler:
         self._last_routing_decision = result
 
         if result.unmet_entries:
-            logger.error(
-                "CAPACITY INSUFFICIENT: %d demand entries cannot be satisfied by any group",
+            logger.debug(
+                "Unmet demand: %d entries cannot be satisfied (visible in dashboard)",
                 len(result.unmet_entries),
             )
-            for unmet in result.unmet_entries[:10]:
-                entry = unmet.entry
-                logger.warning(
-                    "Unmet demand: reason=%s device=%s:%s resources=%s tasks=%s",
-                    unmet.reason,
-                    entry.normalized.device_type,
-                    entry.normalized.device_variants,
-                    entry.resources,
-                    entry.task_ids,
-                )
 
         decisions = []
         for name, group in self._groups.items():
@@ -1155,6 +1145,42 @@ class Autoscaler:
             return "\n".join(lines[-tail:])
         return log
 
+    def check_coscheduling_feasibility(
+        self,
+        replicas: int,
+        constraints: list[cluster_pb2.Constraint],
+    ) -> str | None:
+        """Check if a coscheduled job with the given replicas can ever be scheduled.
+
+        A coscheduled job is feasible when its replica count is an exact multiple of
+        some matching group's num_vms (e.g. 4 VMs can serve 4, 8, 12, ... replicas).
+
+        Returns None if feasible, or a human-readable error message if no scaling
+        group can accommodate the replica count.
+        """
+        groups = list(self._groups.values())
+        if not groups:
+            return None
+
+        group_attrs = {g.name: g.to_attributes() for g in groups}
+        group_index = ConstraintIndex.build(group_attrs)
+        routing_cs = routing_constraints(constraints)
+        matching_names = group_index.matching_entities(routing_cs)
+        matching_groups = [g for g in groups if g.name in matching_names]
+
+        if not matching_groups:
+            return f"no scaling group matches the job constraints; " f"available groups: {[g.name for g in groups]}"
+
+        if any(replicas % g.num_vms == 0 for g in matching_groups):
+            return None
+
+        group_sizes = {g.name: g.num_vms for g in matching_groups}
+        return (
+            f"job requires {replicas} coscheduled replicas but no matching scaling group "
+            f"has a compatible size (replicas must be an exact multiple of num_vms); "
+            f"matching group sizes: {group_sizes}"
+        )
+
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
         status = vm_pb2.AutoscalerStatus(
@@ -1230,7 +1256,7 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
-    def notify_worker_failed(self, vm_address: str) -> None:
+    def notify_worker_failed(self, vm_address: str) -> list[str]:
         """Called by controller when a worker fails. Terminates the containing slice.
 
         This integrates with the existing controller failure cascade:
@@ -1241,11 +1267,19 @@ class Autoscaler:
 
         If the slice was short-lived (died soon after creation), applies backoff
         to the scale group to prevent thrashing on bad zones/preemption.
+
+        Returns:
+            List of sibling VM addresses from the same slice (excluding the
+            originally failed VM). The controller uses these to immediately
+            fail sibling workers, since the entire slice is being terminated.
         """
         slice_id, group = self._find_slice_for_worker(vm_address)
         if not slice_id or not group:
             logger.debug("VM %s not found in any managed slice", vm_address)
-            return
+            return []
+
+        # Collect sibling VM addresses before termination removes them.
+        sibling_vms = [addr for addr in group.get_slice_vm_addresses(slice_id) if addr != vm_address]
 
         logger.info("Worker at VM %s failed, terminating slice %s", vm_address, slice_id)
         self._log_action(
@@ -1263,6 +1297,8 @@ class Autoscaler:
             self._unregister_slice_workers(slice_id)
         except Exception as e:
             logger.warning("Failed to terminate slice %s: %s", slice_id, e)
+
+        return sibling_vms
 
     def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
         """Find the slice and group containing a worker by VM address."""

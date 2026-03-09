@@ -209,11 +209,11 @@ class ContainerHandle(Protocol):
         ...
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory).
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
         Args:
-            duration_seconds: How long to sample
-            profile_type: ProfileType message with oneof cpu/memory profiler config
+            duration_seconds: How long to sample (ignored for threads)
+            profile_type: ProfileType message with oneof cpu/memory/threads profiler config
 
         Returns:
             Raw profile output (SVG/HTML/JSON/text depending on profiler and format)

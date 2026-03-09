@@ -474,6 +474,7 @@ class WorkerStubFactory(Protocol):
 
     def get_stub(self, address: str) -> WorkerServiceClientSync: ...
     def evict(self, address: str) -> None: ...
+    def close(self) -> None: ...
 
 
 class RpcWorkerStubFactory:
@@ -498,7 +499,16 @@ class RpcWorkerStubFactory:
 
     def evict(self, address: str) -> None:
         with self._lock:
-            self._stubs.pop(address, None)
+            stub = self._stubs.pop(address, None)
+        if stub is not None:
+            stub.close()
+
+    def close(self) -> None:
+        with self._lock:
+            stubs = list(self._stubs.values())
+            self._stubs.clear()
+        for stub in stubs:
+            stub.close()
 
 
 @dataclass
@@ -729,11 +739,13 @@ class Controller:
             self._autoscaler.shutdown()
 
         self._threads.stop()
+        self.stub_factory.close()
 
         # Remove log handler before closing the log store to avoid
         # sqlite3.ProgrammingError spam from late log records.
         logging.getLogger("iris").removeHandler(self._log_store_handler)
         self._log_store_handler.close()
+        self._state.log_store.close()
 
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""
@@ -1157,7 +1169,26 @@ class Controller:
                     failed_workers.append(snapshot.worker_id)
                     self.stub_factory.evict(snapshot.worker_address)
                     if self._autoscaler and snapshot.vm_address:
-                        self._autoscaler.notify_worker_failed(snapshot.vm_address)
+                        # Terminate the slice and get sibling VM addresses.
+                        # All workers on the same slice must be failed immediately
+                        # so their tasks (including reservation holders) are cascaded
+                        # rather than waiting for heartbeat timeouts.
+                        sibling_vms = self._autoscaler.notify_worker_failed(snapshot.vm_address)
+                        if sibling_vms:
+                            sibling_failed = self._state.fail_workers_by_vm_addresses(
+                                sibling_vms,
+                                reason=f"sibling worker at VM {snapshot.vm_address} failed, slice terminated",
+                            )
+                            for _wid, addr in sibling_failed:
+                                self.stub_factory.evict(addr)
+                            if sibling_failed:
+                                fail_count += len(sibling_failed)
+                                failed_workers.extend(wid for wid, _ in sibling_failed)
+                                logger.info(
+                                    "Failed %d sibling workers from slice: %s",
+                                    len(sibling_failed),
+                                    [wid for wid, _ in sibling_failed],
+                                )
                 elif action == HeartbeatAction.TRANSIENT_FAILURE:
                     fail_count += 1
                     failed_workers.append(snapshot.worker_id)

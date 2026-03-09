@@ -290,6 +290,10 @@ class LogStore:
         Uses MAX(id) - MIN(id) as a cheap approximation of row count (autoincrement
         IDs are nearly contiguous since we only delete from the bottom). Evicts down
         to max_records // 2 so we don't pay eviction cost on every subsequent append.
+
+        After bulk deletion we truncate the WAL to prevent it from growing unboundedly.
+        Without this, the DELETE pages accumulate in the WAL and the next automatic
+        checkpoint stalls the writer while flushing gigabytes of data.
         """
         row = self._write_conn.execute("SELECT MIN(id), MAX(id) FROM logs").fetchone()
         min_id, max_id = row
@@ -298,10 +302,17 @@ class LogStore:
         approx_count = max_id - min_id + 1
         if approx_count <= self._max_records:
             return
-        # Keep the most recent max_records // 2 rows.
-        cutoff = max_id - (self._max_records // 2)
-        self._write_conn.execute("DELETE FROM logs WHERE id <= ?", (cutoff,))
-        self._write_conn.commit()
+        # Keep the most recent max_records // 2 rows. Delete in batches to
+        # avoid a single enormous transaction that bloats the WAL.
+        target_cutoff = max_id - (self._max_records // 2)
+        batch_size = 100_000
+        cursor = min_id - 1
+        while cursor < target_cutoff:
+            batch_end = min(cursor + batch_size, target_cutoff)
+            self._write_conn.execute("DELETE FROM logs WHERE id > ? AND id <= ?", (cursor, batch_end))
+            self._write_conn.commit()
+            self._write_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            cursor = batch_end
 
 
 class LogCursor:

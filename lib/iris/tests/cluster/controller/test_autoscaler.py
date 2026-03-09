@@ -763,6 +763,45 @@ class TestAutoscalerWorkerFailure:
 
         assert group.slice_count() == 1
 
+    def test_notify_worker_failed_returns_sibling_vm_addresses(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """notify_worker_failed() returns sibling VM addresses for multi-VM slices."""
+        # Create a slice with 4 VMs
+        mock_handle = make_mock_slice_handle(
+            "slice-001",
+            all_ready=True,
+            vm_states=[vm_pb2.VM_STATE_READY] * 4,
+        )
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+        _mark_discovered_ready(group, [mock_handle])
+
+        # Fail the first worker — should return 3 sibling addresses
+        slice_hash = abs(hash("slice-001")) % 256
+        failed_vm = f"10.0.{slice_hash}.0"
+        siblings = autoscaler.notify_worker_failed(failed_vm)
+
+        expected_siblings = [f"10.0.{slice_hash}.{i}" for i in range(1, 4)]
+        assert sorted(siblings) == sorted(expected_siblings)
+        assert group.slice_count() == 0
+
+    def test_notify_worker_failed_returns_empty_for_single_vm_slice(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """Single-VM slices return no siblings."""
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+        _mark_discovered_ready(group, [mock_handle])
+
+        vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        siblings = autoscaler.notify_worker_failed(vm_address)
+
+        assert siblings == []
+
 
 class TestAutoscalerIdleVerification:
     """Tests for idle verification during scale-down."""
@@ -3653,3 +3692,45 @@ class TestScaleUpRateLimiting:
         autoscaler.execute(decisions, ts)
         autoscaler._wait_for_inflight()
         assert group.slice_count() == 10
+
+
+class TestCheckCoschedulingFeasibility:
+    """Tests for Autoscaler.check_coscheduling_feasibility()."""
+
+    def _make_constraints(self):
+        return make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
+
+    def test_feasible_exact_match(self):
+        """Replicas == num_vms is feasible."""
+        config = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
+        autoscaler = make_autoscaler({"group-4": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.check_coscheduling_feasibility(4, self._make_constraints()) is None
+
+    def test_feasible_exact_multiple(self):
+        """Replicas that are an exact multiple of num_vms are feasible (e.g. 8 replicas on 4-VM group)."""
+        config = make_scale_group_config(name="group-4", max_slices=5, num_vms=4)
+        autoscaler = make_autoscaler({"group-4": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.check_coscheduling_feasibility(8, self._make_constraints()) is None
+
+    def test_infeasible_not_a_multiple(self):
+        """Replicas that aren't a multiple of any group's num_vms are rejected."""
+        config = make_scale_group_config(name="group-3", max_slices=5, num_vms=3)
+        autoscaler = make_autoscaler({"group-3": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.check_coscheduling_feasibility(8, self._make_constraints())
+        assert result is not None
+        assert "8" in result
+
+    def test_infeasible_no_group_matches_constraints(self):
+        """Returns error when no group matches the device constraints."""
+        config = make_scale_group_config(
+            name="gpu-group", max_slices=5, num_vms=8, accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU
+        )
+        autoscaler = make_autoscaler({"gpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.check_coscheduling_feasibility(8, self._make_constraints())
+        assert result is not None
+        assert "no scaling group matches" in result
+
+    def test_no_groups_returns_none(self):
+        """Returns None when there are no groups (no validation possible)."""
+        autoscaler = make_autoscaler({})
+        assert autoscaler.check_coscheduling_feasibility(8, []) is None

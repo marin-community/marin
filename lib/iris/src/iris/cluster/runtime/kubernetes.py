@@ -26,6 +26,7 @@ from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    build_pyspy_dump_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
 )
@@ -472,18 +473,28 @@ class KubernetesContainerHandle:
         )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory)."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         if not self._pod_name:
             raise RuntimeError("Cannot profile: no running pod")
 
         profile_id = uuid.uuid4().hex[:8]
 
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            return self._profile_threads()
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu, profile_id)
         elif profile_type.HasField("memory"):
             return self._profile_memory(duration_seconds, profile_type.memory, profile_id)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+
+    def _profile_threads(self) -> bytes:
+        """Collect thread stacks from the pod using py-spy dump."""
+        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="py-spy")
+        result = self.kubectl.exec(self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"py-spy dump failed: {result.stderr}")
+        return result.stdout.encode("utf-8")
 
     def _wrap_in_venv_shell(self, cmd: list[str]) -> list[str]:
         """Wrap a command to run inside the task venv via a login shell.
@@ -511,7 +522,7 @@ class KubernetesContainerHandle:
         )
         try:
             result = self.kubectl.exec(
-                self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=duration_seconds + 5
+                self._pod_name, self._wrap_in_venv_shell(cmd), container="task", timeout=duration_seconds + 30
             )
             if result.returncode != 0:
                 raise RuntimeError(f"py-spy failed: {result.stderr}")
