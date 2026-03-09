@@ -109,7 +109,7 @@ A specification must contain:
 4. **Tests** -- what is tested, how, and why that set of tests is sufficient.
 
 Optional: non-goals, future work, alternatives considered. Follow the format
-in `docs/recipes/design_doc.md` for longer standalone specifications.
+in `.agents/skills/design-doc/` for longer standalone specifications.
 
 A specification passes the **reproduction test**: could a different engineer,
 given only the spec and access to the repo, produce substantially the same PR?

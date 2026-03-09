@@ -12,7 +12,7 @@ You are to fix the Github issue indicated by the user.
 Read first:
 
 @AGENTS.md
-@docs/recipes/architecture.md
+@.agents/skills/architecture/SKILL.md
 
 You may not proceed to a new task until you have completed all prior tasks. If
 you cannot complete a task, write a Github comment with your last status and why
