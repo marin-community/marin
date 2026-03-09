@@ -4785,3 +4785,70 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated and improved**. Unlike Iteration 68, the reduced-Pallas outer-shell move no longer leaks the gain into the remainder: tracked GDN budget is effectively flat, but end-to-end step time improves because the reduced backward tape contract lowers the untracked remainder enough to matter.
 - Next bold hypothesis:
   - Keep CE fixed and build on this `M` boundary rather than retreating to kernel-local tuning. The next serious bet should either compress `chunk_starts` as well or attack the remaining forward closed-call budget inside this improved remainder regime, without reintroducing a serial train-path scan shell.
+
+### Iteration 71 - Direct ejkernel/EasyDeL TPU Pallas port (validated, rejected)
+
+- Coverage slot: `R`
+- Why this control arm was worth trying:
+  - EasyDeL/ejkernel's TPU GDR implementation appears to make the opposite backward trade from the current Levanter path: save less, recompute more.
+  - The specific hypothesis was that directly porting the ejkernel-style fused chunk kernel plus recompute-heavy backward would cut tape/control overhead enough to beat the current champion on TPU.
+  - This was treated as a direct benchmark/control arm, not an incremental mutation of the champion implementation.
+- Change class: `direct external port / smaller tape + backward recompute`
+
+- Date: 2026-03-09T06:15:01Z
+- Starting commit: `581dd25811f23556ef4b4423ae4df2a03a57d4e2`
+- Source references used:
+  - `/Users/calvinxu/Projects/Work/Marin/ejkernel/ejkernel/modules/operations/gated_delta_rule.py`
+  - `/Users/calvinxu/Projects/Work/Marin/ejkernel/ejkernel/kernels/_pallas/tpu/gated_delta_rule/_pallas_impl_fwd.py`
+  - `/Users/calvinxu/Projects/Work/Marin/ejkernel/ejkernel/kernels/_pallas/tpu/gated_delta_rule/_pallas_impl_bwd.py`
+  - `/Users/calvinxu/Projects/Work/Marin/EasyDeL/easydel/operations/kernels/gated_delta_rule.py`
+
+- Change summary:
+  - `lib/levanter/src/levanter/layers/gated_deltanet.py`
+    - Added an experimental `GDN_CHUNK_FLASH_BACKEND=ejkernel` path.
+    - Ported an ejkernel-style fused chunk forward and recompute-heavy backward custom-VJP.
+    - Kept only raw inputs plus chunk-start state as backward inputs; did not save `v_pseudo`, `k_cumdecay`, or `solve_transform` tapes.
+    - Added explicit `shard_map` wrapping because Mosaic kernels would not auto-partition on multi-device TPU.
+
+- Correctness checks:
+  - Focused TPU gradient check after initial fixes:
+    - job: `ray-run-calvinxu-levanter-20260309-055655`
+    - result: `4 passed in 31.15s`
+  - Full TPU correctness suite:
+    - command pattern: `GDN_CHUNK_FLASH_BACKEND=ejkernel LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 ... pytest tests/test_gdn_kernels.py tests/test_gdn_layer.py -v`
+    - job: `ray-run-calvinxu-levanter-20260309-055833`
+    - result: `49 passed, 40 skipped in 137.91s`
+
+- Profile runs:
+  - `chunk_size=128`:
+    - command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --profile-env GDN_CHUNK_FLASH_BACKEND=ejkernel --run-name-prefix gdn_ejkernel_port_ch128_fixshard --no-wait`
+    - job: `ray-run-calvinxu-bash-20260309-060659`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_ejkernel_port_ch128_fixshard_130m_ch128_seg16_20ste-de9878`
+    - result:
+      - `throughput/mfu`: `5.095499`
+      - `throughput/tokens_per_second`: `164838.403`
+      - `throughput/duration`: `0.198789s`
+    - notes:
+      - completed successfully and uploaded a profiler artifact
+      - compile logs still showed scoped-VMEM pressure on `shard_map.53`: requested `104857600` bytes vs max valid `67043328`
+  - `chunk_size=64`:
+    - command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --profile-env GDN_CHUNK_FLASH_BACKEND=ejkernel --run-name-prefix gdn_ejkernel_port_ch64 --no-wait`
+    - job: `ray-run-calvinxu-bash-20260309-060922`
+    - W&B run: `https://wandb.ai/marin-community/marin/runs/gdn_ejkernel_port_ch64_130m_ch64_seg16_20steps-dec638`
+    - result:
+      - `throughput/mfu`: `4.332433`
+      - `throughput/tokens_per_second`: `140153.376`
+      - `throughput/duration`: `0.233801s`
+
+- CE settings held fixed for both profiles:
+  - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`
+  - `LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0`
+
+- Comparison vs current champion (Iteration 70, `throughput/mfu=6.107490`):
+  - `chunk_size=128`: `-16.57%`
+  - `chunk_size=64`: `-29.06%`
+
+- Assessment: **validated and rejected**. The direct ejkernel/EasyDeL port proved deployable enough to pass the TPU correctness suite and run end-to-end profiles, but both measured training configurations were materially slower than the current champion. The `chunk_size=128` port is additionally risky because the profile logs still show scoped-VMEM pressure even after adding the required `shard_map` wrapping.
+- Commit: `none (failed attempt; code reverted after measurement)`
+- Next bold hypothesis:
+  - The main transferable idea from ejkernel is not the literal fused port; it is the backward tradeoff. If we revisit this family, keep the current Levanter control surface and selectively import the smaller-tape / recompute-heavy backward contract rather than the whole direct kernel structure.
