@@ -229,6 +229,7 @@ scr/*
 /scratch
 
 .claude
+!.claude/skills
 .agents/tmp/
 .codex
 .entire

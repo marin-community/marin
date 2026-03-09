@@ -1,4 +1,9 @@
-# Review Prompt
+---
+name: github-pr-review
+description: Review a pull request for correctness and behavioral regressions. Use when asked to review a PR in marin-community/marin.
+---
+
+# Skill: GitHub PR Review
 
 Review this PR for correctness and behavioral regressions.
 
@@ -9,7 +14,7 @@ Format your review as:
 2. **Specification check** (if a specification exists as a PR comment, linked design doc, or `.agents/projects/` file):
    - The implementation should follow the described approach. Flag significant deviations.
    - Described test scenarios should exist and test what they claim.
-   - If no specification exists and the PR exceeds ~500 lines of code changes, note that a specification is expected (see `docs/recipes/pull-request.md`).
+   - If no specification exists and the PR exceeds ~500 lines of code changes, note that a specification is expected (see `.agents/skills/pull-request/`).
 3. Tight bullets (if any) for:
    - Bugs or correctness issues
    - Violations of AGENTS.md or coding guidelines

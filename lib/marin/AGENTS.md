@@ -4,8 +4,8 @@ Vendored Marin pipeline framework. In this file, leading `/` refers to repositor
 
 ## Key Docs
 
-- `/docs/recipes/architecture.md` — repository structure and core concepts
-- `/docs/recipes/add_dataset.md` — dataset addition workflow
+- `/.agents/skills/architecture/SKILL.md` — repository structure and core concepts
+- `/.agents/skills/add-dataset/SKILL.md` — dataset addition workflow
 - `/lib/marin/pyproject.toml` — packaging metadata, extras, dependency groups
 
 ## Development

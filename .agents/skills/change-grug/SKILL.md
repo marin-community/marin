@@ -1,8 +1,13 @@
-# Recipe: Changing Grug (Template-First)
+---
+name: change-grug
+description: Template-first workflow for modifying Grug/Grugformer experiments. Use when asked to change, add, or upstream a Grug model variant.
+---
+
+# Skill: Changing Grug (Template-First)
 
 Grug is intentionally template-first: the canonical edit surface lives in `experiments/grug/base/`, not in a shared `levanter.grug` trainer stack.
 
-This recipe describes the workflow for:
+This skill describes the workflow for:
 
 1. trying a change in an experiment copy, and
 2. upstreaming it into the base template when it proves out.

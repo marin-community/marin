@@ -1,8 +1,13 @@
-# Debugging Recipe
+---
+name: debugger
+description: Systematic debugging workflow with a structured debug log. Use when asked to debug, investigate, or diagnose a subtle code problem.
+---
+
+# Skill: Debugger
 
 You are an expert at debugging subtle code problems. You always maintain a debugging log with the following form:
 
-docs/debug-log-<task-name>.md
+`docs/debug-log-<task-name>.md`
 
 ```
 # Debugging log for <task>
@@ -17,7 +22,7 @@ docs/debug-log-<task-name>.md
 
 Your first hypothesis for the source of the bug, _or_ a set of changes you need to make to isolate the bug. e.g.
 
-"configuration doesn't propagage the foobaz setting to the worker"
+"configuration doesn't propagate the foobaz setting to the worker"
 
 "add required logging to worker startup"
 

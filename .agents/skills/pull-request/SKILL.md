@@ -1,3 +1,8 @@
+---
+name: pull-request
+description: Authoring and reviewing pull requests in Marin. Use when creating a PR, writing a PR description, running pre-PR checks, or reviewing a PR.
+---
+
 # Recipe: Pull Requests
 
 Guidelines for authoring and reviewing pull requests in Marin. Applies to both
@@ -104,7 +109,7 @@ A specification must contain:
 4. **Tests** -- what is tested, how, and why that set of tests is sufficient.
 
 Optional: non-goals, future work, alternatives considered. Follow the format
-in [design_doc.md](design_doc.md) for longer standalone specifications.
+in `.agents/skills/design-doc/` for longer standalone specifications.
 
 A specification passes the **reproduction test**: could a different engineer,
 given only the spec and access to the repo, produce substantially the same PR?
@@ -130,8 +135,7 @@ Automated review validates the implementation matches the specification:
    exercise meaningful behavior, not merely restate production logic.
 4. No bugs, logic errors, resource leaks, or race conditions.
 
-The standard [PR review prompt](github-pr-review.md) includes specification
-validation when a spec is present.
+The standard PR review prompt includes specification validation when a spec is present.
 
 ## Agent-Specific Rules
 
@@ -141,7 +145,7 @@ validation when a spec is present.
 
 ## See Also
 
-- [github-pr-review.md](github-pr-review.md) -- PR review prompt
-- [design_doc.md](design_doc.md) -- design document format
-- [fix_issue.md](fix_issue.md) -- end-to-end issue fix workflow
+- `.agents/skills/github-pr-review/` -- PR review prompt
+- `.agents/skills/design-doc/` -- design document format
+- `.agents/skills/fix-issue/` -- end-to-end issue fix workflow
 - `AGENTS.md` -- coding guidelines

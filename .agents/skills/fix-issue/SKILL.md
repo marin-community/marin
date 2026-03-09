@@ -1,3 +1,10 @@
+---
+name: fix-issue
+description: End-to-end workflow for fixing a GitHub issue. Use when asked to fix, investigate, or resolve a GitHub issue in marin-community/marin.
+---
+
+# Skill: Fix GitHub Issue
+
 You are to fix the Github issue indicated by the user.
 
 ## Background
@@ -5,7 +12,7 @@ You are to fix the Github issue indicated by the user.
 Read first:
 
 @AGENTS.md
-@docs/recipes/architecture.md
+@.agents/skills/architecture/SKILL.md
 
 You may not proceed to a new task until you have completed all prior tasks. If
 you cannot complete a task, write a Github comment with your last status and why
@@ -71,7 +78,7 @@ There are 2 cases:
   > Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
 
 * **Design change**: The design doc replaces the `# Proposed Fix` section.
-  Write it per @docs/recipes/design_doc.md directly in the issue comment
+  Write it per `.agents/skills/design-doc/` directly in the issue comment
   (agents cannot commit files before the PR). The 3-4 sentence prose cap
   applies to `# Research`; the design doc follows its own length guidelines.
   Keep everything in one comment.
@@ -91,11 +98,11 @@ beginning work. Your tests will be minimal and refrain from using mocks.
 ## Testing
 
 * You write your test _before_ you make your fix, and validate your fix works.
-* You use an existing test file in @tests/ if appropriate.
+* You use an existing test file in `tests/` if appropriate.
 * You never use mocks when testing.
 * You keep tests simple and minimal. You do not test obvious behavior like "object has an attr".
 * You run `./infra/pre-commit.py --all-files --fix` and resolve all reported issues before uploading.
-* You will test using `uv run pytest -m 'not slow'` before uploading
+* You will test using `uv run pytest -m 'not slow'` before uploading.
 * You will ensure _all_ tests pass.
 
 ## Uploading
@@ -121,7 +128,7 @@ Key checks to monitor:
 
 # Tasks
 
-The tasks for this recipe:
+The tasks for this skill:
 
 - [ ] Fetch issue information
 - [ ] Research codebase for all relevant source files
