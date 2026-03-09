@@ -109,7 +109,11 @@ class BundleStore:
         return bundle_id
 
     def get_zip(self, bundle_id: str) -> bytes:
-        """Read zip bytes by bundle id."""
+        """Read zip bytes by bundle id.
+
+        Note: this method mutates the DB (updates ``last_access_ms``), so it
+        must hold ``self._lock`` like all other public DB methods.
+        """
         with self._lock:
             row = self._conn.execute(
                 "SELECT zip_bytes FROM bundles WHERE bundle_id = ?",
@@ -136,19 +140,15 @@ class BundleStore:
             raise RuntimeError(f"Bundle {bundle_id} is not cached and controller address is not configured")
 
         url = f"{self._controller_address}/bundles/{bundle_id}.zip"
-        last_exc: Exception | None = None
         for attempt in range(3):
             try:
                 with urlopen(url, timeout=120) as resp:
                     blob = resp.read()
                 break
             except Exception as e:
-                last_exc = e
                 if attempt == 2:
                     raise RuntimeError(f"Failed to fetch bundle {bundle_id}: {e}") from e
                 time.sleep(0.25 * (2**attempt))
-        else:
-            raise RuntimeError(f"Failed to fetch bundle {bundle_id}: {last_exc}")
 
         actual = bundle_id_for_zip(blob)
         if actual != bundle_id:
@@ -179,25 +179,38 @@ class BundleStore:
     def _evict_if_needed_locked(self) -> None:
         if self._max_items <= 0 and self._max_total_bytes <= 0:
             return
-        victims: list[str] = []
-        while True:
-            row = self._conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM bundles",
-            ).fetchone()
-            if row is None:
-                break
-            count = int(row[0])
-            total = int(row[1])
-            over_items = self._max_items > 0 and count > self._max_items
-            over_bytes = self._max_total_bytes > 0 and total > self._max_total_bytes
-            if not (over_items or over_bytes):
-                break
-            victim = self._conn.execute(
-                "SELECT bundle_id FROM bundles ORDER BY last_access_ms ASC LIMIT 1",
-            ).fetchone()
-            if victim is None:
-                break
-            victims.append(str(victim[0]))
-            self._conn.execute("DELETE FROM bundles WHERE bundle_id = ?", (str(victim[0]),))
-        if victims:
+        row = self._conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM bundles",
+        ).fetchone()
+        if row is None:
+            return
+        count = int(row[0])
+        total = int(row[1])
+
+        # Compute how many items to evict based on count and size limits.
+        evict_for_items = max(0, count - self._max_items) if self._max_items > 0 else 0
+        # For bytes, estimate conservatively: evict at least 1 item at a time
+        # but start with the count-based minimum.
+        n_to_evict = evict_for_items
+
+        if self._max_total_bytes > 0 and total > self._max_total_bytes:
+            # Need to evict by size too — fetch LRU candidates and accumulate
+            # until we're under the byte limit.
+            candidates = self._conn.execute(
+                "SELECT bundle_id, size_bytes FROM bundles ORDER BY last_access_ms ASC",
+            ).fetchall()
+            freed = 0
+            for i, (_bid, sz) in enumerate(candidates):
+                if i >= n_to_evict and total - freed <= self._max_total_bytes:
+                    break
+                freed += int(sz)
+                n_to_evict = i + 1
+
+        if n_to_evict > 0:
+            victims = self._conn.execute(
+                "SELECT bundle_id FROM bundles ORDER BY last_access_ms ASC LIMIT ?",
+                (n_to_evict,),
+            ).fetchall()
+            victim_ids = [str(v[0]) for v in victims]
+            self._conn.executemany("DELETE FROM bundles WHERE bundle_id = ?", [(v,) for v in victim_ids])
             self._conn.commit()

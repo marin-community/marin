@@ -11,6 +11,7 @@ image, so only stdlib imports are used.
 import hashlib
 import io
 import os
+import time
 import zipfile
 from pathlib import Path
 from urllib.request import urlopen
@@ -22,7 +23,14 @@ dest.mkdir(parents=True, exist_ok=True)
 if bundle_id:
     controller_url = os.environ["IRIS_CONTROLLER_URL"]
     url = f"{controller_url}/bundles/{bundle_id}.zip"
-    archive = urlopen(url, timeout=120).read()
+    for attempt in range(3):
+        try:
+            archive = urlopen(url, timeout=120).read()
+            break
+        except Exception as e:
+            if attempt == 2:
+                raise RuntimeError(f"Failed to fetch bundle {bundle_id}: {e}") from e
+            time.sleep(0.25 * (2**attempt))
     actual_hash = hashlib.sha256(archive).hexdigest()
     if actual_hash != bundle_id:
         raise ValueError(f"Bundle hash mismatch: expected {bundle_id}, got {actual_hash}")
