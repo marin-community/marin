@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"]
 
 
+_WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
+
+
 class WandbTracker(Tracker):
     name: str = "wandb"
     run: WandbRun
@@ -98,7 +101,11 @@ class WandbTracker(Tracker):
         self.run.summary.update(_convert_value_to_loggable_rec(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
-        self.run.log_artifact(artifact_path, name=name, type=type)
+        self.run.log_artifact(
+            artifact_path,
+            name=_truncate_wandb_artifact_name(name),
+            type=type,
+        )
 
     def finish(self):
         logger.info("Finishing wandb run...")
@@ -302,7 +309,11 @@ class WandbConfig(TrackerConfig):
             with open(requirements_path, "w") as f:
                 f.write(requirements)
             if wandb.run is not None:
-                wandb.run.log_artifact(str(requirements_path), name="requirements.txt", type="requirements")
+                wandb.run.log_artifact(
+                    str(requirements_path),
+                    name=_truncate_wandb_artifact_name("requirements.txt"),
+                    type="requirements",
+                )
 
         wandb.summary["num_devices"] = jax.device_count()  # type: ignore
         wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
@@ -360,3 +371,19 @@ class WandbConfig(TrackerConfig):
                 raise e
 
         return git_sha
+
+
+def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
+    """Truncate artifact names to keep within WandB's artifact-name limit."""
+    if name is None:
+        return None
+    if len(name) <= _WANDB_ARTIFACT_NAME_MAX_LENGTH:
+        return name
+    truncated = name[:_WANDB_ARTIFACT_NAME_MAX_LENGTH]
+    logger.warning(
+        "Wandb artifact name exceeds %d characters and will be truncated: %s -> %s",
+        _WANDB_ARTIFACT_NAME_MAX_LENGTH,
+        name,
+        truncated,
+    )
+    return truncated
