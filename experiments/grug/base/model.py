@@ -31,6 +31,7 @@ class GrugModelConfig:
     num_kv_heads: int = 16
     head_dim: int | None = None
     max_seq_len: int = 4096
+    sliding_window: int | None = None
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
@@ -43,6 +44,8 @@ class GrugModelConfig:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
             raise ValueError("max_seq_len must be positive")
+        if self.sliding_window is not None and self.sliding_window <= 0:
+            raise ValueError("sliding_window must be positive when set")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -156,6 +159,13 @@ class Transformer(eqx.Module):
     final_norm: RMSNorm
     config: GrugModelConfig = eqx.field(static=True)
 
+    def _resolve_attention_mask(self, mask: AttentionMask | jax.Array | None) -> AttentionMask | jax.Array:
+        if mask is None:
+            return AttentionMask.causal(sliding_window=self.config.sliding_window)
+        if isinstance(mask, AttentionMask) and self.config.sliding_window is not None:
+            return mask.with_sliding_window(self.config.sliding_window)
+        return mask
+
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
@@ -177,8 +187,7 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
-        if mask is None:
-            mask = AttentionMask.causal()
+        mask = self._resolve_attention_mask(mask)
 
         hidden = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
         for block in self.blocks:

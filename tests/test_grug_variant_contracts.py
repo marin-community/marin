@@ -233,6 +233,36 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
         assert key in summary
 
 
+def test_grug_base_model_applies_configured_sliding_window_to_attention_mask():
+    model_module = importlib.import_module("experiments.grug.base.model")
+
+    cfg = model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=2,
+        max_seq_len=16,
+        sliding_window=4,
+    )
+    model = object.__new__(model_module.Transformer)
+    object.__setattr__(model, "config", cfg)
+
+    default_mask = model._resolve_attention_mask(None)
+    assert isinstance(default_mask, GrugAttentionMask)
+    assert default_mask.is_causal is True
+    assert default_mask.sliding_window == 4
+
+    segment_ids = jnp.asarray([[0, 0, 1, 1]], dtype=jnp.int32)
+    explicit_mask = GrugAttentionMask.causal().with_segment_ids(segment_ids)
+    resolved_mask = model._resolve_attention_mask(explicit_mask)
+
+    assert isinstance(resolved_mask, GrugAttentionMask)
+    assert resolved_mask.segment_ids is not None
+    assert resolved_mask.sliding_window == 4
+
+
 def test_grug_base_resume_missing_checkpoint_data_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     train_module = importlib.import_module("experiments.grug.base.train")
 
