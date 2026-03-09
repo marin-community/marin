@@ -46,14 +46,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Read review prompt
-        id: prompt
-        run: |
-          PROMPT=$(cat docs/recipes/github-pr-review.md)
-          echo "review_prompt<<PROMPT_DELIMITER" >> "$GITHUB_OUTPUT"
-          echo "$PROMPT" >> "$GITHUB_OUTPUT"
-          echo "PROMPT_DELIMITER" >> "$GITHUB_OUTPUT"
-
       - name: Run Claude Review
         uses: anthropics/claude-code-action@v1
         with:
@@ -63,7 +55,7 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
 
-            ${{ steps.prompt.outputs.review_prompt }}
+            Use your github-pr-review skill.
 
             ${{ github.event_name == 'issue_comment' && format('EXTRA INSTRUCTIONS FROM COMMENT:\n{0}', github.event.comment.body) || '' }}
           claude_args: |
