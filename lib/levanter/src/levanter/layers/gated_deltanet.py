@@ -56,10 +56,7 @@ if _GDN_TRIANGULAR_SOLVE_PROBE not in {"off", "identity", "first_order"}:
     )
 _GDN_CHUNK_FLASH_BACKEND = os.environ.get("GDN_CHUNK_FLASH_BACKEND", "pallas").strip().lower()
 if _GDN_CHUNK_FLASH_BACKEND not in {"pallas", "xla"}:
-    raise ValueError(
-        "GDN_CHUNK_FLASH_BACKEND must be one of: pallas, xla. "
-        f"Got {_GDN_CHUNK_FLASH_BACKEND!r}."
-    )
+    raise ValueError("GDN_CHUNK_FLASH_BACKEND must be one of: pallas, xla. " f"Got {_GDN_CHUNK_FLASH_BACKEND!r}.")
 
 
 def _dbg(tag: str, arr):
@@ -2162,6 +2159,93 @@ def _gdn_chunk_fullseq_recurrent_fwd_pallas(
         return _local_call(q_bhncK, k_bhncK, g_cum_bhnc, v_pseudo_bhncV, k_cumdecay_bhncK, S_prev_bhKV)
 
 
+def _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
+    q_bhncK: jnp.ndarray,
+    k_bhncK: jnp.ndarray,
+    g_cum_bhnc: jnp.ndarray,
+    v_pseudo_bhncV: jnp.ndarray,
+    k_cumdecay_bhncK: jnp.ndarray,
+    S_prev_bhKV: jnp.ndarray,
+    *,
+    N_chunks: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Apply chunk summaries with XLA while keeping chunk-local prep in Pallas."""
+    B, H = q_bhncK.shape[0], q_bhncK.shape[1]
+    if N_chunks == 0:
+        out_empty = jnp.zeros((B, H, 0, Ct, V_pad), dtype=jnp.float32)
+        starts_empty = jnp.zeros((B, H, 0, K_pad, V_pad), dtype=jnp.float32)
+        return out_empty, S_prev_bhKV.astype(jnp.float32), starts_empty
+
+    q_f = q_bhncK.astype(jnp.float32, copy=False)
+    k_f = k_bhncK.astype(jnp.float32, copy=False)
+    g_cum_f = g_cum_bhnc.astype(jnp.float32, copy=False)
+    v_pseudo_f = v_pseudo_bhncV.astype(jnp.float32, copy=False)
+    k_cum_f = k_cumdecay_bhncK.astype(jnp.float32, copy=False)
+    S0 = S_prev_bhKV.astype(jnp.float32, copy=False)
+
+    g_tail = g_cum_f[..., -1]
+    decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+    decay_w = jnp.exp(jnp.clip(g_tail[..., None] - g_cum_f, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+    k_w = k_f * decay_w[..., None]
+
+    summary_linear = jnp.einsum("bhnck,bhncl->bhnkl", k_w, k_cum_f, precision=lax.Precision.HIGHEST)
+    summary_bias = jnp.einsum("bhnck,bhncv->bhnkv", k_w, v_pseudo_f, precision=lax.Precision.HIGHEST)
+
+    eye_k = jnp.eye(K_pad, dtype=jnp.float32)
+    summary_a = decay_tail[..., None, None] * eye_k - summary_linear
+    summary_b = summary_bias
+
+    summary_a_tm = jnp.moveaxis(summary_a, 2, 0)
+    summary_b_tm = jnp.moveaxis(summary_b, 2, 0)
+
+    def _compose_affine(left, right):
+        a_l, b_l = left
+        a_r, b_r = right
+        a = jnp.einsum("...ik,...kj->...ij", a_r, a_l, precision=lax.Precision.HIGHEST)
+        b = jnp.einsum("...ik,...kv->...iv", a_r, b_l, precision=lax.Precision.HIGHEST) + b_r
+        return a, b
+
+    prefix_a_tm, prefix_b_tm = lax.associative_scan(_compose_affine, (summary_a_tm, summary_b_tm), axis=0)
+    prefix_a = jnp.moveaxis(prefix_a_tm, 0, 2)
+    prefix_b = jnp.moveaxis(prefix_b_tm, 0, 2)
+
+    prefix_identity = jnp.broadcast_to(eye_k, (B, H, 1, K_pad, K_pad))
+    prefix_zero = jnp.zeros((B, H, 1, K_pad, V_pad), dtype=jnp.float32)
+    prefix_a_exclusive = jnp.concatenate((prefix_identity, prefix_a[:, :, :-1, :, :]), axis=2)
+    prefix_b_exclusive = jnp.concatenate((prefix_zero, prefix_b[:, :, :-1, :, :]), axis=2)
+
+    chunk_starts = (
+        jnp.einsum("bhnij,bhjk->bhnik", prefix_a_exclusive, S0, precision=lax.Precision.HIGHEST) + prefix_b_exclusive
+    )
+    S_final = (
+        jnp.einsum("bhij,bhjk->bhik", prefix_a[:, :, -1, :, :], S0, precision=lax.Precision.HIGHEST)
+        + prefix_b[:, :, -1, :, :]
+    )
+
+    g_cum_cl = jnp.clip(g_cum_f, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    q_scaled = q_f * jnp.exp(g_cum_cl)[..., None]
+    inter = jnp.einsum("bhnck,bhnkv->bhncv", q_scaled, chunk_starts, precision=lax.Precision.HIGHEST)
+
+    v_prime = jnp.einsum("bhnck,bhnkv->bhncv", k_cum_f, chunk_starts, precision=lax.Precision.HIGHEST)
+    v_new = v_pseudo_f - v_prime
+
+    qk = jnp.einsum("bhnik,bhnjk->bhnij", q_f, k_f, precision=lax.Precision.HIGHEST)
+    g_row = g_cum_f[..., :, None]
+    g_col = g_cum_f[..., None, :]
+    exp_diff = jnp.exp(jnp.clip(g_row - g_col, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+    causal_mask = jnp.tril(jnp.ones((Ct, Ct), dtype=jnp.float32))
+    intra = jnp.einsum(
+        "bhnij,bhnjv->bhniv",
+        qk * exp_diff * causal_mask,
+        v_new,
+        precision=lax.Precision.HIGHEST,
+    )
+    return inter + intra, S_final, chunk_starts
+
+
 def _in_specs_chunk_segment_fwd_fused_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
     """Fused segmented forward specs with backward tape outputs."""
 
@@ -3311,6 +3395,7 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
 
     n_segments = n_chunks_pad // seg
     use_fullseq_pipeline = (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE)
+    use_outer_xla_train_path = return_prepare_tape and use_fullseq_pipeline and (Ct >= _MXU_TILE)
 
     if use_fullseq_pipeline:
         # Fuse chunk-local triangular prep over all chunks into one pipelined pallas call.
@@ -3325,18 +3410,32 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
             V_pad=V_pad,
         )
 
-        out_bhncv, S_final, chunk_starts_bh_all = _gdn_chunk_fullseq_recurrent_fwd_pallas(
-            q_c,
-            k_c,
-            g_cum,
-            v_pseudo_bh_all,
-            k_cumdecay_bh_all,
-            S0,
-            N_chunks=n_chunks_pad,
-            Ct=Ct,
-            K_pad=K_pad,
-            V_pad=V_pad,
-        )
+        if use_outer_xla_train_path:
+            out_bhncv, S_final, chunk_starts_bh_all = _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
+                q_c,
+                k_c,
+                g_cum,
+                v_pseudo_bh_all,
+                k_cumdecay_bh_all,
+                S0,
+                N_chunks=n_chunks_pad,
+                Ct=Ct,
+                K_pad=K_pad,
+                V_pad=V_pad,
+            )
+        else:
+            out_bhncv, S_final, chunk_starts_bh_all = _gdn_chunk_fullseq_recurrent_fwd_pallas(
+                q_c,
+                k_c,
+                g_cum,
+                v_pseudo_bh_all,
+                k_cumdecay_bh_all,
+                S0,
+                N_chunks=n_chunks_pad,
+                Ct=Ct,
+                K_pad=K_pad,
+                V_pad=V_pad,
+            )
 
         chunk_starts_bh = chunk_starts_bh_all[:, :, :Nc, :, :]
         if return_prepare_tape:
@@ -3461,6 +3560,15 @@ def _chunk_gated_delta_rule_flash_pallas(
 def _chunk_gated_delta_rule_flash_pallas_fwd(
     q_arr, k_arr, v_arr, g_arr, b_arr, chunk_size, segment_size, initial_state
 ):
+    C = int(chunk_size)
+    Ct = _round_up_to(C, _GDN_TPU_MULT)
+    L = q_arr.shape[2]
+    K_pad = _round_up_to(q_arr.shape[-1], _GDN_TPU_MULT)
+    V_pad = _round_up_to(v_arr.shape[-1], _GDN_TPU_MULT)
+    pad_tok = (C - (L % C)) % C
+    Nc = (L + pad_tok) // C
+    use_recompute_prepare_tape = (Ct >= _MXU_TILE) and (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE) and (Nc > 0)
+
     out, S, chunk_starts, v_pseudo_chunks, k_cumdecay_chunks, solve_transform_chunks = (
         _chunk_gated_delta_rule_flash_pallas_impl(
             q_arr,
@@ -3474,7 +3582,13 @@ def _chunk_gated_delta_rule_flash_pallas_fwd(
             return_prepare_tape=True,
         )
     )
-    # Save only what bwd needs (including forward solve tape to avoid bwd solve recompute).
+    if use_recompute_prepare_tape:
+        # Training-only full-sequence path: keep the recurrent shell in XLA and
+        # recompute chunk-local prep in backward so the residual does not carry
+        # the three largest prepare tapes.
+        v_pseudo_chunks = None
+        k_cumdecay_chunks = None
+        solve_transform_chunks = None
     residuals = (
         q_arr,
         k_arr,
@@ -3567,17 +3681,6 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
             tail_state = chunk_starts[:, :, -1:, :, :]
             pad_states = jnp.repeat(tail_state, n_chunks_pad - Nc, axis=2)
             chunk_starts = jnp.concatenate([chunk_starts, pad_states], axis=2)
-    v_pseudo_chunks = v_pseudo_chunks.astype(pallas_io_dtype)
-    k_cumdecay_chunks = k_cumdecay_chunks.astype(pallas_io_dtype)
-    solve_transform_chunks = solve_transform_chunks.astype(pallas_io_dtype)
-    if n_chunks_pad != Nc:
-        v_pseudo_chunks = jnp.pad(v_pseudo_chunks, ((0, 0), (0, 0), (0, n_chunks_pad - Nc), (0, 0), (0, 0)))
-        k_cumdecay_chunks = jnp.pad(k_cumdecay_chunks, ((0, 0), (0, 0), (0, n_chunks_pad - Nc), (0, 0), (0, 0)))
-        eye_chunk = jnp.broadcast_to(
-            jnp.eye(Ct, dtype=pallas_io_dtype)[None, None, None, :, :],
-            (B, H, n_chunks_pad - Nc, Ct, Ct),
-        )
-        solve_transform_chunks = jnp.concatenate([solve_transform_chunks, eye_chunk], axis=2)
 
     # pad Ct if needed
     if Ct != C:
@@ -3590,6 +3693,33 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
 
     # g_cum per chunk (outside pallas)
     gcum_c = jnp.cumsum(g_c, axis=-1)  # (B,H,n_chunks_pad,Ct)
+
+    if v_pseudo_chunks is None:
+        v_pseudo_chunks, k_cumdecay_chunks, solve_transform_chunks = _gdn_chunk_fullseq_prepare_pallas(
+            k_c,
+            v_c,
+            gcum_c,
+            b_c,
+            N_chunks=n_chunks_pad,
+            Ct=Ct,
+            K_pad=K_pad,
+            V_pad=V_pad,
+        )
+    else:
+        v_pseudo_chunks = v_pseudo_chunks.astype(pallas_io_dtype)
+        k_cumdecay_chunks = k_cumdecay_chunks.astype(pallas_io_dtype)
+        solve_transform_chunks = solve_transform_chunks.astype(pallas_io_dtype)
+        if n_chunks_pad != Nc:
+            v_pseudo_chunks = jnp.pad(v_pseudo_chunks, ((0, 0), (0, 0), (0, n_chunks_pad - Nc), (0, 0), (0, 0)))
+            k_cumdecay_chunks = jnp.pad(
+                k_cumdecay_chunks,
+                ((0, 0), (0, 0), (0, n_chunks_pad - Nc), (0, 0), (0, 0)),
+            )
+            eye_chunk = jnp.broadcast_to(
+                jnp.eye(Ct, dtype=pallas_io_dtype)[None, None, None, :, :],
+                (B, H, n_chunks_pad - Nc, Ct, Ct),
+            )
+            solve_transform_chunks = jnp.concatenate([solve_transform_chunks, eye_chunk], axis=2)
 
     dS_next0 = jnp.pad(dS_final, ((0, 0), (0, 0), (0, K_pad - dk), (0, V_pad - dv)))
     use_fullseq_bwd = (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE) and (n_chunks_pad > 0)

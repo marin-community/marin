@@ -4656,3 +4656,132 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated and rejected**. The explicit full-XLA chunk backend successfully removed the old GDN `shard_map/pallas_call` buckets, but it replaced them with a worse XLA `lax.scan` / `triangular_solve` shell and regressed end-to-end throughput by about `9%`.
 - Next bold hypothesis:
   - Do not spend another mainline iteration on a standalone full-XLA chunk backend. The next serious bet should keep Pallas for chunk-local solves while changing outer orchestration or backward tape structure (`M` or `O`+`N`), because the pure-XLA train-shell floor is now clearly worse.
+
+### Iteration 70 - Macro Move M / training-only associative outer shell + prepare-tape recompute (validated, improved)
+
+- Coverage slot: M
+- Why this attacks the train-path control bottleneck:
+  - The CE backward split is now closed on this source tree: `pallas_tpu` CE + `pallas` backward remains the deployable path, and the residual hot `while` is still CE-attributed at about `10.19 ms`.
+  - Iteration 68 showed that a reduced-Pallas forward shell can lower tracked train-path buckets while losing the step because `remainder_budget_ms` grows.
+  - This attempt keeps the train-path control pivot but changes the forward/backward boundary: move the full-sequence training recurrent apply to XLA only on the training path, then stop saving the three large forward prepare tapes so the remainder can fall instead of just shifting work out of the tracked GDN buckets.
+- Hot-path scan/cond status:
+  - Hot-path `lax.scan`: no serial train-path `lax.scan` is added.
+  - Hot-path `lax.cond` / runtime dispatch: no new runtime dispatch.
+  - The training-only outer shell uses `lax.associative_scan`, not a serial `WhileOp`.
+- Change class: `outer control structure`
+
+- Codex loop iteration: 3 / 10
+- Date: 2026-03-09T00:48:34Z
+- Starting commit: `fb1f608a71af6be7a8b0c363f37808214395ce51`
+- Dominant bottleneck carried in (fresh explicit `pallas_tpu` CE + `pallas` bwd baseline on the identical source tree, TPU:0 XLA Ops `pid=3, tid=3`):
+  - Forward closed-call: `20.663 ms`
+  - Backward closed-call: `13.127 ms`
+  - while: `10.188 ms`
+  - conditional: `0.026 ms`
+  - CE-attributed while: `10.188 ms`
+  - Kernel budget: `33.790 ms`
+  - Control budget: `10.214 ms`
+  - Train-path budget: `44.004 ms`
+  - Step duration: `167.398 ms`
+  - Remainder budget: `123.394 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro M (selected):** training-only XLA outer recurrent apply with Pallas leaf prepare, plus reduced backward residual contract that recomputes prepare tapes (`+0.5-3%`, high risk).
+  2. **Macro O+N:** retry the reduced-Pallas forward control arm with even more aggressive tape reduction / recompute (`+0-2%`, high probe risk after Iteration 68).
+  3. **Macro P:** another CE backward refresh on the current head (`0-1%`, low risk, but already closed and not a new structural move).
+
+- Selected macro-move category: **M) XLA-first outer train path with Pallas only as leaf chunk kernels**.
+
+- Expected effect on `while_ms`: mostly flat; the residual `while` should remain CE-attributed.
+- Expected effect on `step_duration_ms`: down, but via lower remainder rather than lower tracked GDN kernel/control buckets.
+- Expected effect on `remainder_budget_ms`: down materially if the reduced tape contract works.
+- Reject if `while_ms` remains flat? **No.** This candidate is not trying to attack CE `while`; it is trying to stop a reduced-Pallas train-path win from leaking into the remainder again.
+- Reject if `remainder_budget_ms` grows? **Yes.** That would reproduce the Iteration 68 failure mode and make the move off-critical-path.
+
+- Change summary:
+  - `lib/levanter/src/levanter/layers/gated_deltanet.py`
+    - Added `_gdn_chunk_fullseq_recurrent_fwd_associative_xla`.
+    - Routed the full-sequence **training-only** flash path (`return_prepare_tape=True`, `Ct/K/V >= 128`) through the associative XLA recurrent apply instead of the full-sequence recurrent Pallas call.
+    - Changed the custom-VJP residual contract on that path to stop saving `v_pseudo_chunks`, `k_cumdecay_chunks`, and `solve_transform_chunks`.
+    - Recompute those prepare tapes in backward with `_gdn_chunk_fullseq_prepare_pallas(...)` before the existing full-sequence backward Pallas launch.
+  - `experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py`
+    - Added the repo-required license header while running the required all-files pre-commit pass.
+  - `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
+    - Added the repo-required license header while running the required all-files pre-commit pass.
+
+- Correctness checks:
+  - Local focused checks:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`
+  - TPU validation (`tests=both`, managed dev TPU):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped`
+
+- Profile run (managed dev TPU):
+  - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i03_M_assoc_recompute_tape --marin-prefix gs://marin-us-east5 --no-sync`
+  - run: `https://wandb.ai/marin-community/marin/runs/gdn_i03_M_assoc_recompute_tape_130m_ch128_seg16_20steps-1ea05c`
+  - profiler artifact: `run-gdn_i03_M_assoc_recompute_tape_130m_ch128_seg16_20steps-1ea05c-profiler:v0`
+  - downloaded trace: `scratch/wandb_artifacts/plugins/profile/2026_03_09_00_41_01/perfetto_trace.json.gz`
+  - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+
+- Hotspot metrics (vs explicit `pallas_tpu` CE + `pallas` bwd baseline, TPU:0 XLA Ops `pid=3, tid=3`):
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - CE-attributed while: `10.188 ms -> 10.255 ms`
+  - Forward closed-call: `20.663 ms -> 20.664 ms`
+  - Backward closed-call: `13.127 ms -> 13.127 ms`
+  - while: `10.188 ms -> 10.255 ms`
+  - conditional: `0.026 ms -> 0.026 ms`
+  - Kernel budget: `33.790 ms -> 33.790 ms`
+  - Control budget: `10.214 ms -> 10.280 ms`
+  - Train-path budget: `44.004 ms -> 44.070 ms`
+  - Step duration: `167.398 ms -> 165.850 ms`
+  - Remainder budget: `123.394 ms -> 121.780 ms`
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - Candidate vs explicit `pallas` baseline:
+    - `throughput/mfu`: `6.050995 -> 6.107490` (`+0.93%`)
+    - `throughput/tokens_per_second`: `195748.541 -> 197576.121` (`+0.93%`)
+    - `throughput/duration`: `0.167398s -> 0.165850s` (`-0.93%`)
+  - vs active champion from `.agents/logs/gdn_codex_loop/perf_state.json` (`throughput/mfu=5.748507`):
+    - candidate: `+6.24%`
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - The largest `while` remains the CE backward/custom-VJP shell on TPU Pallas CE; the GDN train path does not add a new dominant `while`.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - No serial hot-path `lax.scan`. It adds an associative forward composition over chunk summaries.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The associative shell lowers as static composition rather than a serial scan, and measured `while` stays essentially flat while remaining CE-attributed.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - Not applicable; the point of the move is to avoid the losing serial-scan shell and move the forward orchestration plus tape pressure into a different boundary.
+  - Is the residual `while` still CE-attributed in this design?
+    - Yes.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: 10.188 ms -> 10.255 ms`
+    - Forward closed-call `20.663 ms -> 20.664 ms`
+    - Backward closed-call `13.127 ms -> 13.127 ms`
+    - `while: 10.188 ms -> 10.255 ms`
+    - `conditional: 0.026 ms -> 0.026 ms`
+    - `Kernel budget: 33.790 ms -> 33.790 ms`
+    - `Control budget: 10.214 ms -> 10.280 ms`
+    - `Train-path budget: 44.004 ms -> 44.070 ms`
+    - `Step duration: 167.398 ms -> 165.850 ms`
+    - `Remainder budget: 123.394 ms -> 121.780 ms`
+    - `throughput/mfu +0.93%`, `throughput/tokens_per_second +0.93%`, `throughput/duration -0.93%`
+  - Governance:
+    - `while` increases only `+0.067 ms` and `train_path_budget` increases only `+0.066 ms`, both far below the hard rejection thresholds.
+    - `remainder_budget_ms` falls by `-1.615 ms`, so this is not another off-critical-path / overlap-loss result.
+    - Primary metric improvement (`+0.93%` MFU) clears the promotion threshold with CE fixed at the deployable `pallas_tpu` / `pallas` setting.
+
+- Assessment: **validated and improved**. Unlike Iteration 68, the reduced-Pallas outer-shell move no longer leaks the gain into the remainder: tracked GDN budget is effectively flat, but end-to-end step time improves because the reduced backward tape contract lowers the untracked remainder enough to matter.
+- Next bold hypothesis:
+  - Keep CE fixed and build on this `M` boundary rather than retreating to kernel-local tuning. The next serious bet should either compress `chunk_starts` as well or attack the remaining forward closed-call budget inside this improved remainder regime, without reintroducing a serial train-path scan shell.
