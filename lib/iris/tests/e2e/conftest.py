@@ -26,7 +26,7 @@ from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.constraints import Constraint
+from iris.cluster.constraints import Constraint, WellKnownAttribute
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -43,6 +43,18 @@ from .chronos import VirtualClock
 
 IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
+
+
+def pytest_addoption(parser):
+    """Cloud mode CLI options for running smoke tests against remote clusters."""
+    parser.addoption("--iris-config", default=None, help="Path to cluster config YAML for cloud mode")
+    parser.addoption(
+        "--iris-mode",
+        default="local",
+        choices=["local", "full", "keep", "redeploy"],
+        help="Cluster mode: local (in-process), full (start+stop), keep, redeploy",
+    )
+    parser.addoption("--iris-controller-url", default=None, help="Connect to existing controller")
 
 
 @dataclass
@@ -284,6 +296,9 @@ class _NoOpPage:
     def click(self, selector, **kwargs):
         pass
 
+    def fill(self, selector, value, **kwargs):
+        pass
+
     def wait_for_selector(self, selector, **kwargs):
         pass
 
@@ -428,6 +443,202 @@ def screenshot(page, request, tmp_path):
         return path
 
     return capture
+
+
+# ---------------------------------------------------------------------------
+# Smoke-test fixtures (module-scoped so all test_smoke_* share one cluster)
+# ---------------------------------------------------------------------------
+
+
+def _add_cpu_group(config: config_pb2.IrisClusterConfig, num_workers: int = 4) -> None:
+    """CPU scale group with multiple workers for scheduling diversity and bin-packing."""
+    sg = config.scale_groups["local-cpu"]
+    sg.name = "local-cpu"
+    sg.num_vms = 1
+    sg.min_slices = num_workers
+    sg.max_slices = num_workers
+    sg.resources.cpu_millicores = 8000
+    sg.resources.memory_bytes = 16 * 1024**3
+    sg.resources.disk_bytes = 50 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.slice_template.local.SetInParent()
+
+
+def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
+    """4-VM TPU coscheduling group for reservation and large-job tests."""
+    sg = config.scale_groups["tpu_cosched_4"]
+    sg.name = "tpu_cosched_4"
+    sg.num_vms = 4
+    sg.min_slices = 1
+    sg.max_slices = 1
+    sg.resources.cpu_millicores = 128000
+    sg.resources.memory_bytes = 128 * 1024**3
+    sg.resources.disk_bytes = 1024 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.resources.device_variant = "v5litepod-32"
+    sg.resources.preemptible = True
+    sg.slice_template.preemptible = True
+    sg.slice_template.num_vms = 4
+    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.slice_template.accelerator_variant = "v5litepod-32"
+    sg.slice_template.local.SetInParent()
+
+
+def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
+    """Two CPU scale groups in different regions for constraint routing tests."""
+    for name, region in [("cpu-region-a", "us-central1"), ("cpu-region-b", "europe-west4")]:
+        sg = config.scale_groups[name]
+        sg.name = name
+        sg.num_vms = 1
+        sg.min_slices = 1
+        sg.max_slices = 2
+        sg.resources.cpu_millicores = 8000
+        sg.resources.memory_bytes = 16 * 1024**3
+        sg.resources.disk_bytes = 50 * 1024**3
+        sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.local.SetInParent()
+        sg.worker.attributes[WellKnownAttribute.REGION] = region
+
+
+# Total smoke cluster workers:
+# 4 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 12
+SMOKE_WORKER_COUNT = 12
+
+
+def _make_smoke_config() -> config_pb2.IrisClusterConfig:
+    """Build a local config with CPU, TPU (coscheduling), and multi-region workers.
+
+    Creates 12 workers across 4 scale groups to exercise scheduling diversity,
+    bin-packing, coscheduling, reservations, and region-based routing.
+    """
+    config = load_config(DEFAULT_CONFIG)
+    config.scale_groups.clear()
+    _add_cpu_group(config, num_workers=4)
+    _add_coscheduling_group(config)
+    _add_coscheduling_group_4vm(config)
+    _add_multi_region_groups(config)
+    return make_local_config(config)
+
+
+@pytest.fixture(scope="module")
+def smoke_cluster(request):
+    """Module-scoped cluster shared across all smoke tests.
+
+    Local mode: boots in-process cluster with CPU + TPU + multi-region groups.
+    Cloud mode: connects to existing cluster via --iris-controller-url or
+    starts one via CLI using --iris-config.
+    """
+    controller_url = request.config.getoption("--iris-controller-url")
+    config_path = request.config.getoption("--iris-config")
+    mode = request.config.getoption("--iris-mode")
+
+    if controller_url:
+        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+        controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
+        yield IrisTestCluster(url=controller_url, client=client, controller_client=controller_client)
+        controller_client.close()
+        return
+
+    if config_path and mode != "local":
+        yield from _cloud_smoke_cluster(config_path, mode)
+        return
+
+    config = _make_smoke_config()
+    with connect_cluster(config) as url:
+        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
+        yield tc
+        controller_client.close()
+
+
+@pytest.fixture(scope="module")
+def smoke_page(smoke_cluster):
+    """Module-scoped Playwright page for smoke dashboard tests."""
+    try:
+        import playwright.sync_api as pw
+
+        with pw.sync_playwright() as p:
+            b = p.chromium.launch()
+            pg = b.new_page(viewport={"width": 1400, "height": 900})
+            pg.goto(f"{smoke_cluster.url}/")
+            pg.wait_for_load_state("domcontentloaded")
+            yield pg
+            pg.close()
+            b.close()
+    except (ImportError, Exception):
+        yield _NoOpPage()
+
+
+@pytest.fixture(scope="module")
+def smoke_screenshot(smoke_page, tmp_path_factory):
+    """Module-scoped screenshot capture for smoke dashboard tests."""
+    if isinstance(smoke_page, _NoOpPage):
+
+        def noop_capture(label: str) -> Path:
+            return tmp_path_factory.mktemp("screenshots") / f"smoke-{label}.png"
+
+        return noop_capture
+
+    output_dir = Path(
+        os.environ.get(
+            "IRIS_SCREENSHOT_DIR",
+            str(tmp_path_factory.mktemp("screenshots")),
+        )
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def capture(label: str) -> Path:
+        path = output_dir / f"smoke-{label}.png"
+        smoke_page.screenshot(path=str(path), full_page=True)
+        return path
+
+    return capture
+
+
+def _cloud_smoke_cluster(config_path: str, mode: str):
+    """Generator that starts a cloud cluster via CLI and yields an IrisTestCluster.
+
+    Ports the cluster lifecycle from smoke-test.py: starts the controller via
+    `iris cluster start`, waits for "Controller started at" in stdout, connects,
+    yields, and stops the cluster on teardown.
+    """
+    import re
+    import signal
+
+    config_path = Path(config_path)
+    cmd = ["uv", "run", "iris", "cluster", "start", "--config", str(config_path)]
+    if mode == "redeploy":
+        cmd.append("--redeploy")
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    url = None
+
+    try:
+        # Wait for controller to start by scanning stdout
+        deadline = time.monotonic() + 120
+        for line in iter(proc.stdout.readline, ""):
+            if time.monotonic() > deadline:
+                raise TimeoutError("Controller did not start within 120s")
+            m = re.search(r"Controller started at (http://\S+)", line)
+            if m:
+                url = m.group(1)
+                break
+
+        if not url:
+            raise RuntimeError("Controller process exited without reporting address")
+
+        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        tc.wait_for_workers(1, timeout=300)
+        yield tc
+        controller_client.close()
+    finally:
+        if mode != "keep":
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=30)
 
 
 # ---------------------------------------------------------------------------

@@ -20,11 +20,23 @@ Distributed job orchestration replacing Ray with simpler primitives. Start with 
 # Unit tests
 uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
 
-# E2E tests (no Docker)
+# E2E smoke tests (shared module-scoped cluster, fast)
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts="
+
+# E2E chaos tests (fresh cluster per test, slower)
+uv run pytest lib/iris/tests/e2e/test_chaos.py -m e2e -o "addopts="
+
+# All E2E tests (no Docker)
 uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
 
 # Full E2E (requires Docker)
 uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
+
+# E2E smoke tests (cloud mode, connect to running cluster)
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
+
+# E2E smoke tests (cloud mode, full lifecycle)
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-config examples/smoke.yaml --iris-mode full -o "addopts="
 ```
 
 See `TESTING.md` for the complete testing policy, markers, and additional commands.
