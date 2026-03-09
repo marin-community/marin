@@ -26,6 +26,7 @@ from experiments.domain_phase_mix.exploratory.general_scaling_models import (
 )
 from experiments.domain_phase_mix.nextgen.contracts import Candidate, LoopConfig, PolicyArtifactRef
 from experiments.domain_phase_mix.nextgen.utils import stable_hash
+from experiments.domain_phase_mix.starcoder_metadata import infer_starcoder_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,9 @@ class ModelAdapter(Protocol):
     """Adapter interface used by the next-gen fit/propose stage."""
 
     @property
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
-    def applicable(self, spec: DatasetSpec) -> bool:
-        ...
+    def applicable(self, spec: DatasetSpec) -> bool: ...
 
     def fit_and_propose(
         self,
@@ -50,8 +49,7 @@ class ModelAdapter(Protocol):
         loop: LoopConfig,
         spec: DatasetSpec,
         training_setup: dict[str, Any],
-    ) -> tuple[Candidate, int | None]:
-        ...
+    ) -> tuple[Candidate, int | None]: ...
 
 
 @dataclass(frozen=True)
@@ -206,6 +204,8 @@ def _extract_phase_domain_columns(df: pd.DataFrame) -> tuple[list[str], list[str
             continue
         phase_idx = int(match.group(1))
         domain = match.group(2)
+        if domain.endswith("_epochs"):
+            continue
         phases.add(phase_idx)
         domains_by_phase.setdefault(phase_idx, [])
         if domain not in domains_by_phase[phase_idx]:
@@ -252,8 +252,12 @@ def _build_dataset_spec(df: pd.DataFrame, objective_metric: str) -> DatasetSpec:
     weights = _build_weights_tensor(model_df, phase_names, domains)
     y = model_df[objective_metric].to_numpy(dtype=float)
 
-    # V1 default for generic imports: epoch multipliers of 1.0 per (phase, domain).
-    epoch_multipliers = np.ones((len(phase_names), len(domains)), dtype=float)
+    starcoder_metadata = infer_starcoder_metadata(phase_names, domains)
+    if starcoder_metadata is None:
+        epoch_multipliers = np.ones((len(phase_names), len(domains)), dtype=float)
+        small_domains = _default_small_domains(domains)
+    else:
+        epoch_multipliers, small_domains = starcoder_metadata
 
     return DatasetSpec(
         weights=weights,
@@ -261,7 +265,7 @@ def _build_dataset_spec(df: pd.DataFrame, objective_metric: str) -> DatasetSpec:
         epoch_multipliers=epoch_multipliers,
         domain_names=domains,
         phase_names=phase_names,
-        small_domains=_default_small_domains(domains),
+        small_domains=small_domains,
         name="nextgen_merged_runs",
     )
 
@@ -368,9 +372,7 @@ def _optimize_top1_point_two_domain(
 
 def _build_phase_weights(point: np.ndarray, spec: DatasetSpec) -> dict[str, dict[str, float]]:
     return {
-        spec.phase_names[p_idx]: {
-            spec.domain_names[d_idx]: float(point[p_idx, d_idx]) for d_idx in range(spec.M)
-        }
+        spec.phase_names[p_idx]: {spec.domain_names[d_idx]: float(point[p_idx, d_idx]) for d_idx in range(spec.M)}
         for p_idx in range(spec.N)
     }
 

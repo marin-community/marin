@@ -60,6 +60,8 @@ class LoopConfig:
     candidate_opt_method: Literal["sample", "scipy_minimize"] = "sample"
     candidate_opt_restarts: int = 128
     candidate_opt_maxiter: int = 400
+    design_policy: Literal["sampler", "static_d_optimal"] = "sampler"
+    design_candidate_pool_size: int = 2048
     # Optional validation execution toggle. V1 defaults to planning-only slots;
     # real execution can be enabled when an execution adapter is provided.
     execute_validation_slots: bool = False

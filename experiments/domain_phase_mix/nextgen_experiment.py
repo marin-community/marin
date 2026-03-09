@@ -96,6 +96,19 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         default=400,
         help="Maximum optimizer iterations per scipy restart.",
     )
+    parser.add_argument(
+        "--design-policy",
+        type=str,
+        default="sampler",
+        choices=("sampler", "static_d_optimal"),
+        help="How to plan new swarm runs before training.",
+    )
+    parser.add_argument(
+        "--design-candidate-pool-size",
+        type=int,
+        default=2048,
+        help="Candidate pool size used by the static D-optimal design policy.",
+    )
     parser.add_argument("--wandb-entity", type=str, default="marin-community")
     parser.add_argument("--wandb-project", type=str, default="marin")
     return parser.parse_known_args()
@@ -124,6 +137,8 @@ def _build_loop_config(args: argparse.Namespace) -> LoopConfig:
         candidate_opt_method=args.candidate_opt_method,
         candidate_opt_restarts=args.candidate_opt_restarts,
         candidate_opt_maxiter=args.candidate_opt_maxiter,
+        design_policy=args.design_policy,
+        design_candidate_pool_size=args.design_candidate_pool_size,
     )
 
 

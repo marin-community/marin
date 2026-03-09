@@ -56,6 +56,8 @@ def _decode_loop_config(payload: str) -> LoopConfig:
         candidate_opt_method=data.get("candidate_opt_method", "sample"),
         candidate_opt_restarts=int(data.get("candidate_opt_restarts", 128)),
         candidate_opt_maxiter=int(data.get("candidate_opt_maxiter", 400)),
+        design_policy=data.get("design_policy", "sampler"),
+        design_candidate_pool_size=int(data.get("design_candidate_pool_size", 2048)),
         execute_validation_slots=bool(data.get("execute_validation_slots", False)),
     )
 
@@ -75,6 +77,8 @@ def _encode_loop_config(loop: LoopConfig) -> str:
             "candidate_opt_method": loop.candidate_opt_method,
             "candidate_opt_restarts": loop.candidate_opt_restarts,
             "candidate_opt_maxiter": loop.candidate_opt_maxiter,
+            "design_policy": loop.design_policy,
+            "design_candidate_pool_size": loop.design_candidate_pool_size,
             "execute_validation_slots": loop.execute_validation_slots,
         },
         sort_keys=True,
@@ -116,7 +120,6 @@ def run_fit_propose(config: FitProposeConfig) -> None:
         if item.candidate_id is not None and item.error is None
     }
     write_json(os.path.join(config.output_path, CANDIDATE_ASSIGNMENTS_JSON), assignment)
-
 
 
 def create_fit_propose_step(*, loop: LoopConfig, export_step: ExecutorStep, output_override_path: str) -> ExecutorStep:

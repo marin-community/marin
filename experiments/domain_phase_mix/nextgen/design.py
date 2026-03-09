@@ -17,6 +17,11 @@ from marin.execution.executor import ExecutorStep, this_output_path
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.experiment import MixtureExperiment
 from experiments.domain_phase_mix.nextgen.contracts import LoopConfig, LoopState, PlannedRun
+from experiments.domain_phase_mix.static_batch_selection import (
+    build_dataset_spec_from_frame,
+    prospective_d_optimal_selection,
+    run_records_to_dataframe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,18 +51,67 @@ def _existing_weight_configs(state: LoopState) -> list[WeightConfig]:
     return [WeightConfig(run_id=int(r.local_run_id), phase_weights=r.phase_weights) for r in rows]
 
 
+def _sample_with_current_sampler(
+    loop: LoopConfig,
+    experiment: MixtureExperiment,
+    existing: list[WeightConfig],
+) -> list[WeightConfig]:
+    sampler = experiment.create_weight_sampler(seed=loop.candidate_search_seed)
+    return sampler.sample_n_configs(
+        loop.n_new_runs,
+        deduplicate=True,
+        existing_configs=existing,
+    )
+
+
+def _sample_with_static_selector(
+    loop: LoopConfig,
+    experiment: MixtureExperiment,
+    state: LoopState,
+    existing: list[WeightConfig],
+) -> list[WeightConfig]:
+    run_df = run_records_to_dataframe(state.runs)
+    spec = build_dataset_spec_from_frame(
+        run_df,
+        objective_metric=loop.objective_metric,
+        name=f"{loop.name}_state",
+    )
+    selected, selection = prospective_d_optimal_selection(
+        spec,
+        experiment,
+        n_select=loop.n_new_runs,
+        seed=loop.candidate_search_seed,
+        pool_size=max(loop.design_candidate_pool_size, loop.n_new_runs),
+        existing_configs=existing,
+    )
+    logger.info(
+        "Static D-optimal design selected %d configs for loop %s (logdet=%.4f)",
+        len(selected),
+        loop.name,
+        selection.info_logdet,
+    )
+    return selected
+
+
 def plan_new_runs(loop: LoopConfig, experiment: MixtureExperiment, state: LoopState) -> list[PlannedRun]:
     """Sample new runs incrementally against prior loop state."""
     if loop.n_new_runs <= 0:
         return []
 
     existing = _existing_weight_configs(state)
-    sampler = experiment.create_weight_sampler(seed=loop.candidate_search_seed)
-    sampled = sampler.sample_n_configs(
-        loop.n_new_runs,
-        deduplicate=True,
-        existing_configs=existing,
-    )
+    sampled: list[WeightConfig]
+    if loop.design_policy == "static_d_optimal":
+        try:
+            sampled = _sample_with_static_selector(loop, experiment, state, existing)
+        except Exception as exc:
+            logger.warning(
+                "Static D-optimal design unavailable for loop %s; falling back to sampler: %s",
+                loop.name,
+                exc,
+            )
+            sampled = _sample_with_current_sampler(loop, experiment, existing)
+    else:
+        sampled = _sample_with_current_sampler(loop, experiment, existing)
 
     next_id = state.next_local_run_id
     planned: list[PlannedRun] = []

@@ -35,11 +35,19 @@ logger = logging.getLogger(__name__)
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
 DEFAULT_WORKING_DIR_EXCLUDES = [
     ".git",
+    ".venv",
+    ".uv-cache",
+    ".pytest_cache",
+    ".ruff_cache",
     "docs/",
     "**/*.pack",
     "lib/levanter/docs",
+    "lib/dupekit/target",
     "experiments/domain_phase_mix/exploratory",
     "experiments/domain_phase_mix/offline_rl/artifacts",
+    "experiments/domain_phase_mix/exploratory/two_phase_starcoder_models.pkl",
+    "experiments/domain_phase_mix/exploratory/three_phase_plots",
+    "experiments/domain_phase_mix/exploratory/holdout_plots_116",
 ]
 
 
