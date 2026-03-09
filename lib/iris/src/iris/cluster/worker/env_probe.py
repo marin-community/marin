@@ -392,6 +392,7 @@ def build_worker_metadata(
         device=device,
         attributes=attributes,
         vm_address=hardware.ip_address,
+        git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
     )
 
 

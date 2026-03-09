@@ -174,7 +174,7 @@ class FetchLogsResponse(_message.Message):
     def __init__(self, entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., cursor: _Optional[int] = ...) -> None: ...
 
 class ProcessInfo(_message.Message):
-    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "cpu_percent", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count")
+    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "cpu_percent", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count", "git_hash")
     HOSTNAME_FIELD_NUMBER: _ClassVar[int]
     PID_FIELD_NUMBER: _ClassVar[int]
     PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -186,6 +186,7 @@ class ProcessInfo(_message.Message):
     OPEN_FD_COUNT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
     CPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    GIT_HASH_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     pid: int
     python_version: str
@@ -197,7 +198,8 @@ class ProcessInfo(_message.Message):
     open_fd_count: int
     memory_total_bytes: int
     cpu_count: int
-    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., cpu_percent: _Optional[float] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ...) -> None: ...
+    git_hash: str
+    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., cpu_percent: _Optional[float] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ..., git_hash: _Optional[str] = ...) -> None: ...
 
 class GetProcessStatusRequest(_message.Message):
     __slots__ = ("max_log_lines", "log_substring", "min_log_level", "target")
@@ -523,7 +525,7 @@ class CoschedulingConfig(_message.Message):
     def __init__(self, group_by: _Optional[str] = ...) -> None: ...
 
 class WorkerMetadata(_message.Message):
-    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "vm_address")
+    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "vm_address", "git_hash")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -548,6 +550,7 @@ class WorkerMetadata(_message.Message):
     GCE_ZONE_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     VM_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    GIT_HASH_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     ip_address: str
     cpu_count: int
@@ -565,7 +568,8 @@ class WorkerMetadata(_message.Message):
     gce_zone: str
     attributes: _containers.MessageMap[str, AttributeValue]
     vm_address: str
-    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., vm_address: _Optional[str] = ...) -> None: ...
+    git_hash: str
+    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., vm_address: _Optional[str] = ..., git_hash: _Optional[str] = ...) -> None: ...
 
 class Controller(_message.Message):
     __slots__ = ()
@@ -877,29 +881,6 @@ class Controller(_message.Message):
         task_count: int
         worker_count: int
         def __init__(self, snapshot_path: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., job_count: _Optional[int] = ..., task_count: _Optional[int] = ..., worker_count: _Optional[int] = ...) -> None: ...
-    class GetClusterSummaryRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
-    class GetClusterSummaryResponse(_message.Message):
-        __slots__ = ("job_state_counts", "total_jobs", "total_workers", "healthy_workers", "total_users")
-        class JobStateCountsEntry(_message.Message):
-            __slots__ = ("key", "value")
-            KEY_FIELD_NUMBER: _ClassVar[int]
-            VALUE_FIELD_NUMBER: _ClassVar[int]
-            key: str
-            value: int
-            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
-        JOB_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_JOBS_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_WORKERS_FIELD_NUMBER: _ClassVar[int]
-        HEALTHY_WORKERS_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_USERS_FIELD_NUMBER: _ClassVar[int]
-        job_state_counts: _containers.ScalarMap[str, int]
-        total_jobs: int
-        total_workers: int
-        healthy_workers: int
-        total_users: int
-        def __init__(self, job_state_counts: _Optional[_Mapping[str, int]] = ..., total_jobs: _Optional[int] = ..., total_workers: _Optional[int] = ..., healthy_workers: _Optional[int] = ..., total_users: _Optional[int] = ...) -> None: ...
     class UserSummary(_message.Message):
         __slots__ = ("user", "task_state_counts", "job_state_counts")
         class TaskStateCountsEntry(_message.Message):

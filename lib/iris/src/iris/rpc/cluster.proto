@@ -117,6 +117,7 @@ message ProcessInfo {
   int32 open_fd_count = 9;      // Open file descriptors
   int64 memory_total_bytes = 10; // Total system memory
   int32 cpu_count = 11;          // Number of CPU cores
+  string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
 }
 
 message GetProcessStatusRequest {
@@ -467,6 +468,10 @@ message WorkerMetadata {
   // VM IP address used for autoscaler slice/worker matching.
   // Self-discovered by the worker at startup via socket probe.
   string vm_address = 41;
+
+  // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
+  // Allows the controller to surface per-worker version info for debugging.
+  string git_hash = 42;
 }
 
 // ============================================================================
@@ -729,16 +734,6 @@ message Controller {
     int32 worker_count = 5;
   }
 
-  // --- Cluster Summary ---
-  message GetClusterSummaryRequest {}
-  message GetClusterSummaryResponse {
-    map<string, int32> job_state_counts = 1;
-    int32 total_jobs = 2;
-    int32 total_workers = 3;
-    int32 healthy_workers = 4;
-    int32 total_users = 5;
-  }
-
   message UserSummary {
     string user = 1;
     map<string, int32> task_state_counts = 2;
@@ -922,8 +917,6 @@ service ControllerService {
   // Transactions / Actions Log
   rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 
-  // Cluster summary (aggregated counts)
-  rpc GetClusterSummary(Controller.GetClusterSummaryRequest) returns (Controller.GetClusterSummaryResponse);
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // Task logs (proxied to worker)
