@@ -61,11 +61,6 @@ def _get_autoscaler_status(controller_url: str) -> vm_pb2.AutoscalerStatus:
     return client.get_autoscaler_status(request).status
 
 
-def _get_cluster_summary(controller_url: str) -> cluster_pb2.Controller.GetClusterSummaryResponse:
-    client = cluster_connect.ControllerServiceClientSync(controller_url)
-    return client.get_cluster_summary(cluster_pb2.Controller.GetClusterSummaryRequest())
-
-
 def _get_worker_status(controller_url: str, worker_id: str) -> cluster_pb2.Controller.GetWorkerStatusResponse:
     client = cluster_connect.ControllerServiceClientSync(controller_url)
     request = cluster_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
@@ -321,14 +316,17 @@ def cluster_status_cmd(ctx):
     controller_url = require_controller_url(ctx)
     click.echo("Checking controller status...")
     try:
-        summary = _get_cluster_summary(controller_url)
-        as_status = _get_autoscaler_status(controller_url)
+        client = cluster_connect.ControllerServiceClientSync(controller_url)
+        proc = client.get_process_status(cluster_pb2.GetProcessStatusRequest()).process_info
+        workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+        as_status = client.get_autoscaler_status(cluster_pb2.Controller.GetAutoscalerStatusRequest()).status
+        healthy = sum(1 for w in workers if w.healthy)
         click.echo("Controller Status:")
         click.echo("  Running: True")
         click.echo("  Healthy: True")
         click.echo(f"  Address: {controller_url}")
-        click.echo(f"  Git Hash: {summary.controller_git_hash}")
-        click.echo(f"  Workers: {summary.healthy_workers}/{summary.total_workers} healthy")
+        click.echo(f"  Git Hash: {proc.git_hash}")
+        click.echo(f"  Workers: {healthy}/{len(workers)} healthy")
         click.echo("\nAutoscaler Status:")
         if not as_status.groups:
             click.echo("  No scale groups configured")
