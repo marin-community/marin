@@ -7,6 +7,7 @@ import tempfile
 import typing
 import warnings
 import json
+import hashlib
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
@@ -309,11 +310,7 @@ class WandbConfig(TrackerConfig):
             with open(requirements_path, "w") as f:
                 f.write(requirements)
             if wandb.run is not None:
-                wandb.run.log_artifact(
-                    str(requirements_path),
-                    name=_truncate_wandb_artifact_name("requirements.txt"),
-                    type="requirements",
-                )
+                wandb.run.log_artifact(str(requirements_path), name="requirements.txt", type="requirements")
 
         wandb.summary["num_devices"] = jax.device_count()  # type: ignore
         wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
@@ -379,7 +376,10 @@ def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
         return None
     if len(name) <= _WANDB_ARTIFACT_NAME_MAX_LENGTH:
         return name
-    truncated = name[:_WANDB_ARTIFACT_NAME_MAX_LENGTH]
+    # Keep names stable and unique across different long inputs by keeping a short hash suffix.
+    hash_suffix = hashlib.sha256(name.encode("utf-8")).hexdigest()[:7]
+    max_truncated_prefix_len = _WANDB_ARTIFACT_NAME_MAX_LENGTH - len(hash_suffix) - 1
+    truncated = f"{name[:max_truncated_prefix_len]}-{hash_suffix}"
     logger.warning(
         "Wandb artifact name exceeds %d characters and will be truncated: %s -> %s",
         _WANDB_ARTIFACT_NAME_MAX_LENGTH,
