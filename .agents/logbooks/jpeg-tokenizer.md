@@ -591,3 +591,28 @@
   - the shutdown-time W&B `BrokenPipeError` remains non-fatal and does not change the successful Ray terminal state
 - Next action: update the Phase 1 comparison note to include exact-libjpeg `K=8`, then decide whether the next
   comparison should focus on bytes vs coeffs or on a sharper JPEG-symbol baseline.
+
+### 2026-03-09 10:08 - Whole-image byte baseline prepared, but not launched
+
+- Hypothesis: the honest byte-vs-coeff comparison should use one whole canonical JPEG per example rather than
+  fixed `8192`-byte windows.
+- Command:
+  - added `scripts/jpeg_tokenizer/build_whole_image_byte_token_store.py`
+  - scanned full Imagenette lengths with:
+    `uv run python - <<'PY' ... canonicalize_image(...) ... whole_image_byte_length(...) ... PY`
+- Result:
+  - added a whole-image byte tokenizer path with distinct `EOS=256` and `PAD=257`
+  - the passthrough data path now reads `loss_mask_ignore_id` from token-store metadata and masks pad tails correctly
+  - full Imagenette whole-image canonical JPEG lengths came out to:
+    - max length: `54544`
+    - mean length: `25524.86`
+    - examples: `13394`
+  - a small whole-image builder smoke succeeded locally with `seq_len=28826` on a `4+2` example slice
+- Interpretation:
+  - the data path for a true whole-image byte baseline is now ready
+  - but the current JPEG model is still the plain full-attention grug transformer, so a `54544`-token whole-image run
+    is not a credible TPU experiment under the current architecture
+  - the next fair byte-vs-coeff comparison requires an attention/windowing decision that can be applied consistently
+    across both representations, rather than just swapping the token store
+- Next action: keep the whole-image byte store path ready, but do not launch it until the attention regime for the
+  comparison is made explicit.

@@ -36,11 +36,15 @@ from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     ByteWindowTokenizerConfig,
     CoefficientTokenSource,
     CoefficientTokenizerConfig,
+    WholeImageByteTokenizerConfig,
     byte_window_vocab_size,
     canonicalize_image,
     encode_dct_coeffs,
     encode_jpeg_bytes,
     encode_jpeg_symbols,
+    whole_image_byte_vocab_size,
+    whole_image_byte_length,
+    pad_whole_image_byte_tokens,
     quantized_luma_blocks,
     reconstruct_luma_from_coeff_tokens,
     stable_byte_checksum,
@@ -104,6 +108,15 @@ def test_byte_window_tokenizer_appends_eos_and_pads_tail():
 
     assert [window.tolist() for window in windows] == [[1, 2, 3, 4], [5, 256, 256, 256]]
     assert byte_window_vocab_size() == 257
+
+
+def test_whole_image_byte_tokenizer_appends_eos_and_masks_pad_tail():
+    config = WholeImageByteTokenizerConfig(eos_token_id=256, pad_token_id=257, append_eos=True)
+    padded = pad_whole_image_byte_tokens(np.asarray([1, 2, 3], dtype=np.int32), seq_len=6, config=config)
+
+    assert padded.tolist() == [1, 2, 3, 256, 257, 257]
+    assert whole_image_byte_length(np.asarray([1, 2, 3], dtype=np.int32), config=config) == 4
+    assert whole_image_byte_vocab_size(config) == 258
 
 
 def test_canonicalization_and_reference_tokenizers_are_deterministic():
@@ -245,6 +258,58 @@ def test_file_backed_token_store_round_trip(tmp_path):
     validation_sets = data_config.validation_grug_sets(seq_len=4)
     first_example = asyncio.run(validation_sets["jpeg_tokens"].get_batch([0]))
     assert first_example[0].tokens.tolist() == [9, 10, 11, 12]
+
+
+def test_file_backed_token_store_uses_loss_mask_ignore_id_from_metadata(tmp_path):
+    store_dir = tmp_path / "byte_store"
+    metadata = TokenStoreMetadata(
+        dataset="dummy",
+        dataset_config="v0",
+        image_column="image",
+        vocab_size=258,
+        seq_len=6,
+        canonical_config={"resolution": 256},
+        tokenizer_config={"eos_token_id": 256, "pad_token_id": 257, "loss_mask_ignore_id": 257},
+        splits={
+            "train": TokenStoreSplitInfo(
+                num_examples=1,
+                seq_len=6,
+                tokens_path="train_tokens.npy",
+                manifest_path="train_manifest.jsonl",
+            ),
+            "validation": TokenStoreSplitInfo(
+                num_examples=1,
+                seq_len=6,
+                tokens_path="validation_tokens.npy",
+                manifest_path="validation_manifest.jsonl",
+            ),
+        },
+    )
+    split_tokens = {
+        "train": np.asarray([[1, 2, 3, 256, 257, 257]], dtype=np.uint16),
+        "validation": np.asarray([[4, 5, 6, 256, 257, 257]], dtype=np.uint16),
+    }
+    split_records = {
+        "train": [TokenSequenceRecord(example_id="train:0", split="train", num_tokens=4, checksum="a", source_index=0)],
+        "validation": [
+            TokenSequenceRecord(
+                example_id="validation:0",
+                split="validation",
+                num_tokens=4,
+                checksum="b",
+                source_index=0,
+            )
+        ],
+    }
+
+    write_token_store(store_dir, metadata=metadata, split_tokens=split_tokens, split_records=split_records)
+
+    data_config = build_passthrough_lm_data_config_from_store(store_dir=store_dir)
+    validation_sets = data_config.validation_grug_sets(seq_len=6)
+    first_example = asyncio.run(validation_sets["jpeg_tokens"].get_batch([0]))[0]
+
+    assert first_example.tokens.tolist() == [4, 5, 6, 256, 257, 257]
+    assert np.asarray(first_example.loss_weight).tolist() == [1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
 
 
 def test_file_backed_token_store_runs_one_training_step(tmp_path):

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import fsspec
+import jax
 import numpy as np
 from haliax import Axis
 
@@ -96,8 +97,8 @@ class TokenMatrixDataset(AsyncDataset[np.ndarray]):
     def __init__(self, tokens: np.ndarray):
         if tokens.ndim != 2:
             raise ValueError(f"Expected a rank-2 token matrix, got shape {tokens.shape}")
-        if tokens.dtype != np.int32:
-            raise ValueError(f"Expected int32 token matrix, got dtype {tokens.dtype}")
+        if not np.issubdtype(tokens.dtype, np.integer):
+            raise ValueError(f"Expected integer token matrix, got dtype {tokens.dtype}")
         self._tokens = tokens
 
     async def async_len(self) -> int:
@@ -117,9 +118,22 @@ def as_causal_lm_dataset(
     *,
     seq_len: int,
     eos_id: int | None = None,
+    ignore_id: int | None = None,
     block_cross_document_attention: bool = True,
 ) -> AsyncDataset[GrugLmExample]:
     """Wrap raw token sequences as causal LM examples."""
+
+    if ignore_id is not None:
+
+        def _create_example(tokens: np.ndarray) -> GrugLmExample:
+            return GrugLmExample.causal(
+                tokens=jax.device_put(tokens.astype(np.int32, copy=False)),
+                ignore_id=ignore_id,
+                eos_id=eos_id,
+                block_cross_document_attention=block_cross_document_attention,
+            )
+
+        return dataset.map(_create_example)
 
     return CausalLmDataset(
         dataset,
@@ -217,14 +231,20 @@ def build_passthrough_lm_data_config_from_store(
 
     local_store_dir = materialize_token_store(store_dir, local_cache_dir=local_cache_dir)
     metadata = read_token_store_metadata(local_store_dir)
+    ignore_id = metadata.tokenizer_config.get("loss_mask_ignore_id")
+    eos_id = metadata.tokenizer_config.get("eos_token_id")
     return build_passthrough_lm_data_config(
         train_dataset=as_causal_lm_dataset(
             open_token_matrix_dataset(local_store_dir, train_split),
             seq_len=metadata.seq_len,
+            eos_id=eos_id,
+            ignore_id=ignore_id,
         ),
         validation_dataset=as_causal_lm_dataset(
             open_token_matrix_dataset(local_store_dir, validation_split),
             seq_len=metadata.seq_len,
+            eos_id=eos_id,
+            ignore_id=ignore_id,
         ),
         vocab_size=metadata.vocab_size,
         component_name=component_name,
@@ -249,11 +269,13 @@ def write_token_store(
         handle.write("\n")
 
     for split, split_info in metadata.splits.items():
-        tokens = np.asarray(split_tokens[split], dtype=np.int32)
+        tokens = np.asarray(split_tokens[split])
         records = list(split_records[split])
         expected_shape = (split_info.num_examples, split_info.seq_len)
         if tokens.shape != expected_shape:
             raise ValueError(f"Split {split} tokens have shape {tokens.shape}, expected {expected_shape}")
+        if not np.issubdtype(tokens.dtype, np.integer):
+            raise ValueError(f"Split {split} tokens must be integer typed, got {tokens.dtype}")
         if len(records) != split_info.num_examples:
             raise ValueError(f"Split {split} manifest has {len(records)} records, expected {split_info.num_examples}")
 

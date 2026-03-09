@@ -692,3 +692,27 @@ The full exact-libjpeg `K=8` baseline has now completed successfully.
 This lands essentially on top of the earlier reference `K=8` coefficient baseline (`3.253`). So for the current
 question, the floating-point reference coefficient path was already close enough to the exact JPEG coefficient stream
 that it did not materially change the learning result.
+
+## Whole-Image Byte Baseline Constraint
+
+The earlier byte baseline used fixed `8192`-byte windows, which is operationally convenient but not the clean
+"one image = one sequence" comparison.
+
+To prepare the honest comparison, the codebase now has:
+
+- a whole-image byte tokenizer with distinct `EOS=256` and `PAD=257`
+- a whole-image builder:
+  `scripts/jpeg_tokenizer/build_whole_image_byte_token_store.py`
+- passthrough token-store loading that reads `loss_mask_ignore_id` from metadata so pad tails do not contribute to
+  the LM loss
+
+On full Imagenette after canonicalization to `256x256` JPEG:
+
+- examples: `13394`
+- mean whole-image byte length: `25524.86`
+- max whole-image byte length: `54544`
+
+That makes the modeling constraint explicit: the current JPEG baseline still uses the plain full-attention grug
+transformer, so a `54544`-token whole-image byte run is not a credible next TPU experiment without also changing the
+attention regime. In other words, the code is now ready for a whole-image byte store, but the comparison itself needs a
+consistent attention/windowing decision across bytes and coefficients before it is worth launching.

@@ -74,6 +74,19 @@ V0_BYTE_WINDOW_CONFIG = ByteWindowTokenizerConfig()
 
 
 @dataclass(frozen=True)
+class WholeImageByteTokenizerConfig:
+    """Frozen V0 defaults for whole-image canonical JPEG byte sequences."""
+
+    eos_token_id: int = 256
+    pad_token_id: int = 257
+    append_eos: bool = True
+    version: str = "v0"
+
+
+V0_WHOLE_IMAGE_BYTE_CONFIG = WholeImageByteTokenizerConfig()
+
+
+@dataclass(frozen=True)
 class SymbolTokenizerConfig:
     """Frozen V0 defaults for the symbol-stream baseline."""
 
@@ -197,6 +210,12 @@ def byte_window_vocab_size(config: ByteWindowTokenizerConfig = V0_BYTE_WINDOW_CO
     return max(config.pad_token_id + 1, 257)
 
 
+def whole_image_byte_vocab_size(config: WholeImageByteTokenizerConfig = V0_WHOLE_IMAGE_BYTE_CONFIG) -> int:
+    """Return the vocabulary size for whole-image bytes with distinct EOS and PAD ids."""
+
+    return max(config.eos_token_id, config.pad_token_id) + 1
+
+
 def symbol_vocab_size(config: SymbolTokenizerConfig = V0_SYMBOL_CONFIG) -> int:
     """Return the explicit bounded symbol vocabulary size."""
 
@@ -289,6 +308,34 @@ def window_byte_tokens(
             break
 
     return windows
+
+
+def whole_image_byte_length(
+    byte_tokens: np.ndarray,
+    *,
+    config: WholeImageByteTokenizerConfig = V0_WHOLE_IMAGE_BYTE_CONFIG,
+) -> int:
+    """Return the whole-image byte length including EOS if configured."""
+
+    return len(byte_tokens) + (1 if config.append_eos else 0)
+
+
+def pad_whole_image_byte_tokens(
+    byte_tokens: np.ndarray,
+    *,
+    seq_len: int,
+    config: WholeImageByteTokenizerConfig = V0_WHOLE_IMAGE_BYTE_CONFIG,
+) -> np.ndarray:
+    """Right-pad one canonical JPEG byte stream to a fixed whole-image sequence length."""
+
+    payload = np.asarray(byte_tokens, dtype=np.int32)
+    if config.append_eos:
+        payload = np.concatenate([payload, np.asarray([config.eos_token_id], dtype=np.int32)])
+    if len(payload) > seq_len:
+        raise ValueError(f"Byte payload length {len(payload)} exceeds seq_len {seq_len}")
+    padded = np.full(seq_len, config.pad_token_id, dtype=np.int32)
+    padded[: len(payload)] = payload
+    return padded
 
 
 def encode_jpeg_symbols(
@@ -489,27 +536,34 @@ def _scaled_luma_quant_table(quality: int) -> np.ndarray:
     return np.clip(table, 1, 255).astype(np.int32)
 
 
-__all__ = [
-    "V0_BYTE_WINDOW_CONFIG",
-    "V0_CANONICAL_JPEG_CONFIG",
-    "V0_COEFFICIENT_CONFIG",
-    "V0_SYMBOL_CONFIG",
-    "ByteWindowTokenizerConfig",
-    "CanonicalJpegConfig",
-    "CanonicalJpegRepresentation",
-    "CoefficientTokenSource",
-    "CoefficientTokenizerConfig",
-    "JpegTokenizerFamily",
-    "SymbolTokenizerConfig",
-    "byte_window_vocab_size",
-    "canonicalize_image",
-    "coefficient_vocab_size",
-    "encode_dct_coeffs",
-    "encode_jpeg_bytes",
-    "encode_jpeg_symbols",
-    "quantized_luma_blocks",
-    "reconstruct_luma_from_coeff_tokens",
-    "stable_byte_checksum",
-    "symbol_vocab_size",
-    "window_byte_tokens",
-]
+__all__ = sorted(
+    [
+        "ByteWindowTokenizerConfig",
+        "CanonicalJpegConfig",
+        "CanonicalJpegRepresentation",
+        "CoefficientTokenSource",
+        "CoefficientTokenizerConfig",
+        "JpegTokenizerFamily",
+        "SymbolTokenizerConfig",
+        "V0_BYTE_WINDOW_CONFIG",
+        "V0_CANONICAL_JPEG_CONFIG",
+        "V0_COEFFICIENT_CONFIG",
+        "V0_SYMBOL_CONFIG",
+        "V0_WHOLE_IMAGE_BYTE_CONFIG",
+        "WholeImageByteTokenizerConfig",
+        "byte_window_vocab_size",
+        "canonicalize_image",
+        "coefficient_vocab_size",
+        "encode_dct_coeffs",
+        "encode_jpeg_bytes",
+        "encode_jpeg_symbols",
+        "pad_whole_image_byte_tokens",
+        "quantized_luma_blocks",
+        "reconstruct_luma_from_coeff_tokens",
+        "stable_byte_checksum",
+        "symbol_vocab_size",
+        "whole_image_byte_length",
+        "whole_image_byte_vocab_size",
+        "window_byte_tokens",
+    ]
+)

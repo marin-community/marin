@@ -289,7 +289,6 @@ coeff_k8_smoke = ExecutorStep(
         output_path=this_output_path(),
         run_id=RESOLVED_K8_SMOKE_RUN_ID,
         resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
-        pip_packages=versioned(("jpeglib>=1.0.2",)),
         steps=versioned(96),
         batch_size=versioned(128),
         seed=versioned(0),

@@ -73,6 +73,24 @@ The byte-window store contains:
 - sequence length: `8192`
 - vocab size: `257`
 
+The codebase now also has a whole-image byte-store builder:
+
+```bash
+uv run python scripts/jpeg_tokenizer/build_whole_image_byte_token_store.py \
+  --log-every 1000 \
+  --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_bytes_whole_v0
+```
+
+That produces one padded sequence per canonical JPEG image with distinct `EOS=256` and `PAD=257`, and the token-store
+metadata tells the LM path to mask loss on the pad tail. On full Imagenette, the whole-image byte lengths are:
+
+- examples: `13394`
+- mean length: `25524.86`
+- max length: `54544`
+
+So the whole-image byte data path is ready, but a direct run is intentionally not staged yet because the current JPEG
+baseline still uses the plain full-attention grug transformer.
+
 The exact libjpeg-backed `K=8` coefficient store lives at:
 
 - `/Users/dlwh/.codex/worktrees/1bd2/marin/artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0`
@@ -138,6 +156,6 @@ WebVision is useful for later robustness checks because it captures real web-ima
 
 ## Immediate Next Steps
 
-1. Let `tokexplore/jpeg-tokenizer-bytes-w8192-trial` finish and compare it against the existing `K=8` reference rung.
-2. Relaunch `tokexplore/jpeg-tokenizer-k8-libjpeg-smoke` from the commit that adds the `jpeglib` dependency.
-3. If that smoke is healthy, promote `tokexplore/jpeg-tokenizer-k8-libjpeg-trial` as the first exact-JPEG coefficient baseline.
+1. Decide the attention/windowing regime for a fair whole-image byte vs coefficient comparison.
+2. If the comparison should stay whole-image, add the same attention constraint across both byte and coefficient runs before launching bytes.
+3. If the goal stays with the current full-attention model, keep bytes as a windowed baseline and treat whole-image bytes as a separate future comparison.
