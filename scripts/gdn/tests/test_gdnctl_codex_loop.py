@@ -90,6 +90,8 @@ def test_stream_subprocess_output_to_file_can_suppress_after_ready(tmp_path: Pat
 def test_build_remote_test_command_installs_torch_and_transformers() -> None:
     cmd = gdnctl._build_remote_test_command("both", None)
 
-    assert "uv pip install torch --index-url" in cmd
-    assert "uv pip install transformers" in cmd
-    assert cmd.index("uv pip install torch --index-url") < cmd.index("uv pip install transformers")
+    assert "uv run python -m ensurepip --upgrade" in cmd
+    assert "uv run python -m pip install --index-url" in cmd
+    assert "uv run python -m pip install transformers" in cmd
+    assert cmd.index("uv run python -m ensurepip --upgrade") < cmd.index("uv run python -m pip install --index-url")
+    assert cmd.index("uv run python -m pip install --index-url") < cmd.index("uv run python -m pip install transformers")

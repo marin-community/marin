@@ -1789,8 +1789,9 @@ def _build_remote_test_command(test_selection: str, extra_pytest_args: str | Non
     pieces = [
         "cd lib/levanter",
         "uv sync --extra=tpu --group test",
-        f"uv pip install torch --index-url {shlex.quote(TORCH_CPU_INDEX)}",
-        "uv pip install transformers",
+        "uv run python -m ensurepip --upgrade",
+        f"uv run python -m pip install --index-url {shlex.quote(TORCH_CPU_INDEX)} torch",
+        "uv run python -m pip install transformers",
         pytest_cmd,
     ]
     return " && ".join(pieces)
@@ -2160,10 +2161,9 @@ def _profile_command_lines(
         lines.append("uv sync --all-packages --extra=tpu --python=3.11")
     else:
         lines.append("uv sync")
-    lines.append(
-        f"uv pip install --python .venv/bin/python --index-url {shlex.quote(TORCH_CPU_INDEX)} --force-reinstall torch"
-    )
-    lines.append("(uv pip uninstall --python .venv/bin/python torchvision || true)")
+    lines.append("uv run python -m ensurepip --upgrade")
+    lines.append(f"uv run python -m pip install --index-url {shlex.quote(TORCH_CPU_INDEX)} --force-reinstall torch")
+    lines.append("(uv run python -m pip uninstall -y torchvision || true)")
     lines.append(
         f".venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile {shlex.join(profile_args)}"
     )
