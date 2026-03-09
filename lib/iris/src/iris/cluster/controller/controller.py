@@ -6,6 +6,7 @@
 import logging
 import queue
 import sys
+import tempfile
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,7 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     merge_constraints,
 )
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
@@ -53,6 +55,7 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
     ControllerWorker,
+    HeartbeatAction,
     HeartbeatSnapshot,
     ReservationClaim,
 )
@@ -471,6 +474,7 @@ class WorkerStubFactory(Protocol):
 
     def get_stub(self, address: str) -> WorkerServiceClientSync: ...
     def evict(self, address: str) -> None: ...
+    def close(self) -> None: ...
 
 
 class RpcWorkerStubFactory:
@@ -495,7 +499,16 @@ class RpcWorkerStubFactory:
 
     def evict(self, address: str) -> None:
         with self._lock:
-            self._stubs.pop(address, None)
+            stub = self._stubs.pop(address, None)
+        if stub is not None:
+            stub.close()
+
+    def close(self) -> None:
+        with self._lock:
+            stubs = list(self._stubs.values())
+            self._stubs.clear()
+        for stub in stubs:
+            stub.close()
 
 
 @dataclass
@@ -509,9 +522,7 @@ class ControllerConfig:
     """Port to bind the HTTP server to. Use 0 for auto-assign."""
 
     bundle_prefix: str | None = None
-    """URI prefix for storing job bundles (e.g., gs://bucket/path or file:///var/cache/iris/bundles).
-    Uses fsspec for storage, so supports both GCS and local filesystems. For distributed deployments,
-    use a GCS path so workers can download bundles."""
+    """Storage prefix for snapshots (e.g. gs://bucket/path, s3://bucket/path)."""
 
     scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
     """How often to run the scheduling loop."""
@@ -582,24 +593,21 @@ class Controller:
         autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
     ):
-        if not config.bundle_prefix:
-            raise ValueError(
-                "bundle_prefix is required. Set via ControllerConfig.bundle_prefix. "
-                "Example: bundle_prefix='gs://my-bucket/iris/bundles'"
-            )
-
         self._config = config
         self.stub_factory = worker_stub_factory
+
+        bundle_db_path = Path(tempfile.gettempdir()) / "iris-controller-bundles.sqlite3"
 
         self._state = ControllerState(
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             log_dir=config.log_dir,
         )
         self._scheduler = Scheduler()
+        self._bundle_store = BundleStore(db_path=bundle_db_path)
         self._service = ControllerServiceImpl(
             self._state,
             self,
-            bundle_prefix=config.bundle_prefix,
+            bundle_store=self._bundle_store,
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -731,11 +739,13 @@ class Controller:
             self._autoscaler.shutdown()
 
         self._threads.stop()
+        self.stub_factory.close()
 
         # Remove log handler before closing the log store to avoid
         # sqlite3.ProgrammingError spam from late log records.
         logging.getLogger("iris").removeHandler(self._log_store_handler)
         self._log_store_handler.close()
+        self._state.log_store.close()
 
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""
@@ -1012,7 +1022,7 @@ class Controller:
                     num_tasks=job.num_tasks,
                     entrypoint=job.request.entrypoint,
                     environment=job.request.environment,
-                    bundle_gcs_path=job.request.bundle_gcs_path,
+                    bundle_id=job.request.bundle_id,
                     resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
@@ -1140,20 +1150,52 @@ class Controller:
 
         worker_futures = [self._dispatch_executor.submit(_dispatch_worker) for _ in range(worker_count)]
 
-        # Phase 3: consume all responses; per-worker RPC timeout determines failures.
+        # Phase 3: consume all responses via complete_heartbeat / fail_heartbeat.
+        # Each returns a HeartbeatAction: OK, TRANSIENT_FAILURE, or WORKER_FAILED.
         fail_count = 0
         failed_workers: list[str] = []
         with slow_log(logger, "heartbeat phase 3 (process results)", threshold_ms=500):
             for _ in snapshots:
                 snapshot, response, error = result_queue.get()
-                if error is not None:
+
+                if response is not None:
+                    action = self._state.complete_heartbeat(snapshot, response)
+                else:
+                    logger.debug("Heartbeat error for %s: %s", snapshot.worker_id, error)
+                    action = self._state.fail_heartbeat(snapshot, error or "unknown error")
+
+                if action == HeartbeatAction.WORKER_FAILED:
                     fail_count += 1
                     failed_workers.append(snapshot.worker_id)
-                    logger.debug("Heartbeat error for %s: %s", snapshot.worker_id, error)
-                    self._handle_heartbeat_failure(snapshot, error)
-                    continue
-                if response is not None:
-                    self._state.complete_heartbeat(snapshot, response)
+                    self.stub_factory.evict(snapshot.worker_address)
+                    if self._autoscaler and snapshot.vm_address:
+                        # Terminate the slice and get sibling VM addresses.
+                        # All workers on the same slice must be failed immediately
+                        # so their tasks (including reservation holders) are cascaded
+                        # rather than waiting for heartbeat timeouts.
+                        # TODO(#3425): This prunes sibling workers before their in-flight
+                        # heartbeat results are processed, causing complete_heartbeat() to
+                        # silently drop any logs/states those workers reported this round.
+                        # See the corresponding TODO in state.py complete_heartbeat().
+                        sibling_vms = self._autoscaler.notify_worker_failed(snapshot.vm_address)
+                        if sibling_vms:
+                            sibling_failed = self._state.fail_workers_by_vm_addresses(
+                                sibling_vms,
+                                reason=f"sibling worker at VM {snapshot.vm_address} failed, slice terminated",
+                            )
+                            for _wid, addr in sibling_failed:
+                                self.stub_factory.evict(addr)
+                            if sibling_failed:
+                                fail_count += len(sibling_failed)
+                                failed_workers.extend(wid for wid, _ in sibling_failed)
+                                logger.info(
+                                    "Failed %d sibling workers from slice: %s",
+                                    len(sibling_failed),
+                                    [wid for wid, _ in sibling_failed],
+                                )
+                elif action == HeartbeatAction.TRANSIENT_FAILURE:
+                    fail_count += 1
+                    failed_workers.append(snapshot.worker_id)
 
         for future in worker_futures:
             future.cancel()
@@ -1180,21 +1222,6 @@ class Controller:
                 active,
                 pending,
             )
-
-    def _handle_heartbeat_failure(self, snapshot: HeartbeatSnapshot, error: str) -> None:
-        """Process a heartbeat failure: update state, evict stub + notify autoscaler if worker died.
-
-        After fail_heartbeat, if the worker was pruned from state (exceeded failure
-        threshold), we evict the cached RPC stub and notify the autoscaler.
-        """
-        self._state.fail_heartbeat(snapshot, error)
-
-        # fail_heartbeat -> _on_worker_heartbeat_failed -> _on_worker_failed prunes
-        # the worker from state when consecutive failures exceed the threshold.
-        if self._state.get_worker(snapshot.worker_id) is None:
-            self.stub_factory.evict(snapshot.worker_address)
-            if self._autoscaler and snapshot.vm_address:
-                self._autoscaler.notify_worker_failed(snapshot.vm_address)
 
     def _do_heartbeat_rpc(
         self,

@@ -26,7 +26,7 @@ Use this skill on scheduled scrub turns to identify and land high-leverage impro
 - Pick the highest-leverage change with the lowest coordination overhead.
 - De-duplicate against existing issues/PRs before opening new work.
 - When an improvement changes recurring workflow guidance, codify it in durable repo instructions:
-  `AGENTS.md` for cross-cutting agent behavior, or `docs/recipes/*.md` for repeatable task workflows.
+  `AGENTS.md` for cross-cutting agent behavior, or `.agents/skills/` for repeatable task workflows.
 - If no justified improvement exists now, choose a no-op outcome.
 
 ## Output

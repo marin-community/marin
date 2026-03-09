@@ -17,12 +17,13 @@ from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerRuntime
 from iris.cluster.types import JobName
-from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
     HostMetricsCollector,
     build_worker_metadata,
+    check_worker_health,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -58,6 +59,7 @@ class WorkerConfig:
     accelerator_variant: str = ""
     gpu_count: int = 0
     preemptible: bool = False
+    storage_prefix: str = ""
 
 
 def worker_config_from_proto(
@@ -102,6 +104,7 @@ def worker_config_from_proto(
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,
         preemptible=proto.preemptible,
+        storage_prefix=proto.storage_prefix,
     )
 
 
@@ -111,7 +114,7 @@ class Worker:
     def __init__(
         self,
         config: WorkerConfig,
-        bundle_provider: BundleProvider | None = None,
+        bundle_store: BundleStore | None = None,
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
@@ -126,7 +129,11 @@ class Worker:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Use overrides if provided, otherwise create defaults
-        self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
+        self._bundle_store = bundle_store or BundleStore(
+            db_path=self._cache_dir / "bundles.sqlite3",
+            controller_address=config.controller_address,
+            max_items=100,
+        )
         self._runtime = container_runtime or DockerRuntime()
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
@@ -232,6 +239,8 @@ class Worker:
         if self._server:
             self._server.should_exit = True
         self._threads.stop()
+        if self._controller_client:
+            self._controller_client.close()
         logging.getLogger().removeHandler(self._log_store_handler)
         self._log_store_handler.close()
         self._log_store.close()
@@ -452,11 +461,12 @@ class Worker:
             attempt_id=attempt_id,
             request=request,
             cache_dir=self._cache_dir,
+            storage_prefix=self._config.storage_prefix,
         )
 
         attempt = TaskAttempt(
             config=config,
-            bundle_provider=self._bundle_cache,
+            bundle_store=self._bundle_store,
             container_runtime=self._runtime,
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,
@@ -599,7 +609,9 @@ class Worker:
                             if reported_state == cluster_pb2.TASK_STATE_PENDING:
                                 reported_state = cluster_pb2.TASK_STATE_BUILDING
 
-                            log_entries = task.drain_heartbeat_logs()
+                            is_terminal = task.status in self._TERMINAL_STATES
+                            log_cap = 50000 if is_terminal else 5000
+                            log_entries = task.drain_heartbeat_logs(max_entries=log_cap, final=is_terminal)
                             entry = cluster_pb2.Controller.WorkerTaskStatus(
                                 task_id=task_id,
                                 attempt_id=task_proto.current_attempt_id,
@@ -645,9 +657,17 @@ class Worker:
                 resource_snapshot.running_task_count = running_count
                 resource_snapshot.total_process_count = total_processes
 
+            # Run health checks to detect local faults (disk full, write failure)
+            with slow_log(logger, "heartbeat health_check", threshold_ms=100):
+                health = check_worker_health(disk_path=str(self._cache_dir))
+                if not health.healthy:
+                    logger.warning("Worker health check failed: %s", health.error)
+
             return cluster_pb2.HeartbeatResponse(
                 tasks=tasks,
                 resource_snapshot=resource_snapshot,
+                worker_healthy=health.healthy,
+                health_error=health.error,
             )
 
     def _kill_task_attempt(
@@ -727,11 +747,30 @@ class Worker:
             return False
         return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
 
-    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile a running task by delegating to its container handle."""
-        attempt = self._get_current_attempt(task_id)
-        if not attempt:
-            raise ValueError(f"Task {task_id} not found")
+    def profile_task(
+        self,
+        task_id: str,
+        duration_seconds: int,
+        profile_type: cluster_pb2.ProfileType,
+        attempt_id: int | None = None,
+    ) -> bytes:
+        """Profile a running task by delegating to its container handle.
+
+        Args:
+            task_id: Bare task ID (e.g. ``/alice/job/0``).
+            duration_seconds: How long to sample.
+            profile_type: CPU, memory, or threads profiler config.
+            attempt_id: Specific attempt to profile.  When ``None``, the
+                current (most recent) attempt is used.
+        """
+        if attempt_id is not None:
+            attempt = self._tasks.get((task_id, attempt_id))
+            if not attempt:
+                raise ValueError(f"Task {task_id} attempt {attempt_id} not found")
+        else:
+            attempt = self._get_current_attempt(task_id)
+            if not attempt:
+                raise ValueError(f"Task {task_id} not found")
         if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
             raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
         return attempt.profile(duration_seconds, profile_type)

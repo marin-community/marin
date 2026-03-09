@@ -259,6 +259,10 @@ message WorkerConfig {
 
   // Platform config (for image resolution — worker creates lightweight platform)
   PlatformConfig platform = 50;
+
+  // Storage prefix for task artifacts (profiles). Injected by the controller
+  // from the resolved bundle_prefix. Empty disables profile upload.
+  string storage_prefix = 60;
 }
 
 // SSH configuration for manual hosts

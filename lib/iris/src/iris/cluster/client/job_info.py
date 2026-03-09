@@ -30,7 +30,7 @@ class JobInfo:
     num_tasks: int = 1
     attempt_id: int = 0
     worker_id: str | None = None
-    bundle_gcs_path: str | None = None
+    bundle_id: str | None = None
 
     controller_address: str | None = None
     """Address of the controller that started this job, if any."""
@@ -105,7 +105,7 @@ def get_job_info() -> JobInfo | None:
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
             extras=json.loads(os.environ.get("IRIS_JOB_EXTRAS", "[]")),
             pip_packages=json.loads(os.environ.get("IRIS_JOB_PIP_PACKAGES", "[]")),
-            bundle_gcs_path=os.environ.get("IRIS_BUNDLE_GCS_PATH"),
+            bundle_id=os.environ.get("IRIS_BUNDLE_ID"),
             ports=_parse_ports_from_env(),
             env=job_env,
             constraints=constraints,

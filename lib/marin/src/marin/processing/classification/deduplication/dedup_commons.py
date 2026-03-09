@@ -4,22 +4,15 @@
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from functools import partial
 import logging
 import os
-from typing import TypedDict
-import humanfriendly
-from marin.utilities.time_logger import log_time
 import pyarrow as pa
 import pyarrow.json as pa_json
 
-from fray.v2.local_backend import LocalClient
+from fray.v2 import ResourceConfig
 from marin.utilities.wandb_utils import init_wandb
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utils import fsspec_glob
-from zephyr import ZephyrContext
-from zephyr.dataset import Dataset
-from zephyr.expr import col
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 
 logger = logging.getLogger(__name__)
@@ -70,8 +63,7 @@ class DedupConfig:
     mode: DedupMode = DedupMode.EXACT_PARAGRAPH
     # field to use for text content in Parquet files
     text_field: str = "text"
-    ray_num_cpus: int = 2
-    ray_memory: int = humanfriendly.parse_size("64GB", binary=True)
+    worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="32g", disk="5g"))
     # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
     fuzzy_minhash_num_perms: int = 286
     fuzzy_minhash_num_bands: int = 26
@@ -89,6 +81,7 @@ def deduplicate(config: DedupConfig):
             output_path=config.output_path,
             text_field=config.text_field,
             filetypes=config.filetypes,
+            worker_resources=config.worker_resources,
         )
     elif config.mode == DedupMode.EXACT_DOCUMENT:
         from marin.processing.classification.deduplication.exact import dedup_exact_document
@@ -98,6 +91,7 @@ def deduplicate(config: DedupConfig):
             output_path=config.output_path,
             text_field=config.text_field,
             filetypes=config.filetypes,
+            worker_resources=config.worker_resources,
         )
     elif config.mode == DedupMode.FUZZY_DOCUMENT:
         from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
@@ -111,6 +105,7 @@ def deduplicate(config: DedupConfig):
             fuzzy_minhash_num_bands=config.fuzzy_minhash_num_bands,
             fuzzy_minhash_ngram_size=config.fuzzy_minhash_ngram_size,
             fuzzy_minhash_seed=config.fuzzy_minhash_seed,
+            worker_resources=config.worker_resources,
         )
     else:
         raise ValueError(f"Unknown mode {config.mode}")
@@ -124,7 +119,6 @@ class DupCounters:
     total: int = 0
     dups: int = 0
     unique: int = 0
-    dup_clusters: int = 0
 
     def __add__(self, other: "DupCounters") -> "DupCounters":
         assert isinstance(other, DupCounters)
@@ -135,7 +129,6 @@ class DupCounters:
             total=self.total + other.total,
             dups=self.dups + other.dups,
             unique=self.unique + other.unique,
-            dup_clusters=self.dup_clusters + other.dup_clusters,
         )
 
     def __str__(self) -> str:
@@ -143,8 +136,7 @@ class DupCounters:
             return f"{self.level} total: 0"
         return (
             f"{self.method.capitalize()} {self.level.lower()} total: {self.total:,}, "
-            f"dups: {self.dups:,} ({self.dups / self.total:.2%}), unique: {self.unique:,}, "
-            f"dup_clusters: {self.dup_clusters:,}"
+            f"dups: {self.dups:,} ({self.dups / self.total:.2%}), unique: {self.unique:,}"
         )
 
     def to_dict(self):
@@ -152,7 +144,6 @@ class DupCounters:
             f"dedup/{self.method}/{self.level}/total": self.total,
             f"dedup/{self.method}/{self.level}/dups": self.dups,
             f"dedup/{self.method}/{self.level}/unique": self.unique,
-            f"dedup/{self.method}/{self.level}/dup_clusters": self.dup_clusters,
         }
 
 
@@ -223,25 +214,6 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
             yield from pa_json.read_json(f).to_batches()
 
 
-def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
-    shard_dup_map = {}
-
-    def add_to_dup_map(record: dict):
-        shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
-
-    with log_time(f"Load duplicate map from {len(shards)} shards"):
-        ctx = ZephyrContext(client=LocalClient(), name="dedup-commons-map")
-        ctx.execute(
-            Dataset.from_list(shards)
-            .load_parquet()
-            .select("hash", "canonical")
-            .filter(col("hash").is_not_null())
-            .map(add_to_dup_map),
-        )
-
-    return shard_dup_map
-
-
 def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
@@ -249,48 +221,3 @@ def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
         # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
         base_path = os.path.dirname(base_path)
     return base_path
-
-
-def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
-    with log_time(f"Compute deduplication stats from {len(shards)} shards"):
-        ctx = ZephyrContext(client=LocalClient(), name="dedup-commons-counts")
-        result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
-            Dataset.from_list(shards)
-            .load_parquet()
-            .select("cnt")
-            .map(
-                lambda c: DupCounters(
-                    method=method,
-                    level=level,
-                    total=c["cnt"],
-                    dups=c["cnt"] if c["cnt"] > 1 else 0,
-                    unique=int(c["cnt"] == 1),
-                    dup_clusters=int(c["cnt"] > 1),
-                )
-            )
-            .reduce(partial(sum, start=DupCounters(method=method, level=level))),
-        )[0]
-    return result
-
-
-class DupeReduceResult(TypedDict):
-    hash: str | None
-    cnt: int
-    canonical: str | None
-
-
-def _count_reduce(key: str, items: Iterator[pa.StructScalar], *, canonical_id: str) -> DupeReduceResult:
-    head = next(items)
-    doc_cnt = sum(map(lambda _: 1, items)) + 1
-    if doc_cnt == 1:
-        return {
-            "hash": None,
-            "cnt": 1,
-            "canonical": None,
-        }
-
-    return {
-        "hash": key,
-        "cnt": doc_cnt,
-        "canonical": head[canonical_id],
-    }

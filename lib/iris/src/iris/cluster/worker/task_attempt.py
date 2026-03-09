@@ -34,9 +34,10 @@ from iris.cluster.types import (
     JobName,
     is_task_finished,
 )
-from iris.cluster.worker.bundle_cache import BundleProvider
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.profile_capture import ProfileCapture
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
 from iris.logging import parse_log_level, str_to_log_level
 from iris.rpc import cluster_pb2, logging_pb2
@@ -123,6 +124,7 @@ class TaskAttemptConfig:
     attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
     cache_dir: Path
+    storage_prefix: str = ""
 
 
 def _get_host_ip() -> str:
@@ -167,7 +169,7 @@ def build_iris_env(
     env["IRIS_JOB_ID"] = task.task_id.to_wire()
     env["IRIS_NUM_TASKS"] = str(task.num_tasks)
     env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
-    env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
+    env["IRIS_BUNDLE_ID"] = task.request.bundle_id
 
     if worker_id:
         env["IRIS_WORKER_ID"] = worker_id
@@ -176,10 +178,7 @@ def build_iris_env(
         # With --network=host, containers share the host's network directly,
         # so no address rewriting is needed.
         env["IRIS_CONTROLLER_ADDRESS"] = controller_address
-
-    # Inject bundle path for sub-task inheritance
-    if task.request.bundle_gcs_path:
-        env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
+        env["IRIS_CONTROLLER_URL"] = controller_address
 
     # With --network=host, containers share the host's network stack.
     # Compute the host's routable IP so container code can read it via
@@ -240,7 +239,7 @@ class TaskAttempt:
     def __init__(
         self,
         config: TaskAttemptConfig,
-        bundle_provider: BundleProvider,
+        bundle_store: BundleStore,
         container_runtime: ContainerRuntime,
         worker_metadata: WorkerMetadata,
         worker_id: str | None,
@@ -261,7 +260,7 @@ class TaskAttempt:
 
         Args:
             config: Immutable configuration for this attempt
-            bundle_provider: Provider for downloading code bundles
+            bundle_store: Bundle store for resolving task bundles
             container_runtime: Runtime for creating and managing containers
             worker_metadata: Worker's hardware/environment metadata
             worker_id: Worker identifier for env injection
@@ -275,7 +274,7 @@ class TaskAttempt:
             log_store: Shared LogStore for appending and querying task logs.
             poll_interval_seconds: How often to poll container status
         """
-        self._bundle_provider = bundle_provider
+        self._bundle_store = bundle_store
         self._runtime = container_runtime
         self._worker_metadata = worker_metadata
         self._worker_id = worker_id
@@ -297,6 +296,7 @@ class TaskAttempt:
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
+        self._storage_prefix: str = config.storage_prefix
         # Task state
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
@@ -336,8 +336,26 @@ class TaskAttempt:
         """Return recent logs for this task attempt."""
         return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
 
-    def drain_heartbeat_logs(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
-        """Return log entries appended since the last call, for delta forwarding."""
+    def drain_heartbeat_logs(self, max_entries: int = 5000, final: bool = False) -> list[logging_pb2.LogEntry]:
+        """Return log entries appended since the last call, for delta forwarding.
+
+        Args:
+            max_entries: Maximum number of entries to return per call.
+            final: When True (terminal heartbeat), reads all pending entries and
+                truncates locally to *max_entries* with a marker.  When False
+                (normal heartbeat), uses the bounded cursor so undelivered rows
+                remain available for subsequent heartbeats.
+        """
+        if final:
+            entries = self._heartbeat_cursor.read(max_entries=0)
+            if len(entries) > max_entries:
+                marker = logging_pb2.LogEntry(
+                    source="iris",
+                    data=f"<logs truncated — {len(entries) - max_entries} earlier entries exceeded heartbeat log quota>",
+                )
+                marker.timestamp.epoch_ms = entries[-max_entries].timestamp.epoch_ms
+                entries = [marker, *entries[-max_entries:]]
+            return entries
         return self._heartbeat_cursor.read(max_entries=max_entries)
 
     def stop(self, force: bool = False) -> None:
@@ -459,7 +477,7 @@ class TaskAttempt:
 
         The lifecycle is:
         0. Setup: allocate ports, create workdir
-        1. Download bundle from GCS
+        1. Download bundle by bundle ID
         2. Resolve base image
         3. Create container handle
         4. Build phase: run setup_commands (uv sync) - BUILDING state
@@ -509,7 +527,7 @@ class TaskAttempt:
             )
 
     def _download_bundle(self) -> None:
-        """Download the code bundle from GCS.
+        """Stage the code bundle from the configured bundle ID.
 
         Transitions task to BUILDING state and performs chaos injection checks
         for testing delayed builds.
@@ -531,15 +549,16 @@ class TaskAttempt:
         # Periodically check should_stop during download to support kill during BUILDING
         # (RF-3: For now, we defer kill handling until container starts, as bundle
         # downloads are typically fast. Future work could add cancellation support
-        # to BundleProvider.get_bundle if long downloads become a problem.)
+        # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
         self._runtime.stage_bundle(
-            bundle_gcs_path=self.request.bundle_gcs_path,
+            bundle_id=self.request.bundle_id,
             workdir=self.workdir,
             workdir_files=dict(self.request.entrypoint.workdir_files),
-            fetch_bundle=lambda path: self._bundle_provider.get_bundle(path, expected_hash=None),
+            bundle_store=self._bundle_store,
         )
+
         logger.info(
             "Bundle staged for task %s in %.2fs",
             self.task_id,
@@ -665,8 +684,12 @@ class TaskAttempt:
         Streams logs incrementally into task.logs (single source of truth).
         Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
+
+        A background ProfileCapture thread periodically captures py-spy snapshots
+        and uploads the last N to cloud storage when the task finishes.
         """
         assert self._container_handle is not None
+        assert self.workdir is not None
         handle = self._container_handle
 
         # Create deadline from timeout if specified (0 or unset means no timeout)
@@ -677,6 +700,21 @@ class TaskAttempt:
 
         log_reader = handle.log_reader()
 
+        with ProfileCapture(
+            container_handle=handle,
+            safe_token=self.task_id.to_safe_token(),
+            attempt_id=self.attempt_id,
+            workdir=self.workdir,
+            storage_prefix=self._storage_prefix,
+        ):
+            self._monitor_loop(handle, log_reader, deadline)
+
+    def _monitor_loop(
+        self,
+        handle: ContainerHandle,
+        log_reader: RuntimeLogReader,
+        deadline: Deadline | None,
+    ) -> None:
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)

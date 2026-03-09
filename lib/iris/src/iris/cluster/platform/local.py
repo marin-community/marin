@@ -40,6 +40,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
@@ -49,6 +50,7 @@ from iris.cluster.platform.base import (
     WorkerStatus,
     default_stop_all,
     find_free_port,
+    generate_slice_suffix,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
@@ -56,20 +58,6 @@ from iris.rpc import config_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# Local Providers (in-process implementations for testing)
-# ============================================================================
-
-
-class _LocalBundleProvider:
-    def __init__(self, bundle_path: Path):
-        self._bundle_path = bundle_path
-
-    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
-        del gcs_path, expected_hash
-        return self._bundle_path
 
 
 # ============================================================================
@@ -347,6 +335,7 @@ class LocalPlatform:
         port_allocator: PortAllocator | None = None,
         worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
         gpu_count_by_group: dict[str, int] | None = None,
+        storage_prefix: str = "",
     ):
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix)
@@ -359,6 +348,7 @@ class LocalPlatform:
         self._port_allocator = port_allocator
         self._worker_attributes_by_group = worker_attributes_by_group or {}
         self._gpu_count_by_group = gpu_count_by_group or {}
+        self._storage_prefix = storage_prefix
         self._local_controller: object | None = None
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
@@ -386,7 +376,7 @@ class LocalPlatform:
         that register with the controller (E2E mode). Otherwise creates in-memory
         stubs (unit test mode).
         """
-        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
         num_vms = config.num_vms or 1
 
         if self._controller_address is not None:
@@ -435,9 +425,12 @@ class LocalPlatform:
                 logger.debug("Unknown accelerator variant %r; TPU topology not available", config.accelerator_variant)
 
         for tpu_worker_id in range(worker_count):
-            bundle_provider = _LocalBundleProvider(self._fake_bundle)
-            container_runtime = ProcessRuntime()
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
+            bundle_store = BundleStore(
+                db_path=self._cache_path / f"bundles-{worker_id}.sqlite3",
+                controller_address=self._controller_address,
+            )
+            container_runtime = ProcessRuntime()
             worker_port = find_free_port()
 
             # Collect extra worker attributes from scale group config
@@ -494,16 +487,17 @@ class LocalPlatform:
             wc = WorkerConfig(
                 host="127.0.0.1",
                 port=worker_port,
-                cache_dir=self._cache_path,
+                cache_dir=self._cache_path / worker_id,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
                 default_task_image="process-runtime-unused",
                 poll_interval=Duration.from_seconds(0.1),
+                storage_prefix=self._storage_prefix,
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
             worker = Worker(
                 wc,
-                bundle_provider=bundle_provider,
+                bundle_store=bundle_store,
                 container_runtime=container_runtime,
                 environment_provider=env_provider,
                 port_allocator=self._port_allocator,
@@ -574,6 +568,8 @@ class LocalPlatform:
 
     def shutdown(self) -> None:
         """Stop all worker threads. Critical for clean test teardown."""
+        for s in self._slices.values():
+            s.terminate()
         self._threads.stop(timeout=Duration.from_seconds(5.0))
         self._slices.clear()
         self._vms.clear()

@@ -12,6 +12,7 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     JobSubmittedEvent,
@@ -124,9 +125,9 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def service(state, scheduler):
+def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
-    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
+    return ControllerServiceImpl(state, controller_mock, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"))
 
 
 @pytest.fixture
@@ -136,10 +137,10 @@ def client(service):
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler):
+def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
+    return ControllerServiceImpl(state, controller_mock, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"))
 
 
 def rpc_post(client: TestClient, method: str, body: dict | None = None):
@@ -268,9 +269,15 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     state.get_job(succeeded_id).state = cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Add endpoints for each
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep1", name="pending-svc", address="h:1", job_id=pending_id))
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep2", name="running-svc", address="h:2", job_id=running_id))
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep3", name="done-svc", address="h:3", job_id=succeeded_id))
+    state.add_endpoint(
+        ControllerEndpoint(endpoint_id="ep1", name="pending-svc", address="h:1", task_id=pending_id.task(0))
+    )
+    state.add_endpoint(
+        ControllerEndpoint(endpoint_id="ep2", name="running-svc", address="h:2", task_id=running_id.task(0))
+    )
+    state.add_endpoint(
+        ControllerEndpoint(endpoint_id="ep3", name="done-svc", address="h:3", task_id=succeeded_id.task(0))
+    )
 
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
@@ -354,21 +361,6 @@ def test_list_users_returns_aggregates(client, state):
     assert users["alice"]["taskStateCounts"]["pending"] == 2
     assert users["bob"]["jobStateCounts"]["pending"] == 1
     assert users["bob"]["taskStateCounts"]["pending"] == 1
-
-
-def test_cluster_summary_includes_total_users(client, state):
-    """GetClusterSummary includes unique user count."""
-    request = cluster_pb2.Controller.LaunchJobRequest(
-        entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
-        replicas=1,
-    )
-    submit_job(state, "/alice/train", request)
-    submit_job(state, "/bob/train", request)
-
-    resp = rpc_post(client, "GetClusterSummary")
-    assert resp["totalUsers"] == 2
 
 
 def test_get_job_status_returns_retry_info(client, state, job_request):
@@ -873,3 +865,14 @@ def test_list_jobs_returns_all_jobs_for_pagination(client, state):
     resp = rpc_post(client, "ListJobs")
     jobs = resp.get("jobs", [])
     assert len(jobs) == 60
+
+
+def test_bundle_download_route_serves_bundle_bytes(client, service):
+    bundle_id = "a" * 64
+    bundle_bytes = b"zip-bytes"
+    service.bundle_zip = Mock(return_value=bundle_bytes)
+
+    resp = client.get(f"/bundles/{bundle_id}.zip")
+    assert resp.status_code == 200
+    assert resp.content == bundle_bytes
+    assert resp.headers["content-type"] == "application/zip"

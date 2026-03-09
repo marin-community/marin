@@ -59,6 +59,7 @@ from iris.cluster.platform.base import (
     WorkerStatus,
     default_stop_all,
     find_free_port,
+    generate_slice_suffix,
 )
 from iris.cluster.platform.bootstrap import (
     build_worker_bootstrap_script,
@@ -170,9 +171,8 @@ def _build_label_filter(labels: dict[str, str]) -> str:
     return " AND ".join(parts)
 
 
-def _build_vm_slice_id(name_prefix: str, epoch_ms: int) -> str:
+def _build_vm_slice_id(name_prefix: str, suffix: str) -> str:
     """Build a bounded VM slice id valid for both GCE instance names and labels."""
-    suffix = str(epoch_ms)
     max_prefix_len = _GCE_NAME_MAX_LEN - len(suffix) - 1
     if max_prefix_len <= 0:
         raise ValueError("Timestamp suffix leaves no room for VM slice id prefix")
@@ -901,7 +901,7 @@ class GcpPlatform:
         is monitored via health endpoint polling rather than SSH.
         """
         gcp = config.gcp
-        slice_id = f"{config.name_prefix}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{config.name_prefix}-{generate_slice_suffix()}"
 
         # Pre-render bootstrap script for metadata embedding.
         startup_script: str | None = None
@@ -996,7 +996,7 @@ class GcpPlatform:
         root-container SSH identity bug.
         """
         gcp = config.gcp
-        slice_id = _build_vm_slice_id(config.name_prefix, Timestamp.now().epoch_ms())
+        slice_id = _build_vm_slice_id(config.name_prefix, generate_slice_suffix())
         vm_name = slice_id
         machine_type = gcp.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = config.disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB

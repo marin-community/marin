@@ -29,12 +29,11 @@ import tempfile
 import threading
 import uuid
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.runtime.bundle import stage_bundle_to_local
+from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -43,7 +42,14 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, ContainerStats, ContainerStatus, RuntimeLogReader
+from iris.cluster.runtime.profile import run_pyspy_dump
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerPhase,
+    ContainerStats,
+    ContainerStatus,
+    RuntimeLogReader,
+)
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
 from iris.rpc import cluster_pb2
@@ -479,18 +485,20 @@ class ProcessContainerHandle:
         )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
 
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
 
-        # Dispatch to CPU or memory profiling
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            pid = str(self._container._process.pid)
+            return run_pyspy_dump(pid)
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
             return self._profile_memory(duration_seconds, profile_type.memory)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
     def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""
@@ -598,18 +606,15 @@ class ProcessRuntime:
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        stage_bundle_to_local(
-            bundle_gcs_path=bundle_gcs_path,
-            workdir=workdir,
-            workdir_files=workdir_files,
-            fetch_bundle=fetch_bundle,
-        )
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        bundle_store.write_workdir_files(workdir, workdir_files)
 
     def list_containers(self) -> list[ProcessContainerHandle]:
         """List all managed container handles."""

@@ -18,7 +18,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.controller.bundle_store import BundleStore
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -35,11 +35,13 @@ from iris.cluster.controller.state import (
     ControllerWorker,
 )
 from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
+from iris.cluster.process_status import get_process_status
+from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.proto_utils import job_state_name, task_state_name
-from iris.time_utils import Timestamp
+from iris.time_utils import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +143,21 @@ def worker_status_message(w: ControllerWorker) -> str:
     return "Unhealthy (no failures recorded)"
 
 
+_WORKER_TARGET_PREFIX = "/system/worker/"
+
+
+def _parse_worker_target(target: str) -> str | None:
+    """Extract worker_id from a /system/worker/<worker_id> target.
+
+    Returns the worker_id string, or None if the target does not match.
+    """
+    if target.startswith(_WORKER_TARGET_PREFIX):
+        worker_id = target[len(_WORKER_TARGET_PREFIX) :]
+        if worker_id:
+            return worker_id
+    return None
+
+
 def _task_state_key(state: int) -> str:
     """Return the lowercase RPC key for a task state enum."""
     return task_state_name(state).removeprefix("TASK_STATE_").lower()
@@ -181,6 +198,14 @@ class AutoscalerProtocol(Protocol):
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get info for a specific VM."""
+        ...
+
+    def check_coscheduling_feasibility(
+        self,
+        replicas: int,
+        constraints: list[cluster_pb2.Constraint],
+    ) -> str | None:
+        """Check if a coscheduled job can be scheduled. Returns error message or None."""
         ...
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
@@ -245,20 +270,23 @@ class ControllerServiceImpl:
 
     Args:
         state: Controller state containing jobs, tasks, and workers
-        scheduler: Background scheduler for task dispatch (any object with wake() method)
-        bundle_prefix: URI prefix for storing bundles (e.g., gs://bucket/path or file:///path).
-                      Required for job submission with bundles.
+        controller: Background scheduler for task dispatch (any object with wake() method)
+        bundle_store: Bundle store for zip storage.
     """
 
     def __init__(
         self,
         state: ControllerState,
         controller: ControllerProtocol,
-        bundle_prefix: str,
+        bundle_store: BundleStore,
     ):
         self._state = state
         self._controller = controller
-        self._bundle_store = BundleStore(bundle_prefix)
+        self._bundle_store = bundle_store
+        self._timer = Timer()
+
+    def bundle_zip(self, bundle_id: str) -> bytes:
+        return self._bundle_store.get_zip(bundle_id)
 
     def _get_autoscaler_pending_hints(self) -> dict[str, str]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -280,6 +308,7 @@ class ControllerServiceImpl:
         The job is expanded into tasks based on the replicas field
         (defaulting to 1). Each task has ID "/job/.../index".
         """
+        del ctx
         if not request.name:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
 
@@ -313,8 +342,7 @@ class ControllerServiceImpl:
             else:
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
-        # Handle bundle_blob: upload to bundle store, then replace blob
-        # with the resulting GCS path (preserving all other fields).
+        # Handle bundle_blob: upload to bundle store and persist only bundle_id.
         if request.bundle_blob:
             # Validate bundle size
             bundle_size = len(request.bundle_blob)
@@ -326,18 +354,33 @@ class ControllerServiceImpl:
                     f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
                 )
 
-            bundle_path = self._bundle_store.write_bundle(job_id.to_wire(), request.bundle_blob)
+            bundle_id = self._bundle_store.write_zip(request.bundle_blob)
 
             new_request = cluster_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             new_request.ClearField("bundle_blob")
-            new_request.bundle_gcs_path = bundle_path
+            new_request.bundle_id = bundle_id
             request = new_request
-
         # Auto-inject device constraints from the resource spec.
         # Explicit user constraints for canonical keys (device-type,
         # device-variant, etc.) replace auto-generated ones.
         request = _inject_resource_constraints(request)
+
+        # Reject coscheduled jobs that can never be scheduled: if no scaling
+        # group has num_vms matching the replica count, the job would sit in
+        # the queue forever.
+        if request.HasField("coscheduling"):
+            autoscaler = self._controller.autoscaler
+            if autoscaler is not None:
+                error = autoscaler.check_coscheduling_feasibility(
+                    replicas=request.replicas,
+                    constraints=list(request.constraints),
+                )
+                if error:
+                    raise ConnectError(
+                        Code.FAILED_PRECONDITION,
+                        f"Job is unschedulable: {error}",
+                    )
 
         # Submit job via event API
         self._state.handle_event(
@@ -761,25 +804,44 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         """Register a service endpoint.
 
-        Endpoints are registered regardless of job state, but only become visible to clients
-        (via lookup/list) when the job is executing (not in a terminal state).
+        The ``task_id`` field carries the calling task's wire-format task ID
+        (e.g. ``/user/job/0``).  The endpoint is associated with the owning
+        task so that retry cleanup removes stale endpoints from earlier
+        attempts.
+
+        Endpoints are registered regardless of job state, but only become
+        visible to clients (via lookup/list) when the job is executing (not
+        in a terminal state).
         """
         endpoint_id = request.endpoint_id or str(uuid.uuid4())
 
-        job = self._state.get_job(JobName.from_wire(request.job_id))
+        task_id = JobName.from_wire(request.task_id)
+        job_id, _task_index = task_id.require_task()
+
+        job = self._state.get_job(job_id)
         if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.task_id} not found")
+
+        task = self._state.get_task(task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        if request.attempt_id != task.current_attempt_id:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Stale attempt: task {request.task_id} attempt {request.attempt_id} "
+                f"!= current {task.current_attempt_id}",
+            )
 
         endpoint = ControllerEndpoint(
             endpoint_id=endpoint_id,
             name=request.name,
             address=request.address,
-            job_id=JobName.from_wire(request.job_id),
+            task_id=task_id,
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
         )
 
-        self._state.add_endpoint(endpoint)
+        self._state.add_endpoint(endpoint, task_id=task_id)
 
         return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
@@ -805,7 +867,7 @@ class ControllerServiceImpl:
                     endpoint_id=e.endpoint_id,
                     name=e.name,
                     address=e.address,
-                    job_id=e.job_id.to_wire(),
+                    task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
                 )
                 for e in endpoints
@@ -949,28 +1011,72 @@ class ControllerServiceImpl:
 
     # --- Profiling ---
 
+    def _resolve_worker_stub(self, worker_id_str: str) -> WorkerServiceClientSync:
+        """Resolve a worker ID to a healthy stub, raising ConnectError on failure."""
+        worker = self._state.get_worker(WorkerId(worker_id_str))
+        if not worker:
+            raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
+        if not worker.healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id_str} is unavailable")
+        return self._controller.stub_factory.get_stub(worker.address)
+
     def profile_task(
         self,
         request: cluster_pb2.ProfileTaskRequest,
         ctx: RequestContext,
     ) -> cluster_pb2.ProfileTaskResponse:
-        """Profile a running task by proxying to its worker."""
+        """Profile a running task or system process.
+
+        Target routing:
+        - /system/process: the controller process itself
+        - /system/worker/<worker_id>: proxy to a specific worker (profiles the worker process)
+        - /job/.../task/N: proxied to the task's worker
+        """
+        # Handle controller-local targets: profile the controller process itself
+        if is_system_target(request.target):
+            if not request.HasField("profile_type"):
+                raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+            try:
+                duration = request.duration_seconds or 10
+                data = profile_local_process(duration, request.profile_type)
+                return cluster_pb2.ProfileTaskResponse(profile_data=data)
+            except Exception as e:
+                return cluster_pb2.ProfileTaskResponse(error=str(e))
+
+        # /system/worker/<worker_id>: proxy profile to the worker's own process
+        worker_id = _parse_worker_target(request.target)
+        if worker_id is not None:
+            stub = self._resolve_worker_stub(worker_id)
+            forwarded = cluster_pb2.ProfileTaskRequest(
+                target="/system/process",
+                duration_seconds=request.duration_seconds,
+                profile_type=request.profile_type,
+            )
+            timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
+            resp = stub.profile_task(forwarded, timeout_ms=timeout_ms)
+            return cluster_pb2.ProfileTaskResponse(
+                profile_data=resp.profile_data,
+                error=resp.error,
+            )
+
+        # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
-            task_name = JobName.from_wire(request.task_id)
+            parsed = parse_profile_target(request.target)
+            task_name = JobName.from_wire(parsed.task_id)
             task_name.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         task = self._state.get_task(task_name)
         if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 
-        worker_id = task.worker_id
-        if not worker_id:
-            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+        task_worker_id = task.worker_id
+        if not task_worker_id:
+            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not assigned to a worker")
 
-        worker = self._state.get_worker(worker_id)
+        worker = self._state.get_worker(task_worker_id)
         if not worker or not worker.healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
         stub = self._controller.stub_factory.get_stub(worker.address)
@@ -1003,32 +1109,6 @@ class ControllerServiceImpl:
                 actions.append(proto_action)
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
 
-    # --- Cluster Summary ---
-
-    def get_cluster_summary(
-        self,
-        request: cluster_pb2.Controller.GetClusterSummaryRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.GetClusterSummaryResponse:
-        """Lightweight cluster-wide counters for the dashboard header."""
-        jobs = self._state.list_all_jobs()
-        state_counts: dict[str, int] = {}
-        for job in jobs:
-            name = job_state_name(job.state)
-            key = name.removeprefix("JOB_STATE_").lower()
-            state_counts[key] = state_counts.get(key, 0) + 1
-
-        workers = self._state.list_all_workers()
-        healthy = sum(1 for w in workers if w.healthy)
-
-        return cluster_pb2.Controller.GetClusterSummaryResponse(
-            job_state_counts=state_counts,
-            total_jobs=len(jobs),
-            total_workers=len(workers),
-            healthy_workers=healthy,
-            total_users=len(self._state.list_user_stats()),
-        )
-
     def list_users(
         self,
         request: cluster_pb2.Controller.ListUsersRequest,
@@ -1060,7 +1140,26 @@ class ControllerServiceImpl:
         request: cluster_pb2.FetchLogsRequest,
         ctx: Any,
     ) -> cluster_pb2.FetchLogsResponse:
-        """Fetch logs from the LogStore by key with filtering and pagination."""
+        """Fetch logs by source key with filtering and pagination.
+
+        Source routing:
+        - /system/process, /job/...: served from the controller's own LogStore
+        - /system/worker/<worker_id>: proxied to the worker's FetchLogs(/system/process)
+        """
+        worker_id = _parse_worker_target(request.source)
+        if worker_id is not None:
+            stub = self._resolve_worker_stub(worker_id)
+            forwarded = cluster_pb2.FetchLogsRequest(
+                source="/system/process",
+                since_ms=request.since_ms,
+                cursor=request.cursor,
+                substring=request.substring,
+                max_lines=request.max_lines,
+                tail=request.tail,
+                min_level=request.min_level,
+            )
+            return stub.fetch_logs(forwarded, timeout_ms=10000)
+
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._state.log_store.get_logs(
             request.source,
@@ -1150,3 +1249,39 @@ class ControllerServiceImpl:
         )
         resp.created_at.CopyFrom(result.proto.created_at)
         return resp
+
+    def get_process_status(
+        self,
+        request: cluster_pb2.GetProcessStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetProcessStatusResponse:
+        """Return process info and recent logs.
+
+        Target routing (same convention as ProfileTask/FetchLogs):
+        - empty or /system/process: the controller process itself
+        - /system/worker/<worker_id>: proxy to a specific worker
+        """
+        target = request.target
+        if not target or target == "/system/process":
+            return get_process_status(request, self._state.log_store, self._timer)
+
+        # Parse /system/worker/<worker_id>
+        worker_id = _parse_worker_target(target)
+        if worker_id is None:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
+
+        worker = self._state.get_worker(WorkerId(worker_id))
+        if not worker:
+            raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
+        if not worker.healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+
+        stub = self._controller.stub_factory.get_stub(worker.address)
+        # Forward with target set to /system/process so the worker returns its own status
+        forwarded = cluster_pb2.GetProcessStatusRequest(
+            max_log_lines=request.max_log_lines,
+            log_substring=request.log_substring,
+            min_log_level=request.min_log_level,
+            target="/system/process",
+        )
+        return stub.get_process_status(forwarded, timeout_ms=10000)

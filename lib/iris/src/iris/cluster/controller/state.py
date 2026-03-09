@@ -80,6 +80,23 @@ accidental collision with normal job names."""
 HEARTBEAT_FAILURE_THRESHOLD = 10
 """Consecutive heartbeat failures before marking worker as failed."""
 
+
+class HeartbeatAction(Enum):
+    """Action the controller should take after reporting a heartbeat result.
+
+    OK: Heartbeat succeeded, worker is healthy. No special action needed.
+    TRANSIENT_FAILURE: RPC failed but worker is still within the failure threshold.
+        Dispatches were re-queued for the next heartbeat.
+    WORKER_FAILED: Worker exceeded the heartbeat failure threshold or reported itself
+        as unhealthy. The worker has been pruned from state. The controller should
+        evict the cached stub and notify the autoscaler.
+    """
+
+    OK = "ok"
+    TRANSIENT_FAILURE = "transient_failure"
+    WORKER_FAILED = "worker_failed"
+
+
 RESOURCE_HISTORY_MAX = 60
 """~5 minutes at 5s heartbeat interval."""
 
@@ -885,7 +902,7 @@ class ControllerEndpoint:
         endpoint_id: Unique endpoint identifier
         name: Full prefixed service name (e.g., "abc123/my-actor")
         address: Network address (host:port)
-        job_id: Job that registered this endpoint
+        task_id: Task that registered this endpoint (wire-format, e.g. "/user/job/0")
         metadata: Additional key-value metadata
         registered_at: Timestamp when endpoint was registered
     """
@@ -893,7 +910,7 @@ class ControllerEndpoint:
     endpoint_id: str
     name: str  # Full prefixed name: "{root_job_id}/{actor_name}"
     address: str
-    job_id: JobName
+    task_id: JobName
     metadata: dict[str, str] = field(default_factory=dict)
     registered_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
@@ -1959,6 +1976,34 @@ class ControllerState:
         with self._lock:
             return self._workers.pop(worker_id, None)
 
+    def fail_workers_by_vm_addresses(self, vm_addresses: list[str], reason: str) -> list[tuple[WorkerId, str]]:
+        """Immediately fail all workers whose vm_address matches any in the given list.
+
+        Used when a slice is terminated: all sibling workers must be failed
+        so their tasks (including reservation holders) are cascaded immediately
+        rather than waiting for heartbeat timeouts.
+
+        Returns list of (worker_id, worker_address) tuples for each failed worker.
+        """
+        with self._lock:
+            matched: list[tuple[WorkerId, str]] = []
+            vm_set = set(vm_addresses)
+            for worker in self._workers.values():
+                if worker.healthy and (worker.metadata.vm_address or "") in vm_set:
+                    matched.append((worker.worker_id, worker.address))
+
+            failed: list[tuple[WorkerId, str]] = []
+            for worker_id, worker_address in matched:
+                event = WorkerFailedEvent(
+                    worker_id=worker_id,
+                    error=reason,
+                )
+                txn = TransactionLog(event=event)
+                self._on_worker_failed(txn, event)
+                self._transactions.append(txn)
+                failed.append((worker_id, worker_address))
+            return failed
+
     def get_available_workers(self) -> list[ControllerWorker]:
         with self._lock:
             return [w for w in self._workers.values() if w.healthy]
@@ -2044,8 +2089,9 @@ class ControllerState:
             feeds tasks_to_run). The worker processes tasks_to_run before
             reconciling expected_tasks, so newly-submitted tasks will be found.
 
-        Phase 3 — complete_heartbeat or fail_heartbeat (under lock):
+        Phase 3 — complete_heartbeat or fail_heartbeat:
             On success: process worker's response (task state changes, health).
+              If worker_healthy is False, the worker is immediately failed.
             On failure: re-queue dispatches for the next heartbeat (we cannot
             distinguish "not delivered" from "delivered but slow to respond").
             Increment consecutive_failures; if threshold exceeded, cascade
@@ -2089,7 +2135,7 @@ class ControllerState:
         self,
         snapshot: HeartbeatSnapshot,
         response: cluster_pb2.HeartbeatResponse,
-    ) -> None:
+    ) -> HeartbeatAction:
         """Process successful heartbeat response (phase 3, success path).
 
         Preconditions:
@@ -2101,6 +2147,13 @@ class ControllerState:
             - Terminal tasks trigger retry/cleanup via the normal state machine
             - Worker resource metrics updated
 
+        If the response carries ``worker_healthy=False``, the worker is
+        immediately marked as failed under the same lock acquisition (tasks
+        cascade to WORKER_FAILED) and ``HeartbeatAction.WORKER_FAILED`` is
+        returned. The health check is performed before the worker is marked
+        healthy, so no scheduling cycle can assign new work to an unhealthy
+        worker.
+
         Updates worker health state and processes task state changes from the response.
         Log entries are collected under the state lock but flushed to SQLite after
         the lock is released, so disk I/O does not block scheduling or RPCs.
@@ -2110,7 +2163,32 @@ class ControllerState:
         with self._lock:
             worker = self._workers.get(snapshot.worker_id)
             if not worker:
-                return  # Worker removed while heartbeat in flight
+                # TODO(#3425): When a sibling worker is pruned by fail_workers_by_vm_addresses()
+                # during the same heartbeat round, this early return silently drops any logs or
+                # terminal task states the worker reported in its in-flight response. Task states
+                # are already terminal from the cascade so the main loss is log entries. A clean
+                # fix would decouple log flushing from the worker-existence check, but this is an
+                # edge case — the affected tasks will be retried regardless.
+                return HeartbeatAction.OK
+
+            # Check worker health before marking it as available. If the worker
+            # reported itself unhealthy we must handle it under this same lock
+            # acquisition so no scheduling cycle can see the worker as healthy.
+            if not response.worker_healthy:
+                health_error = response.health_error or "worker reported unhealthy"
+                logger.warning(
+                    "Worker %s reported unhealthy: %s",
+                    snapshot.worker_id,
+                    health_error,
+                )
+                event = WorkerFailedEvent(
+                    worker_id=snapshot.worker_id,
+                    error=f"health check failed: {health_error}",
+                )
+                txn = TransactionLog(event=event)
+                self._on_worker_failed(txn, event)
+                self._transactions.append(txn)
+                return HeartbeatAction.WORKER_FAILED
 
             worker.last_heartbeat = Timestamp.now()
             worker.healthy = True
@@ -2164,6 +2242,8 @@ class ControllerState:
         if pending_logs and self._log_store is not None:
             self._log_store.append_batch(pending_logs)
 
+        return HeartbeatAction.OK
+
     def _process_task_state_change(
         self,
         task_id: JobName,
@@ -2187,7 +2267,7 @@ class ControllerState:
         self._on_task_state_changed(txn, event)
         self._transactions.append(txn)
 
-    def fail_heartbeat(self, snapshot: HeartbeatSnapshot, error: str) -> None:
+    def fail_heartbeat(self, snapshot: HeartbeatSnapshot, error: str) -> HeartbeatAction:
         """Handle heartbeat RPC failure (phase 3, failure path).
 
         Preconditions:
@@ -2208,11 +2288,14 @@ class ControllerState:
         still be processing it. Firing WORKER_FAILED would bump the attempt_id; the
         next heartbeat would then carry a higher attempt_id, causing the worker to
         kill the running task and restart it unnecessarily.
+
+        Returns WORKER_FAILED if the failure threshold was exceeded, otherwise
+        TRANSIENT_FAILURE.
         """
         with self._lock:
             worker = self._workers.get(snapshot.worker_id)
             if not worker:
-                return  # Worker removed while heartbeat in flight
+                return HeartbeatAction.WORKER_FAILED  # Worker removed while heartbeat in flight
 
             # Record failure via event first - this may mark worker as failed
             event = WorkerHeartbeatFailedEvent(worker_id=snapshot.worker_id, error=error)
@@ -2225,11 +2308,13 @@ class ControllerState:
                 pd = self._pending_dispatch.setdefault(snapshot.worker_id, PendingDispatch())
                 pd.tasks_to_run.extend(snapshot.tasks_to_run)
                 pd.tasks_to_kill.extend(snapshot.tasks_to_kill)
+                return HeartbeatAction.TRANSIENT_FAILURE
             else:
                 # Worker failed - _on_worker_failed already cascaded WORKER_FAILED to
                 # all tasks in running_tasks. Clear stale dispatches so they don't
                 # linger after the worker is pruned.
                 self._pending_dispatch.pop(snapshot.worker_id, None)
+                return HeartbeatAction.WORKER_FAILED
 
     def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
         """Load workers from static configuration."""
@@ -2276,7 +2361,11 @@ class ControllerState:
 
     def _is_endpoint_visible(self, ep: ControllerEndpoint) -> bool:
         """An endpoint is visible when its owning job is still running."""
-        job = self._jobs.get(ep.job_id)
+        try:
+            job_id, _ = ep.task_id.require_task()
+        except ValueError:
+            job_id = ep.task_id
+        job = self._jobs.get(job_id)
         return job is not None and not job.is_finished()
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[ControllerEndpoint]:

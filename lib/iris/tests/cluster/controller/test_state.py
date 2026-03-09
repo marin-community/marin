@@ -648,7 +648,7 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
         endpoint_id="ep1",
         name="j1/actor",
         address="a:1",
-        job_id=JobName.root("test-user", "j1"),
+        task_id=task.task_id,
     )
     state.add_endpoint(ep, task.task_id)
 
@@ -678,7 +678,7 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
         endpoint_id="ep-1",
         name="ns-1/actor",
         address="10.0.0.1:8080",
-        job_id=JobName.root("test-user", "ns-1"),
+        task_id=task.task_id,
     )
     state.add_endpoint(ep)
 
@@ -717,7 +717,7 @@ def test_namespace_isolation(job_request, worker_metadata):
             endpoint_id="ep-1",
             name="ns-1/actor",
             address="10.0.0.1:8080",
-            job_id=JobName.root("test-user", "ns-1"),
+            task_id=tasks1[0].task_id,
         )
     )
     state.add_endpoint(
@@ -725,7 +725,7 @@ def test_namespace_isolation(job_request, worker_metadata):
             endpoint_id="ep-2",
             name="ns-2/actor",
             address="10.0.0.2:8080",
-            job_id=JobName.root("test-user", "ns-2"),
+            task_id=tasks2[0].task_id,
         )
     )
 
@@ -1374,6 +1374,7 @@ def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
     log_entry.timestamp.epoch_ms = 1000
 
     response = cluster_pb2.HeartbeatResponse(
+        worker_healthy=True,
         tasks=[
             cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=task.task_id.to_wire(),
@@ -1381,7 +1382,7 @@ def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
                 state=cluster_pb2.TASK_STATE_RUNNING,
                 log_entries=[log_entry],
             )
-        ]
+        ],
     )
     state.complete_heartbeat(snapshot, response)
 
@@ -1409,6 +1410,7 @@ def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata)
         entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
         entry.timestamp.epoch_ms = 1000 + i
         response = cluster_pb2.HeartbeatResponse(
+            worker_healthy=True,
             tasks=[
                 cluster_pb2.Controller.WorkerTaskStatus(
                     task_id=task.task_id.to_wire(),
@@ -1416,7 +1418,7 @@ def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata)
                     state=cluster_pb2.TASK_STATE_RUNNING,
                     log_entries=[entry],
                 )
-            ]
+            ],
         )
         state.complete_heartbeat(snapshot, response)
 
@@ -2166,6 +2168,7 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
 
     # Create a mock response with completed task
     response = cluster_pb2.HeartbeatResponse(
+        worker_healthy=True,
         tasks=[
             cluster_pb2.Controller.WorkerTaskStatus(
                 task_id=tasks[0].task_id.to_wire(),
@@ -2173,7 +2176,7 @@ def test_complete_heartbeat_processes_task_states(job_request, worker_metadata):
                 exit_code=0,
                 attempt_id=0,
             )
-        ]
+        ],
     )
 
     # Complete heartbeat
@@ -2277,6 +2280,63 @@ def test_worker_failed_from_building_counts_as_preemption(job_request, worker_me
     # Real preemption: worker had started processing the task
     assert task.preemption_count == 1
     assert task.failure_count == 0
+
+
+def test_fail_workers_by_vm_addresses_cascades_tasks(job_request, worker_metadata):
+    """fail_workers_by_vm_addresses fails sibling workers and cascades their tasks."""
+    state = ControllerState()
+
+    # Register two workers on the same "slice" with distinct vm_addresses
+    meta1 = worker_metadata()
+    meta1.vm_address = "10.0.1.0"
+    w1 = register_worker(state, "w1", "host1:8080", meta1)
+
+    meta2 = worker_metadata()
+    meta2.vm_address = "10.0.1.1"
+    w2 = register_worker(state, "w2", "host2:8080", meta2)
+
+    # Submit and dispatch a task to each worker
+    tasks1 = submit_job(state, "j1", job_request("job1"))
+    dispatch_task(state, tasks1[0], w1)
+
+    tasks2 = submit_job(state, "j2", job_request("job2"))
+    dispatch_task(state, tasks2[0], w2)
+
+    assert tasks1[0].state == cluster_pb2.TASK_STATE_RUNNING
+    assert tasks2[0].state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Fail the sibling worker (w2) by vm_address
+    failed = state.fail_workers_by_vm_addresses(["10.0.1.1"], reason="slice terminated")
+
+    assert len(failed) == 1
+    assert failed[0][0] == w2
+    assert failed[0][1] == "host2:8080"
+
+    # w2's task should be cascaded to WORKER_FAILED (or re-queued as PENDING for retry)
+    assert tasks2[0].state in (cluster_pb2.TASK_STATE_WORKER_FAILED, cluster_pb2.TASK_STATE_PENDING)
+
+    # w1 should be unaffected
+    assert tasks1[0].state == cluster_pb2.TASK_STATE_RUNNING
+    assert state.get_worker(w1) is not None
+
+    # w2 should be pruned from state
+    assert state.get_worker(w2) is None
+
+
+def test_fail_workers_by_vm_addresses_skips_unknown(worker_metadata):
+    """fail_workers_by_vm_addresses returns empty for unknown VM addresses."""
+    state = ControllerState()
+    meta = worker_metadata()
+    meta.vm_address = "10.0.1.0"
+    register_worker(state, "w1", "host1:8080", meta)
+
+    failed = state.fail_workers_by_vm_addresses(["10.0.99.99"], reason="unknown")
+    assert failed == []
+
+    # Original worker should still be healthy
+    w = state.get_worker(WorkerId("w1"))
+    assert w is not None
+    assert w.healthy
 
 
 def test_fail_heartbeat_kills_requeue_only(job_request, worker_metadata):

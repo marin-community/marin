@@ -665,12 +665,13 @@ class ScalingGroup:
                 idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
                 logger.info(
                     "Scale group %s: scaling down slice %s "
-                    "(idle for %dms, never_active=%s, ready=%d, pending=%d, target=%d)",
+                    "(idle for %dms, never_active=%s, ready=%d/%d, pending=%d, target=%d)",
                     self.name,
                     slice_state.handle.slice_id,
                     idle_duration.to_ms(),
                     never_active,
                     ready,
+                    self.num_vms,
                     pending,
                     target_capacity,
                 )
@@ -908,6 +909,14 @@ class ScalingGroup:
             if vm_address in self._get_slice_vm_addresses(state):
                 return slice_id
         return None
+
+    def get_slice_vm_addresses(self, slice_id: str) -> list[str]:
+        """Get all VM addresses for a slice. Returns empty list if not found."""
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+        if state is None:
+            return []
+        return list(self._get_slice_vm_addresses(state))
 
     def terminate_all(self) -> None:
         """Terminate all slices in this scale group."""
