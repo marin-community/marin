@@ -2163,7 +2163,13 @@ class ControllerState:
         with self._lock:
             worker = self._workers.get(snapshot.worker_id)
             if not worker:
-                return HeartbeatAction.OK  # Worker removed while heartbeat in flight
+                # TODO(#3425): When a sibling worker is pruned by fail_workers_by_vm_addresses()
+                # during the same heartbeat round, this early return silently drops any logs or
+                # terminal task states the worker reported in its in-flight response. Task states
+                # are already terminal from the cascade so the main loss is log entries. A clean
+                # fix would decouple log flushing from the worker-existence check, but this is an
+                # edge case — the affected tasks will be retried regardless.
+                return HeartbeatAction.OK
 
             # Check worker health before marking it as available. If the worker
             # reported itself unhealthy we must handle it under this same lock
