@@ -134,6 +134,10 @@ def serve(
         bundle_prefix = default_bundle_prefix()
         logger.info("Using auto-detected bundle_prefix: %s", bundle_prefix)
 
+    # Workers need the resolved bundle_prefix to upload task artifacts (profiles).
+    if base_worker_config is not None:
+        base_worker_config.storage_prefix = bundle_prefix
+
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 

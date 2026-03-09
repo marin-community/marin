@@ -37,6 +37,7 @@ from iris.cluster.types import (
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.profile_capture import ProfileCapture
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
 from iris.logging import parse_log_level, str_to_log_level
 from iris.rpc import cluster_pb2, logging_pb2
@@ -123,6 +124,7 @@ class TaskAttemptConfig:
     attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
     cache_dir: Path
+    storage_prefix: str = ""
 
 
 def _get_host_ip() -> str:
@@ -294,6 +296,7 @@ class TaskAttempt:
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
+        self._storage_prefix: str = config.storage_prefix
         # Task state
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
@@ -681,8 +684,12 @@ class TaskAttempt:
         Streams logs incrementally into task.logs (single source of truth).
         Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
+
+        A background ProfileCapture thread periodically captures py-spy snapshots
+        and uploads the last N to cloud storage when the task finishes.
         """
         assert self._container_handle is not None
+        assert self.workdir is not None
         handle = self._container_handle
 
         # Create deadline from timeout if specified (0 or unset means no timeout)
@@ -693,6 +700,21 @@ class TaskAttempt:
 
         log_reader = handle.log_reader()
 
+        with ProfileCapture(
+            container_handle=handle,
+            safe_token=self.task_id.to_safe_token(),
+            attempt_id=self.attempt_id,
+            workdir=self.workdir,
+            storage_prefix=self._storage_prefix,
+        ):
+            self._monitor_loop(handle, log_reader, deadline)
+
+    def _monitor_loop(
+        self,
+        handle: ContainerHandle,
+        log_reader: RuntimeLogReader,
+        deadline: Deadline | None,
+    ) -> None:
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
