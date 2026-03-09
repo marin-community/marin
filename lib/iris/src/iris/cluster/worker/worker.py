@@ -602,11 +602,9 @@ class Worker:
                             if reported_state == cluster_pb2.TASK_STATE_PENDING:
                                 reported_state = cluster_pb2.TASK_STATE_BUILDING
 
-                            # Use a generous cap for terminal tasks since
-                            # this is the last heartbeat that will carry logs
-                            # for this attempt.
-                            log_cap = 50000 if task.status in self._TERMINAL_STATES else 5000
-                            log_entries = task.drain_heartbeat_logs(max_entries=log_cap)
+                            is_terminal = task.status in self._TERMINAL_STATES
+                            log_cap = 50000 if is_terminal else 5000
+                            log_entries = task.drain_heartbeat_logs(max_entries=log_cap, final=is_terminal)
                             entry = cluster_pb2.Controller.WorkerTaskStatus(
                                 task_id=task_id,
                                 attempt_id=task_proto.current_attempt_id,

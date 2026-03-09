@@ -821,6 +821,16 @@ class ControllerServiceImpl:
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.task_id} not found")
 
+        task = self._state.get_task(task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        if request.attempt_id != task.current_attempt_id:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Stale attempt: task {request.task_id} attempt {request.attempt_id} "
+                f"!= current {task.current_attempt_id}",
+            )
+
         endpoint = ControllerEndpoint(
             endpoint_id=endpoint_id,
             name=request.name,

@@ -336,22 +336,27 @@ class TaskAttempt:
         """Return recent logs for this task attempt."""
         return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
 
-    def drain_heartbeat_logs(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
+    def drain_heartbeat_logs(self, max_entries: int = 5000, final: bool = False) -> list[logging_pb2.LogEntry]:
         """Return log entries appended since the last call, for delta forwarding.
 
-        When the number of pending entries exceeds *max_entries*, the result is
-        truncated to the last *max_entries* lines and a truncation marker is
-        prepended so operators can tell that earlier output was dropped.
+        Args:
+            max_entries: Maximum number of entries to return per call.
+            final: When True (terminal heartbeat), reads all pending entries and
+                truncates locally to *max_entries* with a marker.  When False
+                (normal heartbeat), uses the bounded cursor so undelivered rows
+                remain available for subsequent heartbeats.
         """
-        entries = self._heartbeat_cursor.read(max_entries=0)
-        if len(entries) > max_entries:
-            marker = logging_pb2.LogEntry(
-                source="iris",
-                data=f"<logs truncated — {len(entries) - max_entries} earlier entries exceeded heartbeat log quota>",
-            )
-            marker.timestamp.epoch_ms = entries[-max_entries].timestamp.epoch_ms
-            entries = [marker, *entries[-max_entries:]]
-        return entries
+        if final:
+            entries = self._heartbeat_cursor.read(max_entries=0)
+            if len(entries) > max_entries:
+                marker = logging_pb2.LogEntry(
+                    source="iris",
+                    data=f"<logs truncated — {len(entries) - max_entries} earlier entries exceeded heartbeat log quota>",
+                )
+                marker.timestamp.epoch_ms = entries[-max_entries].timestamp.epoch_ms
+                entries = [marker, *entries[-max_entries:]]
+            return entries
+        return self._heartbeat_cursor.read(max_entries=max_entries)
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
