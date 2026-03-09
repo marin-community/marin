@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import io
 import hashlib
+import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
+import jpeglib
 import numpy as np
 from PIL import Image, ImageOps
 from scipy.fft import dctn, idctn
@@ -19,6 +22,13 @@ class JpegTokenizerFamily(StrEnum):
     BYTES = "bytes"
     SYMBOLS = "symbols"
     COEFFS = "coeffs"
+
+
+class CoefficientTokenSource(StrEnum):
+    """Available implementations for coefficient extraction."""
+
+    REFERENCE = "reference"
+    LIBJPEG = "libjpeg"
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,7 @@ class CoefficientTokenizerConfig:
     block_size: int = 8
     coefficient_bound: int = 2047
     quality: int = 95
+    source: CoefficientTokenSource = CoefficientTokenSource.REFERENCE
     version: str = "v0"
 
 
@@ -344,14 +355,28 @@ def encode_dct_coeffs(
     *,
     config: CoefficientTokenizerConfig = V0_COEFFICIENT_CONFIG,
 ) -> np.ndarray:
-    """Encode bounded low-frequency coefficients from the deterministic luma reference blocks."""
+    """Encode bounded low-frequency coefficients from the configured block source."""
 
-    blocks = _quantized_luma_blocks(canonical_jpeg.luma_plane, quality=config.quality)
+    blocks = quantized_luma_blocks(canonical_jpeg, config=config)
     zigzag = blocks.reshape(-1, 64)[:, _ZIGZAG_ORDER[: config.zigzag_coefficients]]
     encoded = [
         _encode_bounded_value(int(value), config.coefficient_bound, "coefficient") for value in zigzag.reshape(-1)
     ]
     return np.asarray(encoded, dtype=np.int32)
+
+
+def quantized_luma_blocks(
+    canonical_jpeg: CanonicalJpegRepresentation,
+    *,
+    config: CoefficientTokenizerConfig = V0_COEFFICIENT_CONFIG,
+) -> np.ndarray:
+    """Return raster-ordered quantized luma DCT blocks from the selected extractor."""
+
+    if config.source == CoefficientTokenSource.REFERENCE:
+        return _quantized_luma_blocks(canonical_jpeg.luma_plane, quality=config.quality)
+    if config.source == CoefficientTokenSource.LIBJPEG:
+        return _libjpeg_quantized_luma_blocks(canonical_jpeg)
+    raise ValueError(f"Unsupported coefficient source {config.source!r}")
 
 
 def reconstruct_luma_from_coeff_tokens(
@@ -437,6 +462,24 @@ def _quantized_luma_blocks(luma_plane: np.ndarray, *, quality: int) -> np.ndarra
     return quantized.reshape(-1, 8, 8)
 
 
+def _libjpeg_quantized_luma_blocks(canonical_jpeg: CanonicalJpegRepresentation) -> np.ndarray:
+    """Return libjpeg's exact quantized luma blocks for canonical JPEG bytes."""
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
+        handle.write(canonical_jpeg.jpeg_bytes)
+        temp_path = Path(handle.name)
+
+    try:
+        dct = jpeglib.read_dct(str(temp_path))
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    y_blocks = np.asarray(dct.Y, dtype=np.int32)
+    if y_blocks.ndim != 4 or y_blocks.shape[-2:] != (8, 8):
+        raise ValueError(f"Expected libjpeg Y blocks with shape [rows, cols, 8, 8], got {y_blocks.shape}")
+    return y_blocks.reshape(-1, 8, 8)
+
+
 def _scaled_luma_quant_table(quality: int) -> np.ndarray:
     if quality <= 0 or quality > 100:
         raise ValueError(f"quality must be in [1, 100], got {quality}")
@@ -453,6 +496,7 @@ __all__ = [
     "ByteWindowTokenizerConfig",
     "CanonicalJpegConfig",
     "CanonicalJpegRepresentation",
+    "CoefficientTokenSource",
     "CoefficientTokenizerConfig",
     "JpegTokenizerFamily",
     "SymbolTokenizerConfig",
@@ -462,6 +506,7 @@ __all__ = [
     "encode_dct_coeffs",
     "encode_jpeg_bytes",
     "encode_jpeg_symbols",
+    "quantized_luma_blocks",
     "reconstruct_luma_from_coeff_tokens",
     "stable_byte_checksum",
     "symbol_vocab_size",

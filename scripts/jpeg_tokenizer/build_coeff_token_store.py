@@ -23,6 +23,7 @@ from experiments.jpeg_tokenizer.base.data import (
 from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     V0_CANONICAL_JPEG_CONFIG,
     V0_COEFFICIENT_CONFIG,
+    CoefficientTokenSource,
     canonicalize_image,
     coefficient_vocab_size,
     encode_dct_coeffs,
@@ -41,6 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-train-examples", type=int)
     parser.add_argument("--max-validation-examples", type=int)
     parser.add_argument("--k", type=int, default=4)
+    parser.add_argument(
+        "--source",
+        choices=[source.value for source in CoefficientTokenSource],
+        default=CoefficientTokenSource.REFERENCE.value,
+    )
     parser.add_argument("--output-dir", default="artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k4_v0")
     parser.add_argument("--log-every", type=int, default=500)
     return parser.parse_args()
@@ -51,7 +57,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     output_dir = Path(args.output_dir)
 
-    coeff_config = replace(V0_COEFFICIENT_CONFIG, zigzag_coefficients=args.k)
+    coeff_config = replace(
+        V0_COEFFICIENT_CONFIG,
+        zigzag_coefficients=args.k,
+        source=CoefficientTokenSource(args.source),
+    )
     seq_len = (V0_CANONICAL_JPEG_CONFIG.resolution // coeff_config.block_size) ** 2 * coeff_config.zigzag_coefficients
     vocab_size = coefficient_vocab_size(coeff_config)
 

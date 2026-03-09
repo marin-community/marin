@@ -491,3 +491,54 @@
   - the byte baseline is now concrete and cheap enough to run at the same `8192 * 128 = 1,048,576` tokens/step budget as the `K=8` coefficient baseline
   - the main remaining question is empirical: whether the byte stream can train cleanly and where its eval loss lands relative to `K=8`
 - Next action: commit the byte builder/launch surface and keep an eye on `ray-run-dlwh-launch-20260309-061949` until trainer startup or a concrete failure signal appears.
+
+### 2026-03-09 00:40 - Byte smoke succeeded; exact libjpeg K=8 baseline staged
+
+- Hypothesis: the first useful pair of non-reference baselines is full canonical JPEG bytes and an exact libjpeg-backed
+  coefficient stream at the same `K=8` budget.
+- Command:
+  - byte smoke monitoring:
+    `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a job-logs -n 200 ray-run-dlwh-launch-20260309-061949`
+  - byte trial launch:
+    `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-bytes-w8192-trial"]'`
+  - exact coeff sanity:
+    `uv run python scripts/jpeg_tokenizer/build_coeff_token_store.py --source libjpeg --k 8 --max-train-examples 16 --max-validation-examples 8 ...`
+  - exact coeff full build:
+    `uv run python scripts/jpeg_tokenizer/build_coeff_token_store.py --source libjpeg --k 8 --log-every 1000 --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0`
+  - exact coeff mirror:
+    `gsutil -m rsync -r artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0 gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0`
+  - exact coeff smoke launch:
+    `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k8-libjpeg-smoke"]'`
+- Result:
+  - byte smoke completed successfully:
+    - Ray job: `ray-run-dlwh-launch-20260309-061949`
+    - W&B: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-bytes-w8192-smoke`
+    - eval loss: `5.657 -> 4.610 -> 4.546`
+    - final checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-w8192-smoke-c5f441/checkpoints/step-96`
+  - byte trial submitted:
+    - Ray job: `ray-run-dlwh-launch-20260309-073427`
+  - added an explicit libjpeg-backed coefficient path via `CoefficientTokenSource.LIBJPEG`
+  - tiny `K=8` exact-vs-reference sanity on `16` train images:
+    - sequence shapes matched exactly: `(16, 8192)`
+    - exact and reference rows differed on every example, but token equality was still `94.688%`
+    - every mismatch was only `±1`, which is consistent with real libjpeg quantization differing slightly from the
+      floating-point reference DCT
+  - full exact `K=8` store mirrored to:
+    `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0`
+    - size: `420.76 MiB`
+    - train examples: `9469`
+    - validation examples: `3925`
+    - sequence length: `8192`
+    - vocab size: `4095`
+  - first exact-coeff smoke submission failed immediately:
+    - Ray job: `ray-run-dlwh-launch-20260309-074034`
+    - failure: `ModuleNotFoundError: No module named 'jpeglib'`
+    - cause: the Ray job was submitted from the pre-change commit, so the worker runtime env did not include the new
+      dependency yet
+- Interpretation:
+  - the byte baseline is healthy enough to justify the full trial
+  - the exact libjpeg coefficient path is now implemented, validated locally, and cheap enough to compare directly to
+    the existing reference `K=8` rung
+  - the libjpeg smoke failure is packaging hygiene, not a modeling or infra issue
+- Next action: commit the new dependency + libjpeg launch surface, then relaunch `tokexplore/jpeg-tokenizer-k8-libjpeg-smoke`
+  from the updated commit.

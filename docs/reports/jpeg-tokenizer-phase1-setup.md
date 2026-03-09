@@ -560,3 +560,85 @@ That gives the more precise interpretation of the earlier sweep:
 This result is much more in line with the initial intuition: the first few coefficients per block are largely a
 low-frequency summary, and the reason larger `K` helps on shared-prefix targets is that the added mid-frequency tokens
 carry information about nearby local structure that improves the next block's prefix prediction.
+
+## Byte And Exact-Coefficient Baselines
+
+The next comparison should not mutate the existing reference coefficient ladder in place. There are now two separate
+baselines staged alongside it:
+
+- full canonical JPEG bytes
+- exact libjpeg-backed `K=8` coefficients
+
+The important distinction for the byte baseline is that it uses the entire canonical JPEG file after deterministic
+re-encoding, not just the entropy payload. In other words, the byte stream includes normal JPEG structure such as
+markers, tables, headers, and entropy-coded data, with source metadata stripped during canonicalization.
+
+### Byte Smoke
+
+The byte-window smoke run completed successfully:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260309-061949`
+- W&B:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-bytes-w8192-smoke`
+- eval loss:
+  `5.657 -> 4.610 -> 4.546`
+- final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-w8192-smoke-c5f441/checkpoints/step-96`
+
+That is enough to promote the full byte trial:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260309-073427`
+
+I do not yet have the terminal result for the full byte trial in this note.
+
+### Exact Libjpeg K=8 Coefficients
+
+The new libjpeg path uses `jpeglib.read_dct(...)` on the canonical JPEG bytes and extracts the exact quantized luma
+blocks from libjpeg rather than recomputing a floating-point DCT over the canonical luma plane.
+
+I kept this as a separate coefficient source instead of rewriting the old `K=8` reference rung, so the earlier results
+remain comparable.
+
+On a small `16`-image train slice:
+
+- exact and reference `K=8` sequences had the same shape: `(16, 8192)`
+- no rows were perfectly identical
+- token equality was still `94.688%`
+- every mismatch was only `±1`
+
+That is the expected qualitative outcome: the reference implementation is close, but not identical, to libjpeg's real
+quantized coefficient stream.
+
+The full exact `K=8` token store is now mirrored at:
+
+- `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0`
+
+with:
+
+- train examples: `9469`
+- validation examples: `3925`
+- sequence length: `8192`
+- vocab size: `4095`
+- size: `420.76 MiB`
+
+The first smoke submission for this exact baseline failed immediately:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260309-074034`
+- failure:
+  `ModuleNotFoundError: No module named 'jpeglib'`
+
+This was not a modeling problem. The job was submitted from the older committed snapshot, so the Ray runtime env did
+not include the new dependency yet.
+
+## Current Recommendation
+
+The next two comparisons are now well-defined:
+
+- let the full byte trial finish and compare it against the existing reference `K=8` rung
+- relaunch the exact libjpeg `K=8` smoke from the updated commit, then promote it if startup is clean
+
+That gets us the first real answer to the representation question outside the original floating-point reference
+coefficient ladder.

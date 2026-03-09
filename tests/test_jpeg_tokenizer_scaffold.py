@@ -34,11 +34,14 @@ from experiments.jpeg_tokenizer.base.model import JpegLmConfig
 from experiments.jpeg_tokenizer.base.train import JpegEvalConfig, JpegRunConfig, JpegTrainerConfig, run_jpeg_tokenizer
 from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     ByteWindowTokenizerConfig,
+    CoefficientTokenSource,
+    CoefficientTokenizerConfig,
     byte_window_vocab_size,
     canonicalize_image,
     encode_dct_coeffs,
     encode_jpeg_bytes,
     encode_jpeg_symbols,
+    quantized_luma_blocks,
     reconstruct_luma_from_coeff_tokens,
     stable_byte_checksum,
     window_byte_tokens,
@@ -121,6 +124,22 @@ def test_canonicalization_and_reference_tokenizers_are_deterministic():
     assert symbol_tokens.ndim == 1
     assert coeff_tokens.min() >= 0
     assert symbol_tokens.min() >= 0
+
+
+def test_libjpeg_quantized_blocks_are_deterministic_and_match_expected_token_count():
+    pixels = np.arange(32 * 32, dtype=np.uint8).reshape(32, 32)
+    image = Image.fromarray(pixels, mode="L").convert("RGB")
+    canonical = canonicalize_image(image)
+    libjpeg_config = CoefficientTokenizerConfig(zigzag_coefficients=4, source=CoefficientTokenSource.LIBJPEG)
+
+    first_blocks = quantized_luma_blocks(canonical, config=libjpeg_config)
+    second_blocks = quantized_luma_blocks(canonical, config=libjpeg_config)
+    coeff_tokens = encode_dct_coeffs(canonical, config=libjpeg_config)
+
+    assert first_blocks.shape == (1024, 8, 8)
+    assert np.array_equal(first_blocks, second_blocks)
+    assert coeff_tokens.shape == (1024 * 4,)
+    assert coeff_tokens.min() >= 0
 
 
 def test_coeff_reconstruction_metrics_are_well_formed():

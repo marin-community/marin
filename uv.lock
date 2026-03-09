@@ -3932,6 +3932,27 @@ wheels = [
 ]
 
 [[package]]
+name = "jpeglib"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "setuptools", version = "78.1.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-cpu' or extra == 'extra-5-marin-cuda12' or extra != 'extra-5-marin-vllm' or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-vllm' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "wheel" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/d7/5cadeb5790320923e205e5d682acdc63740bf40973d6bf15f7625a149eb8/jpeglib-1.0.2.tar.gz", hash = "sha256:25eadd5497c94771c53deb6aa6646f0030ac24509fa9c3b89e984e11390bf3d9", size = 5671347, upload-time = "2025-09-18T16:45:49.463Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/bd/1e49f362ad057d237f27a5c4ef7bc35adc6e1928dab51dce3c565ad44d79/jpeglib-1.0.2-cp38-abi3-macosx_10_9_universal2.whl", hash = "sha256:fa065e7239664facd4a4c8910968ca729c75ad811aa36b23e3b8dba14d3163b2", size = 14453096, upload-time = "2025-09-18T16:45:34.228Z" },
+    { url = "https://files.pythonhosted.org/packages/33/54/d55db299c1572199847ef0707e1855e5a9f1d33abebc3148405c0760446d/jpeglib-1.0.2-cp38-abi3-macosx_10_9_x86_64.whl", hash = "sha256:7d160a4b0169e737fef2b3a8e58074ccb463425baf47725ff480818fd26dd4ff", size = 10690880, upload-time = "2025-09-18T16:45:36.643Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/9e/3e72638f1baf356edc683aad86c08034b5facdec912253be846dc0a60ccd/jpeglib-1.0.2-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:1e97ed4c232d0a76b80d823ac8a72ce0e8c68003929de599c27423dfdacf5e96", size = 10533860, upload-time = "2025-09-18T16:45:38.651Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/b5/d3f0560b0b420aa5dccac348598217be8691e6cdd5a5269c805b85fe2e36/jpeglib-1.0.2-cp38-abi3-manylinux2010_i686.manylinux2014_i686.manylinux_2_12_i686.manylinux_2_17_i686.whl", hash = "sha256:e03cc447815efaf4cf0c22333ec207a9a8a0b9245bd0bafd15b30c2156ed1290", size = 22136496, upload-time = "2025-09-18T16:45:40.962Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/f4/d7b8c2d3934208963fd2388cf4316043cb6c8e8c7d55780b8d9a45b4f8b2/jpeglib-1.0.2-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:feef6e94c34cf8b27f7a888c1c8567c34686c32b1e6edb16716931e4ee18fece", size = 22754356, upload-time = "2025-09-18T16:45:43.727Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/c5/7d9d2e594b897b6c24fae5dcdd345bbcd3098f65e26943a12cb48a5d687d/jpeglib-1.0.2-cp38-abi3-win32.whl", hash = "sha256:0b2d25da03f8710181367a4f1143215ad872c63b61dcad6665258b7ed051a5fb", size = 9394019, upload-time = "2025-09-18T16:45:45.942Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/5b/542403cdd0330733eeef421e4adc833d9862ed9b071f1607defe1f5cbe87/jpeglib-1.0.2-cp38-abi3-win_amd64.whl", hash = "sha256:abcc0be1c0b6adbff02b3b42805474fddbf6ac3182d619117a7e7c5cfa8f9bd2", size = 9852148, upload-time = "2025-09-18T16:45:47.928Z" },
+]
+
+[[package]]
 name = "jsmin"
 version = "3.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5394,6 +5415,7 @@ dependencies = [
     { name = "fray" },
     { name = "haliax" },
     { name = "iris" },
+    { name = "jpeglib" },
     { name = "levanter" },
     { name = "marin" },
     { name = "pillow" },
@@ -5406,6 +5428,7 @@ requires-dist = [
     { name = "fray", editable = "lib/fray" },
     { name = "haliax", editable = "lib/haliax" },
     { name = "iris", editable = "lib/iris" },
+    { name = "jpeglib", specifier = ">=1.0.2" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
     { name = "pillow", specifier = ">=11.0.0" },

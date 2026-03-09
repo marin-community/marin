@@ -72,6 +72,36 @@ The byte-window store contains:
 - sequence length: `8192`
 - vocab size: `257`
 
+The exact libjpeg-backed `K=8` coefficient store lives at:
+
+- `/Users/dlwh/.codex/worktrees/1bd2/marin/artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0`
+- `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0`
+
+It was built with:
+
+```bash
+uv run python scripts/jpeg_tokenizer/build_coeff_token_store.py \
+  --source libjpeg \
+  --k 8 \
+  --log-every 1000 \
+  --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0
+```
+
+and mirrored to GCS with:
+
+```bash
+gsutil -m rsync -r \
+  artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0 \
+  gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0
+```
+
+The exact `K=8` store contains:
+
+- train: `9469` examples
+- validation: `3925` examples
+- sequence length: `8192`
+- vocab size: `4095`
+
 ## V0 Decisions
 
 This section freezes the initial assumptions for the Phase 0 feasibility spike so later scripts do not drift.
@@ -98,6 +128,7 @@ WebVision is useful for later robustness checks because it captures real web-ima
 `/experiments/jpeg_tokenizer/base/` is split to mirror the repo's template-first experiment style:
 
 - `jpeg_codecs.py`: canonical JPEG decisions and token encoders.
+  - `bytes` means the full canonical JPEG byte stream after deterministic re-encoding, not just entropy payload bytes.
 - `data.py`: thin random-access dataset adapters and `LmDataConfig` wiring.
 - `model.py`: local model surface, initially reusing the grug base transformer.
 - `train.py`: local training surface, initially reusing the grug base trainer.
@@ -106,6 +137,6 @@ WebVision is useful for later robustness checks because it captures real web-ima
 
 ## Immediate Next Steps
 
-1. Launch `tokexplore/jpeg-tokenizer-k4-smoke` on `v6e-8` against the regional `gs://marin-eu-west4/...` token store.
-2. If the smoke run is healthy, launch `tokexplore/jpeg-tokenizer-k4-trial` as the first real Phase 1 baseline.
-3. Run `tokexplore/jpeg-tokenizer-bytes-w8192-smoke`, then promote it to a matched-budget byte trial if startup and the first eval look healthy.
+1. Let `tokexplore/jpeg-tokenizer-bytes-w8192-trial` finish and compare it against the existing `K=8` reference rung.
+2. Relaunch `tokexplore/jpeg-tokenizer-k8-libjpeg-smoke` from the commit that adds the `jpeglib` dependency.
+3. If that smoke is healthy, promote `tokexplore/jpeg-tokenizer-k8-libjpeg-trial` as the first exact-JPEG coefficient baseline.
