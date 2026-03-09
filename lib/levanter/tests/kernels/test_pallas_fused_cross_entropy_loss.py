@@ -902,7 +902,7 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         fused_api,
         "_candidate_block_sizes",
-        lambda impl_name, inferred_block_sizes: [inferred_block_sizes, slower, faster],
+        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, slower, faster],
     )
 
     def fake_benchmark(**kwargs):
@@ -1206,6 +1206,110 @@ def test_infer_block_sizes_huge_batch_without_scoped_vmem_flag_warns_and_uses_sa
             device_kind="TPU v5p",
         )
     assert block_sizes.v_block_size == 256
+
+
+def test_infer_block_sizes_uses_widest_operand_dtype_bucket(monkeypatch: pytest.MonkeyPatch):
+    tuned = dict(tuned_block_sizes.TUNED_BLOCK_SIZES["TPU v5p"])
+    tuned[("bfloat16", "large-batch-medium-h")] = fused_api.BlockSizes(
+        b_block_size=1024,
+        h_block_size=256,
+        v_block_size=256,
+    )
+    tuned[("float32", "large-batch-medium-h")] = fused_api.BlockSizes(
+        b_block_size=1024,
+        h_block_size=1024,
+        v_block_size=768,
+    )
+    monkeypatch.setitem(tuned_block_sizes.TUNED_BLOCK_SIZES, "TPU v5p", tuned)
+
+    mixed_block_sizes, has_tuned_match = tuned_block_sizes.infer_block_sizes_with_tuned_match(
+        40_960,
+        2_048,
+        128_256,
+        dtype=jnp.bfloat16,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.float32,
+        device_kind="TPU v5p",
+    )
+    bf16_block_sizes = tuned_block_sizes.infer_block_sizes(
+        40_960,
+        2_048,
+        128_256,
+        dtype=jnp.bfloat16,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="TPU v5p",
+    )
+    float32_block_sizes = tuned_block_sizes.infer_block_sizes(
+        40_960,
+        2_048,
+        128_256,
+        dtype=jnp.bfloat16,
+        x_dtype=jnp.float32,
+        w_dtype=jnp.float32,
+        device_kind="TPU v5p",
+    )
+
+    assert has_tuned_match is True
+    assert mixed_block_sizes == float32_block_sizes
+    assert mixed_block_sizes != bf16_block_sizes
+
+
+def test_pallas_autotune_only_runs_when_block_sizes_are_not_explicit(monkeypatch: pytest.MonkeyPatch):
+    inferred = fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)
+    autotuned = fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=768)
+    explicit = fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)
+    autotune_calls: list[fused_api.BlockSizes] = []
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+
+    monkeypatch.setattr(fused_api, "infer_block_sizes_with_tuned_match", lambda *args, **kwargs: (inferred, False))
+
+    def fake_autotune(**kwargs):
+        autotune_calls.append(kwargs["inferred"])
+        return autotuned
+
+    def fake_impl(x, labels, w, *, block_sizes, **kwargs):
+        del labels, w, kwargs
+        seen_block_sizes.append(block_sizes)
+        zeros = jnp.zeros((x.shape[0],), dtype=jnp.float32)
+        return zeros, zeros
+
+    monkeypatch.setattr(fused_api, "_autotune_block_sizes_on_miss", fake_autotune)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
+
+    x = jnp.ones((1024, 512), dtype=jnp.bfloat16)
+    w = jnp.ones((512, 4096), dtype=jnp.float32)
+    labels = jnp.zeros((1024,), dtype=jnp.int32)
+
+    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        labels,
+        w,
+        reduction="mean",
+        dtype=jnp.float32,
+        implementation="pallas_tpu",
+    )
+
+    assert autotune_calls == [inferred]
+    assert seen_block_sizes == [autotuned]
+    assert float(loss) == 0.0
+
+    autotune_calls.clear()
+    seen_block_sizes.clear()
+
+    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        labels,
+        w,
+        reduction="mean",
+        dtype=jnp.float32,
+        implementation="pallas_tpu",
+        block_sizes=explicit,
+    )
+
+    assert autotune_calls == []
+    assert seen_block_sizes == [explicit]
+    assert float(loss) == 0.0
 
 
 def test_infer_block_sizes_skips_invalid_tuned_entry(monkeypatch: pytest.MonkeyPatch):
