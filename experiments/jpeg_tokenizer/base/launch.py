@@ -772,7 +772,7 @@ bytes_whole_swa4096_smoke = ExecutorStep(
         ),
         eval=versioned(
             JpegEvalConfig(
-                eval_batch_size=4,
+                eval_batch_size=8,
                 steps_per_eval=16,
                 max_eval_batches=4,
                 eval_current=True,
