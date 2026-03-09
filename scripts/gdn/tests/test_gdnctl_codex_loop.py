@@ -85,3 +85,11 @@ def test_stream_subprocess_output_to_file_can_suppress_after_ready(tmp_path: Pat
     assert "suppressing further allocation log output" in text
     assert "noisy line 1" not in text
     assert "noisy line 2" not in text
+
+
+def test_build_remote_test_command_installs_torch_and_transformers() -> None:
+    cmd = gdnctl._build_remote_test_command("both", None)
+
+    assert "uv pip install torch --index-url" in cmd
+    assert "uv pip install transformers" in cmd
+    assert cmd.index("uv pip install torch --index-url") < cmd.index("uv pip install transformers")

@@ -1780,6 +1780,7 @@ def _build_remote_test_command(test_selection: str, extra_pytest_args: str | Non
         "cd lib/levanter",
         "uv sync --extra=tpu --group test",
         f"uv pip install torch --index-url {shlex.quote(TORCH_CPU_INDEX)}",
+        "uv pip install transformers",
         pytest_cmd,
     ]
     return " && ".join(pieces)
