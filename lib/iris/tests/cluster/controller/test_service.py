@@ -136,9 +136,11 @@ def mock_scheduler():
 
 
 @pytest.fixture
-def service(state, mock_scheduler):
+def service(state, mock_scheduler, tmp_path):
     """Create a ControllerServiceImpl for testing."""
-    return ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/iris-test-bundles")
+    from iris.cluster.bundle import BundleStore
+
+    return ControllerServiceImpl(state, mock_scheduler, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"))
 
 
 # =============================================================================
@@ -160,6 +162,17 @@ def test_launch_job_returns_job_id(service, job_request):
     )
     assert status_response.job.job_id == JobName.root("test-user", "test-job").to_wire()
     assert status_response.job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, job_request):
+    request = job_request("bundle-job")
+    request.bundle_blob = b"bundle-bytes"
+    service.launch_job(request, None)
+
+    job = service._state.get_job(JobName.root("test-user", "bundle-job"))
+    assert job is not None
+    assert job.request.bundle_blob == b""
+    assert len(job.request.bundle_id) == 64
 
 
 def test_launch_job_rejects_duplicate_name(service, job_request):

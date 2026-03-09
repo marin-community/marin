@@ -12,7 +12,7 @@ from connectrpc.request import RequestContext
 
 from iris.cluster.types import Entrypoint, JobName
 from iris.time_utils import Duration
-from iris.cluster.worker.bundle_cache import BundleCache
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
@@ -28,14 +28,11 @@ from tests.test_utils import wait_for_condition
 
 
 @pytest.fixture
-def mock_bundle_cache(tmp_path):
-    """Create mock BundleCache with a real temp directory."""
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    (bundle_dir / "test_file.py").write_text("print('hello')")
-
-    cache = Mock(spec=BundleCache)
-    cache.get_bundle = Mock(return_value=bundle_dir)
+def mock_bundle_store(tmp_path):
+    """Create mock BundleStore with a real temp directory."""
+    cache = Mock(spec=BundleStore)
+    cache.extract_bundle_to = Mock()
+    cache.write_workdir_files = Mock()
     return cache
 
 
@@ -71,7 +68,7 @@ def mock_runtime():
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_runtime, tmp_path):
+def worker(mock_bundle_store, mock_runtime, tmp_path):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
@@ -81,7 +78,7 @@ def worker(mock_bundle_cache, mock_runtime, tmp_path):
     )
     return Worker(
         config,
-        bundle_provider=mock_bundle_cache,
+        bundle_store=mock_bundle_store,
         container_runtime=mock_runtime,
     )
 
@@ -114,7 +111,7 @@ def create_run_task_request(
         num_tasks=num_tasks,
         entrypoint=entrypoint_proto,
         environment=env_config,
-        bundle_gcs_path="gs://bucket/bundle.zip",
+        bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         resources=resources,
         ports=ports or [],
     )
