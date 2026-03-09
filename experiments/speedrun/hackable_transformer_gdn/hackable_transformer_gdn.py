@@ -340,7 +340,7 @@ class HackableDecoderLayer(eqx.Module):
     gdn_segment_size: int = eqx.field(static=True, default=8)
 
     @staticmethod
-    def init(config: HackableTransformerConfig, *, key, layer_index: int) -> "HackableDecoderLayer":
+    def init(config: HackableTransformerConfig, *, key, layer_index: int = 0) -> "HackableDecoderLayer":
         k_attn, k_mlp = jrandom.split(key, 2)
         use_gdn = config.layer_uses_gdn(layer_index)
         attn: Attention | AttentionWithSink | None

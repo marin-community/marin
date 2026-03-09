@@ -20,6 +20,7 @@ Environment overrides:
 - GDN_PROFILE_BATCH_SIZE: optional global batch size override (default if unset: size-specific safe tiny-profile batch)
 - GDN_PROFILE_CHUNK_SIZE: optional GDN chunk size override
 - GDN_PROFILE_SEGMENT_SIZE: optional GDN segment size override
+- GDN_PROFILE_ALL_TRANSFORMER: if `1`, disable all GDN layers and benchmark an all-transformer stack
 - GDN_PROFILE_RUN_NAME_PREFIX: run-name prefix (default: gdn_tinyprof)
 - GDN_PROFILE_RUN_NAME_SUFFIX: optional run-name suffix
 """
@@ -56,11 +57,17 @@ def _env_optional_int(name: str) -> int | None:
     return int(value)
 
 
-def _run_name(size: str, steps: int, chunk_size: int, segment_size: int) -> str:
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _run_name(size: str, steps: int, chunk_size: int, segment_size: int, *, all_transformer: bool) -> str:
     prefix = os.environ.get("GDN_PROFILE_RUN_NAME_PREFIX", "gdn_tinyprof")
     suffix = os.environ.get("GDN_PROFILE_RUN_NAME_SUFFIX", "").strip()
 
-    name = f"{prefix}_{size}_ch{chunk_size}_seg{segment_size}_{steps}steps"
+    arch = "attnonly" if all_transformer else "gdn"
+    name = f"{prefix}_{arch}_{size}_ch{chunk_size}_seg{segment_size}_{steps}steps"
     if suffix:
         name = f"{name}_{suffix}"
     return name
@@ -75,6 +82,7 @@ if __name__ == "__main__":
     batch_size_override = _env_optional_int("GDN_PROFILE_BATCH_SIZE")
     chunk_size_override = _env_optional_int("GDN_PROFILE_CHUNK_SIZE")
     segment_size_override = _env_optional_int("GDN_PROFILE_SEGMENT_SIZE")
+    all_transformer = _env_flag("GDN_PROFILE_ALL_TRANSFORMER")
 
     if batch_size_override is None:
         batch_size_override = _SAFE_BATCH_SIZE_BY_SIZE.get(size, 8)
@@ -86,6 +94,12 @@ if __name__ == "__main__":
         model_cfg = dataclasses.replace(model_cfg, gdn_chunk_size=chunk_size_override)
     if segment_size_override is not None:
         model_cfg = dataclasses.replace(model_cfg, gdn_segment_size=segment_size_override)
+    if all_transformer:
+        model_cfg = dataclasses.replace(
+            model_cfg,
+            use_gated_deltanet=False,
+            gdn_layers_per_block=0,
+        )
 
     base_profiler = base_cfg.train_config.profiler
     profiler_cfg = (
@@ -111,14 +125,24 @@ if __name__ == "__main__":
     )
     train_cfg = dataclasses.replace(train_cfg, train_batch_size=batch_size_override)
 
-    run_name = _run_name(size, num_steps, model_cfg.gdn_chunk_size, model_cfg.gdn_segment_size)
+    run_name = _run_name(
+        size,
+        num_steps,
+        model_cfg.gdn_chunk_size,
+        model_cfg.gdn_segment_size,
+        all_transformer=all_transformer,
+    )
+
+    tags = ["speedrun", "gdn", "gdn_tiny_profile", "kernel_optimization"]
+    if all_transformer:
+        tags.append("attn_only_baseline")
 
     step = default_train(
         name=f"speedrun/{run_name}",
         tokenized=base_cfg.tokenized_dataset,
         model_config=model_cfg,
         train_config=train_cfg,
-        tags=["speedrun", "gdn", "gdn_tiny_profile", "kernel_optimization"],
+        tags=tags,
         use_default_validation=False,
         eval_harness_tasks=[],
         wandb_group=os.environ.get("WANDB_GROUP", "gdn-tiny-profile"),
