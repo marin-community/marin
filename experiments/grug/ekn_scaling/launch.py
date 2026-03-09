@@ -37,8 +37,8 @@ SWEEP_LBL = [0.0025, 0.01, 0.04]
 
 # (num_layers, hidden_dim, num_heads, num_kv_heads, lr, batch_size)
 SCALE_CONFIGS = {
-    "small": (12, 768, 12, 4, 1.22e-3, 208),
-    "medium": (16, 1024, 16, 4, 9.57e-4, 376),
+    "small": (12, 768, 12, 4, 1.22e-3, 224),
+    "medium": (16, 1024, 16, 4, 9.57e-4, 384),
 }
 FIXED_K = 4
 FIXED_E = 32
@@ -169,7 +169,7 @@ for _scale_name, (_layers, _hidden, _heads, _kv_heads, _lr, _bs) in SCALE_CONFIG
                 data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
                 output_path=this_output_path(),
                 run_id=_run_id,
-                resources=versioned(ResourceConfig.with_tpu("v4p-64")),
+                resources=versioned(ResourceConfig.with_tpu("v4-64")),
                 steps=versioned(FIXED_STEPS),
                 batch_size=versioned(_bs),
                 seed=versioned(0),
