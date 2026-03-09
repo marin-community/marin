@@ -1,621 +1,469 @@
-(<lambda> pid=13870, ip=10.164.0.62) 2026-03-03T19:03:00 - 3 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 [repeated 30x across cluster]
-(<lambda> pid=13577, ip=10.164.0.105) 2026-03-03T19:03:50 - 24 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmp4kad44sm
-(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:03:50 - 9 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpafcgufqm
-(<lambda> pid=3725, ip=10.164.1.26) 2026-03-03T19:03:50 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmphfztjbba
-(<lambda> pid=14015, ip=10.164.0.26) 2026-03-03T19:03:50 - 23 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpnhleyktg
-(<lambda> pid=3724, ip=10.164.0.43) 2026-03-03T19:03:51 - 13 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1014 - INFO :: Saving shard model-00002-of-00002.safetensors (1.84 GB, 26.93% of model)
-(<lambda> pid=13727, ip=10.164.1.58) 2026-03-03T19:03:54 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 6.82GB/6.82GB rate:88,242,769.7B/s remaining:00:00 elapsed:01:03 postfix:-
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:03:54 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
-(autoscaler +2h10m20s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +2h10m20s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +2h10m20s) Resized to 23400 CPUs, 780 TPUs.
-(<lambda> pid=13784, ip=10.164.0.63) 2026-03-03T19:04:13 - 8 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1031 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB
-(<lambda> pid=13784, ip=10.164.0.63) 2026-03-03T19:04:13 - 8 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmp094vs6sb
-(<lambda> pid=13784, ip=10.164.0.63) 2026-03-03T19:04:13 - 8 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1048 - INFO :: Saving tokenizer
-(<lambda> pid=13787, ip=10.164.0.76) 2026-03-03T19:03:54 - 28 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 [repeated 31x across cluster]
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:03:51 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1002 - INFO :: Saving shard model-00002-of-00002.safetensors to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpp_d0wnyu [repeated 28x across cluster]
-(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:03:52 - 21 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1014 - INFO :: Saving shard model-00002-of-00002.safetensors (1.84 GB, 26.93% of model) [repeated 31x across cluster]
-(<lambda> pid=13787, ip=10.164.0.76) 2026-03-03T19:03:54 - 28 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 6.82GB/6.82GB rate:88,659,147.1B/s remaining:00:00 elapsed:01:02 postfix:- [repeated 31x across cluster]
-(<lambda> pid=3818, ip=10.164.1.40) 2026-03-03T19:04:13 - 31 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpwqvmb_qd
-(<lambda> pid=13577, ip=10.164.0.105) 2026-03-03T19:04:13 - 24 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpptvctycx
-(<lambda> pid=3727, ip=10.164.0.14) 2026-03-03T19:04:13 - 25 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpqkrvwtod
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:04:13 - 15 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpzuluezil
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmpmg_vebra
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.utils.cloud_utils - cloud_utils.py:161 - INFO :: Copying from temp dir to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
-(<lambda> pid=3724, ip=10.164.0.43) 2026-03-03T19:04:14 - 13 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1072 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:14 - 0 - levanter.utils.cloud_utils - cloud_utils.py:164 - INFO :: Finished copying to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000
-(<lambda> pid=13577, ip=10.164.0.105) 2026-03-03T19:04:15 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.00kit/30.0kit rate:47.9s/it remaining:345:38:40 elapsed:23:57 postfix:loss=4.28
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1031 - INFO :: Saved a sharded checkpoint with 2 shards, max size 4.99 GB [repeated 31x across cluster]
-(<lambda> pid=3725, ip=10.164.1.26) 2026-03-03T19:04:13 - 5 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1037 - INFO :: Saving metadata to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 via temp path /tmp/tmp9ls8mh6y [repeated 26x across cluster]
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:04:13 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1048 - INFO :: Saving tokenizer [repeated 31x across cluster]
-(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:04:13 - 9 - levanter.utils.cloud_utils - cloud_utils.py:166 - INFO :: Waiting for process 0 to finish saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 [repeated 31x across cluster]
-(<lambda> pid=13857, ip=10.164.1.35) 2026-03-03T19:04:14 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:Checkpoint size 6.82GB/6.82GB rate:79,688,340.7B/s remaining:00:00 elapsed:01:32 postfix:- [repeated 32x across cluster]
-(<lambda> pid=13857, ip=10.164.1.35) 2026-03-03T19:04:14 - 17 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1072 - INFO :: Finished saving HF-compatible checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/hf/step-4000 [repeated 31x across cluster]
-(<lambda> pid=13851, ip=10.164.1.29) 2026-03-03T19:05:16 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.06kit/30.0kit rate:1.1s/it remaining:8:08:58 elapsed:24:58 postfix:loss=4.35 [repeated 32x across cluster]
-(<lambda> pid=3722, ip=10.164.1.63) 2026-03-03T19:06:17 - 7 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.11kit/30.0kit rate:1.2s/it remaining:8:30:08 elapsed:25:59 postfix:loss=4.42 [repeated 32x across cluster]
-(<lambda> pid=3726, ip=10.164.1.60) 2026-03-03T19:07:18 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.16kit/30.0kit rate:1.1s/it remaining:7:57:00 elapsed:27:00 postfix:loss=4.29 [repeated 32x across cluster]
-(autoscaler +2h14m1s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +2h14m1s) Resized to 23400 CPUs, 780 TPUs.
-(<lambda> pid=3727, ip=10.164.0.14) 2026-03-03T19:08:18 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.21kit/30.0kit rate:1.1s/it remaining:7:59:36 elapsed:28:00 postfix:loss=4.41 [repeated 32x across cluster]
-(<lambda> pid=13577, ip=10.164.0.105) 2026-03-03T19:09:18 - 24 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.27kit/30.0kit rate:1.1s/it remaining:7:54:30 elapsed:29:00 postfix:loss=4.28 [repeated 32x across cluster]
-(autoscaler +2h15m58s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +2h15m58s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +2h15m58s) Resized to 23400 CPUs, 780 TPUs.
-(<lambda> pid=3728, ip=10.164.0.97) 2026-03-03T19:10:18 - 18 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.32kit/30.0kit rate:1.1s/it remaining:8:00:05 elapsed:30:01 postfix:loss=4.28 [repeated 32x across cluster]
-(<lambda> pid=3726, ip=10.164.1.60) 2026-03-03T19:11:19 - 27 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.38kit/30.0kit rate:1.2s/it remaining:8:31:52 elapsed:31:01 postfix:loss=4.46 [repeated 32x across cluster]
-(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:11:40 - 21 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 4391.
-(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:11:40 - 21 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 4391 to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391
-(<lambda> pid=3724, ip=10.164.0.43) 2026-03-03T19:11:19 - 13 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.38kit/30.0kit rate:1.2s/it remaining:8:31:52 elapsed:31:01 postfix:loss=4.46 [repeated 31x across cluster]
-(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:11:40 - 21 - levanter.checkpoint - checkpoint.py:337 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391 for step 4391
-(autoscaler +2h18m19s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +2h18m19s) Resized to 23400 CPUs, 780 TPUs.
-(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:11:40 - 9 - levanter.checkpoint - checkpoint.py:213 - INFO :: Saving temporary checkpoint at step 4391. [repeated 31x across cluster]
-(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:11:40 - 9 - levanter.checkpoint - checkpoint.py:288 - INFO :: Saving checkpoint at step 4391 to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391 [repeated 31x across cluster]
-(<lambda> pid=14169, ip=10.164.1.25) 2026-03-03T19:12:20 - 29 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.42kit/30.0kit rate:1.1s/it remaining:8:01:49 elapsed:32:03 postfix:loss=4.15
-(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:11:40 - 9 - levanter.checkpoint - checkpoint.py:337 - INFO :: Saving checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391 for step 4391 [repeated 31x across cluster]
-(<lambda> pid=13851, ip=10.164.1.29) 2026-03-03T19:12:20 - 2 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.42kit/30.0kit rate:1.1s/it remaining:8:01:49 elapsed:32:03 postfix:loss=4.15
-(<lambda> pid=3722, ip=10.164.0.58) 2026-03-03T19:13:01 - 0 - levanter.checkpoint - checkpoint.py:345 - INFO :: Saved checkpoint to gs://marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/step-4391 for step 4391
-(<lambda> pid=13784, ip=10.164.0.63) 2026-03-03T19:12:20 - 8 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.42kit/30.0kit rate:1.1s/it remaining:8:01:49 elapsed:32:03 postfix:loss=4.15 [repeated 30x across cluster]
-(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:13:21 - 21 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.48kit/30.0kit rate:1.1s/it remaining:7:50:26 elapsed:33:03 postfix:loss=4.35
-(<lambda> pid=13857, ip=10.164.1.35) 2026-03-03T19:13:21 - 17 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.48kit/30.0kit rate:1.1s/it remaining:7:50:26 elapsed:33:03 postfix:loss=4.35
-(autoscaler +2h19m55s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +2h19m55s) Resized to 23400 CPUs, 780 TPUs.
-(<lambda> pid=13873, ip=10.164.0.84) 2026-03-03T19:13:46 - 9 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/374 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:13:21 - 30 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train 4.48kit/30.0kit rate:1.1s/it remaining:7:50:26 elapsed:33:03 postfix:loss=4.35 [repeated 30x across cluster]
-(raylet, ip=10.164.0.49) [2026-03-03 19:13:54,751 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(<lambda> pid=3727, ip=10.164.0.14) 2026-03-03T19:13:46 - 25 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval -/374 rate:- remaining:? elapsed:00:00 postfix:- [repeated 31x across cluster]
-(raylet, ip=10.164.0.8) [2026-03-03 19:14:08,576 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(raylet, ip=10.164.0.49) [2026-03-03 19:14:08,918 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(raylet, ip=10.164.0.27) [2026-03-03 19:14:13,495 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
-(raylet, ip=10.164.0.8) [2026-03-03 19:14:20,668 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
-(raylet, ip=10.164.0.49) [2026-03-03 19:14:27,133 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
-(raylet, ip=10.164.0.8) [2026-03-03 19:14:32,756 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
-(<lambda> pid=13944, ip=10.164.1.27) 2026-03-03T19:14:36 - 14 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 374it/374it rate:7.1it/s remaining:00:00 elapsed:00:50 postfix:-
-(raylet, ip=10.164.0.88) [2026-03-03 19:14:37,933 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:257 - INFO :: eval loss: 4.374
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 3.700
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 3.773
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 3.495
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 3.836
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 5.111
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: understanding loss: 4.325
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 4.298
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: generation loss: 5.839
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 5.675
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_understanding_text_only loss: 1.422
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_understanding_visual_only loss: 6.556
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_generation_text_only loss: 1.509
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_generation_visual_only loss: 6.488
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_understanding_wo_visual loss: 1.601
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: val_generation_wo_language loss: 6.570
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval loss: 6.567
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 6.709
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 5.934
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_ai2d loss: 3.439
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 2.152
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_cifar10_small loss: 6.617
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 7.472
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text loss: 1.684
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_hellaswag loss: 1.060
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_winogrande loss: 6.713
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_arc_easy loss: 4.424
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_arc_challenge loss: 3.761
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: text_eval_mmlu loss: 2.737
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/4chan loss: 2.946
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/c4_100_domains loss: 3.513
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/c4_en loss: 3.600
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/dolma-v1_5 loss: 3.506
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_programing_languages loss: 3.414
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/dolma_100_subreddits loss: 3.798
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 3.708
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 4.868
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_s2orc_unsplit loss: 3.263
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/m2d2_wikipedia_unsplit loss: 3.252
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 3.828
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/mc4 loss: 3.262
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 4.055
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 3.649
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 5.108
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 3.225
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 4.561
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 4.123
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 3.432
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 3.553
-(<lambda> pid=3725, ip=10.164.0.93) 2026-03-03T19:14:39 - 30 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 3.571
-(<lambda> pid=13912, ip=10.164.1.46) 2026-03-03T19:14:36 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:eval 374it/374it rate:7.1it/s remaining:00:00 elapsed:00:50 postfix:- [repeated 31x across cluster]
-(raylet, ip=10.164.0.49) [2026-03-03 19:14:43,256 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 11x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval loss: 6.567 [repeated 62x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:269 - INFO :: paloma macro loss: 3.700 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:269 - INFO :: uncheatable_eval macro loss: 3.773 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:278 - INFO :: paloma micro loss: 3.495 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:278 - INFO :: uncheatable_eval micro loss: 3.836 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: multimodal loss: 5.111 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: understanding loss: 4.325 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_understanding loss: 4.298 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: generation loss: 5.839 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_generation loss: 5.675 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_understanding_text_only loss: 1.422 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_understanding_visual_only loss: 6.556 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_generation_text_only loss: 1.509 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_generation_visual_only loss: 6.488 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_understanding_wo_visual loss: 1.601 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: val_generation_wo_language loss: 6.570 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval_textvqa loss: 6.709 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval_chartqa loss: 5.934 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/ao3_english loss: 3.949 [repeated 405x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval_mmmu loss: 2.152 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: eval_imagenet_small loss: 7.472 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text loss: 1.684 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_hellaswag loss: 1.060 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_winogrande loss: 6.713 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_arc_easy loss: 4.424 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_arc_challenge loss: 3.761 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: text_eval_mmlu loss: 2.737 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/falcon-refinedweb loss: 3.708 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/gab loss: 4.868 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/manosphere_meta_sep loss: 3.828 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/ptb loss: 4.055 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/redpajama loss: 3.649 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: paloma/twitterAAE_HELM_fixed loss: 5.108 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/wikipedia_english loss: 3.225 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_python loss: 4.561 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/github_cpp loss: 4.123 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/bbc_news loss: 3.432 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_physics loss: 3.553 [repeated 31x across cluster]
-(<lambda> pid=13888, ip=10.164.1.65) 2026-03-03T19:14:39 - 15 - levanter.eval - eval.py:275 - INFO :: uncheatable_eval/arxiv_computer_science loss: 3.571 [repeated 31x across cluster]
-(raylet, ip=10.164.0.66) [2026-03-03 19:14:48,365 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 14x across cluster]
-(raylet, ip=10.164.0.27) [2026-03-03 19:14:53,737 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 9x across cluster]
-(raylet, ip=10.164.0.88) [2026-03-03 19:14:59,712 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
-(raylet, ip=10.164.0.104) [2026-03-03 19:15:07,977 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(raylet, ip=10.164.0.49) [2026-03-03 19:15:13,290 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
-(<lambda> pid=13782, ip=10.164.1.28) 2026-03-03T19:15:14 - 21 - gcsfs - retry.py:164 - ERROR :: _request out of retries on exception: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
-(<lambda> pid=13782, ip=10.164.1.28) Traceback (most recent call last):
-(<lambda> pid=13782, ip=10.164.1.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-(<lambda> pid=13782, ip=10.164.1.28)     return await func(*args, **kwargs)
-(<lambda> pid=13782, ip=10.164.1.28)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=13782, ip=10.164.1.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-(<lambda> pid=13782, ip=10.164.1.28)     validate_response(status, contents, path, args)
-(<lambda> pid=13782, ip=10.164.1.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response
-(<lambda> pid=13782, ip=10.164.1.28)     raise HttpError(error)
-(<lambda> pid=13782, ip=10.164.1.28) gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
-(SliceActor pid=2746, ip=10.164.1.40) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=13782, ip=10.164.1.28)
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-(SliceActor pid=2746, ip=10.164.1.40)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=2746, ip=10.164.1.40)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-(SliceActor pid=2746, ip=10.164.1.40)     trainer.train(state, train_loader)
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train
-(SliceActor pid=2746, ip=10.164.1.40)     for info in self.training_steps(state, train_loader):
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-(SliceActor pid=2746, ip=10.164.1.40)     info = self.train_step(state, example)
-(SliceActor pid=2746, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step
-(SliceActor pid=2746, ip=10.164.1.40)     self.run_hooks(info)
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
-(SliceActor pid=2746, ip=10.164.1.40)     self.hooks.run_hooks(info, force=force)
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
-(SliceActor pid=2746, ip=10.164.1.40)     hook.fn.on_step(info, force=force)
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
-(SliceActor pid=2746, ip=10.164.1.40)     self.fn(info)
-(SliceActor pid=2746, ip=10.164.1.40)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback
-(SliceActor pid=2746, ip=10.164.1.40)     with fs.open(metrics_file, "a") as f:
-(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close
-(SliceActor pid=2746, ip=10.164.1.40)     self.flush(force=True)
-(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush
-(SliceActor pid=2746, ip=10.164.1.40)     if self._upload_chunk(final=force) is not False:
-(SliceActor pid=2746, ip=10.164.1.40)        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk
-(SliceActor pid=2746, ip=10.164.1.40)     headers, contents = self.gcsfs.call(
-(SliceActor pid=2746, ip=10.164.1.40)                         ^^^^^^^^^^^^^^^^
-(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-(SliceActor pid=2746, ip=10.164.1.40)     return sync(self.loop, func, *args, **kwargs)
-(SliceActor pid=2746, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-(SliceActor pid=2746, ip=10.164.1.40)     raise return_result
-(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-(SliceActor pid=2746, ip=10.164.1.40)     result[0] = await coro
-(SliceActor pid=2746, ip=10.164.1.40)                 ^^^^^^^^^^
-(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-(SliceActor pid=2746, ip=10.164.1.40)     status, headers, info, contents = await self._request(
-(SliceActor pid=2746, ip=10.164.1.40)                                       ^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2746, ip=10.164.1.40)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-(SliceActor pid=2746, ip=10.164.1.40)     return await caller(func, *(extras + args), **kw)
-(SliceActor pid=2746, ip=10.164.1.40)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=2746, ip=10.164.1.40)     raise e
-(<lambda> pid=13782, ip=10.164.1.28) E0303 19:15:14.325648   15460 preemption_sync_manager.cc:161] Failed to cancel preemption barrier: FAILED_PRECONDITION: Tried to cancel non-existent barrier PREEMPTION_SYNC_BARRIER. [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(<lambda> pid=13782, ip=10.164.1.28) E0303 19:15:14.325878   15460 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=13782, ip=10.164.1.28) F0303 19:15:14.325888   15460 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
-(<lambda> pid=13782, ip=10.164.1.28) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
-(<lambda> pid=13782, ip=10.164.1.28) :UNKNOWN:Error received from peer  {grpc_message:"Socket closed", grpc_status:14}
-(run_on_pod_ray pid=4857, ip=10.164.1.99) Task error ray::<lambda>() (pid=13782, ip=10.164.1.28)
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return func(*args, **kwargs)
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=4857, ip=10.164.1.99)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=4857, ip=10.164.1.99) ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
-(run_on_pod_ray pid=4857, ip=10.164.1.99) Failed 11 times. Continuing to retry.
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return func(*args, **kwargs)
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=4857, ip=10.164.1.99)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=4857, ip=10.164.1.99) ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
-(run_on_pod_ray pid=4857, ip=10.164.1.99) Failed too many times
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return func(*args, **kwargs)
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=4857, ip=10.164.1.99)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=4857, ip=10.164.1.99) ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
-2026-03-03 19:15:17,135 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed:
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
-    ray.get(self._ref)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-    values, debugger_breakpoint = worker.get_objects(
-                                  ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-    raise value.as_instanceof_cause()
-ray.exceptions.RayTaskError(HttpError): ray::run_levanter_train_lm() (pid=4781, ip=10.164.1.99)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
-    job.wait(raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
-    return self._wait_ref(timeout, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
-    ray.get(self._ref, timeout=timeout)
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(HttpError): ray::run_on_pod_ray() (pid=4857, ip=10.164.1.99)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-    trainer.train(state, train_loader)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train
-    for info in self.training_steps(state, train_loader):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-    info = self.train_step(state, example)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step
-    self.run_hooks(info)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
-    self.hooks.run_hooks(info, force=force)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
-    hook.fn.on_step(info, force=force)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
-    self.fn(info)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback
-    with fs.open(metrics_file, "a") as f:
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close
-    self.flush(force=True)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush
-    if self._upload_chunk(final=force) is not False:
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk
-    headers, contents = self.gcsfs.call(
-                        ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-    return sync(self.loop, func, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-    raise return_result
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-    result[0] = await coro
-                ^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-    status, headers, info, contents = await self._request(
-                                      ^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-    return await caller(func, *(extras + args), **kw)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 165, in retry_request
-    raise e
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-    return await func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-    validate_response(status, contents, path, args)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response
-    raise HttpError(error)
-gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
-2026-03-03 19:15:17,137 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 to finish for step checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8
-2026-03-03 19:15:17,137 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed:
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
-    ray.get(self._ref, timeout=timeout)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-    values, debugger_breakpoint = worker.get_objects(
-                                  ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-    raise value.as_instanceof_cause()
-ray.exceptions.RayTaskError(HttpError): ray::run_levanter_train_lm() (pid=4781, ip=10.164.1.99)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
-    job.wait(raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
-    return self._wait_ref(timeout, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
-    ray.get(self._ref, timeout=timeout)
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(HttpError): ray::run_on_pod_ray() (pid=4857, ip=10.164.1.99)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-    trainer.train(state, train_loader)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train
-    for info in self.training_steps(state, train_loader):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-    info = self.train_step(state, example)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step
-    self.run_hooks(info)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
-    self.hooks.run_hooks(info, force=force)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
-    hook.fn.on_step(info, force=force)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
-    self.fn(info)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback
-    with fs.open(metrics_file, "a") as f:
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close
-    self.flush(force=True)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush
-    if self._upload_chunk(final=force) is not False:
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk
-    headers, contents = self.gcsfs.call(
-                        ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-    return sync(self.loop, func, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-    raise return_result
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-    result[0] = await coro
-                ^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-    status, headers, info, contents = await self._request(
-                                      ^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-    return await caller(func, *(extras + args), **kw)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 165, in retry_request
-    raise e
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-    return await func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-    validate_response(status, contents, path, args)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response
-    raise HttpError(error)
-gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
-2026-03-03 19:15:17,138 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed:
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
-    ray.get(self._ref)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-    values, debugger_breakpoint = worker.get_objects(
-                                  ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-    raise value.as_instanceof_cause()
-ray.exceptions.RayTaskError(HttpError): ray::run_levanter_train_lm() (pid=4781, ip=10.164.1.99)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/training/training.py", line 234, in run_levanter_train_lm
-    job.wait(raise_on_failure=True)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 96, in wait
-    return self._wait_ref(timeout, raise_on_failure)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
-    ray.get(self._ref, timeout=timeout)
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(HttpError): ray::run_on_pod_ray() (pid=4857, ip=10.164.1.99)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 880, in run_on_pod_ray
-    raise problem or RuntimeError("TPU job failed too many times")
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
-    tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-                                                 ^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^
-                                  ^^^^^^^^^^^^^^^^^^^
-ray.exceptions.RayTaskError(HttpError): ray::<lambda>() (pid=13782, ip=10.164.1.28)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
-    lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main
-    trainer.train(state, train_loader)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train
-    for info in self.training_steps(state, train_loader):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps
-    info = self.train_step(state, example)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step
-    self.run_hooks(info)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 335, in run_hooks
-    self.hooks.run_hooks(info, force=force)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks
-    hook.fn.on_step(info, force=force)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step
-    self.fn(info)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback
-    with fs.open(metrics_file, "a") as f:
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close
-    self.flush(force=True)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush
-    if self._upload_chunk(final=force) is not False:
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk
-    headers, contents = self.gcsfs.call(
-                        ^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
-    return sync(self.loop, func, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
-    raise return_result
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
-    result[0] = await coro
-                ^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
-    status, headers, info, contents = await self._request(
-                                      ^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
-    return await caller(func, *(extras + args), **kw)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 165, in retry_request
-    raise e
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
-    return await func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
-    validate_response(status, contents, path, args)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response
-    raise HttpError(error)
-gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429
-2026-03-03 19:15:17,437 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8 failed
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
-    runner.wait()
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 192, in wait
-    raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
-    runner.wait()
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 192, in wait
-    raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-e1d73201 failed
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/experiments/unified/unified_pretrain_demo_eu.py", line 603, in <module>
-    executor_main(
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
-    response = fn(cfg, *args, **kwargs)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
-    executor.run(
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 747, in run
-    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
-  File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
-    raise RuntimeError(message) from failure_exceptions[0]
-RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8']
-(raylet) The node with node id: b7c83455c9af135df1bcfd1d3a69f4574d927065bb07e1d70ee322a9 and address: 10.164.0.50 and node name: 10.164.0.50 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 15x across cluster]
-(raylet, ip=10.164.0.115) [2026-03-03 19:15:16,446 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99) Traceback (most recent call last): [repeated 3x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request [repeated 10x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return await func(*args, **kwargs) [repeated 5x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request [repeated 5x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     validate_response(status, contents, path, args) [repeated 5x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 122, in validate_response [repeated 5x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise HttpError(error) [repeated 5x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99) gcsfs.retry.HttpError: The object marin-eu-west4/checkpoints/unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8-186f78/checkpoints/eval_metrics.jsonl exceeded the rate limit for object mutation operations (create, update, and delete). Please reduce your request rate. See https://cloud.google.com/storage/docs/gcs429., 429 [repeated 5x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/main/train_lm.py", line 335, in main [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     trainer.train(state, train_loader) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 541, in train [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     for info in self.training_steps(state, train_loader): [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 519, in training_steps [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     info = self.train_step(state, example) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 8x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 496, in train_step [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     self.run_hooks(info) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/trainer.py", line 128, in run_hooks [repeated 8x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     self.hooks.run_hooks(info, force=force) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     hook.fn.on_step(info, force=force) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/callbacks/_core.py", line 59, in on_step [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     self.fn(info) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/tmp/ray/session_2026-02-02_16-31-54_698750_658/runtime_resources/working_dir_files/_ray_pkg_f343f37ad26613c4/lib/levanter/src/levanter/eval.py", line 228, in eval_callback [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     with fs.open(metrics_file, "a") as f: [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2178, in close [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     self.flush(force=True) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 2041, in flush [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     if self._upload_chunk(final=force) is not False: [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1896, in _upload_chunk [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     headers, contents = self.gcsfs.call( [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)                         ^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper [repeated 7x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return sync(self.loop, func, *args, **kwargs) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise return_result [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     result[0] = await coro [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)                 ^^^^^^^^^^ [repeated 7x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     status, headers, info, contents = await self._request( [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)                                       ^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     return await caller(func, *(extras + args), **kw) [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=4857, ip=10.164.1.99)     raise e [repeated 4x across cluster]
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-128  -e EXP_NAME unified-qwen3-1.7b-1-1-1-w0.5-3e4-30k-demo8 -e TEXT_WEIGHT 1.0  -e MULTIMODAL_WEIGHT 2.0 -e W_VISUAL 0.5  -e UND_GEN_RATIO 1 -e LEARNING_RATE 3e-4 -e NUM_STEPS 30000     -- python experiments/unified/unified_pretrain_demo_eu.py^C
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ 
+actor_pool
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     raise Exception(msg)
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Exception: v5litepod-64 slices actor pool wanted to scale to 1 actors, but scaled to 0 actors instead
+(raylet) The node with node id: 2ff676ed6d7e51dc734e04ae3fd5ec302aac5437a330fc9747a8689a and address: 10.164.1.64 and node name: 10.164.1.64 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 10x across cluster]
+(autoscaler +3h37m24s) Adding 3 node(s) of type tpu_worker.
+(autoscaler +3h37m24s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +3h37m24s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +3h37m24s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +3h37m24s) Resized to 11880 CPUs, 396 TPUs.
+(autoscaler +3h37m24s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-fe683bbe-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-63efe39c-tpu': 1.0}*16, {'ray-marin-eu-west4-worker-00f1d93e-tpu': 1.0}*3. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.10) E0308 15:52:59.995307694    1067 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T15:52:59.994950024-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T15:52:59.994941534-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T15:52:59.994914584-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T15:52:59.994895664-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T15:52:59.994938824-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-08T15:52:59.994933514-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.10) [2026-03-08 15:53:00,074 C 1067 1067] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.10) *** StackTrace Information ***
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x56089efe1eca] ray::operator<<()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x56089efe44e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x56089e526ce9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x56089e4a303c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x56089e2e601e] std::make_unique<>()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x56089e3150df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x56089e317c29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x56089e6e5aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x56089e6f81b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x56089e70fe4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x56089e8e05db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x56089e8d7ffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x56089efad6cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x56089efafc79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x56089efb0182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x56089e2aa3d7] main
+(raylet, ip=10.164.0.10) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fc200528d90]
+(raylet, ip=10.164.0.10) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fc200528e40] __libc_start_main
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x56089e2cc4f7]
+(raylet, ip=10.164.0.10) 
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x5637958c30df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x563795c93aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x563795ca61b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.10) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f1478d02d90]
+(raylet, ip=10.164.0.10) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x56379587a4f7]
+(raylet, ip=10.164.0.10) 
+(raylet, ip=10.164.0.41) [2026-03-08 15:59:09,958 E 3900 3900] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x55aa23a390df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x55aa23e09aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x55aa23e1c1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.182) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fb7161d8d90]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x55aa239f04f7]
+(raylet, ip=10.164.0.182) 
+(raylet, ip=10.164.0.182) E0308 15:53:00.025375158    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T15:53:00.025033198-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T15:53:00.025024438-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T15:53:00.024997898-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T15:53:00.024978728-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T15:53:00.025021758-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-08T15:53:00.025016418-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]} [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) [2026-03-08 15:53:00,102 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port. [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) *** StackTrace Information *** [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x55aa24705eca] ray::operator<<() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x55aa247084e9] ray::RayLog::~RayLog() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x55aa23c4ace9] ray::rpc::GrpcServer::Run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x55aa23bc703c] ray::ObjectManager::ObjectManager() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x55aa23a0a01e] std::make_unique<>() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x55aa23ffac5b] std::_Function_handler<>::_M_invoke() [repeated 11x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x55aa23e33e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x55aa240045db] EventTracker::RecordExecution() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x55aa23ffbffb] boost::asio::detail::executor_op<>::do_complete() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x55aa246d16cb] boost::asio::detail::scheduler::do_run_one() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x55aa246d3c79] boost::asio::detail::scheduler::run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x55aa246d4182] boost::asio::io_context::run() [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x55aa239ce3d7] main [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fb7161d8e40] __libc_start_main [repeated 2x across cluster]
+(raylet, ip=10.164.0.182) [2026-03-08 16:06:13,487 E 5035 5035] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 14x across cluster]
+(raylet, ip=10.164.0.10) [2026-03-08 16:07:14,371 E 3313 3313] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
+(raylet, ip=10.164.0.39) [2026-03-08 16:07:19,466 E 6938 6938] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(autoscaler +3h46m48s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +3h46m48s) Resized to 11520 CPUs, 384 TPUs.
+(autoscaler +3h46m48s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-fe683bbe-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-63efe39c-tpu': 1.0}*16. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +3h52m27s) Removing 12 nodes of type tpu_slice_v5e_64 (idle).
+(autoscaler +3h52m27s) Resized to 10080 CPUs, 336 TPUs.
+(autoscaler +3h52m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-fe683bbe-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-63efe39c-tpu': 1.0}*16. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.9) [2026-03-08 16:23:25,228 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.61) [2026-03-08 16:24:02,412 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.92) [2026-03-08 16:24:07,922 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 11x across cluster]
+(raylet, ip=10.164.0.103) [2026-03-08 16:25:05,779 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.50) [2026-03-08 16:25:06,202 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +4h6s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-fe683bbe-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-63efe39c-tpu': 1.0}*16. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.9) [2026-03-08 16:23:25,228 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(autoscaler +4h1m42s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +4h1m42s) Resized to 10080 CPUs, 336 TPUs.
+(autoscaler +4h1m42s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-fe683bbe-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-63efe39c-tpu': 1.0}*16. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.103) [2026-03-08 16:25:05,779 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.97) [2026-03-08 16:24:02,411 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.68) [2026-03-08 16:30:03,475 E 3814 3814] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 15x across cluster]
+(raylet, ip=10.164.0.241) E0308 16:30:28.960606170    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:30:28.96023077-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:30:28.9602222-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:28.96019484-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:28.96017532-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T16:30:28.96021942-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:28.96021398-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.241) [2026-03-08 16:30:29,038 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.241) *** StackTrace Information ***
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x564df0f84eca] ray::operator<<()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x564df0f874e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x564df04c9ce9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x564df044603c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x564df028901e] std::make_unique<>()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x564df02b80df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x564df02bac29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x564df0688aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x564df069b1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x564df06b2e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x564df08835db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x564df087affb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x564df0f506cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x564df0f52c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x564df0f53182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x564df024d3d7] main
+(raylet, ip=10.164.0.241) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fd05120bd90]
+(raylet, ip=10.164.0.241) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fd05120be40] __libc_start_main
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x564df026f4f7]
+(raylet, ip=10.164.0.241) 
+(raylet, ip=10.164.0.80) [2026-03-08 16:30:06,260 E 3810 3810] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 8x across cluster]
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x564df0879c5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.0.246) [2026-03-08 16:30:37,609 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.230) [2026-03-08 16:30:37,734 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.34) E0308 16:30:41.820234859    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:30:41.819845939-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:30:41.819837349-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:41.819808739-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:41.819787329-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:41.819834549-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:41.819828949-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.34) [2026-03-08 16:30:41,897 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.34) *** StackTrace Information ***
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x560927bb5eca] ray::operator<<()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x560927bb84e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x5609270face9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x56092707703c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x560926eba01e] std::make_unique<>()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x560926ee90df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x5609272b9aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x5609272cc1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x5609272e3e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5609274b45db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x5609274abffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x560927b816cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x560927b83c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x560927b84182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x560926e7e3d7] main
+(raylet, ip=10.164.0.34) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fd8f43cad90]
+(raylet, ip=10.164.0.34) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fd8f43cae40] __libc_start_main
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x560926ea04f7]
+(raylet, ip=10.164.0.34) 
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x558e4f5fd0df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x558e4f9cdaaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x558e4f9e01b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.226) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7feb30ad1d90]
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x558e4f5b44f7]
+(raylet, ip=10.164.0.226) 
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x558e4fbbec5b] std::_Function_handler<>::_M_invoke() [repeated 8x across cluster]
+(raylet, ip=10.164.0.245) [2026-03-08 16:30:38,831 E 1071 1071] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.226) E0308 16:30:59.218400560    1070 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:30:59.217994109-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:30:59.21798544-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:59.217957749-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:59.21793784-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T16:30:59.217982269-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:59.21797662-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.226) [2026-03-08 16:30:59,295 C 1070 1070] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.226) *** StackTrace Information ***
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x558e502c9eca] ray::operator<<()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x558e502cc4e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x558e4f80ece9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x558e4f78b03c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x558e4f5ce01e] std::make_unique<>()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x558e4f9f7e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x558e4fbc85db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x558e4fbbfffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x558e502956cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x558e50297c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x558e50298182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x558e4f5923d7] main
+(raylet, ip=10.164.0.226) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7feb30ad1e40] __libc_start_main
+(raylet, ip=10.164.0.100) [2026-03-08 16:31:04,944 E 3808 3808] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.0.61) [2026-03-08 16:31:10,359 E 3812 3812] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.149) E0308 16:31:22.968174404    1069 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:31:22.967784144-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:31:22.967767915-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:31:22.967740464-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-08T16:31:22.967720804-07:00"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T16:31:22.967765235-07:00", fd:30, children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-08T16:31:22.967759875-07:00"}]}]}]}
+(raylet, ip=10.164.0.149) [2026-03-08 16:31:23,045 C 1069 1069] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.149) *** StackTrace Information ***
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x5595b1b09eca] ray::operator<<()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x5595b1b0c4e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x5595b104ece9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x5595b0fcb03c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x5595b0e0e01e] std::make_unique<>()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x5595b0e3d0df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x5595b0e3fc29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x5595b120daaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x5595b12201b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x5595b1237e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5595b14085db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x5595b13ffffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x5595b1ad56cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x5595b1ad7c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x5595b1ad8182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x5595b0dd23d7] main
+(raylet, ip=10.164.0.149) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fc8abcced90]
+(raylet, ip=10.164.0.149) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fc8abccee40] __libc_start_main
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x5595b0df44f7]
+(raylet, ip=10.164.0.149) 
+(raylet, ip=10.164.0.73) [2026-03-08 16:31:13,245 E 3811 3811] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x5595b13fec5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.0.165) [2026-03-08 16:31:32,248 E 1071 1071] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.147) [2026-03-08 16:31:32,485 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.203) [2026-03-08 16:31:38,209 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 47x across cluster]
+(raylet, ip=10.164.0.247) [2026-03-08 16:31:46,476 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(autoscaler +4h4m35s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-fe683bbe-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-63efe39c-tpu': 1.0}*16. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.213) [2026-03-08 16:32:04,790 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.157) [2026-03-08 16:32:30,507 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.198) [2026-03-08 16:31:47,133 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.0.34) E0308 16:30:41.820234859    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:30:41.819845939-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:30:41.819837349-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:41.819808739-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:41.819787329-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:41.819834549-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:41.819828949-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.34) [2026-03-08 16:30:41,897 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.34) *** StackTrace Information ***
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x560927bb5eca] ray::operator<<()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x560927bb84e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x5609270face9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x56092707703c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x560926eba01e] std::make_unique<>()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x560926ee90df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x560926eebc29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x5609272b9aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x5609272cc1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x5609272e3e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5609274b45db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x5609274abffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x560927b816cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x560927b83c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x560927b84182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x560926e7e3d7] main
+(raylet, ip=10.164.0.34) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fd8f43cad90]
+(raylet, ip=10.164.0.34) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fd8f43cae40] __libc_start_main
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x560926ea04f7]
+(raylet, ip=10.164.0.34) 
+(raylet, ip=10.164.0.198) [2026-03-08 16:38:03,890 E 3818 3818] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x5609274aac5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.0.133) [2026-03-08 16:31:36,080 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.0.149) E0308 16:31:22.968174404    1069 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:31:22.967784144-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:31:22.967767915-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:31:22.967740464-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-08T16:31:22.967720804-07:00"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T16:31:22.967765235-07:00", fd:30, children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-08T16:31:22.967759875-07:00"}]}]}]}
+(raylet, ip=10.164.0.149) [2026-03-08 16:31:23,045 C 1069 1069] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.149) *** StackTrace Information ***
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x5595b1b09eca] ray::operator<<()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x5595b1b0c4e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x5595b104ece9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x5595b0fcb03c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x5595b0e0e01e] std::make_unique<>()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x5595b0e3d0df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x5595b0e3fc29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x5595b120daaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x5595b12201b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x5595b1237e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5595b14085db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x5595b13ffffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x5595b1ad56cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x5595b1ad7c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x5595b1ad8182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x5595b0dd23d7] main
+(raylet, ip=10.164.0.149) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fc8abcced90]
+(raylet, ip=10.164.0.149) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fc8abccee40] __libc_start_main
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x5595b0df44f7]
+(raylet, ip=10.164.0.149) 
+(raylet, ip=10.164.0.142) [2026-03-08 16:38:41,131 E 3904 3904] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 42x across cluster]
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x5595b13fec5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.0.170) [2026-03-08 16:38:46,312 E 3907 3907] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 21x across cluster]
+(run_on_pod_ray pid=25819, ip=10.164.1.162) v5litepod-64 slices actor pool actor Actor(SliceActor, 3b45939e5e286dcf275517d51c000000) failed to start: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     class_name: SliceActor
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     actor_id: 3b45939e5e286dcf275517d51c000000
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     namespace: eda1f365-6a3a-4ff7-9fe3-b76e1c5d9edb
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     ip: 10.164.0.238
+(run_on_pod_ray pid=25819, ip=10.164.1.162) The actor died because its node has died. Node Id: 25d1bd69a5dd6353738c58db13c409297671ea5d9bc3cda39f911045
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     the actor's node was terminated expectedly: received SIGTERM
+(run_on_pod_ray pid=25819, ip=10.164.1.162) The actor never ran - it was cancelled before it started running.
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Traceback (most recent call last):
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_e6dbe027f3327ebc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 376, in _add_members_to_actor_pool
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     actor_info = ray.get(actor_info_awaitable, timeout=0)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     return func(*args, **kwargs)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=25819, ip=10.164.1.162)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     raise value
+(run_on_pod_ray pid=25819, ip=10.164.1.162) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     class_name: SliceActor
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     actor_id: 3b45939e5e286dcf275517d51c000000
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     namespace: eda1f365-6a3a-4ff7-9fe3-b76e1c5d9edb
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     ip: 10.164.0.238
+(run_on_pod_ray pid=25819, ip=10.164.1.162) The actor died because its node has died. Node Id: 25d1bd69a5dd6353738c58db13c409297671ea5d9bc3cda39f911045
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     the actor's node was terminated expectedly: received SIGTERM
+(run_on_pod_ray pid=25819, ip=10.164.1.162) The actor never ran - it was cancelled before it started running.
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Failed to prune dead slices or create new actors
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Traceback (most recent call last):
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_e6dbe027f3327ebc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 712, in run_on_pod_ray
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     slice_pool_manager.scale_multislice(num_slices)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_e6dbe027f3327ebc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 456, in scale_multislice
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     self._scale_actor_pool(num_slices)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_e6dbe027f3327ebc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 428, in _scale_actor_pool
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     raise Exception(msg)
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Exception: v5litepod-64 slices actor pool wanted to scale to 1 actors, but scaled to 0 actors instead
+(raylet, ip=10.164.0.232) [2026-03-08 16:30:37,844 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.241) E0308 16:30:28.960606170    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:30:28.96023077-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:30:28.9602222-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:28.96019484-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:28.96017532-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T16:30:28.96021942-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:28.96021398-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.241) [2026-03-08 16:30:29,038 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.241) *** StackTrace Information ***
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x564df0f84eca] ray::operator<<()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x564df0f874e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x564df04c9ce9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x564df044603c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x564df028901e] std::make_unique<>()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x564df02b80df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x564df02bac29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x564df0688aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x564df069b1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x564df06b2e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x564df08835db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x564df087affb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x564df0f506cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x564df0f52c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x564df0f53182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x564df024d3d7] main
+(raylet, ip=10.164.0.241) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fd05120bd90]
+(raylet, ip=10.164.0.241) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fd05120be40] __libc_start_main
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x564df026f4f7]
+(raylet, ip=10.164.0.241) 
+(raylet, ip=10.164.0.235) [2026-03-08 16:39:21,602 E 3937 3937] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 15x across cluster]
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x564df0879c5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.0.73) [2026-03-08 16:31:13,245 E 3811 3811] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
+(raylet, ip=10.164.0.187) [2026-03-08 16:39:36,246 E 3993 3993] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 28x across cluster]
+(raylet, ip=10.164.0.156) [2026-03-08 16:39:41,982 E 3906 3906] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.0.226) E0308 16:30:59.218400560    1070 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:30:59.217994109-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:30:59.21798544-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:59.217957749-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:59.21793784-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T16:30:59.217982269-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:59.21797662-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.226) [2026-03-08 16:30:59,295 C 1070 1070] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.226) *** StackTrace Information ***
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x558e502c9eca] ray::operator<<()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x558e502cc4e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x558e4f80ece9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x558e4f78b03c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x558e4f5ce01e] std::make_unique<>()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x558e4f5fd0df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x558e4f5ffc29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x558e4f9cdaaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x558e4f9e01b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x558e4f9f7e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x558e4fbc85db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x558e4fbbfffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x558e502956cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x558e50297c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x558e50298182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x558e4f5923d7] main
+(raylet, ip=10.164.0.226) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7feb30ad1d90]
+(raylet, ip=10.164.0.226) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7feb30ad1e40] __libc_start_main
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x558e4f5b44f7]
+(raylet, ip=10.164.0.226) 
+(raylet, ip=10.164.0.222) [2026-03-08 16:39:53,034 E 3826 3826] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.226) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x558e4fbbec5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.0.3) [2026-03-08 16:40:11,056 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.0.243) [2026-03-08 16:40:21,468 E 3939 3939] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.0.47) [2026-03-08 16:40:26,953 E 3936 3936] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.0.71) [2026-03-08 16:40:41,944 E 6573 6573] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.0.212) [2026-03-08 16:40:53,780 E 3828 3828] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.0.215) [2026-03-08 16:40:59,336 E 3826 3826] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(autoscaler +4h14m55s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +4h14m55s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +4h14m55s) Resized to 13320 CPUs, 444 TPUs.
+(autoscaler +4h14m55s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-fe683bbe-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-63efe39c-tpu': 1.0}*16, {'ray-marin-eu-west4-worker-39af74bb-tpu': 1.0}*2. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.0.201) [2026-03-08 16:38:04,000 E 3819 3819] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.34) E0308 16:30:41.820234859    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:30:41.819845939-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:30:41.819837349-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:41.819808739-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:41.819787329-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:41.819834549-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:41.819828949-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.34) [2026-03-08 16:30:41,897 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.34) *** StackTrace Information ***
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x560927bb5eca] ray::operator<<()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x560927bb84e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x5609270face9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x56092707703c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x560926eba01e] std::make_unique<>()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x560926ee90df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x560926eebc29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x5609272b9aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x5609272cc1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x5609272e3e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5609274b45db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x5609274abffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x560927b816cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x560927b83c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x560927b84182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x560926e7e3d7] main
+(raylet, ip=10.164.0.34) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fd8f43cad90]
+(raylet, ip=10.164.0.34) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fd8f43cae40] __libc_start_main
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x560926ea04f7]
+(raylet, ip=10.164.0.34) 
+(raylet, ip=10.164.0.177) [2026-03-08 16:38:44,148 E 3905 3905] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.0.34) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x5609274aac5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.0.149) E0308 16:31:22.968174404    1069 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:31:22.967784144-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:31:22.967767915-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:31:22.967740464-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-08T16:31:22.967720804-07:00"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T16:31:22.967765235-07:00", fd:30, children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-08T16:31:22.967759875-07:00"}]}]}]}
+(raylet, ip=10.164.0.149) [2026-03-08 16:31:23,045 C 1069 1069] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.149) *** StackTrace Information ***
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x5595b1b09eca] ray::operator<<()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x5595b1b0c4e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x5595b104ece9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x5595b0fcb03c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x5595b0e0e01e] std::make_unique<>()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x5595b0e3d0df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x5595b120daaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x5595b12201b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x5595b1237e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5595b14085db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x5595b13ffffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x5595b1ad56cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x5595b1ad7c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x5595b1ad8182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x5595b0dd23d7] main
+(raylet, ip=10.164.0.149) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fc8abcced90]
+(raylet, ip=10.164.0.149) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fc8abccee40] __libc_start_main
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x5595b0df44f7]
+(raylet, ip=10.164.0.149) 
+(run_on_pod_ray pid=25819, ip=10.164.1.162) v5litepod-64 slices actor pool actor Actor(SliceActor, 2faa33fa5e575f1c211effc81c000000) failed to start: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     class_name: SliceActor
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     actor_id: 2faa33fa5e575f1c211effc81c000000
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     pid: 5655
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     namespace: eda1f365-6a3a-4ff7-9fe3-b76e1c5d9edb
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     ip: 10.164.0.238
+(run_on_pod_ray pid=25819, ip=10.164.1.162) The actor died because its node has died. Node Id: f848fc441ef49d750ad1ee7ab05ea0aa726520ee42e0a97675473f65
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     the actor's node was terminated expectedly: received SIGTERM
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Traceback (most recent call last):
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_e6dbe027f3327ebc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 376, in _add_members_to_actor_pool
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     actor_info = ray.get(actor_info_awaitable, timeout=0)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     return func(*args, **kwargs)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=25819, ip=10.164.1.162)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     raise value
+(run_on_pod_ray pid=25819, ip=10.164.1.162) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     class_name: SliceActor
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     actor_id: 2faa33fa5e575f1c211effc81c000000
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     pid: 5655
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     namespace: eda1f365-6a3a-4ff7-9fe3-b76e1c5d9edb
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     ip: 10.164.0.238
+(run_on_pod_ray pid=25819, ip=10.164.1.162) The actor died because its node has died. Node Id: f848fc441ef49d750ad1ee7ab05ea0aa726520ee42e0a97675473f65
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     the actor's node was terminated expectedly: received SIGTERM
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Failed to prune dead slices or create new actors
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Traceback (most recent call last):
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_e6dbe027f3327ebc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 712, in run_on_pod_ray
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     slice_pool_manager.scale_multislice(num_slices)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_e6dbe027f3327ebc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 456, in scale_multislice
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     self._scale_actor_pool(num_slices)
+(run_on_pod_ray pid=25819, ip=10.164.1.162)   File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_e6dbe027f3327ebc/lib/fray/src/fray/v2/ray_backend/tpu.py", line 428, in _scale_actor_pool
+(run_on_pod_ray pid=25819, ip=10.164.1.162)     raise Exception(msg)
+(run_on_pod_ray pid=25819, ip=10.164.1.162) Exception: v5litepod-64 slices actor pool wanted to scale to 1 actors, but scaled to 0 actors instead
+(raylet, ip=10.164.0.161) [2026-03-08 16:38:44,595 E 3904 3904] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 58x across cluster]
+(raylet, ip=10.164.0.149) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x5595b13fec5b] std::_Function_handler<>::_M_invoke() [repeated 4x across cluster]
+(raylet, ip=10.164.0.241) E0308 16:30:28.960606170    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-08T16:30:28.96023077-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-08T16:30:28.9602222-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-08T16:30:28.96019484-07:00", children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:28.96017532-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-08T16:30:28.96021942-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-08T16:30:28.96021398-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.0.241) [2026-03-08 16:30:29,038 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.0.241) *** StackTrace Information ***
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x564df0f84eca] ray::operator<<()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x564df0f874e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x564df04c9ce9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x564df044603c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x564df028901e] std::make_unique<>()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x564df02b80df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x564df0688aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x564df069b1b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x564df06b2e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x564df08835db] EventTracker::RecordExecution()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x564df087affb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x564df0f506cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x564df0f52c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x564df0f53182] boost::asio::io_context::run()
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x564df024d3d7] main
+(raylet, ip=10.164.0.241) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7fd05120bd90]
+(raylet, ip=10.164.0.241) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7fd05120be40] __libc_start_main
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x564df026f4f7]
+(raylet, ip=10.164.0.241) 
+(raylet, ip=10.164.0.143) [2026-03-08 16:44:41,511 E 6728 6728] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 26x across cluster]
+(raylet, ip=10.164.0.241) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x564df0879c5b] std::_Function_handler<>::_M_invoke() [repeated 4x across cluster]
+(raylet, ip=10.164.0.242) [2026-03-08 16:44:47,912 E 6765 6765] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
+(raylet, ip=10.164.0.147) [2026-03-08 16:45:35,841 E 6731 6731] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.0.166) [2026-03-08 16:45:41,552 E 6729 6729] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 14x across cluster]
+(raylet, ip=10.164.0.243) [2026-03-08 16:45:46,712 E 6767 6767] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 7x across cluster]
+(raylet, ip=10.164.0.231) [2026-03-08 16:45:56,136 E 6767 6767] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
