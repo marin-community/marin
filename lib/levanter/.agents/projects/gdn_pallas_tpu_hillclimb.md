@@ -4656,3 +4656,155 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated and rejected**. The explicit full-XLA chunk backend successfully removed the old GDN `shard_map/pallas_call` buckets, but it replaced them with a worse XLA `lax.scan` / `triangular_solve` shell and regressed end-to-end throughput by about `9%`.
 - Next bold hypothesis:
   - Do not spend another mainline iteration on a standalone full-XLA chunk backend. The next serious bet should keep Pallas for chunk-local solves while changing outer orchestration or backward tape structure (`M` or `O`+`N`), because the pure-XLA train-shell floor is now clearly worse.
+
+### Iteration 70 - Macro Move P / explicit TPU CE backward-mode A/B on fixed `pallas_tpu` CE (validated, keep `pallas`, reject `xla_streaming`)
+
+- Coverage slot: P
+- Why this attacks the train-path control bottleneck:
+  - The latest committed train-path trace already collapses the GDN chunk forward/backward scan shells for the target shape, leaving the residual hot `while` bucket CE-attributed on TPU:0 XLA Ops.
+  - Before spending another mainline iteration on outer-train-path restructuring, this run closes the remaining CE backward/custom-VJP split on the current head by holding CE implementation fixed to `pallas_tpu` and refreshing the real-train-run A/B between explicit `pallas` and explicit `xla_streaming` backward.
+- Hot-path scan/cond status:
+  - Hot-path `lax.scan`: preserved in the deployable GDN train shell; CE backward mode does not add a new train-path scan.
+  - Hot-path `lax.cond` / runtime dispatch: no new runtime dispatch; CE backward mode is selected by env at compile time.
+- Change class: `CE backend`
+
+- Codex loop iteration: 2 / 10
+- Date: 2026-03-09T00:05:36Z
+- Starting commit: `70e9eb9acbd2581749dd737da52e7fa01bae93df`
+- Dominant bottleneck carried in (latest committed baseline trace `scratch/profiles/plugins/profile/2026_03_08_18_12_35/perfetto_trace.json.gz`, TPU:0 XLA Ops `pid=3, tid=3`):
+  - Forward closed-call: `20.663 ms`
+  - Backward closed-call: `13.126 ms`
+  - while: `10.150 ms`
+  - conditional: `0.026 ms`
+  - CE-attributed while: `10.150 ms`
+  - Kernel budget: `33.789 ms`
+  - Control budget: `10.176 ms`
+  - Train-path budget: `43.965 ms`
+  - Step duration: `167.098 ms`
+  - Remainder budget: `123.133 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro P (selected):** explicit `pallas_tpu` CE backward A/B (`pallas` incumbent vs `xla_streaming` challenger) on the current deployable head (`+2-8%` if the residual CE custom-VJP shell is still the active wall, medium risk).
+  2. **Macro M:** XLA-first outer train path with Pallas only as leaf chunk kernels after the CE backward split is closed (`+2-6%`, high integration risk).
+  3. **Macro O+N:** refreshed reduced-Pallas control arm only if the CE backward split stays ambiguous after the A/B (`+0-3%` diagnostic value, high probe risk).
+
+- Selected macro-move category: **P) CE backward-mode A/B on the real train run**.
+
+- Expected effect on `while_ms`: challenger `xla_streaming` should reduce the residual CE `while` if the remaining shell is still the main wall; incumbent `pallas` refresh should stay flat within noise.
+- Expected effect on `step_duration_ms`: should fall only if the CE backward shell really gets lighter.
+- Expected effect on `remainder_budget_ms`: should stay flat or decrease slightly; growth would indicate off-critical-path work shift rather than a real step win.
+- Reject if `while_ms` remains flat? **Yes.** The only reason to switch CE backward mode is to materially reduce the residual CE control shell.
+- Reject if `remainder_budget_ms` grows? **Yes.** A CE-shell change that only moves time into the remainder is not a promising mainline direction.
+
+- Change summary:
+  - No source code change was promoted in this iteration.
+  - This was the required Macro-P validation matrix on the current deployable head: explicit `pallas_tpu` CE + `pallas` backward incumbent versus explicit `pallas_tpu` CE + `xla_streaming` backward challenger.
+  - The durable artifact from this iteration is the refreshed A/B evidence on the current head: keep `pallas` backward as the deployable TPU CE mode and treat CE backward as closed for mainline promotion purposes.
+
+- Correctness checks:
+  - TPU validation:
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - run 1 hit the known near-threshold parity flake in `test_gdn_layer_backward_matches_hf[True]` (`1 / 1536` elements, max abs `1.1369586e-05` vs `atol=1e-5`).
+    - run 2 (same command/signature) passed: `87 passed, 2 skipped`.
+
+- Profile runs (managed dev TPU):
+  - Primary refresh (`pallas` backward):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i02_P_ce_pallas_bwd_pallas --marin-prefix gs://marin-us-east5 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_i02_P_ce_pallas_bwd_pallas_130m_ch128_seg16_20steps-2ce6fa`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+  - Compare (`xla_streaming` backward):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode xla_streaming --run-name-prefix gdn_i02_P_ce_pallas_bwd_xla_stream --marin-prefix gs://marin-us-east5 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_i02_P_ce_pallas_bwd_xla_stream_130m_ch128_seg16_20s-f5180c`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+  - Trace attribution note:
+    - `70e9eb9` is a pure revert of the prior CE-A/B log-entry commit, so the executable source remains identical to `0b1ec6eba4c5b6f28bcf8e5fcb343203e9247582`.
+    - Current end-to-end throughput numbers below come from the fresh runs above.
+    - Hotspot attribution below reuses the already-downloaded identical-source traces because re-downloading the fresh compare artifact locally hit `OSError: [Errno 28] No space left on device` while copying the artifact payload:
+      - primary trace: `scratch/wandb_artifacts/ce_pallas_bwd_pallas/plugins/profile/2026_03_08_23_16_12/perfetto_trace.json.gz`
+      - compare trace: `scratch/wandb_artifacts/ce_pallas_bwd_xla_stream/plugins/profile/2026_03_08_23_20_25/perfetto_trace.json.gz`
+
+- Hotspot metrics:
+  - Primary refresh (`pallas` bwd) vs carried-in baseline:
+    - CE backend selected: `pallas_tpu`
+    - CE bwd mode: `pallas`
+    - CE-attributed while: `10.150 ms -> 10.188 ms`
+    - Forward closed-call `20.663 ms -> 20.663 ms`
+    - Backward closed-call `13.126 ms -> 13.127 ms`
+    - `while: 10.150 ms -> 10.188 ms`
+    - `conditional: 0.026 ms -> 0.026 ms`
+    - `Kernel budget: 33.789 ms -> 33.790 ms`
+    - `Control budget: 10.176 ms -> 10.214 ms`
+    - `Train-path budget: 43.965 ms -> 44.004 ms`
+    - `Step duration: 167.098 ms -> 167.398 ms`
+    - `Remainder budget: 123.133 ms -> 123.394 ms`
+  - CE backward compare (`xla_streaming` bwd) vs explicit `pallas` primary:
+    - CE backend selected: `pallas_tpu`
+    - CE bwd mode: `pallas -> xla_streaming`
+    - CE-attributed while: `10.188 ms -> 23.603 ms`
+    - Forward closed-call `20.663 ms -> 20.664 ms`
+    - Backward closed-call `13.127 ms -> 13.130 ms`
+    - `while: 10.188 ms -> 23.603 ms`
+    - `conditional: 0.026 ms -> 0.026 ms`
+    - `Kernel budget: 33.790 ms -> 33.794 ms`
+    - `Control budget: 10.214 ms -> 23.629 ms`
+    - `Train-path budget: 44.004 ms -> 57.422 ms`
+    - `Step duration: 167.398 ms -> 180.796 ms`
+    - `Remainder budget: 123.394 ms -> 123.374 ms`
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - Primary `pallas` refresh vs carried-in baseline (`gdn_iter03_macroP_ce_auto_130m_ch128_seg16_20steps-c4bf85`):
+    - `throughput/mfu`: `6.061863 -> 6.050995` (`-0.18%`)
+    - `throughput/tokens_per_second`: `196100.108 -> 195748.541` (`-0.18%`)
+    - `throughput/duration`: `0.167098s -> 0.167398s` (`+0.18%`)
+  - Compare `xla_streaming` vs explicit `pallas` primary:
+    - `throughput/mfu`: `6.050995 -> 5.602600` (`-7.41%`)
+    - `throughput/tokens_per_second`: `195748.541 -> 181243.054` (`-7.41%`)
+    - `throughput/duration`: `0.167398s -> 0.180796s` (`+8.00%`)
+  - Compare `xla_streaming` vs carried-in baseline:
+    - `throughput/mfu`: `6.061863 -> 5.602600` (`-7.58%`)
+    - `throughput/tokens_per_second`: `196100.108 -> 181243.054` (`-7.58%`)
+    - `throughput/duration`: `0.167098s -> 0.180796s` (`+8.20%`)
+  - vs active champion from `.agents/logs/gdn_codex_loop/perf_state.json` (`throughput/mfu=5.748507`):
+    - primary `pallas`: `+5.26%`
+    - compare `xla_streaming`: `-2.54%`
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - Both runs keep a single CE-attributed `while` bucket on TPU:0 XLA Ops; switching to `xla_streaming` makes that CE `while` much larger without improving any tracked GDN bucket.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - Preserves the existing GDN train shell; no new hot-path scan is added.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The hypothesis was that the CE backward lowering might shrink the residual CE shell without changing GDN control flow. The trace disproves that for `xla_streaming`.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - Because the carried-in unresolved wall was already CE-attributed; resolving CE backward mode first was required before spending more mainline budget on GDN-local structure.
+  - Is the residual `while` still CE-attributed in this design?
+    - Yes. It remains a CE bucket in both runs and grows from about `10.19 ms` to about `23.60 ms` under `xla_streaming`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> retry pass `87 passed, 2 skipped`.
+  - Perf:
+    - `CE backend selected: pallas_tpu` (both runs).
+    - `CE bwd mode: pallas | xla_streaming`.
+    - `CE-attributed while: 10.188 ms -> 23.603 ms`.
+    - Forward closed-call `20.663 ms -> 20.664 ms`.
+    - Backward closed-call `13.127 ms -> 13.130 ms`.
+    - `while: 10.188 ms -> 23.603 ms`.
+    - `conditional: 0.026 ms -> 0.026 ms`.
+    - `Kernel budget: 33.790 ms -> 33.794 ms`.
+    - `Control budget: 10.214 ms -> 23.629 ms`.
+    - `Train-path budget: 44.004 ms -> 57.422 ms`.
+    - `Step duration: 167.398 ms -> 180.796 ms`.
+    - `Remainder budget: 123.394 ms -> 123.374 ms`.
+    - `throughput/mfu -7.41%`, `throughput/tokens_per_second -7.41%`, `throughput/duration +8.00%` (`xla_streaming` vs explicit `pallas` primary).
+  - Governance:
+    - Primary incumbent refresh shows no meaningful drift on the current head beyond noise.
+    - `xla_streaming` fails the hard control-flow gate: `while` grows by `+13.415 ms` vs explicit `pallas`, `train_path_budget` grows by `+13.418 ms`, `step_duration` worsens by `+13.397 ms`, and MFU falls by `-7.41%`.
+    - `remainder_budget_ms` stays effectively flat (`-0.021 ms` vs explicit `pallas`), so the untracked remainder does not rescue the candidate.
+    - Candidate rejected; keep `pallas` backward as the deployable TPU CE mode.
+
+- Assessment: **validated and rejected**. The required CE backward A/B is now refreshed on the current head: `pallas` remains the winning deployable mode, while `xla_streaming` recreates a much larger CE `WhileOp` and regresses end-to-end throughput by about `7.4%`.
+- Next bold hypothesis:
+  - With CE backward mode now closed on the current head, spend the next mainline budget on `M` with an `N`-style backward tape-contract reduction nested inside it, and continue to gate promotions on `step_duration_ms` plus `remainder_budget_ms`, not just GDN-labeled train-path buckets.
