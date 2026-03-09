@@ -31,6 +31,16 @@ def _task_id_to_job_id(task_id: str) -> str | None:
     return parent.to_wire()
 
 
+def _group_status_detail(routing: vm_pb2.RoutingDecision, group_name: str) -> str:
+    """Extract decision/reason from GroupRoutingStatus for a given group."""
+    for gs in routing.group_statuses:
+        if gs.group == group_name:
+            if gs.reason:
+                return f"{gs.decision}: {gs.reason}"
+            return gs.decision
+    return ""
+
+
 def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str, str]:
     """Build autoscaler pending hints keyed by job id.
 
@@ -77,7 +87,9 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
         # Demand is routed but no new slices requested right now (for example
         # existing in-flight slices are expected to satisfy demand).
         primary_group, _ = ranked_groups[0]
-        hints[job_id] = f"Waiting for workers in scale group '{primary_group}' to become ready"
+        status_detail = _group_status_detail(routing, primary_group)
+        suffix = f" ({status_detail})" if status_detail else ""
+        hints[job_id] = f"Waiting for workers in scale group '{primary_group}' to become ready{suffix}"
 
     for job_id, reason_counts in unmet_reasons_by_job.items():
         if job_id in hints:

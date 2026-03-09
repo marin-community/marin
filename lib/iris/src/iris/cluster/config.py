@@ -1035,11 +1035,12 @@ def create_autoscaler(
         slice_template = group_config.slice_template
         cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
         logger.info(
-            "Scale group %s: device=%s:%s device_count=%d min=%d max=%d instance=%s worker_attrs=%s",
+            "Scale group %s: device=%s:%s device_count=%d num_vms=%d min=%d max=%d instance=%s worker_attrs=%s",
             name,
             resources.device_type,
             resources.device_variant,
             resources.device_count,
+            group_config.num_vms,
             group_config.min_slices,
             group_config.max_slices,
             cw_instance or "n/a",
