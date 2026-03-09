@@ -34,6 +34,26 @@
 - Interpretation: `K=8` remains the practical coefficient baseline, and exact-libjpeg avoids ambiguity about whether the coefficient path is merely a reference approximation.
 - Next action: validate locally, run the `K=8` SWA smoke, and only then launch the paired trials.
 
+### 2026-03-09 14:50 - Exact `K=8` SWA smoke succeeded
+
+- Hypothesis: exact-libjpeg `K=8` should still optimize normally when switched from full attention to `SWA=4096`, which is the last check needed before the paired whole-image-byte comparison.
+- Command:
+  - `uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k8-libjpeg-swa4096-smoke"]'`
+- Config:
+  - exact-libjpeg `K=8`
+  - `seq_len=8192`
+  - `sliding_window=4096`
+  - batch size `56`
+  - steps `96`
+- Result:
+  - Ray job: `ray-run-dlwh-launch-20260309-183657`
+  - terminal status: `SUCCEEDED`
+  - W&B: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-libjpeg-swa4096-smoke`
+  - eval loss: `8.554 -> 4.335 -> 4.115`
+  - final checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-libjpeg-swa4096-smoke-8e1097/checkpoints/step-96`
+- Interpretation: the coeff side now has the same SWA architecture as the whole-image byte baseline, so the longer head-to-head trials are worth running.
+- Next action: launch `tokexplore/jpeg-tokenizer-k8-libjpeg-swa4096-trial` and `tokexplore/jpeg-tokenizer-bytes-whole-swa4096-trial`.
+
 ### 2026-03-08 20:00 - Phase 0 finalized locally
 
 - Hypothesis: a fixed-length K=4 coefficient stream is a clean first training target because it avoids the sequence-length variance of bytes and symbols.
