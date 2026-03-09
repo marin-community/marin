@@ -1,7 +1,12 @@
-# Recipe: Dataset Schema Inspection
+---
+name: add-dataset
+description: Add a Hugging Face dataset to Marin pipelines. Use when asked to add, register, or inspect a new dataset for training.
+---
+
+# Skill: Dataset Schema Inspection and Registration
 
 ## Overview
-This recipe guides agents and humans in inspecting Hugging Face dataset schemas using Marin's schema inspection tool. The inspection is the first step toward exposing a dataset for training. After capturing the schema, register an `ExecutorStep` so the dataset can be downloaded in Marin pipelines. For simple datasets, add the step to [`experiments/pretraining_datasets/__init__.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/__init__.py) (see the `fineweb_edu` entry). If the dataset is multipart or more complex, create a dedicated file (e.g., [`experiments/pretraining_datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py)) and add the step there instead. Datasets with Hugging Face–exposed subsets or splits should pattern match on [`experiments/pretraining_datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py), defining separate steps for each subset.
+This skill guides agents in inspecting Hugging Face dataset schemas using Marin's schema inspection tool. The inspection is the first step toward exposing a dataset for training. After capturing the schema, register an `ExecutorStep` so the dataset can be downloaded in Marin pipelines. For simple datasets, add the step to [`experiments/pretraining_datasets/__init__.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/__init__.py) (see the `fineweb_edu` entry). If the dataset is multipart or more complex, create a dedicated file (e.g., [`experiments/pretraining_datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py)) and add the step there instead. Datasets with Hugging Face–exposed subsets or splits should pattern match on [`experiments/pretraining_datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py), defining separate steps for each subset.
 
 ## Prerequisites
 - Install the [Hugging Face `datasets` library](https://huggingface.co/docs/datasets/) (e.g., `pip install datasets`).
@@ -118,15 +123,6 @@ $ uv run lib/marin/tools/get_hf_dataset_schema.py c4 --config_name en --trust_re
 }
 ```
 
-## Example Agent Prompt
-To test with an AI agent:
-> "Follow the dataset schema inspection recipe. Inspect the schema for 'roneneldan/TinyStories' using the get_hf_dataset_schema tool. Apply all rules and output the full schema as JSON."
-
-## Testing and Validation
-- **Human Testing:** Run the examples above and verify the output matches your expectations. Cross-check with Hugging Face's dataset viewer for accuracy.
-- **Agent Testing:** Input this recipe into tools like Claude or Cursor, using the example prompt. Report issues or successes in the Marin Discord (#coding-roombas) or GitHub issues.
-- **Integration Testing:** Ensure the schema output integrates with Marin's pipelines (e.g., feed into token estimation tools in future steps).
-
 ## Next Steps
 Once the schema is inspected and the dataset is registered (for example in [`experiments/pretraining_datasets/__init__.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/__init__.py) or in a dedicated file), the goal is to cargo-cult existing dataset configs for tokenization:
 - Apply transformations (e.g., field mapping).
@@ -135,8 +131,6 @@ Once the schema is inspected and the dataset is registered (for example in [`exp
 - Copy and adapt tokenization configs from similar datasets.
 - Run ablations or trials.
 
-These will be detailed in expanded recipes or subsequent PRs.
-
 ## See Also
-- [get_hf_dataset_schema.py on GitHub](https://github.com/marin-community/marin/blob/main/lib/marin/tools/get_hf_dataset_schema.py)
+- `lib/marin/tools/get_hf_dataset_schema.py`
 - [Hugging Face datasets documentation](https://huggingface.co/docs/datasets/)

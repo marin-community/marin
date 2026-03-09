@@ -1,7 +1,12 @@
-# Recipe: Agent-Directed Research
+---
+name: agent-research
+description: Long-running exploratory research workflow with logbooks, W&B, and experiment issues. Use when asked to run a research thread, benchmark study, or multi-session investigation.
+---
+
+# Skill: Agent-Directed Research
 
 ## Overview
-Use this recipe for long-running, exploratory research where an agent iterates on
+Use this skill for long-running, exploratory research where an agent iterates on
 benchmarks, experiments, and hypotheses over multiple sessions.
 
 This workflow optimizes for:
@@ -42,7 +47,7 @@ When using W&B:
   - iteration is quick,
   - you are tuning kernels or benchmarks,
   - full pipeline apparatus is unnecessary.
-- See [dev_tpu.md](../dev-guide/dev_tpu.md) for operational details and troubleshooting.
+- See `docs/dev-guide/dev_tpu.md` for operational details and troubleshooting.
 
 ### Dev TPU script (explicit)
 For fast iteration, use:
@@ -275,5 +280,5 @@ Before closing the issue:
 
 ## See Also
 - `.github/ISSUE_TEMPLATE/experiment.md`
-- `docs/recipes/organize_experiments.md`
-- `docs/recipes/add_pallas_kernel.md`
+- `.agents/skills/organize-experiments/`
+- `.agents/skills/add-pallas-kernel/`

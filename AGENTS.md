@@ -8,16 +8,23 @@ Start with the shared practices below. Consult subproject manuals for directory-
 
 ## Workflow Playbooks
 
-Agent-friendly recipes live in `docs/recipes/`. Key ones:
+Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/skills/`). Load a skill by reading its `SKILL.md`. Key ones:
 
-- [pull-request.md](docs/recipes/pull-request.md) — PR descriptions, testing, review workflow
-- [fix_issue.md](docs/recipes/fix_issue.md) — issue triage and fix protocol
-- [add_dataset.md](docs/recipes/add_dataset.md) — dataset addition (start with schema inspection)
-- [organize_experiments.md](docs/recipes/organize_experiments.md) — experiment organization
-- [agent_research.md](docs/recipes/agent_research.md) — long-running benchmark/research threads
-- [ferries.md](docs/recipes/ferries.md) — canary/daily ferry workflow
-- [change_grug.md](docs/recipes/change_grug.md) — Grug/Grugformer changes
-- [agent_profiling.md](docs/recipes/agent_profiling.md) — profiling and optimization
+- [pull-request](.agents/skills/pull-request/SKILL.md) — PR descriptions, testing, review workflow
+- [fix-issue](.agents/skills/fix-issue/SKILL.md) — issue triage and fix protocol
+- [add-dataset](.agents/skills/add-dataset/SKILL.md) — dataset addition (start with schema inspection)
+- [organize-experiments](.agents/skills/organize-experiments/SKILL.md) — experiment organization
+- [agent-research](.agents/skills/agent-research/SKILL.md) — long-running benchmark/research threads
+- [ferries](.agents/skills/ferries/SKILL.md) — canary/daily ferry workflow
+- [change-grug](.agents/skills/change-grug/SKILL.md) — Grug/Grugformer changes
+- [agent-profiling](.agents/skills/agent-profiling/SKILL.md) — profiling and optimization
+- [github-pr-review](.agents/skills/github-pr-review/SKILL.md) — PR review prompt
+- [debugger](.agents/skills/debugger/SKILL.md) — structured debugging workflow
+- [design-doc](.agents/skills/design-doc/SKILL.md) — writing design documents
+- [multi-stage](.agents/skills/multi-stage/SKILL.md) — coordinator/sub-agent orchestration
+- [add-pallas-kernel](.agents/skills/add-pallas-kernel/SKILL.md) — TPU Pallas kernel development
+- [archive-experiments](.agents/skills/archive-experiments/SKILL.md) — retiring legacy experiments
+- [architecture](.agents/skills/architecture/SKILL.md) — codebase architecture reference
 
 ## Development
 

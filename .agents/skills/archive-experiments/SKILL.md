@@ -1,7 +1,12 @@
-# Recipe: Archive Legacy Experiments
+---
+name: archive-experiments
+description: Retire legacy experiment scripts behind an archive tag and leave breadcrumbs on GitHub issues. Use when asked to archive, clean up, or retire old experiments.
+---
+
+# Skill: Archive Legacy Experiments
 
 ## Overview
-Use this recipe when old experiment scripts need to be retired without losing their history. The goal is to put the code behind a dated archive tag and leave a canonical comment on the originating GitHub issues so future readers know where to find the last snapshot.
+Use this skill when old experiment scripts need to be retired without losing their history. The goal is to put the code behind a dated archive tag and leave a canonical comment on the originating GitHub issues so future readers know where to find the last snapshot.
 
 ## Prerequisites
 - Local checkout of `marin` with push access to `origin`.
@@ -24,7 +29,6 @@ Use this recipe when old experiment scripts need to be retired without losing th
 
 ### 2. Post the canonical archive comment on each issue
 1. Confirm the cleanup PR number (`PR_NUM`); if nobody has provided one yet, ping the human operator for it before continuing.
-   <!-- Example: For a previous batch, the PR number was `1999`. -->
 2. For every experiment issue, build the file URL: `https://github.com/marin-community/marin/tree/${TAG}/experiments/<filename>`.
 3. Use the standardized note below, swapping in the filename-specific URL and PR reference:
    ```
@@ -56,4 +60,4 @@ Use this recipe when old experiment scripts need to be retired without losing th
 - Spot-check a few URLs to verify they open the expected files inside the archive tag.
 
 ## See Also
-- `docs/recipes/organize_experiments.md` for related curation workflows.
+- `.agents/skills/organize-experiments/` for related curation workflows.

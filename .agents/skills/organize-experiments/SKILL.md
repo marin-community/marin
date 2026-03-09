@@ -1,7 +1,12 @@
-# Recipe: Organize Experiment Reports
+---
+name: organize-experiments
+description: Curate the experiment report index after new experiments are harvested. Use when asked to organize, categorize, or update the experiment reports index.
+---
+
+# Skill: Organize Experiment Reports
 
 ## Overview
-Use this recipe to curate `docs/reports/index.md` after new experiment issues are harvested. The goal is to keep the report index tidy by folding fresh entries into the right sections, refreshing links, and leaving `## Uncategorized` empty.
+Use this skill to curate `docs/reports/index.md` after new experiment issues are harvested. The goal is to keep the report index tidy by folding fresh entries into the right sections, refreshing links, and leaving `## Uncategorized` empty.
 
 ## Prerequisites
 - Local checkout of the marin repository with write access.
@@ -40,4 +45,4 @@ Use this recipe to curate `docs/reports/index.md` after new experiment issues ar
 
 ## See Also
 - `scripts/pm/itemize_experiment_issues.py` for source data generation.
-- Existing recipes in `docs/recipes` for editing conventions.
+- `.agents/skills/archive-experiments/` for retiring legacy experiments.

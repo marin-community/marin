@@ -43,7 +43,7 @@ from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
-# `docs/recipes/change_grug.md`.
+# `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
 

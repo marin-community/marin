@@ -1,7 +1,12 @@
-# Recipe: Agent-Driven Profiling (xprof/TensorBoard/Perfetto)
+---
+name: agent-profiling
+description: Profile JAX training using xprof/TensorBoard/Perfetto and analyze hotspots. Use when asked to profile, benchmark, or optimize training throughput.
+---
+
+# Skill: Agent-Driven Profiling (xprof/TensorBoard/Perfetto)
 
 ## Overview
-Use this recipe to turn a `jax_profile` artifact into a deterministic, agent-consumable summary and a concrete optimization workflow:
+Use this skill to turn a `jax_profile` artifact into a deterministic, agent-consumable summary and a concrete optimization workflow:
 
 1. capture a representative profile,
 2. ingest to `profile_summary.v1`,
@@ -31,7 +36,7 @@ uv run ... \
 
 Reference:
 - `lib/levanter/docs/Performance-Guide.md`
-- `docs/recipes/add_pallas_kernel.md`
+- `.agents/skills/add-pallas-kernel/`
 
 For better profile readability, use `haliax.jax_utils.named_call` and `jax.named_scope` liberally in model code.
 These names flow into trace annotations and make region-level summaries far more actionable.
@@ -144,8 +149,6 @@ Pre-op gap attribution is marker-aware:
 - `gap_before_ops[].payload_op`: op where useful work starts after the idle period.
 - `gap_before_ops[].marker_op`: first op observed after the gap (often lightweight setup like `iota.*`).
 
-This avoids over-attributing stalls to tiny "first op" markers when the actual payload starts immediately after.
-
 Hierarchical semantic regions (derived from `tf_op` paths when available):
 
 ```bash
@@ -154,7 +157,7 @@ uv run python lib/marin/tools/profile_summary.py query \
   --question "show hierarchical regions"
 ```
 
-Contextualize a noisy op (for example, `copy.*`) in model/module terms:
+Contextualize a noisy op:
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py query \
@@ -202,7 +205,7 @@ uv run python lib/marin/tools/profile_summary.py history \
   --history /tmp/profile_regression_history.jsonl
 ```
 
-7. **One-shot compare bundle** (if you want all artifacts in one command):
+7. **One-shot compare bundle**:
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py bundle \
@@ -212,7 +215,7 @@ uv run python lib/marin/tools/profile_summary.py bundle \
   --history /tmp/profile_regression_history.jsonl
 ```
 
-8. **Publish summary/report back to W&B** (store alongside experiment artifacts):
+8. **Publish summary/report back to W&B**:
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py publish \
@@ -225,18 +228,9 @@ The comparison reports:
 - steady-state step-time delta,
 - step class deltas (light/heavy when detected),
 - compute/comm/host/stall share deltas,
-- semantic family deltas with workload-normalized metrics (from trace-derived shape signatures),
+- semantic family deltas with workload-normalized metrics,
 - provenance checks (trace hash/run identity),
 - regressed/improved ops by exclusive duration.
-
-## First Workloads
-Start with one representative training workload:
-- Grug 125M TPU training profile artifact (example above)
-
-Then extend to:
-- eval workloads,
-- inference workloads,
-- RL workloads.
 
 ## Success Metrics
 MVP is successful when:

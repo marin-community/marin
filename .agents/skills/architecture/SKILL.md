@@ -1,4 +1,9 @@
-# Marin Architecture
+---
+name: architecture
+description: Marin architecture overview and repository structure reference. Use when you need to understand how Marin works, find a module, or orient yourself in the codebase.
+---
+
+# Skill: Marin Architecture
 
 Marin is a framework for building reproducible language model training pipelines. At its core, Marin executes DAGs of steps using Ray for distributed processing, with automatic versioning based on code and configuration. Pipeline: data curation → transformation → tokenization → training → evaluation.
 
@@ -76,7 +81,7 @@ marin/
 
 **Getting Started**: See `README.md` for installation and getting started guides.
 
-**For Agents**: [Add Dataset](add_dataset.md) • [Fix Issue](fix_issue.md) • See `AGENTS.md` in repository root
+**For Agents**: `.agents/skills/add-dataset/` • `.agents/skills/fix-issue/` • See `AGENTS.md` in repository root
 
 **Core APIs**: See `lib/marin/src/marin/execution/executor.py` for executor API, `experiments/defaults.py` for default steps
 

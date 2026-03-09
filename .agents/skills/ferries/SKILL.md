@@ -1,7 +1,12 @@
-# Recipe: Ferries (Canary + Daily)
+---
+name: ferries
+description: Run and monitor Marin ferry lanes (canary and daily integration runs). Use when asked to launch, monitor, or seal a ferry run.
+---
+
+# Skill: Ferries (Canary + Daily)
 
 ## Overview
-Use this recipe to run the two ferry lanes:
+Use this skill to run the two ferry lanes:
 - `canary`: fast, low-cost always-on health check
 - `daily`: higher-scale integration run with bounded changes
 
@@ -165,12 +170,6 @@ uv run python scripts/ferries/daily_analysis.py \
   --format markdown
 ```
 
-Add a specific analysis section from the same script output that compares the current run against recent completed daily ferries:
-- final-loss deltas on the canonical eval keys
-- run-behavior differences from history (train-loss trajectory, step-to-threshold timing, early vs late averages, late-stage volatility)
-
-These analysis outputs are optional context ("if interesting"), not hard requirements for run closure.
-
 Required terminal issue comment template:
 
 ```markdown
@@ -208,7 +207,7 @@ If canary fails:
 #### Canary profiling triage
 
 - The full `profile_summary.json` is in the workflow logs (default params: `--warmup-steps 5`, `--breakdown-mode exclusive_per_track`, `--hot-op-limit 25`). The step summary has pointers to the raw trace artifact and W&B run.
-- The log summary is ephemeral and not published. To re-analyze with different parameters, fetch the raw trace via `--run-target` — see `docs/recipes/agent_profiling.md`.
+- The log summary is ephemeral and not published. To re-analyze with different parameters, fetch the raw trace via `--run-target` — see `.agents/skills/agent-profiling/`.
 - If the canary failed early, the profile may only cover warmup steps — check `step_time.all_steps.count` before drawing conclusions from steady-state stats.
 - `exclusive_per_track` (the default) can hide device stalls that overlap across tracks. Use `exclusive_global` when investigating stall-heavy profiles.
 
@@ -221,7 +220,7 @@ Promotion signals:
 - no reliability regressions.
 
 When promoting:
-- open a follow-up PR updating `experiments/ferries/daily.py` and this recipe,
+- open a follow-up PR updating `experiments/ferries/daily.py` and this skill,
 - include a concise before/after metrics table.
 
 ## Validation Checklist
@@ -235,4 +234,4 @@ When promoting:
 - `docs/experiments/daily-ferry-log.md`
 - `.agents/docs/job-monitoring-loop.md`
 - `.agents/projects/ferry_framework.md`
-- `docs/recipes/agent_research.md`
+- `.agents/skills/agent-research/`
