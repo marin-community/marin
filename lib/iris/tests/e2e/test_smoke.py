@@ -8,9 +8,8 @@ submits its own jobs and is independently runnable. In local mode the cluster
 has workers across CPU, TPU coscheduling, and multi-region scale groups.
 """
 
+import logging
 import os
-import re
-import signal
 import subprocess
 import time
 import uuid
@@ -18,8 +17,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from iris.cli.cluster import _build_cluster_images, _pin_latest_images
 from iris.client.client import IrisClient
-from iris.cluster.config import load_config, make_local_config
+from iris.cluster.config import IrisConfig, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.manager import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
@@ -49,6 +49,8 @@ from .conftest import (
     wait_for_dashboard_ready,
 )
 from .helpers import TestJobs
+
+logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.e2e
 
@@ -125,38 +127,47 @@ def _make_smoke_config() -> config_pb2.IrisClusterConfig:
 
 
 def _cloud_smoke_cluster(config_path: str, mode: str):
-    """Generator that starts a cloud cluster via CLI and yields an IrisTestCluster."""
-    config_path_obj = Path(config_path)
-    cmd = ["uv", "run", "iris", "cluster", "start", "--config", str(config_path_obj)]
-    if mode == "redeploy":
-        cmd.append("--redeploy")
+    """Manage full cloud cluster lifecycle: stop old → build images → start → test → stop.
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    url = None
+    Uses the Iris Python API directly instead of subprocess to avoid stdout
+    parsing and to get proper tunnel management via the platform abstraction.
+    """
+    config = load_config(config_path)
+
+    logger.info("Pinning and building cluster images...")
+    _pin_latest_images(config)
+    _build_cluster_images(config, verbose=False)
+
+    iris_config = IrisConfig(config)
+    platform = iris_config.platform()
+
+    # Tear down any existing cluster for a clean slate
+    logger.info("Stopping any existing cluster...")
+    try:
+        platform.stop_all(config)
+    except Exception:
+        logger.info("No existing cluster to stop (or stop failed), continuing")
+
+    logger.info("Starting fresh controller...")
+    address = platform.start_controller(config)
+    logger.info("Controller started at %s", address)
 
     try:
-        deadline = time.monotonic() + 120
-        for line in iter(proc.stdout.readline, ""):
-            if time.monotonic() > deadline:
-                raise TimeoutError("Controller did not start within 120s")
-            m = re.search(r"Controller started at (http://\S+)", line)
-            if m:
-                url = m.group(1)
-                break
-
-        if not url:
-            raise RuntimeError("Controller process exited without reporting address")
-
-        client = IrisClient.remote(url, workspace=IRIS_ROOT)
-        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
-        tc.wait_for_workers(1, timeout=300)
-        yield tc
-        controller_client.close()
+        with platform.tunnel(address) as url:
+            logger.info("Tunnel ready: %s", url)
+            client = IrisClient.remote(url, workspace=IRIS_ROOT)
+            controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+            tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, job_timeout=600.0)
+            tc.wait_for_workers(1, timeout=600)
+            yield tc
+            controller_client.close()
     finally:
         if mode != "keep":
-            proc.send_signal(signal.SIGINT)
-            proc.wait(timeout=30)
+            logger.info("Stopping cluster...")
+            try:
+                platform.stop_all(config)
+            except Exception:
+                logger.warning("Cluster stop failed during teardown", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -176,10 +187,16 @@ def smoke_cluster(request):
     config_path = request.config.getoption("--iris-config")
     mode = request.config.getoption("--iris-mode")
 
+    is_cloud = mode != "local"
+    timeout = 600.0 if is_cloud else 60.0
+
     if controller_url:
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-        yield IrisTestCluster(url=controller_url, client=client, controller_client=controller_client)
+        tc = IrisTestCluster(url=controller_url, client=client, controller_client=controller_client, job_timeout=timeout)
+        if is_cloud:
+            tc.wait_for_workers(1, timeout=timeout)
+        yield tc
         controller_client.close()
         return
 
@@ -245,7 +262,7 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
 def verbose_job(smoke_cluster):
     """Shared verbose log job — submits once, used by log-related tests."""
     job = smoke_cluster.submit(TestJobs.log_verbose, "smoke-verbose")
-    smoke_cluster.wait(job, timeout=60)
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     return job
 
 
@@ -285,9 +302,9 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
     running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 30)
 
-    smoke_cluster.wait(quick, timeout=30)
-    smoke_cluster.wait(failed, timeout=30)
-    smoke_cluster.wait_for_state(running, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
+    smoke_cluster.wait(quick, timeout=smoke_cluster.job_timeout)
+    smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
+    smoke_cluster.wait_for_state(running, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
@@ -301,7 +318,7 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
 def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     """SUCCEEDED job detail page."""
     job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")
-    smoke_cluster.wait(job, timeout=30)
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
     wait_for_dashboard_ready(smoke_page)
@@ -364,7 +381,7 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
 
 def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
     """Scheduling diagnostic shows 'Insufficient CPU' for oversized job."""
-    smoke_cluster.wait_for_workers(1, timeout=30)
+    smoke_cluster.wait_for_workers(1, timeout=smoke_cluster.job_timeout)
     job = smoke_cluster.submit(TestJobs.quick, "smoke-diag-cpu", cpu=999_999)
 
     status = smoke_cluster.status(job)
@@ -390,7 +407,7 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
 def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
     """Worker detail page shows info, task history, metric cards."""
     job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
-    smoke_cluster.wait(job, timeout=30)
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
     task_status = smoke_cluster.task_status(job)
     worker_id = task_status.worker_id
@@ -434,7 +451,7 @@ def test_small_job_skips_oversized(smoke_cluster):
     """Small job gets scheduled even when a large unschedulable job is queued."""
     big_job = smoke_cluster.submit(TestJobs.quick, "smoke-big", cpu=10000)
     small_job = smoke_cluster.submit(TestJobs.quick, "smoke-small", cpu=1)
-    status = smoke_cluster.wait(small_job, timeout=30)
+    status = smoke_cluster.wait(small_job, timeout=smoke_cluster.job_timeout)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     big_status = smoke_cluster.status(big_job)
     assert big_status.state == cluster_pb2.JOB_STATE_PENDING
@@ -444,14 +461,14 @@ def test_endpoint_registration(smoke_cluster):
     """Endpoint registered from inside job via RPC."""
     prefix = f"smoke-ep-{uuid.uuid4().hex[:8]}"
     job = smoke_cluster.submit(TestJobs.register_endpoint, "smoke-endpoint", prefix)
-    status = smoke_cluster.wait(job, timeout=30)
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_port_allocation(smoke_cluster):
     """Port allocation job succeeded."""
     job = smoke_cluster.submit(TestJobs.validate_ports, "smoke-ports", ports=["http", "grpc"])
-    status = smoke_cluster.wait(job, timeout=30)
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -468,7 +485,7 @@ def test_reservation_gates_scheduling(smoke_cluster):
     assert reserved_status.state == cluster_pb2.JOB_STATE_PENDING
 
     regular = smoke_cluster.submit(TestJobs.quick, "smoke-regular-while-reserved")
-    status = smoke_cluster.wait(regular, timeout=30)
+    status = smoke_cluster.wait(regular, timeout=smoke_cluster.job_timeout)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -481,7 +498,7 @@ def test_log_levels_populated(smoke_cluster, verbose_job):
     """Task logs have level field (INFO, WARNING, ERROR)."""
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + smoke_cluster.job_timeout
     entries = []
     while time.monotonic() < deadline:
         request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id)
@@ -537,7 +554,7 @@ def test_region_constrained_routing(smoke_cluster, capabilities):
         "smoke-region",
         constraints=[region_constraint([target_region])],
     )
-    smoke_cluster.wait(job, timeout=30)
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
     task = smoke_cluster.task_status(job, task_index=0)
     assert task.worker_id
@@ -573,8 +590,8 @@ def test_profile_running_task(smoke_cluster):
 
     ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
         _is_running,
-        timeout=Duration.from_seconds(30),
-        error_message=f"Task did not reach RUNNING within 30s, last state: {last_state}",
+        timeout=Duration.from_seconds(smoke_cluster.job_timeout),
+        error_message=f"Task did not reach RUNNING within {smoke_cluster.job_timeout}s, last state: {last_state}",
     )
     task_id = smoke_cluster.task_status(job, task_index=0).task_id
 
@@ -587,7 +604,7 @@ def test_profile_running_task(smoke_cluster):
     assert len(response.profile_data) > 0
     assert not response.error
 
-    smoke_cluster.wait(job, timeout=30)
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
 
 # ============================================================================
@@ -595,7 +612,7 @@ def test_profile_running_task(smoke_cluster):
 # ============================================================================
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(1200)
 def test_stress_200_tasks(smoke_cluster):
     """200 tasks exercises scheduler concurrency and bin-packing."""
     job = smoke_cluster.submit(
@@ -605,7 +622,7 @@ def test_stress_200_tasks(smoke_cluster):
         memory="10m",
         replicas=200,
     )
-    status = smoke_cluster.wait(job, timeout=90)
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
