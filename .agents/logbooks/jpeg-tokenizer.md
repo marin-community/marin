@@ -434,3 +434,25 @@
   - the shared-prefix numbers are the useful answer, and they move in the same direction as the training losses: larger `K` improves modeling of the shared early coefficients, not just the appended tail
   - that makes the "extra coefficients are merely easier" explanation incomplete; at least on Imagenette, the richer representation is helping prediction on the common prefix too
 - Next action: commit the evaluator fix and write the Phase 1 note framing the K sweep around shared-prefix quality rather than mean token loss alone.
+
+### 2026-03-08 23:06 - Prefix-only context ablation reverses the K advantage
+
+- Hypothesis: the earlier prefix win for larger `K` may be coming from extra tail coefficients being useful *context*, not from a fundamentally better model of the low-frequency prefix in isolation.
+- Command:
+  - local evaluator update adding `--context-ablation-prefixes`
+  - dev TPU run:
+    - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-eu-west4-a.yaml --tpu-name dlwh-jpeg-ablate-0550 allocate --tpu-type v6e-8`
+    - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-eu-west4-a.yaml --tpu-name dlwh-jpeg-ablate-0550 execute --no-sync -- uv run python scripts/jpeg_tokenizer/evaluate_coefficient_sweep.py ... --context-ablation-prefixes 4,8`
+- Result:
+  - output written to:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-coeff-sequence-eval-ablate-0179b3388`
+  - shared-prefix results with tail context removed:
+    - `prefix_4_context_prefix_only` mean bits/image:
+      `K=4 25430.55`, `K=8 27249.77`, `K=16 28640.63`
+    - `prefix_8_context_prefix_only` mean bits/image:
+      `K=8 44845.61`, `K=16 51906.86`
+- Interpretation:
+  - once coefficients beyond the shared prefix are removed from context, the larger-`K` models lose their prefix advantage and in fact become worse
+  - that means the earlier `prefix_4` and `prefix_8` improvements were driven by extra retained coefficients being useful autoregressive context for later low-frequency targets
+  - the more surprising "larger K intrinsically models the first coefficients better in isolation" hypothesis is not supported by this ablation
+- Next action: update the Phase 1 report so the coefficient sweep conclusion is framed as a context-vs-length tradeoff, not a pure low-frequency representation win.

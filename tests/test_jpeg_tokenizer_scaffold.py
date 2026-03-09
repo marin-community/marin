@@ -45,7 +45,11 @@ from levanter.distributed import DistributedConfig, RayConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
-from scripts.jpeg_tokenizer.evaluate_coefficient_sweep import _pad_batch
+from scripts.jpeg_tokenizer.evaluate_coefficient_sweep import (
+    _ablate_context_batch,
+    _coefficient_prefix_context_keep_mask,
+    _pad_batch,
+)
 
 
 def test_in_memory_token_dataset_and_passthrough_config_round_trip():
@@ -137,6 +141,15 @@ def test_sequence_eval_tail_batch_padding_repeats_last_example():
 
     assert actual_batch_size == 2
     assert padded.tolist() == [[1, 2, 3], [4, 5, 6], [4, 5, 6], [4, 5, 6]]
+
+
+def test_sequence_eval_context_prefix_only_ablation_masks_tail_coefficients():
+    keep_mask = _coefficient_prefix_context_keep_mask(8, tokens_per_block=4, prefix_tokens_per_block=2)
+    assert keep_mask.tolist() == [True, True, False, False, True, True, False, False]
+
+    batch = np.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=np.int32)
+    ablated = _ablate_context_batch(batch, keep_mask=keep_mask, replacement_token_id=2047)
+    assert ablated.tolist() == [[1, 2, 2047, 2047, 5, 6, 2047, 2047]]
 
 
 def test_file_backed_token_store_round_trip(tmp_path):

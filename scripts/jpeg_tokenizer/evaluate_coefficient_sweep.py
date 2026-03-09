@@ -28,6 +28,7 @@ from jax.sharding import PartitionSpec as P
 from experiments.grug.base.model import Transformer
 from experiments.jpeg_tokenizer.base.data import materialize_token_store, read_token_store_metadata
 from experiments.jpeg_tokenizer.base.eval import coefficient_prefix_loss_mask, summarize_metric
+from experiments.jpeg_tokenizer.base.jpeg_codecs import V0_COEFFICIENT_CONFIG
 from experiments.jpeg_tokenizer.base.model import JPEG_TOKENIZER_V0_MODEL
 from levanter.checkpoint import load_checkpoint
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
@@ -64,6 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-examples", type=int, default=None)
     parser.add_argument("--shared-prefixes", default="4,8")
+    parser.add_argument("--context-ablation-prefixes", default="")
     parser.add_argument("--output-dir", default="artifacts/jpeg_tokenizer/analysis/coefficient_sweep_sequence_loss")
     parser.add_argument("--log-every", type=int, default=10)
     return parser.parse_args()
@@ -122,6 +124,43 @@ def _metric_summary(values_nats: np.ndarray, *, blocks_per_image: int) -> dict[s
     }
 
 
+def _coefficient_prefix_context_keep_mask(
+    seq_len: int,
+    *,
+    tokens_per_block: int,
+    prefix_tokens_per_block: int,
+) -> np.ndarray:
+    """Return a source-position mask that keeps only the requested per-block prefix."""
+
+    if seq_len <= 0:
+        raise ValueError(f"seq_len must be positive, got {seq_len}")
+    if tokens_per_block <= 0:
+        raise ValueError(f"tokens_per_block must be positive, got {tokens_per_block}")
+    if prefix_tokens_per_block <= 0:
+        raise ValueError(f"prefix_tokens_per_block must be positive, got {prefix_tokens_per_block}")
+    if prefix_tokens_per_block > tokens_per_block:
+        raise ValueError(
+            f"prefix_tokens_per_block ({prefix_tokens_per_block}) must be <= tokens_per_block ({tokens_per_block})"
+        )
+    if seq_len % tokens_per_block != 0:
+        raise ValueError(f"seq_len ({seq_len}) must be divisible by tokens_per_block ({tokens_per_block})")
+
+    blocks_per_image = seq_len // tokens_per_block
+    keep_mask = np.zeros(seq_len, dtype=bool)
+    for block_index in range(blocks_per_image):
+        start = block_index * tokens_per_block
+        keep_mask[start : start + prefix_tokens_per_block] = True
+    return keep_mask
+
+
+def _ablate_context_batch(batch: np.ndarray, *, keep_mask: np.ndarray, replacement_token_id: int) -> np.ndarray:
+    """Replace masked source positions with a fixed neutral token."""
+
+    ablated = np.array(batch, copy=True)
+    ablated[:, ~keep_mask] = replacement_token_id
+    return ablated
+
+
 def evaluate_run(
     spec: SweepRunSpec,
     *,
@@ -129,6 +168,7 @@ def evaluate_run(
     split: str,
     batch_size: int,
     shared_prefixes: list[int],
+    context_ablation_prefixes: list[int],
     max_examples: int | None,
     log_every: int,
 ) -> dict[str, object]:
@@ -156,6 +196,16 @@ def evaluate_run(
         for prefix in shared_prefixes
         if prefix <= spec.tokens_per_block
     }
+    context_keep_masks = {
+        prefix: _coefficient_prefix_context_keep_mask(
+            spec.seq_len,
+            tokens_per_block=spec.tokens_per_block,
+            prefix_tokens_per_block=prefix,
+        )
+        for prefix in context_ablation_prefixes
+        if prefix <= spec.tokens_per_block
+    }
+    zero_coefficient_token_id = V0_COEFFICIENT_CONFIG.coefficient_bound
 
     with trainer.use_device_mesh():
         mesh = trainer.device_mesh
@@ -170,36 +220,48 @@ def evaluate_run(
         model = hax.shard_with_axis_mapping(model, trainer.parameter_axis_mapping)
 
         causal_loss_mask_jax = jnp.asarray(causal_loss_mask, dtype=jnp.float32)
-        prefix_masks_jax = {prefix: jnp.asarray(mask, dtype=jnp.float32) for prefix, mask in prefix_masks.items()}
 
         @named_jit(axis_resources=trainer.compute_axis_mapping)
-        def eval_batch(model: Transformer, token_batch: jax.Array) -> dict[str, jax.Array]:
+        def eval_batch(model: Transformer, token_batch: jax.Array) -> jax.Array:
             model = trainer.mp.cast_to_compute(model)
-            per_pos_loss = model.next_token_loss(
+            return model.next_token_loss(
                 token_batch,
                 jnp.broadcast_to(causal_loss_mask_jax, token_batch.shape),
                 mask=GrugAttentionMask.causal(),
                 reduction="none",
                 logsumexp_weight=None,
             )
-            metrics: dict[str, jax.Array] = {
-                "sequence_nats": jnp.sum(per_pos_loss, axis=1),
-            }
-            for prefix, mask in prefix_masks_jax.items():
-                metrics[f"prefix_{prefix}_nats"] = jnp.sum(per_pos_loss * mask[None, :], axis=1)
-            return metrics
 
         collected: dict[str, list[np.ndarray]] = {"sequence_nats": []}
         for prefix in prefix_masks:
             collected[f"prefix_{prefix}_nats"] = []
+        for prefix in context_keep_masks:
+            collected[f"prefix_{prefix}_context_prefix_only_nats"] = []
 
         for batch_index, (start, end) in enumerate(_iter_batches(num_examples, batch_size)):
             batch = np.asarray(tokens[start:end], dtype=np.int32)
             batch, actual_batch_size = _pad_batch(batch, batch_size)
-            outputs = eval_batch(model, jax.device_put(batch, batch_sharding))
-            outputs = jax.device_get(outputs)
-            for name, values in outputs.items():
-                collected[name].append(np.asarray(values[:actual_batch_size], dtype=np.float64))
+            per_pos_loss = jax.device_get(eval_batch(model, jax.device_put(batch, batch_sharding)))
+            collected["sequence_nats"].append(
+                np.asarray(np.sum(per_pos_loss[:actual_batch_size], axis=1), dtype=np.float64)
+            )
+            for prefix, mask in prefix_masks.items():
+                collected[f"prefix_{prefix}_nats"].append(
+                    np.asarray(np.sum(per_pos_loss[:actual_batch_size] * mask[None, :], axis=1), dtype=np.float64)
+                )
+            for prefix, keep_mask in context_keep_masks.items():
+                ablated_batch = _ablate_context_batch(
+                    batch,
+                    keep_mask=keep_mask,
+                    replacement_token_id=zero_coefficient_token_id,
+                )
+                ablated_per_pos_loss = jax.device_get(eval_batch(model, jax.device_put(ablated_batch, batch_sharding)))
+                collected[f"prefix_{prefix}_context_prefix_only_nats"].append(
+                    np.asarray(
+                        np.sum(ablated_per_pos_loss[:actual_batch_size] * prefix_masks[prefix][None, :], axis=1),
+                        dtype=np.float64,
+                    )
+                )
             if (batch_index + 1) % log_every == 0:
                 logger.info("Run %s processed %s/%s examples", spec.name, end, num_examples)
 
@@ -222,6 +284,13 @@ def evaluate_run(
         prefix_nats = np.concatenate(collected[f"prefix_{prefix}_nats"])
         result["metrics"][f"prefix_{prefix}"] = {
             "selected_loss_positions_per_image": int(prefix_masks[prefix].sum()),
+            **_metric_summary(prefix_nats, blocks_per_image=blocks_per_image),
+        }
+    for prefix in sorted(context_keep_masks):
+        prefix_nats = np.concatenate(collected[f"prefix_{prefix}_context_prefix_only_nats"])
+        result["metrics"][f"prefix_{prefix}_context_prefix_only"] = {
+            "selected_loss_positions_per_image": int(prefix_masks[prefix].sum()),
+            "context_replacement_token_id": zero_coefficient_token_id,
             **_metric_summary(prefix_nats, blocks_per_image=blocks_per_image),
         }
 
@@ -292,6 +361,7 @@ def main(args: argparse.Namespace) -> None:
         raise ValueError("At least one --run-spec is required")
 
     shared_prefixes = [int(value) for value in args.shared_prefixes.split(",") if value]
+    context_ablation_prefixes = [int(value) for value in args.context_ablation_prefixes.split(",") if value]
     run_specs = [parse_run_spec(text) for text in args.run_spec]
     output_dir = args.output_dir.rstrip("/")
     trainer = TrainerConfig(
@@ -316,6 +386,7 @@ def main(args: argparse.Namespace) -> None:
                 split=args.split,
                 batch_size=args.batch_size,
                 shared_prefixes=shared_prefixes,
+                context_ablation_prefixes=context_ablation_prefixes,
                 max_examples=args.max_examples,
                 log_every=args.log_every,
             )

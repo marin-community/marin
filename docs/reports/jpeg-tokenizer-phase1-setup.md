@@ -514,3 +514,49 @@ The cleanest current interpretation is:
 - `K=16` is the strongest rung in this Imagenette coefficient ladder
 - the benefit is real on shared targets, not just on the full longer stream
 - the next comparison should probably not be `K=32`, but a different representation family or a broader corpus
+
+## Prefix-Only Context Ablation
+
+There was still one obvious objection to the shared-prefix result above:
+
+- maybe `K=16` beats `K=8` on `prefix_8` only because it gets to condition on coefficients `9..16`
+- maybe `K=8` beats `K=4` on `prefix_4` only because it gets to condition on coefficients `5..8`
+
+That is a different claim from "the low-frequency prefix is better modeled in isolation."
+
+To check that directly, I added a hostile-context ablation to the evaluator:
+
+- keep scoring the same shared-prefix targets
+- replace all non-prefix source tokens in the context with the zero-coefficient token
+
+This is intentionally out-of-distribution for the trained model, so it is not a clean likelihood estimate. But it is
+good enough to answer the specific qualitative question: does the larger-`K` advantage survive once the extra tail
+coefficients are removed from context?
+
+### Output
+
+- output directory:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-coeff-sequence-eval-ablate-0179b3388`
+
+The ablated results are:
+
+- `prefix_4_context_prefix_only` mean bits/image:
+  - `K=4`: `25430.55`
+  - `K=8`: `27249.77`
+  - `K=16`: `28640.63`
+- `prefix_8_context_prefix_only` mean bits/image:
+  - `K=8`: `44845.61`
+  - `K=16`: `51906.86`
+
+So the sign flips once the extra tail coefficients are removed from context.
+
+That gives the more precise interpretation of the earlier sweep:
+
+- larger `K` helps because the extra retained coefficients are useful autoregressive context for later low-frequency targets
+- larger `K` does **not** appear to produce a model that predicts the shared low-frequency prefix better in isolation
+- the real tradeoff exposed by the coefficient ladder is therefore context utility versus sequence length, not simply
+  "more retained coefficients always make the core low-frequency representation better"
+
+This result is much more in line with the initial intuition: the first few coefficients per block are largely a
+low-frequency summary, and the reason larger `K` helps on shared-prefix targets is that the added mid-frequency tokens
+carry information about nearby local structure that improves the next block's prefix prediction.
