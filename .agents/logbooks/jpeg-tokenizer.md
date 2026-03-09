@@ -20,6 +20,20 @@
 
 ## Experiment Log
 
+### 2026-03-09 11:10 - SWA head-to-head staged
+
+- Hypothesis: the cleanest next comparison is whole-image bytes with `SWA=4096` versus exact-libjpeg `K=8` coefficients with the same `SWA=4096`, shared optimizer settings, and roughly matched tokens per step.
+- Command:
+  - `uv run python experiments/jpeg_tokenizer/base/launch.py --help`
+- Config:
+  - added `tokexplore/jpeg-tokenizer-k8-libjpeg-swa4096-smoke`
+  - added `tokexplore/jpeg-tokenizer-k8-libjpeg-swa4096-trial`
+  - added `tokexplore/jpeg-tokenizer-bytes-whole-swa4096-trial`
+  - chose `K=8` batch size `56` so `8192 * 56 = 458,752` tokens/step, close to whole-image bytes `54,656 * 8 = 437,248`
+- Result: launch surface now has a fairer SWA comparison path instead of mixing full-attention coeff runs with sliding-window byte runs.
+- Interpretation: `K=8` remains the practical coefficient baseline, and exact-libjpeg avoids ambiguity about whether the coefficient path is merely a reference approximation.
+- Next action: validate locally, run the `K=8` SWA smoke, and only then launch the paired trials.
+
 ### 2026-03-08 20:00 - Phase 0 finalized locally
 
 - Hypothesis: a fixed-length K=4 coefficient stream is a clean first training target because it avoids the sequence-length variance of bytes and symbols.
