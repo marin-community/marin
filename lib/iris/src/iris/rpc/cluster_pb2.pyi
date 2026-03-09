@@ -881,31 +881,6 @@ class Controller(_message.Message):
         task_count: int
         worker_count: int
         def __init__(self, snapshot_path: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., job_count: _Optional[int] = ..., task_count: _Optional[int] = ..., worker_count: _Optional[int] = ...) -> None: ...
-    class GetClusterSummaryRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
-    class GetClusterSummaryResponse(_message.Message):
-        __slots__ = ("job_state_counts", "total_jobs", "total_workers", "healthy_workers", "total_users", "controller_git_hash")
-        class JobStateCountsEntry(_message.Message):
-            __slots__ = ("key", "value")
-            KEY_FIELD_NUMBER: _ClassVar[int]
-            VALUE_FIELD_NUMBER: _ClassVar[int]
-            key: str
-            value: int
-            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
-        JOB_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_JOBS_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_WORKERS_FIELD_NUMBER: _ClassVar[int]
-        HEALTHY_WORKERS_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_USERS_FIELD_NUMBER: _ClassVar[int]
-        CONTROLLER_GIT_HASH_FIELD_NUMBER: _ClassVar[int]
-        job_state_counts: _containers.ScalarMap[str, int]
-        total_jobs: int
-        total_workers: int
-        healthy_workers: int
-        total_users: int
-        controller_git_hash: str
-        def __init__(self, job_state_counts: _Optional[_Mapping[str, int]] = ..., total_jobs: _Optional[int] = ..., total_workers: _Optional[int] = ..., healthy_workers: _Optional[int] = ..., total_users: _Optional[int] = ..., controller_git_hash: _Optional[str] = ...) -> None: ...
     class UserSummary(_message.Message):
         __slots__ = ("user", "task_state_counts", "job_state_counts")
         class TaskStateCountsEntry(_message.Message):

@@ -734,18 +734,6 @@ message Controller {
     int32 worker_count = 5;
   }
 
-  // --- Cluster Summary ---
-  message GetClusterSummaryRequest {}
-  message GetClusterSummaryResponse {
-    map<string, int32> job_state_counts = 1;
-    int32 total_jobs = 2;
-    int32 total_workers = 3;
-    int32 healthy_workers = 4;
-    int32 total_users = 5;
-    // Git commit hash of the running controller image (IRIS_GIT_HASH env var).
-    string controller_git_hash = 6;
-  }
-
   message UserSummary {
     string user = 1;
     map<string, int32> task_state_counts = 2;
@@ -929,8 +917,6 @@ service ControllerService {
   // Transactions / Actions Log
   rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 
-  // Cluster summary (aggregated counts)
-  rpc GetClusterSummary(Controller.GetClusterSummaryRequest) returns (Controller.GetClusterSummaryResponse);
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // Task logs (proxied to worker)
