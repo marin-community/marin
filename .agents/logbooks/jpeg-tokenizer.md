@@ -564,3 +564,30 @@
     earlier reference `K=8` baseline
 - Next action: launch `tokexplore/jpeg-tokenizer-k8-libjpeg-trial` from the fixed commit and monitor it through the
   first eval/checkpoint boundary.
+
+### 2026-03-09 01:47 - Exact libjpeg K=8 trial completed
+
+- Hypothesis: once `jpeglib` is installed through the Fray job request, the full exact `K=8` baseline should behave
+  like the earlier reference `K=8` run rather than exposing a new runtime-only failure.
+- Command:
+  - submit:
+    `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-k8-libjpeg-trial"]'`
+  - monitor:
+    followed `.agents/docs/job-monitoring-loop.md` on Ray track for `ray-run-dlwh-launch-20260309-081237`
+- Result:
+  - Ray job: `ray-run-dlwh-launch-20260309-081237`
+  - W&B: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-libjpeg-trial`
+  - output path: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-libjpeg-trial-cdae37`
+  - worker runtime confirmed: `Building environment with ['jpeglib>=1.0.2'], extras ['tpu']`
+  - startup eval loss: `8.544`
+  - final eval loss at step `2000`: `3.263`
+  - final checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-libjpeg-trial-cdae37/checkpoints/step-2000`
+  - controller status: `SUCCEEDED`
+- Interpretation:
+  - the exact libjpeg-backed `K=8` baseline is now complete, so the representation comparison can move beyond the
+    floating-point reference coefficient path
+  - exact libjpeg lands essentially on top of the earlier reference `K=8` result (`3.263` vs `3.253`), which suggests
+    the reference coefficient stream was already close enough for the first-order modeling conclusions
+  - the shutdown-time W&B `BrokenPipeError` remains non-fatal and does not change the successful Ray terminal state
+- Next action: update the Phase 1 comparison note to include exact-libjpeg `K=8`, then decide whether the next
+  comparison should focus on bytes vs coeffs or on a sharper JPEG-symbol baseline.

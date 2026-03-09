@@ -667,3 +667,28 @@ After that change, the relaunched exact smoke succeeded:
 
 This is enough to treat the exact JPEG coefficient baseline as operational on the production Ray + TPU path. The next
 step is the full `K=8` exact-libjpeg trial.
+
+## Exact Libjpeg K=8 Trial Result
+
+The full exact-libjpeg `K=8` baseline has now completed successfully.
+
+- Ray job:
+  `ray-run-dlwh-launch-20260309-081237`
+- W&B run:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-libjpeg-trial`
+- Output path:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-libjpeg-trial-cdae37`
+- Runtime confirmation:
+  `Building environment with ['jpeglib>=1.0.2'], extras ['tpu']`
+- Startup eval loss:
+  `8.544`
+- Final eval loss at step `2000`:
+  `3.263`
+- Final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-libjpeg-trial-cdae37/checkpoints/step-2000`
+- Terminal status:
+  `SUCCEEDED`
+
+This lands essentially on top of the earlier reference `K=8` coefficient baseline (`3.253`). So for the current
+question, the floating-point reference coefficient path was already close enough to the exact JPEG coefficient stream
+that it did not materially change the learning result.
