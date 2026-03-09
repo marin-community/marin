@@ -13,6 +13,7 @@ JPEG is the first probe because it exposes a useful ladder over the same image c
 The canonical template lives in `/experiments/jpeg_tokenizer/base/`. Future variants should start as explicit copies of `base/` and keep tokenizer-specific logic local until the comparison stabilizes.
 
 The local Phase 0 run summary is captured in [docs/reports/jpeg-tokenizer-phase0.md](/Users/dlwh/.codex/worktrees/1bd2/marin/docs/reports/jpeg-tokenizer-phase0.md).
+The gzip reset follow-up note is captured in [docs/reports/jpeg-tokenizer-gzip-reset-design.md](/Users/dlwh/.codex/worktrees/1bd2/marin/docs/reports/jpeg-tokenizer-gzip-reset-design.md).
 
 ## Local Artifacts
 

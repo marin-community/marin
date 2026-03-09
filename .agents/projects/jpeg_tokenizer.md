@@ -14,6 +14,12 @@ JPEG is useful here because it gives us a controlled ladder of representations o
 - explicit syntax symbols,
 - quantized coefficient structures.
 
+One concrete follow-up mechanism test is a reset-heavy gzip ladder:
+
+- vanilla gzip bytes,
+- frequent-reset gzip members,
+- compare whether shortening hidden rolling codec state makes the stream more modelable.
+
 That makes JPEG a good **instrument** for isolating tokenizer properties, not the real subject of the project.
 
 The core claim we want to test is:
