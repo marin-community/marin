@@ -783,7 +783,8 @@ class DockerRuntime:
         bundle_store: BundleStore,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        bundle_store.extract_bundle_to(bundle_id, workdir)
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
         bundle_store.write_workdir_files(workdir, workdir_files)
 
     def track_container(self, container_id: str) -> None:
