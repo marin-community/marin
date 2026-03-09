@@ -128,14 +128,12 @@ class BundleStore:
             self._conn.commit()
             return bytes(row[0])
 
-    def prefetch_bundle(self, bundle_id: str) -> None:
-        """Ensure bundle is present locally, fetching from controller on miss."""
-        try:
-            self.get_zip(bundle_id)
-            return
-        except FileNotFoundError:
-            logger.info("Bundle %s not found in local store, fetching from controller", bundle_id)
+    def _fetch_from_controller(self, bundle_id: str) -> None:
+        """Fetch a bundle from the controller HTTP endpoint and store it locally.
 
+        Retries up to 3 times with exponential backoff. Verifies the SHA-256
+        hash of the downloaded zip matches ``bundle_id``.
+        """
         if not self._controller_address:
             raise RuntimeError(f"Bundle {bundle_id} is not cached and controller address is not configured")
 
@@ -156,8 +154,18 @@ class BundleStore:
         self.write_zip(blob)
 
     def extract_bundle_to(self, bundle_id: str, dest: Path) -> None:
-        """Extract a bundle zip into ``dest`` with zip-slip protection."""
-        blob = self.get_zip(bundle_id)
+        """Extract a bundle zip into ``dest`` with zip-slip protection.
+
+        If the bundle is not in the local cache and a controller address is
+        configured, it is fetched on demand before extraction.
+        """
+        try:
+            blob = self.get_zip(bundle_id)
+        except FileNotFoundError:
+            logger.info("Bundle %s not in local cache, fetching from controller", bundle_id)
+            self._fetch_from_controller(bundle_id)
+            blob = self.get_zip(bundle_id)
+
         dest.mkdir(parents=True, exist_ok=True)
         base = dest.resolve()
 

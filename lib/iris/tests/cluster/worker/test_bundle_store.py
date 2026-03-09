@@ -43,7 +43,8 @@ def store(tmp_path):
     )
 
 
-def test_prefetch_and_extract_bundle(monkeypatch, store, tmp_path):
+def test_extract_bundle_fetches_on_demand(monkeypatch, store, tmp_path):
+    """extract_bundle_to should fetch from controller on cache miss."""
     bundle_zip = _make_zip({"main.py": b"print('hello')", "src/module.py": b"def f():\n  return 1\n"})
     bundle_id = hashlib.sha256(bundle_zip).hexdigest()
 
@@ -52,7 +53,6 @@ def test_prefetch_and_extract_bundle(monkeypatch, store, tmp_path):
         return _FakeResponse(bundle_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
-    store.prefetch_bundle(bundle_id)
 
     extract_dir = tmp_path / "extract"
     store.extract_bundle_to(bundle_id, extract_dir)
@@ -60,7 +60,17 @@ def test_prefetch_and_extract_bundle(monkeypatch, store, tmp_path):
     assert (extract_dir / "src/module.py").exists()
 
 
-def test_prefetch_hash_verification_failure(monkeypatch, store):
+def test_extract_bundle_uses_cache_on_hit(store, tmp_path):
+    """extract_bundle_to should use local cache without hitting the network."""
+    bundle_zip = _make_zip({"cached.txt": b"cached data"})
+    bundle_id = store.write_zip(bundle_zip)
+
+    extract_dir = tmp_path / "extract"
+    store.extract_bundle_to(bundle_id, extract_dir)
+    assert (extract_dir / "cached.txt").read_bytes() == b"cached data"
+
+
+def test_extract_bundle_hash_verification_failure(monkeypatch, store, tmp_path):
     bad_zip = _make_zip({"a.txt": b"A"})
     wrong_id = "a" * 64
 
@@ -70,7 +80,7 @@ def test_prefetch_hash_verification_failure(monkeypatch, store):
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
     with pytest.raises(ValueError, match="Bundle hash mismatch"):
-        store.prefetch_bundle(wrong_id)
+        store.extract_bundle_to(wrong_id, tmp_path / "extract")
 
 
 def test_lru_eviction_by_item_count(store):

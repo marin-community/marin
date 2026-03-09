@@ -528,7 +528,7 @@ class TaskAttempt:
         # Periodically check should_stop during download to support kill during BUILDING
         # (RF-3: For now, we defer kill handling until container starts, as bundle
         # downloads are typically fast. Future work could add cancellation support
-        # to BundleStore.prefetch_bundle if long downloads become a problem.)
+        # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
         self._runtime.stage_bundle(

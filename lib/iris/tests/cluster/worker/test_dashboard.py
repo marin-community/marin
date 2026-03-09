@@ -33,7 +33,6 @@ def mock_bundle_store(tmp_path):
     cache = Mock(spec=BundleStore)
     cache.extract_bundle_to = Mock()
     cache.write_workdir_files = Mock()
-    cache.prefetch_bundle = Mock()
     return cache
 
 

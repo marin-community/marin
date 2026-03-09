@@ -433,6 +433,25 @@ class KubernetesContainerHandle:
         if phase == "Running":
             return ContainerStatus(phase=ContainerPhase.RUNNING)
 
+        # Check init containers first — if staging (bundle fetch, workdir
+        # setup) failed, the main container never started and the real error
+        # lives in initContainerStatuses.
+        init_statuses = pod.get("status", {}).get("initContainerStatuses", [])
+        for init_st in init_statuses:
+            init_terminated = init_st.get("state", {}).get("terminated", {})
+            init_exit = init_terminated.get("exitCode")
+            if init_exit is not None and init_exit != 0:
+                init_reason = init_terminated.get("reason", "")
+                init_message = init_terminated.get("message", "")
+                init_name = init_st.get("name", "init")
+                error_detail = init_message or init_reason or f"init container {init_name} failed"
+                return ContainerStatus(
+                    phase=ContainerPhase.STOPPED,
+                    exit_code=init_exit,
+                    error=f"Init container '{init_name}' failed: {error_detail}",
+                    oom_killed=init_reason == "OOMKilled",
+                )
+
         statuses = pod.get("status", {}).get("containerStatuses", [])
         terminated = {}
         if statuses:

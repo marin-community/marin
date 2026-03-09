@@ -9,9 +9,15 @@ including GPU resource requests, hostNetwork, tolerations, and S3 secret refs.
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import os
 import subprocess
+import zipfile
 
+
+from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
 from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerPhase
 from iris.rpc import cluster_pb2
@@ -317,3 +323,171 @@ def test_status_returns_structured_error_after_persistent_pod_not_found(monkeypa
     assert third.error_kind == ContainerErrorKind.INFRA_NOT_FOUND
     assert third.error is not None
     assert "Task pod not found after retry window" in third.error
+
+
+def test_status_surfaces_init_container_failure(monkeypatch):
+    """Init-container failures (e.g. bundle fetch 404) should be surfaced
+    with the init container's name and error details."""
+    manifests = _capture_manifest(monkeypatch)
+
+    runtime = KubernetesRuntime(namespace="iris")
+    config = _make_config()
+    config.env["IRIS_BUNDLE_ID"] = "a" * 64
+    config.env["IRIS_CONTROLLER_URL"] = "http://controller.internal:10000"
+    handle = runtime.create_container(config)
+    handle.run()
+    assert manifests
+
+    failed_pod = {
+        "status": {
+            "phase": "Failed",
+            "initContainerStatuses": [
+                {
+                    "name": "stage-workdir",
+                    "state": {
+                        "terminated": {
+                            "exitCode": 1,
+                            "reason": "Error",
+                            "message": "Bundle hash mismatch: expected aaa, got bbb",
+                        }
+                    },
+                }
+            ],
+            "containerStatuses": [],
+        }
+    }
+
+    def fake_get_json(resource: str, name: str):
+        return failed_pod
+
+    monkeypatch.setattr(handle.kubectl, "get_json", fake_get_json)
+
+    status = handle.status()
+    assert status.phase == ContainerPhase.STOPPED
+    assert status.exit_code == 1
+    assert "stage-workdir" in status.error
+    assert "Bundle hash mismatch" in status.error
+
+
+def test_status_ignores_successful_init_containers(monkeypatch):
+    """Successfully completed init containers should not affect status."""
+    manifests = _capture_manifest(monkeypatch)
+
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(_make_config())
+    handle.run()
+    assert manifests
+
+    running_pod = {
+        "status": {
+            "phase": "Running",
+            "initContainerStatuses": [
+                {
+                    "name": "stage-workdir",
+                    "state": {
+                        "terminated": {
+                            "exitCode": 0,
+                            "reason": "Completed",
+                        }
+                    },
+                }
+            ],
+            "containerStatuses": [
+                {
+                    "name": "task",
+                    "state": {"running": {}},
+                }
+            ],
+        }
+    }
+
+    def fake_get_json(resource: str, name: str):
+        return running_pod
+
+    monkeypatch.setattr(handle.kubectl, "get_json", fake_get_json)
+
+    status = handle.status()
+    assert status.phase == ContainerPhase.RUNNING
+
+
+def _make_zip(entries: dict[str, bytes]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return output.getvalue()
+
+
+def test_k8s_init_script_fetches_and_extracts_bundle(tmp_path):
+    """Exercise the kubernetes_bundle_fetch.py init script against a real
+    BundleStore acting as controller, verifying end-to-end bundle staging."""
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import threading
+
+    bundle_zip = _make_zip({"main.py": b"print('hello')", "lib/util.py": b"x = 1\n"})
+    bundle_id = hashlib.sha256(bundle_zip).hexdigest()
+
+    # Set up a controller-side BundleStore and write the bundle
+    controller_store = BundleStore(db_path=tmp_path / "controller.sqlite3")
+    stored_id = controller_store.write_zip(bundle_zip)
+    assert stored_id == bundle_id
+
+    # Start a minimal HTTP server that serves bundles from the store
+    class BundleHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            # Expect /bundles/<bundle_id>.zip
+            parts = self.path.strip("/").split("/")
+            if len(parts) == 2 and parts[0] == "bundles" and parts[1].endswith(".zip"):
+                bid = parts[1][:-4]
+                try:
+                    data = controller_store.get_zip(bid)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.end_headers()
+                    self.wfile.write(data)
+                except FileNotFoundError:
+                    self.send_response(404)
+                    self.end_headers()
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, fmt, *args):
+            pass  # Suppress log output in tests
+
+    server = HTTPServer(("127.0.0.1", 0), BundleHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+
+        # Run the init script in a subprocess, simulating the K8s init container
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+            "src",
+            "iris",
+            "cluster",
+            "runtime",
+            "kubernetes_bundle_fetch.py",
+        )
+        env = {
+            "IRIS_BUNDLE_ID": bundle_id,
+            "IRIS_CONTROLLER_URL": f"http://127.0.0.1:{port}",
+            "IRIS_WORKDIR": str(workdir),
+        }
+        result = subprocess.run(
+            ["python", script_path],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, f"Init script failed: {result.stderr}"
+        assert (workdir / "main.py").exists()
+        assert (workdir / "main.py").read_text() == "print('hello')"
+        assert (workdir / "lib/util.py").exists()
+    finally:
+        server.shutdown()
