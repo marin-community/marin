@@ -62,6 +62,7 @@ SESSION_DIRECTIVE_PRESET_FILES = {
     "control-structure-pivot": REPO_ROOT / "scripts/gdn/session_directives/control-structure-pivot.md",
     "associative-summaries": REPO_ROOT / "scripts/gdn/session_directives/associative-summaries.md",
     "xla-first-train-path": REPO_ROOT / "scripts/gdn/session_directives/xla-first-train-path.md",
+    "ejkernel-recompute-backward": REPO_ROOT / "scripts/gdn/session_directives/ejkernel-recompute-backward.md",
 }
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
