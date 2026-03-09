@@ -24,14 +24,30 @@ _prev_cpu_utime: float = 0.0
 
 
 def _memory_bytes() -> tuple[int, int]:
-    """Return (rss_bytes, vms_bytes). vms is approximated as ru_maxrss.
+    """Return (rss_bytes, vms_bytes).
 
-    Linux reports ru_rss and ru_maxrss in kilobytes; macOS reports bytes.
+    On Linux, reads current RSS and VMS from /proc/self/statm.
+    Falls back to ru_maxrss (peak RSS) for both values when /proc is unavailable.
+    On macOS, ru_maxrss (in bytes) is used as a rough approximation for both.
     """
+    # Fallback: ru_maxrss is peak RSS (kilobytes on Linux, bytes on macOS).
     usage = resource.getrusage(resource.RUSAGE_SELF)
     scale = 1024 if sys.platform == "linux" else 1
-    rss = usage.ru_rss * scale
-    vms = usage.ru_maxrss * scale
+    peak_rss = usage.ru_maxrss * scale
+    rss = peak_rss
+    vms = peak_rss
+
+    if sys.platform == "linux":
+        try:
+            with open("/proc/self/statm") as f:
+                parts = f.read().split()
+                page_size = os.sysconf("SC_PAGE_SIZE")
+                # statm fields: size(vms) resident shared text lib data dt
+                vms = int(parts[0]) * page_size
+                rss = int(parts[1]) * page_size
+        except (OSError, ValueError, IndexError):
+            pass
+
     return rss, vms
 
 
