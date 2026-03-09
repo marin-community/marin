@@ -14,12 +14,19 @@ import sys
 import psutil
 
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore
+from iris.cluster.runtime.process import _read_proc_cpu_percent
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timer
+
+# Persistent CPU sampling state so delta-based measurement works across requests.
+_prev_cpu_total: float = 0.0
+_prev_cpu_utime: float = 0.0
 
 
 def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
     """Collect information about the current process and host."""
+    global _prev_cpu_total, _prev_cpu_utime
+
     proc = psutil.Process(os.getpid())
     mem = proc.memory_info()
     vm = psutil.virtual_memory()
@@ -30,6 +37,8 @@ def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
     except AttributeError:
         fd_count = 0
 
+    cpu_pct, _prev_cpu_total, _prev_cpu_utime = _read_proc_cpu_percent(os.getpid(), _prev_cpu_total, _prev_cpu_utime)
+
     return cluster_pb2.ProcessInfo(
         hostname=platform.node(),
         pid=os.getpid(),
@@ -37,7 +46,7 @@ def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
         uptime_ms=timer.elapsed_ms(),
         memory_rss_bytes=mem.rss,
         memory_vms_bytes=mem.vms,
-        cpu_percent=proc.cpu_percent(interval=0),
+        cpu_percent=cpu_pct,
         thread_count=proc.num_threads(),
         open_fd_count=fd_count,
         memory_total_bytes=vm.total,
