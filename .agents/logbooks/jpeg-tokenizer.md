@@ -393,3 +393,44 @@
     token budget per step as `K=8/K=16`, but shorter `K=4` sequences
   - no new code-level issue is visible yet; early state looks like ordinary runtime-env setup
 - Next action: monitor `ray-run-dlwh-launch-20260309-045325` through executor startup and the first training/checkpoint lines.
+
+### 2026-03-08 22:20 - Matched-budget K4 completed
+
+- Hypothesis: the matched-budget `K=4` rerun is the missing apples-to-apples baseline for the coefficient ladder.
+- Command:
+  - monitoring via `uv run scripts/ray/cluster.py --cluster marin-eu-west4-a ...`
+- Result:
+  - `ray-run-dlwh-launch-20260309-045325` finished `SUCCEEDED`
+  - final checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k4-trial-matched-13c1dd/checkpoints/step-2000`
+  - final eval loss: `4.340`
+  - the step-level training loop completed cleanly; the shutdown-time wandb `BrokenPipeError` matched the already-known benign pattern
+- Interpretation:
+  - matching the token budget did not change the overall picture: `K=4` remains materially worse than `K=8` and `K=16`
+  - the fair ladder is now `K=4 -> 4.340`, `K=8 -> 3.253`, `K=16 -> 2.668`
+- Next action: evaluate the completed checkpoints on sequence-level and shared-prefix losses to separate "better representation" from "easier extra tokens".
+
+### 2026-03-08 22:48 - Sequence-level coefficient sweep completed on dev TPU
+
+- Hypothesis: mean token loss alone is ambiguous because larger `K` adds extra targets that may simply be easier. The right check is image-level NLL plus shared-prefix losses on identical target subsets.
+- Command:
+  - initial Ray job (head-node placement, failed): `ray-run-dlwh-evaluate_coefficient_sweep-20260309-052440`
+  - TPU-reserved Ray retry (capacity-bound, stopped): `ray-run-dlwh-evaluate_coefficient_sweep-20260309-052657`
+  - dev TPU fallback:
+    - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-eu-west4-a.yaml --tpu-name dlwh-jpeg-seqeval-0527 allocate --tpu-type v6e-8`
+    - `RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-eu-west4-a.yaml --tpu-name dlwh-jpeg-seqeval-0527 execute --no-sync -- uv run python scripts/jpeg_tokenizer/evaluate_coefficient_sweep.py ...`
+- Result:
+  - added direct-GCS output support to the evaluator and committed it as `253e4dc31`
+  - found and fixed a real tail-batch bug in the evaluator: the final validation batch could be smaller than the `8`-way data sharding, which broke `device_put(...)` on TPU
+  - local fix validated with targeted pytest and a padding regression test
+  - final sweep output written to:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-coeff-sequence-eval-253e4dc31-r4`
+  - shared-prefix results:
+    - `prefix_4` mean bits/image: `K=4 25430.55`, `K=8 24672.92`, `K=16 24282.01`
+    - `prefix_8` mean bits/image: `K=8 44845.61`, `K=16 44167.21`
+  - whole-sequence results:
+    - `sequence` mean bits/image: `K=4 25430.55`, `K=8 44845.61`, `K=16 75156.11`
+- Interpretation:
+  - the whole-sequence bits/image numbers rise with `K` largely because the representation itself is longer, so they are not the right quality metric across different `K`
+  - the shared-prefix numbers are the useful answer, and they move in the same direction as the training losses: larger `K` improves modeling of the shared early coefficients, not just the appended tail
+  - that makes the "extra coefficients are merely easier" explanation incomplete; at least on Imagenette, the richer representation is helping prediction on the common prefix too
+- Next action: commit the evaluator fix and write the Phase 1 note framing the K sweep around shared-prefix quality rather than mean token loss alone.

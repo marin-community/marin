@@ -45,6 +45,7 @@ from levanter.distributed import DistributedConfig, RayConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from scripts.jpeg_tokenizer.evaluate_coefficient_sweep import _pad_batch
 
 
 def test_in_memory_token_dataset_and_passthrough_config_round_trip():
@@ -127,6 +128,15 @@ def test_coefficient_prefix_loss_mask_tracks_target_prefixes_across_blocks():
 
     full_mask = coefficient_prefix_loss_mask(8, tokens_per_block=4, prefix_tokens_per_block=4)
     assert full_mask.tolist() == [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0]
+
+
+def test_sequence_eval_tail_batch_padding_repeats_last_example():
+    batch = np.asarray([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
+
+    padded, actual_batch_size = _pad_batch(batch, 4)
+
+    assert actual_batch_size == 2
+    assert padded.tolist() == [[1, 2, 3], [4, 5, 6], [4, 5, 6], [4, 5, 6]]
 
 
 def test_file_backed_token_store_round_trip(tmp_path):

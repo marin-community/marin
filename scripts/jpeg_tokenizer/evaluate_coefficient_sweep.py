@@ -96,6 +96,22 @@ def _iter_batches(num_examples: int, batch_size: int) -> Iterable[tuple[int, int
         yield start, min(start + batch_size, num_examples)
 
 
+def _pad_batch(batch: np.ndarray, target_batch_size: int) -> tuple[np.ndarray, int]:
+    """Pad a token batch to the requested batch size by repeating the final example."""
+
+    actual_batch_size = int(batch.shape[0])
+    if actual_batch_size <= 0:
+        raise ValueError("Expected a non-empty batch")
+    if actual_batch_size > target_batch_size:
+        raise ValueError(f"Batch size {actual_batch_size} exceeds target batch size {target_batch_size}")
+    if actual_batch_size == target_batch_size:
+        return batch, actual_batch_size
+
+    pad_rows = target_batch_size - actual_batch_size
+    padded = np.concatenate([batch, np.repeat(batch[-1:, :], pad_rows, axis=0)], axis=0)
+    return padded, actual_batch_size
+
+
 def _metric_summary(values_nats: np.ndarray, *, blocks_per_image: int) -> dict[str, object]:
     bits_per_image = values_nats / math.log(2.0)
     bits_per_block = bits_per_image / blocks_per_image
@@ -179,10 +195,11 @@ def evaluate_run(
 
         for batch_index, (start, end) in enumerate(_iter_batches(num_examples, batch_size)):
             batch = np.asarray(tokens[start:end], dtype=np.int32)
+            batch, actual_batch_size = _pad_batch(batch, batch_size)
             outputs = eval_batch(model, jax.device_put(batch, batch_sharding))
             outputs = jax.device_get(outputs)
             for name, values in outputs.items():
-                collected[name].append(np.asarray(values, dtype=np.float64))
+                collected[name].append(np.asarray(values[:actual_batch_size], dtype=np.float64))
             if (batch_index + 1) % log_every == 0:
                 logger.info("Run %s processed %s/%s examples", spec.name, end, num_examples)
 

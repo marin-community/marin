@@ -414,3 +414,103 @@ finishes, we will have the comparison that actually matters:
 - `K=4` at matched token budget
 - `K=8` at matched token budget
 - `K=16` at matched token budget
+
+## Matched-Budget K4 Result
+
+That rerun is now complete too.
+
+- Ray job:
+  `ray-run-dlwh-launch-20260309-045325`
+- Final status:
+  `SUCCEEDED`
+- Final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k4-trial-matched-13c1dd/checkpoints/step-2000`
+- Final eval loss:
+  `4.340`
+
+So the fair ladder, with the same `1,048,576` tokens per step, is:
+
+- `K=4` matched:
+  `4.340`
+- `K=8`:
+  `3.253`
+- `K=16`:
+  `2.668`
+
+That keeps the original qualitative result intact: increasing retained coefficients continues to help even after the
+token-budget mismatch is removed.
+
+## Sequence-Level Sweep
+
+The next concern was methodological rather than infrastructural: lower mean token loss at larger `K` might just mean
+the extra coefficients are easier to predict, not that the representation is actually better.
+
+To answer that, I added a separate evaluator that computes:
+
+- total NLL per image / bits per image for the whole coefficient sequence
+- shared-prefix losses on identical target subsets:
+  - first `4` coefficients per block for `K=4/K=8/K=16`
+  - first `8` coefficients per block for `K=8/K=16`
+
+### Launch Path
+
+The evaluator was first submitted as a plain Ray job, which failed correctly on the CPU head because
+`TrainerConfig(require_accelerator=True)` found no accelerator:
+
+- failed submission:
+  `ray-run-dlwh-evaluate_coefficient_sweep-20260309-052440`
+
+A TPU-reserved Ray retry then stayed capacity-bound on `marin-eu-west4-a`:
+
+- stopped retry:
+  `ray-run-dlwh-evaluate_coefficient_sweep-20260309-052657`
+
+The final successful path used a temporary dev TPU:
+
+- TPU name:
+  `dlwh-jpeg-seqeval-0527`
+- cluster config:
+  `infra/marin-eu-west4-a.yaml`
+
+During that run, the evaluator found one real bug: the last validation batch can be smaller than the `8`-way data
+sharding, so `device_put(...)` failed on the tail batch. The fix was to pad the last batch locally, then trim the
+extra outputs before aggregation. That is now covered by a targeted regression test.
+
+### Final Output
+
+- output directory:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-coeff-sequence-eval-253e4dc31-r4`
+
+The whole-sequence bits/image numbers are:
+
+- `K=4` matched:
+  `25430.55`
+- `K=8`:
+  `44845.61`
+- `K=16`:
+  `75156.11`
+
+Those rise with `K`, which is expected because the representation itself is longer. So they are useful as description
+lengths, but not as a direct cross-`K` quality metric.
+
+The useful comparison is on shared prefixes:
+
+- `prefix_4` mean bits/image:
+  - `K=4`: `25430.55`
+  - `K=8`: `24672.92`
+  - `K=16`: `24282.01`
+- `prefix_8` mean bits/image:
+  - `K=8`: `44845.61`
+  - `K=16`: `44167.21`
+
+This is the important result from the sweep:
+
+- larger `K` is not only winning because it appends easier tail coefficients
+- larger `K` also improves the model's probability assignment on the shared early coefficients
+- so the representation-quality story survives the "maybe the extra tokens are just easier" objection
+
+The cleanest current interpretation is:
+
+- `K=16` is the strongest rung in this Imagenette coefficient ladder
+- the benefit is real on shared targets, not just on the full longer stream
+- the next comparison should probably not be `K=32`, but a different representation family or a broader corpus
