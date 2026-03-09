@@ -5268,3 +5268,137 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Assessment: **validated, regressed, and reverted**. Pulling backward prepare recompute into the full-sequence Pallas kernel did not unlock the step. The train-path buckets stay essentially flat, the residual CE shell remains, and the step slows because the untracked remainder grows. This is another remainder-loss result, not a viable promotion candidate.
 - Next bold hypothesis:
   - Do not spend another standalone iteration on the same full-sequence backward recompute boundary. The next serious bet should either move to a different outer control surface (`O`/`M`) or return to CE attribution only if the residual shell becomes ambiguous again.
+
+### Iteration 75 - Macro Move M / segment-start checkpoints on the associative outer train shell (validated, regressed, reverted)
+
+- Coverage slot: `M`
+- Why this attacks the train-path control bottleneck:
+  - Iterations 73 and 74 both showed the same failure mode on the promoted `pallas_tpu` + `pallas` CE head: the residual CE backward/custom-VJP `while` stayed near `9.18 ms`, while GDN-side tape changes leaked into `remainder_budget_ms` instead of making the step faster.
+  - This variant kept the promoted associative outer train shell from Iteration 70, but tried a smaller checkpoint contract inside that shell: save one `segment_starts` checkpoint per segment instead of every per-chunk `chunk_starts`, then rebuild chunk-start state in backward from raw inputs plus the saved segment-start state.
+- Hot-path scan/cond status:
+  - No new hot-path `lax.scan` on the full-sequence train path.
+  - No new hot-path `lax.cond` / runtime dispatch.
+- Change class: `outer control structure`
+
+- Codex loop iteration: `8 / 10`
+- Date: `2026-03-09T16:24:05Z`
+- Starting commit: `cbc3025af2bcc468610d28053162ad30095baa04`
+- Dominant bottleneck carried in (current deployable baseline from Iteration 72, run `gdn_i03_P_ce_bwd_supertile_130m_ch128_seg16_20steps-216db2`, trace `scratch/iter3_candidate_download/plugins/profile/2026_03_09_10_52_04/perfetto_trace.json.gz`):
+  - Forward closed-call: `20.664 ms`
+  - Backward closed-call: `13.128 ms`
+  - while: `9.180 ms`
+  - conditional: `0.025 ms`
+  - CE-attributed while: `9.180 ms`
+  - Kernel budget: `33.792 ms`
+  - Control budget: `9.205 ms`
+  - Train-path budget: `42.997 ms`
+  - Step duration: `165.151 ms`
+  - Remainder budget: `122.154 ms`
+
+- Current train-path control bottleneck read from the latest validated evidence:
+  - The residual CE backward/custom-VJP shell is still the dominant tracked `while`, but it is now flat enough that repeated GDN-local tape rewrites no longer move the step by themselves.
+  - The immediate GDN-side unknown is whether the remaining backward residual contract is still too large; recent failures indicate that if the answer is no, extra recompute simply reappears as `remainder_budget_ms`.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro M (selected):** replace saved per-chunk `chunk_starts` with one saved `segment_starts` checkpoint per segment, then rebuild chunk-start state in backward on the associative outer shell (`+0.25-1.50%`, medium/high risk).
+  2. **Macro O:** reduced-Pallas / XLA control-arm benchmark on the current promoted CE settings to bound how much of the loss is still outside the tracked train path (`0%` deployable upside, high diagnostic value, high probe risk).
+  3. **Macro P:** refresh the CE backward-mode A/B only if CE attribution becomes unclear again; Iteration 72 already showed `xla_streaming` is clearly worse on the current deployable head (`0-0.50%`, low risk, low expected upside).
+
+- Selected macro-move category: **M) XLA-first outer train path with Pallas only as leaf chunk kernels**.
+- Why CE was kept fixed:
+  - Iteration 72 already benchmarked `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` with `pallas` vs `xla_streaming` backward and showed the `xla_streaming` arm was materially worse, so this run held CE fixed at the promoted setting to isolate the remaining GDN-side remainder question.
+
+- Expected effect on `while_ms`: flat to slightly down; this move was not intended to change the residual CE shell directly.
+- Expected effect on `step_duration_ms`: down if the smaller checkpoint contract removed enough backward residual traffic to matter on the full step.
+- Expected effect on `remainder_budget_ms`: down materially if saving segment-start checkpoints is cheaper than saving every chunk-start state.
+- Reject if `while_ms` remains flat? **No.** A flat CE `while` is acceptable here if the smaller checkpoint contract still makes the full step faster.
+- Reject if `remainder_budget_ms` grows? **Yes.** The point of this move is to shrink the residual burden; if the remainder grows, the work only moved to another part of the step.
+
+- Residual contract change under test:
+  - Removed saved per-chunk `chunk_starts` on the recompute-tape train path.
+  - Kept raw `q/k/v/g/beta` plus one saved `segment_starts` checkpoint per segment.
+  - Recomputed `v_pseudo`, `k_cumdecay`, and `solve_transform` in backward as before, then rebuilt per-chunk start states from raw inputs plus saved segment-start state via associative-XLA summary replay.
+
+- Correctness checks:
+  - Local focused checks:
+    - `uv run python -m py_compile lib/levanter/src/levanter/layers/gated_deltanet.py lib/levanter/tests/test_gdn_kernels.py` -> passed
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash_chunk_backward_chunk_size_invariance_kernel_level or chunk_continuation_two_pass_equals_one_pass"` -> passed
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "layer_backward_chunk_size_invariance or gradients_exist"` -> passed
+  - TPU validation (`tests=both`, managed dev TPU):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `88 passed, 3 skipped`
+
+- Profile run (managed dev TPU, CE fixed to `pallas_tpu` + `pallas`):
+  - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i08_M_segment_checkpoint_replay --marin-prefix gs://marin-us-central1 --no-sync`
+  - run: `https://wandb.ai/marin-community/marin/runs/gdn_i08_M_segment_checkpoint_replay_130m_ch128_seg16_20-bcedde`
+  - profiler artifact: `run-gdn_i08_M_segment_checkpoint_replay_130m_ch128_seg16_20-bcedde-profiler:v0`
+  - downloaded trace: `scratch/iter8_candidate_download/plugins/profile/2026_03_09_16_12_19/perfetto_trace.json.gz`
+  - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+
+- Hotspot metrics (candidate vs current deployable baseline):
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - CE-attributed while: `9.180 ms -> 9.183 ms`
+  - Forward closed-call: `20.664 ms -> 20.664 ms`
+  - Backward closed-call: `13.128 ms -> 13.129 ms`
+  - `while: 9.180 ms -> 9.183 ms`
+  - `conditional: 0.025 ms -> 0.026 ms`
+  - `Kernel budget: 33.792 ms -> 33.793 ms`
+  - `Control budget: 9.205 ms -> 9.209 ms`
+  - `Train-path budget: 42.997 ms -> 43.002 ms`
+  - `Step duration: 165.151 ms -> 165.925 ms`
+  - `Remainder budget: 122.154 ms -> 122.923 ms`
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - Candidate vs current deployable baseline:
+    - `throughput/mfu`: `6.133327 -> 6.104734` (`-0.47%`)
+    - `throughput/tokens_per_second`: `198411.969 -> 197486.967` (`-0.47%`)
+    - `throughput/duration`: `0.165151s -> 0.165925s` (`+0.47%`)
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - The dominant tracked `while` still comes from the CE backward/custom-VJP shell in the TPU fused cross-entropy path, not from the GDN chunk kernels.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - No hot-path `lax.scan` on the promoted full-sequence train path; the reconstruction uses associative summary composition instead of a serial backward scan.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not lower to the same losing `WhileOp` / `Conditional` pattern?
+    - The reconstruction work stays inside the same promoted XLA-first outer shell and uses associative summary replay rather than a new serial control shell, so it should alter dataflow cost rather than introduce another lowering-visible loop wall.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - Not applicable on the full-sequence training path under test.
+  - Is the residual `while` still CE-attributed in this design?
+    - Yes.
+  - What do you expect to happen to `while_ms`?
+    - Flat to slightly down; the measured result is effectively flat (`9.180 ms -> 9.183 ms`).
+  - What do you expect to happen to `remainder_budget_ms`?
+    - Down if the segment-start checkpoint contract was the right tradeoff; the measured result instead regressed (`122.154 ms -> 122.923 ms`).
+  - Should this candidate be rejected if `while_ms` remains flat or `remainder_budget_ms` grows? Why?
+    - Reject if `remainder_budget_ms` grows. A flat CE `while` is acceptable for this move, but a larger remainder means the checkpoint shrink only moved work off the tracked train-path buckets.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `88 passed, 3 skipped`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: 9.180 ms -> 9.183 ms`
+    - Forward closed-call `20.664 ms -> 20.664 ms`
+    - Backward closed-call `13.128 ms -> 13.129 ms`
+    - `while: 9.180 ms -> 9.183 ms`
+    - `conditional: 0.025 ms -> 0.026 ms`
+    - `Kernel budget: 33.792 ms -> 33.793 ms`
+    - `Control budget: 9.205 ms -> 9.209 ms`
+    - `Train-path budget: 42.997 ms -> 43.002 ms`
+    - `Step duration: 165.151 ms -> 165.925 ms`
+    - `Remainder budget: 122.154 ms -> 122.923 ms`
+    - `throughput/mfu -0.47%`, `throughput/tokens_per_second -0.47%`, `throughput/duration +0.47%`
+  - Governance:
+    - CE stayed fixed at the required deployable setting: `pallas_tpu` backend, `pallas` backward.
+    - The train-path buckets are effectively flat: kernel budget changes by `+0.001 ms`, control budget by `+0.004 ms`, and the residual CE `while` does not move.
+    - The step still gets slower by `+0.774 ms`, so this is another `off-critical-path` / `overlap-loss` result rather than a critical-path win.
+    - `remainder_budget_ms` grows by `+0.769 ms`, which is the opposite of the intended effect for this checkpoint-shrink arm.
+    - Primary metric regresses by `-0.47%` vs the current deployable head, so this candidate does not clear the promotion bar and should not stay in the tree.
+
+- Assessment: **validated, regressed, and reverted**. Saving one checkpoint per segment instead of every chunk did not unlock the step on the promoted CE settings. The residual CE `while` stays flat, the tracked train-path budget stays flat, and the full step gets slower because the remainder grows. This arm did not remove the train-path control bottleneck; it only shifted work around the same critical path.
+- Next bold hypothesis:
+  - If segment-start checkpoints are worth revisiting, the replay has to move into a different lowering-visible boundary, such as inside the backward Pallas launch itself. Otherwise the next iteration should pivot to a fresh diagnostic control arm (`O`) instead of spending more budget on residual shrink at the same XLA boundary.
