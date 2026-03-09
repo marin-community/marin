@@ -3,19 +3,26 @@
 
 """Comprehensive smoke tests exercising Iris cluster features.
 
-All tests share a single module-scoped cluster (smoke_cluster) with 12 workers
-across CPU, TPU coscheduling, and multi-region scale groups. Tests are numbered
-for execution order and share a module-level _jobs dict for cross-test job
-handle passing.
+All tests share a single module-scoped cluster (smoke_cluster). In local mode
+the cluster has workers across CPU, TPU coscheduling, and multi-region scale
+groups. Tests are numbered for execution order and share a module-level _jobs
+dict for cross-test job handle passing.
+
+Order dependency: test_02 submits all jobs and stores handles in _jobs.
+Later tests reference _jobs to inspect status, task logs, and dashboard state.
 """
 
+import os
+import re
+import signal
 import subprocess
 import time
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from iris.client.client import Job
+from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.manager import connect_cluster
@@ -33,36 +40,209 @@ from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff
 
 from .conftest import (
-    _is_noop_page,
+    DEFAULT_CONFIG,
+    IRIS_ROOT,
+    IrisTestCluster,
+    _NoOpPage,
+    _add_coscheduling_group,
     assert_visible,
     dashboard_click,
     dashboard_goto,
     wait_for_dashboard_ready,
 )
-from .helpers import (
-    _emit_multi_level_logs,
-    _failing,
-    _noop,
-    _port_job,
-    _quick,
-    _quick_task_job,
-    _register_endpoint_job,
-    _slow,
-    _verbose_task,
-)
+from .helpers import TestJobs
 
 pytestmark = pytest.mark.e2e
 
 _jobs: dict[str, Job] = {}
 
 
-def _busy_task():
-    """Busy-loop with real Python work for profiling."""
-    import time
+# ---------------------------------------------------------------------------
+# Smoke-test cluster configuration helpers
+# ---------------------------------------------------------------------------
 
-    end = time.monotonic() + 3
-    while time.monotonic() < end:
-        sum(range(1000))
+
+def _add_cpu_group(config: config_pb2.IrisClusterConfig, num_workers: int = 4) -> None:
+    """CPU scale group with multiple workers for scheduling diversity and bin-packing."""
+    sg = config.scale_groups["local-cpu"]
+    sg.name = "local-cpu"
+    sg.num_vms = 1
+    sg.min_slices = num_workers
+    sg.max_slices = num_workers
+    sg.resources.cpu_millicores = 8000
+    sg.resources.memory_bytes = 16 * 1024**3
+    sg.resources.disk_bytes = 50 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.slice_template.local.SetInParent()
+
+
+def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
+    """4-VM TPU coscheduling group for reservation and large-job tests."""
+    sg = config.scale_groups["tpu_cosched_4"]
+    sg.name = "tpu_cosched_4"
+    sg.num_vms = 4
+    sg.min_slices = 1
+    sg.max_slices = 1
+    sg.resources.cpu_millicores = 128000
+    sg.resources.memory_bytes = 128 * 1024**3
+    sg.resources.disk_bytes = 1024 * 1024**3
+    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.resources.device_variant = "v5litepod-32"
+    sg.resources.preemptible = True
+    sg.slice_template.preemptible = True
+    sg.slice_template.num_vms = 4
+    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
+    sg.slice_template.accelerator_variant = "v5litepod-32"
+    sg.slice_template.local.SetInParent()
+
+
+def _add_multi_region_groups(config: config_pb2.IrisClusterConfig) -> None:
+    """Two CPU scale groups in different regions for constraint routing tests."""
+    for name, region in [("cpu-region-a", "us-central1"), ("cpu-region-b", "europe-west4")]:
+        sg = config.scale_groups[name]
+        sg.name = name
+        sg.num_vms = 1
+        sg.min_slices = 1
+        sg.max_slices = 2
+        sg.resources.cpu_millicores = 8000
+        sg.resources.memory_bytes = 16 * 1024**3
+        sg.resources.disk_bytes = 50 * 1024**3
+        sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+        sg.slice_template.local.SetInParent()
+        sg.worker.attributes[WellKnownAttribute.REGION] = region
+
+
+# Total local-mode workers:
+# 4 (local-cpu) + 2 (cosched_2) + 4 (cosched_4) + 2 (region-a + region-b) = 12
+SMOKE_WORKER_COUNT = 12
+
+
+def _make_smoke_config() -> config_pb2.IrisClusterConfig:
+    """Build a local config with CPU, TPU (coscheduling), and multi-region workers."""
+    config = load_config(DEFAULT_CONFIG)
+    config.scale_groups.clear()
+    _add_cpu_group(config, num_workers=4)
+    _add_coscheduling_group(config)
+    _add_coscheduling_group_4vm(config)
+    _add_multi_region_groups(config)
+    return make_local_config(config)
+
+
+def _cloud_smoke_cluster(config_path: str, mode: str):
+    """Generator that starts a cloud cluster via CLI and yields an IrisTestCluster."""
+    config_path_obj = Path(config_path)
+    cmd = ["uv", "run", "iris", "cluster", "start", "--config", str(config_path_obj)]
+    if mode == "redeploy":
+        cmd.append("--redeploy")
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    url = None
+
+    try:
+        deadline = time.monotonic() + 120
+        for line in iter(proc.stdout.readline, ""):
+            if time.monotonic() > deadline:
+                raise TimeoutError("Controller did not start within 120s")
+            m = re.search(r"Controller started at (http://\S+)", line)
+            if m:
+                url = m.group(1)
+                break
+
+        if not url:
+            raise RuntimeError("Controller process exited without reporting address")
+
+        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        tc.wait_for_workers(1, timeout=300)
+        yield tc
+        controller_client.close()
+    finally:
+        if mode != "keep":
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=30)
+
+
+# ---------------------------------------------------------------------------
+# Smoke-test fixtures (module-scoped so all smoke tests share one cluster)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def smoke_cluster(request):
+    """Module-scoped cluster shared across all smoke tests.
+
+    Local mode: boots in-process cluster with CPU + TPU + multi-region groups.
+    Cloud mode: connects to existing cluster via --iris-controller-url or
+    starts one via CLI using --iris-config.
+    """
+    controller_url = request.config.getoption("--iris-controller-url")
+    config_path = request.config.getoption("--iris-config")
+    mode = request.config.getoption("--iris-mode")
+
+    if controller_url:
+        client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
+        controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
+        yield IrisTestCluster(url=controller_url, client=client, controller_client=controller_client)
+        controller_client.close()
+        return
+
+    if config_path and mode != "local":
+        yield from _cloud_smoke_cluster(config_path, mode)
+        return
+
+    config = _make_smoke_config()
+    with connect_cluster(config) as url:
+        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
+        yield tc
+        controller_client.close()
+
+
+@pytest.fixture(scope="module")
+def smoke_page(smoke_cluster):
+    """Module-scoped Playwright page for smoke dashboard tests."""
+    try:
+        import playwright.sync_api as pw
+
+        with pw.sync_playwright() as p:
+            b = p.chromium.launch()
+            pg = b.new_page(viewport={"width": 1400, "height": 900})
+            pg.goto(f"{smoke_cluster.url}/")
+            pg.wait_for_load_state("domcontentloaded")
+            yield pg
+            pg.close()
+            b.close()
+    except (ImportError, Exception):
+        yield _NoOpPage()
+
+
+@pytest.fixture(scope="module")
+def smoke_screenshot(smoke_page, tmp_path_factory):
+    """Module-scoped screenshot capture for smoke dashboard tests."""
+    if isinstance(smoke_page, _NoOpPage):
+
+        def noop_capture(label: str) -> Path:
+            return tmp_path_factory.mktemp("screenshots") / f"smoke-{label}.png"
+
+        return noop_capture
+
+    output_dir = Path(
+        os.environ.get(
+            "IRIS_SCREENSHOT_DIR",
+            str(tmp_path_factory.mktemp("screenshots")),
+        )
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def capture(label: str) -> Path:
+        path = output_dir / f"smoke-{label}.png"
+        smoke_page.screenshot(path=str(path), full_page=True)
+        return path
+
+    return capture
 
 
 # ============================================================================
@@ -71,8 +251,14 @@ def _busy_task():
 
 
 def test_smoke_01_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
-    """Wait for all 12 workers, screenshot fleet tab."""
-    smoke_cluster.wait_for_workers(12, timeout=60)
+    """Verify workers are healthy, screenshot fleet tab."""
+    # The fixture already waited for SMOKE_WORKER_COUNT in local mode.
+    # In cloud mode it waits for >=1. Just verify health here.
+    request = cluster_pb2.Controller.ListWorkersRequest()
+    response = smoke_cluster.controller_client.list_workers(request)
+    healthy = [w for w in response.workers if w.healthy]
+    assert len(healthy) > 0, "No healthy workers registered"
+
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
     dashboard_click(smoke_page, 'button.tab-btn:has-text("Workers")')
@@ -87,42 +273,42 @@ def test_smoke_01_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
 
 def test_smoke_02_submit_diverse_jobs(smoke_cluster, smoke_page, smoke_screenshot):
     """Submit diverse jobs in parallel and wait for expected states."""
-    _jobs["simple"] = smoke_cluster.submit(_quick, "smoke-simple")
+    _jobs["simple"] = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
 
     for i in range(3):
-        _jobs[f"task-{i}"] = smoke_cluster.submit(_quick_task_job, f"smoke-task-{i}", i)
+        _jobs[f"task-{i}"] = smoke_cluster.submit(TestJobs.sleep, f"smoke-task-{i}", 2)
 
-    _jobs["verbose"] = smoke_cluster.submit(_verbose_task, "smoke-verbose")
-    _jobs["log-levels"] = smoke_cluster.submit(_emit_multi_level_logs, "smoke-log-levels")
-    _jobs["failed"] = smoke_cluster.submit(_failing, "smoke-failed")
-    _jobs["running"] = smoke_cluster.submit(_slow, "smoke-running")
+    # Single verbose job covers both substring filtering and structured log levels
+    _jobs["verbose"] = smoke_cluster.submit(TestJobs.log_verbose, "smoke-verbose")
+    _jobs["failed"] = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
+    _jobs["running"] = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 120)
 
     prefix = f"smoke-ep-{uuid.uuid4().hex[:8]}"
     _jobs["_ep_prefix"] = prefix  # type: ignore[assignment]
-    _jobs["endpoint"] = smoke_cluster.submit(_register_endpoint_job, "smoke-endpoint", prefix)
+    _jobs["endpoint"] = smoke_cluster.submit(TestJobs.register_endpoint, "smoke-endpoint", prefix)
 
-    _jobs["ports"] = smoke_cluster.submit(_port_job, "smoke-ports", ports=["http", "grpc"])
+    _jobs["ports"] = smoke_cluster.submit(TestJobs.validate_ports, "smoke-ports", ports=["http", "grpc"])
 
     _jobs["region"] = smoke_cluster.submit(
-        _noop,
+        TestJobs.noop,
         "smoke-region-a",
         constraints=[region_constraint(["us-central1"])],
     )
 
     _jobs["unschedulable"] = smoke_cluster.submit(
-        _quick,
+        TestJobs.quick,
         "smoke-unsched",
         cpu=9999,
         scheduling_timeout=Duration.from_seconds(5),
     )
 
     _jobs["reserved"] = smoke_cluster.submit(
-        _quick,
+        TestJobs.quick,
         "smoke-reserved",
         reservation=[ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("H100", 8)))],
     )
 
-    for key in ["simple", "task-0", "task-1", "task-2", "verbose", "log-levels", "endpoint", "ports", "region"]:
+    for key in ["simple", "task-0", "task-1", "task-2", "verbose", "endpoint", "ports", "region"]:
         status = smoke_cluster.wait(_jobs[key], timeout=60)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job {key} failed: {status}"
 
@@ -164,35 +350,37 @@ def test_smoke_04_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screensh
 
 
 def test_smoke_05_dashboard_task_logs(smoke_cluster, smoke_page, smoke_screenshot):
-    """Task logs show 200 lines, truncation buttons, substring filter."""
+    """Task logs show lines, truncation buttons, substring filter."""
     job = _jobs["verbose"]
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
     wait_for_dashboard_ready(smoke_page)
 
-    if not _is_noop_page(smoke_page):
-        smoke_page.wait_for_function(
-            "() => document.querySelector('pre') && "
-            "document.querySelector('pre').textContent.includes('DONE: all 200 lines emitted')",
-            timeout=10000,
-        )
-        smoke_screenshot("05-task-logs-default")
+    # Wait for all log lines to render
+    smoke_page.wait_for_function(
+        "() => document.querySelector('pre') && "
+        "document.querySelector('pre').textContent.includes('DONE: all lines emitted')",
+        timeout=10000,
+    )
+    smoke_screenshot("05-task-logs-default")
 
-        smoke_page.click("button:has-text('100')")
-        smoke_page.wait_for_function(
-            "() => document.querySelector('span') && document.body.textContent.includes('(truncated)')",
-            timeout=5000,
-        )
-        smoke_screenshot("05-task-logs-truncated")
+    # Test truncation
+    smoke_page.click("button:has-text('100')")
+    smoke_page.wait_for_function(
+        "() => document.querySelector('span') && document.body.textContent.includes('(truncated)')",
+        timeout=5000,
+    )
+    smoke_screenshot("05-task-logs-truncated")
 
-        smoke_page.fill("input[placeholder='substring']", "ERROR")
-        smoke_page.click("button:has-text('Apply')")
-        smoke_page.wait_for_function(
-            "() => document.querySelector('pre') && "
-            "!document.querySelector('pre').textContent.includes('[INFO]') && "
-            "document.querySelector('pre').textContent.includes('[ERROR]')",
-            timeout=5000,
-        )
-        smoke_screenshot("05-task-logs-filtered")
+    # Test substring filter: "validation failed" only appears in ERROR lines
+    smoke_page.fill("input[placeholder='substring']", "validation failed")
+    smoke_page.click("button:has-text('Apply')")
+    smoke_page.wait_for_function(
+        "() => document.querySelector('pre') && "
+        "document.querySelector('pre').textContent.includes('validation failed') && "
+        "!document.querySelector('pre').textContent.includes('processing data batch')",
+        timeout=5000,
+    )
+    smoke_screenshot("05-task-logs-filtered")
 
 
 def test_smoke_06_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
@@ -202,29 +390,25 @@ def test_smoke_06_dashboard_constraints(smoke_cluster, smoke_page, smoke_screens
         Constraint(key="env-tag", op=ConstraintOp.EXISTS),
         Constraint(key="device-variant", op=ConstraintOp.IN, values=("v5p-8", "v6e-4")),
     ]
-    job = smoke_cluster.submit(_quick, "smoke-constraints", constraints=constraints)
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-constraints", constraints=constraints)
     time.sleep(3)
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
     wait_for_dashboard_ready(smoke_page)
 
-    if not _is_noop_page(smoke_page):
-        smoke_page.click("text=Job Request")
-        smoke_page.wait_for_function(
-            "() => document.querySelector('.constraint-chip') !== null",
-            timeout=5000,
-        )
-        chips = smoke_page.locator(".constraint-chip")
-        texts = [chips.nth(i).text_content() for i in range(chips.count())]
-        assert any("region = local" in t for t in texts), f"Expected region constraint in {texts}"
-
+    smoke_page.click("text=Job Request")
+    smoke_page.wait_for_function(
+        "() => document.querySelector('.constraint-chip') !== null",
+        timeout=5000,
+    )
+    assert_visible(smoke_page, "text=region = local")
     smoke_screenshot("06-constraints")
 
 
 def test_smoke_07_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
     """Scheduling diagnostic shows 'Insufficient CPU' for oversized job."""
     smoke_cluster.wait_for_workers(1, timeout=30)
-    job = smoke_cluster.submit(lambda: None, "smoke-diag-cpu", cpu=10000)
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-diag-cpu", cpu=10000)
 
     status = smoke_cluster.status(job)
     assert status.state == cluster_pb2.JOB_STATE_PENDING
@@ -254,13 +438,11 @@ def test_smoke_09_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_scree
     assert worker_id
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
-
-    if not _is_noop_page(smoke_page):
-        smoke_page.wait_for_function(
-            "() => document.querySelector('.worker-detail-grid') !== null"
-            " || document.querySelector('.error-message') !== null",
-            timeout=10000,
-        )
+    smoke_page.wait_for_function(
+        "() => document.querySelector('.worker-detail-grid') !== null"
+        " || document.querySelector('.error-message') !== null",
+        timeout=10000,
+    )
     assert_visible(smoke_page, f"text={worker_id}")
     assert_visible(smoke_page, "text=Healthy")
     assert_visible(smoke_page, "text=Task History")
@@ -280,8 +462,7 @@ def test_smoke_11_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screensh
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
     dashboard_click(smoke_page, 'button.tab-btn:has-text("Status")')
-    if not _is_noop_page(smoke_page):
-        smoke_page.wait_for_selector(".log-container", timeout=10000)
+    smoke_page.wait_for_selector(".log-container", timeout=10000)
     smoke_screenshot("11-status-tab")
 
 
@@ -292,8 +473,8 @@ def test_smoke_11_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screensh
 
 def test_smoke_12_small_job_skips_oversized(smoke_cluster):
     """Small job gets scheduled even when a large unschedulable job is queued."""
-    big_job = smoke_cluster.submit(lambda: None, "smoke-big", cpu=10000)
-    small_job = smoke_cluster.submit(lambda: "done", "smoke-small", cpu=1)
+    big_job = smoke_cluster.submit(TestJobs.quick, "smoke-big", cpu=10000)
+    small_job = smoke_cluster.submit(TestJobs.quick, "smoke-small", cpu=1)
     status = smoke_cluster.wait(small_job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     big_status = smoke_cluster.status(big_job)
@@ -319,19 +500,19 @@ def test_smoke_15_reservation_gates_scheduling(smoke_cluster):
     reserved_status = smoke_cluster.status(_jobs["reserved"])
     assert reserved_status.state == cluster_pb2.JOB_STATE_PENDING
 
-    regular = smoke_cluster.submit(_quick, "smoke-regular-while-reserved")
+    regular = smoke_cluster.submit(TestJobs.quick, "smoke-regular-while-reserved")
     status = smoke_cluster.wait(regular, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 # ============================================================================
-# Phase 5: Log level verification
+# Phase 5: Log level verification (uses the merged verbose job)
 # ============================================================================
 
 
 def test_smoke_16_log_levels_populated(smoke_cluster):
     """Task logs have level field (INFO, WARNING, ERROR)."""
-    job = _jobs["log-levels"]
+    job = _jobs["verbose"]
     task_id = job.job_id.task(0).to_wire()
 
     deadline = time.monotonic() + 60
@@ -360,7 +541,7 @@ def test_smoke_16_log_levels_populated(smoke_cluster):
 
 def test_smoke_17_log_level_filter(smoke_cluster):
     """min_level=WARNING excludes INFO."""
-    job = _jobs["log-levels"]
+    job = _jobs["verbose"]
     task_id = job.job_id.task(0).to_wire()
 
     request = cluster_pb2.Controller.GetTaskLogsRequest(id=task_id, min_level="WARNING")
@@ -405,7 +586,7 @@ def test_smoke_18_region_constrained_routing(smoke_cluster):
 
 def test_smoke_19_profile_running_task(smoke_cluster):
     """Profile a running task, verify data returned."""
-    job = smoke_cluster.submit(_busy_task, name="smoke-profile")
+    job = smoke_cluster.submit(TestJobs.busy_loop, name="smoke-profile")
 
     last_state = "unknown"
 
@@ -435,7 +616,26 @@ def test_smoke_19_profile_running_task(smoke_cluster):
 
 
 # ============================================================================
-# Phase 8: GPU metadata (standalone cluster)
+# Phase 8: Stress test
+# ============================================================================
+
+
+@pytest.mark.timeout(120)
+def test_smoke_20_stress_200_tasks(smoke_cluster):
+    """200 tasks exercises scheduler concurrency and bin-packing."""
+    job = smoke_cluster.submit(
+        TestJobs.quick,
+        "smoke-stress-200",
+        cpu=0,
+        memory="10m",
+        replicas=200,
+    )
+    status = smoke_cluster.wait(job, timeout=90)
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+# ============================================================================
+# GPU metadata (local-only, creates standalone cluster with mocked nvidia-smi)
 # ============================================================================
 
 _NVIDIA_SMI_H100_8X = "\n".join(["NVIDIA H100 80GB HBM3, 81559"] * 8)
@@ -443,8 +643,6 @@ _NVIDIA_SMI_H100_8X = "\n".join(["NVIDIA H100 80GB HBM3, 81559"] * 8)
 
 def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     """Build a local config with no auto-scaled workers."""
-    from .conftest import DEFAULT_CONFIG
-
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
     sg = config.scale_groups["placeholder"]
@@ -460,8 +658,13 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
-def test_smoke_20_gpu_worker_metadata(tmp_path):
-    """Mocked nvidia-smi registers GPU metadata on worker."""
+def test_gpu_worker_metadata(tmp_path):
+    """Mocked nvidia-smi registers GPU metadata on worker.
+
+    Creates a standalone local cluster (not the shared smoke_cluster) with a
+    manually started worker using mocked nvidia-smi output. This test only
+    works in local mode — it doesn't run against real GPU/TPU clusters.
+    """
     config = _make_controller_only_config()
     with connect_cluster(config) as url:
         original_run = subprocess.run

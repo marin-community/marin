@@ -27,41 +27,9 @@ from iris.rpc import cluster_pb2
 from iris.test_util import SentinelFile
 from iris.time_utils import Duration
 
-from .helpers import _block, _quick, _slow
+from .helpers import TestJobs
 
 pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
-
-
-# ---------------------------------------------------------------------------
-# Module-level job callables for Entrypoint.from_callable serialization.
-# These must be top-level functions, not closures or lambdas.
-# ---------------------------------------------------------------------------
-
-
-def _quick_42():
-    return 42
-
-
-def _slow_2s():
-    time.sleep(2)
-    return 42
-
-
-def _slow_3s():
-    time.sleep(3)
-    return 42
-
-
-def _medium_5s():
-    time.sleep(5)
-    return 42
-
-
-def _waiting_task(s):
-    from iris.time_utils import Duration
-
-    s.wait(timeout=Duration.from_seconds(2))
-    return "done"
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +42,14 @@ def test_bundle_download_intermittent(cluster):
     enable_chaos(
         "worker.bundle_download", failure_rate=0.5, max_failures=2, error=RuntimeError("chaos: download failed")
     )
-    job = cluster.submit(_quick, "bundle-fail", max_retries_failure=3)
+    job = cluster.submit(TestJobs.quick, "bundle-fail", max_retries_failure=3)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_task_timeout(cluster, sentinel):
     """Task times out, marked FAILED."""
-    job = cluster.submit(_block, "timeout-test", sentinel, timeout=Duration.from_seconds(2))
+    job = cluster.submit(TestJobs.block, "timeout-test", sentinel, timeout=Duration.from_seconds(2))
     status = cluster.wait(job, timeout=15)
     assert status.state == cluster_pb2.JOB_STATE_FAILED
 
@@ -90,7 +58,7 @@ def test_coscheduled_sibling_failure(cluster):
     """Coscheduled job: one replica fails -> all siblings killed."""
     enable_chaos("worker.create_container", failure_rate=1.0, max_failures=1, error=RuntimeError("chaos: replica fail"))
     job = cluster.submit(
-        _quick,
+        TestJobs.quick,
         "cosched-fail",
         coscheduling=CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME),
         replicas=2,
@@ -103,7 +71,7 @@ def test_coscheduled_sibling_failure(cluster):
 def test_retry_budget_exact(cluster):
     """Task fails exactly N-1 times, succeeds on last attempt."""
     enable_chaos("worker.create_container", failure_rate=1.0, max_failures=2, error=RuntimeError("chaos: transient"))
-    job = cluster.submit(_quick, "exact-retry", max_retries_failure=2)
+    job = cluster.submit(TestJobs.quick, "exact-retry", max_retries_failure=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -115,12 +83,12 @@ def test_capacity_wait(cluster, tmp_path):
     for i in range(2):
         s = SentinelFile(str(tmp_path / f"blocker-{i}"))
         blocker_sentinels.append(s)
-        job = cluster.submit(_block, f"blocker-{i}", s, cpu=4)
+        job = cluster.submit(TestJobs.block, f"blocker-{i}", s, cpu=4)
         blockers.append(job)
 
     time.sleep(1)
 
-    pending = cluster.submit(_quick, "pending")
+    pending = cluster.submit(TestJobs.quick, "pending")
     status = cluster.status(pending)
     assert status.state in (
         cluster_pb2.JOB_STATE_PENDING,
@@ -139,7 +107,7 @@ def test_capacity_wait(cluster, tmp_path):
 def test_scheduling_timeout(cluster):
     """Scheduling timeout exceeded -> UNSCHEDULABLE."""
     job = cluster.submit(
-        _quick,
+        TestJobs.quick,
         "unsched",
         cpu=9999,
         scheduling_timeout=Duration.from_seconds(2),
@@ -151,7 +119,7 @@ def test_scheduling_timeout(cluster):
 def test_dispatch_delayed(cluster):
     """Dispatch delayed by chaos (via heartbeat), but eventually goes through."""
     enable_chaos("controller.heartbeat", delay_seconds=1.0, failure_rate=1.0, max_failures=2)
-    job = cluster.submit(_quick, "delayed-dispatch")
+    job = cluster.submit(TestJobs.quick, "delayed-dispatch")
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -164,7 +132,7 @@ def test_dispatch_delayed(cluster):
 def test_worker_crash_mid_task(cluster):
     """Worker task monitor crashes mid-task."""
     enable_chaos("worker.task_monitor", failure_rate=1.0)
-    job = cluster.submit(_quick, "crash-mid-task")
+    job = cluster.submit(TestJobs.quick, "crash-mid-task")
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_FAILED
 
@@ -172,7 +140,7 @@ def test_worker_crash_mid_task(cluster):
 def test_worker_delayed_registration(cluster):
     """Worker registration delayed by 2s."""
     enable_chaos("worker.register", delay_seconds=2.0, max_failures=1)
-    job = cluster.submit(_quick, "delayed-reg")
+    job = cluster.submit(TestJobs.quick, "delayed-reg")
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -185,7 +153,7 @@ def test_task_fails_once_then_succeeds(cluster):
         max_failures=1,
         error=RuntimeError("chaos: transient container failure"),
     )
-    job = cluster.submit(_quick, "retry-once", max_retries_failure=2)
+    job = cluster.submit(TestJobs.quick, "retry-once", max_retries_failure=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -193,7 +161,7 @@ def test_task_fails_once_then_succeeds(cluster):
 def test_worker_sequential_jobs(cluster):
     """Sequential jobs verify reconciliation works across job boundaries."""
     for i in range(3):
-        job = cluster.submit(_quick, f"seq-{i}")
+        job = cluster.submit(TestJobs.quick, f"seq-{i}")
         status = cluster.wait(job, timeout=30)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -202,7 +170,7 @@ def test_worker_sequential_jobs(cluster):
 def test_all_workers_fail(cluster):
     """All workers' registration fails permanently."""
     enable_chaos("worker.register", failure_rate=1.0, error=RuntimeError("chaos: registration failed"))
-    job = cluster.submit(_slow, "all-workers-fail", cpu=9999, scheduling_timeout=Duration.from_seconds(3))
+    job = cluster.submit(TestJobs.sleep, "all-workers-fail", 120, cpu=9999, scheduling_timeout=Duration.from_seconds(3))
     status = cluster.wait(job, timeout=10)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
@@ -216,7 +184,7 @@ def test_dispatch_intermittent_failure(cluster):
     """Intermittent heartbeat failure during dispatch (30%)."""
     cluster.wait_for_workers(1, timeout=15)
     enable_chaos("controller.heartbeat", failure_rate=0.3)
-    job = cluster.submit(_quick, "intermittent-dispatch")
+    job = cluster.submit(TestJobs.quick, "intermittent-dispatch")
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -225,7 +193,7 @@ def test_dispatch_permanent_failure(cluster):
     """Permanent heartbeat failure leads to worker failure."""
     cluster.wait_for_workers(1, timeout=15)
     enable_chaos("controller.heartbeat", failure_rate=1.0)
-    job = cluster.submit(_quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(2))
+    job = cluster.submit(TestJobs.quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(2))
     status = cluster.wait(job, timeout=10)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
@@ -234,7 +202,7 @@ def test_heartbeat_temporary_failure(cluster):
     """Heartbeat fails 3 times, stays under threshold."""
     cluster.wait_for_workers(1, timeout=15)
     enable_chaos("worker.heartbeat", failure_rate=1.0, max_failures=2)
-    job = cluster.submit(_quick, "temp-hb-fail")
+    job = cluster.submit(TestJobs.quick, "temp-hb-fail")
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -243,7 +211,7 @@ def test_heartbeat_permanent_failure(cluster):
     """Heartbeat permanently fails -> worker marked failed."""
     cluster.wait_for_workers(1, timeout=15)
     enable_chaos("worker.heartbeat", failure_rate=1.0)
-    job = cluster.submit(_slow, "perm-hb-fail", scheduling_timeout=Duration.from_seconds(2))
+    job = cluster.submit(TestJobs.sleep, "perm-hb-fail", 120, scheduling_timeout=Duration.from_seconds(2))
     status = cluster.wait(job, timeout=10)
     assert status.state in (
         cluster_pb2.JOB_STATE_FAILED,
@@ -256,7 +224,7 @@ def test_notify_task_update_failure(cluster):
     """notify_task_update always fails; completion buffered via heartbeat."""
     cluster.wait_for_workers(1, timeout=15)
     enable_chaos("worker.notify_task_update", failure_rate=1.0)
-    job = cluster.submit(_quick, "notify-fail")
+    job = cluster.submit(TestJobs.quick, "notify-fail")
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -271,7 +239,7 @@ LOCAL_HEARTBEAT_FAILURE_THRESHOLD = 3
 
 def test_heartbeat_survives_transient_delay(cluster):
     """Brief heartbeat delays don't trigger reset."""
-    job = cluster.submit(_quick_42, "transient-delay")
+    job = cluster.submit(TestJobs.quick, "transient-delay")
     enable_chaos("worker.heartbeat", delay_seconds=0.3, max_failures=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
@@ -286,7 +254,7 @@ def test_heartbeat_below_threshold_recovers(cluster):
         max_failures=failures_to_inject,
         delay_seconds=0.01,
     )
-    job = cluster.submit(_quick_42, "transient-hb-fail")
+    job = cluster.submit(TestJobs.quick, "transient-hb-fail")
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -299,7 +267,7 @@ def test_heartbeat_at_threshold_kills_worker(cluster):
         max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
-    job = cluster.submit(_slow_2s, "threshold-hb-fail", max_retries_preemption=10)
+    job = cluster.submit(TestJobs.sleep, "threshold-hb-fail", 2, max_retries_preemption=10)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -312,7 +280,7 @@ def test_dispatch_cleared_on_worker_failure(cluster):
         max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD + 2,
         delay_seconds=0.01,
     )
-    job = cluster.submit(_slow_3s, "dispatch-clear-test", max_retries_preemption=10)
+    job = cluster.submit(TestJobs.sleep, "dispatch-clear-test", 3, max_retries_preemption=10)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -325,7 +293,7 @@ def test_multiple_workers_one_fails(cluster):
         max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
-    job = cluster.submit(_quick_42, "multi-worker-fail", max_retries_preemption=10)
+    job = cluster.submit(TestJobs.quick, "multi-worker-fail", max_retries_preemption=10)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -338,7 +306,7 @@ def test_heartbeat_failure_with_pending_kills(cluster):
         max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
-    job = cluster.submit(_quick_42, "kill-clear-test", max_retries_preemption=10)
+    job = cluster.submit(TestJobs.quick, "kill-clear-test", max_retries_preemption=10)
     status = cluster.wait(job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -350,7 +318,7 @@ def test_heartbeat_failure_with_pending_kills(cluster):
 
 def test_checkpoint_returns_metadata(cluster):
     """BeginCheckpoint RPC returns valid snapshot path and counts."""
-    job = cluster.submit(_quick, "pre-checkpoint")
+    job = cluster.submit(TestJobs.quick, "pre-checkpoint")
     cluster.wait(job, timeout=30)
     resp = cluster.controller_client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
     assert resp.snapshot_path
@@ -360,7 +328,7 @@ def test_checkpoint_returns_metadata(cluster):
 
 def test_checkpoint_with_worker_death(cluster):
     """Worker dies after checkpoint; task retried via heartbeat failure."""
-    job = cluster.submit(_medium_5s, "worker-death-retry", max_retries_preemption=10)
+    job = cluster.submit(TestJobs.sleep, "worker-death-retry", 5, max_retries_preemption=10)
     cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=15)
 
     ckpt_resp = cluster.controller_client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
@@ -383,7 +351,7 @@ def test_128_tasks_concurrent_scheduling(multi_worker_cluster, sentinel):
 
     try:
         job = multi_worker_cluster.submit(
-            _waiting_task,
+            TestJobs.wait_for_sentinel,
             "race-test",
             sentinel,
             cpu=0,

@@ -1,185 +1,141 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared job helper functions used across e2e test files.
+"""Job callables for e2e tests, organized as static methods on TestJobs.
 
-Functions prefixed with _ are job callables that run inside workers.
-They must be importable as top-level functions (no closures) so that
-Entrypoint.from_callable can serialize them.
+All methods use logging as the primary communication channel. They are
+serialized via cloudpickle (Entrypoint.from_callable) so static methods
+work fine — cloudpickle pickles bytecode, not import paths.
 """
 
-import time
 
-# ---------------------------------------------------------------------------
-# Core primitives (used by both smoke and chaos tests)
-# ---------------------------------------------------------------------------
+class TestJobs:
+    """Namespace for job callables that run inside Iris workers.
 
+    Each method represents a distinct job behavior. Use logging for output
+    so tests can verify both substring filtering and structured log levels.
+    """
 
-def _quick():
-    return 1
+    @staticmethod
+    def quick():
+        return 1
 
+    @staticmethod
+    def sleep(duration: float):
+        import time
 
-def _slow():
-    time.sleep(120)
+        time.sleep(duration)
+        return 1
 
+    @staticmethod
+    def block(s):
+        """Block until sentinel is signalled."""
+        s.wait()
 
-def _block(s):
-    """Block until sentinel is signalled. Pass a SentinelFile instance."""
-    s.wait()
+    @staticmethod
+    def fail():
+        raise ValueError("intentional failure")
 
+    @staticmethod
+    def noop():
+        return "ok"
 
-def _failing():
-    raise ValueError("intentional failure")
+    @staticmethod
+    def busy_loop(duration: float = 3.0):
+        """CPU-bound busy loop for profiling tests."""
+        import time
 
+        end = time.monotonic() + duration
+        while time.monotonic() < end:
+            sum(range(1000))
 
-def _noop():
-    return "ok"
+    @staticmethod
+    def log_verbose(num_lines: int = 200):
+        """Emit log lines at INFO/WARNING/ERROR levels.
 
+        Covers both substring filtering (grep for "processing" vs "validation failed")
+        and structured level filtering (INFO vs WARNING vs ERROR). Also emits
+        named markers (info-marker, warning-marker, error-marker) for precise
+        level assertions.
+        """
+        import logging
 
-# ---------------------------------------------------------------------------
-# Smoke test job functions (migrated from scripts/smoke-test.py)
-# ---------------------------------------------------------------------------
+        logger = logging.getLogger("iris.test.verbose")
+        for i in range(num_lines):
+            if i % 3 == 0:
+                logger.info(f"step {i}: processing data batch")
+            elif i % 3 == 1:
+                logger.warning(f"step {i}: slow operation detected")
+            else:
+                logger.error(f"step {i}: validation failed for item")
+        logger.info("info-marker")
+        logger.warning("warning-marker")
+        logger.error("error-marker")
+        logger.info("DONE: all lines emitted")
+        return 1
 
+    @staticmethod
+    def register_endpoint(prefix):
+        """Register an endpoint via RPC and verify it's listed."""
+        from iris.cluster.client import get_job_info
+        from iris.rpc import cluster_pb2
+        from iris.rpc.cluster_connect import ControllerServiceClientSync
 
-def _hello_job():
-    """Simple job that prints and returns."""
-    print("Hello from smoke test!")
-    return 42
+        info = get_job_info()
+        if info is None:
+            raise ValueError("JobInfo not available")
 
+        client = ControllerServiceClientSync(address=info.controller_address, timeout_ms=5000)
+        try:
+            endpoint_name = f"{prefix}/actor1"
+            request = cluster_pb2.Controller.RegisterEndpointRequest(
+                name=endpoint_name,
+                address="localhost:5000",
+                task_id=info.task_id.to_wire(),
+                metadata={"type": "actor"},
+            )
+            response = client.register_endpoint(request)
+            assert response.endpoint_id
 
-def _quick_task_job(task_id: int):
-    """Quick job that sleeps briefly and returns."""
-    time.sleep(2.0)
-    print(f"Task {task_id} completed")
-    return task_id
+            list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{prefix}/")
+            list_response = client.list_endpoints(list_request)
+            assert len(list_response.endpoints) == 1
+            names = [ep.name for ep in list_response.endpoints]
+            assert endpoint_name in names
+        finally:
+            client.close()
 
+    @staticmethod
+    def validate_ports():
+        """Validate that requested ports are allocated via JobInfo."""
+        from iris.cluster.client import get_job_info
 
-def _distributed_work_job():
-    """Coscheduled job that validates job context via get_job_info()."""
-    from iris.cluster.client import get_job_info
+        info = get_job_info()
+        if info is None:
+            raise ValueError("JobInfo not available")
+        if "http" not in info.ports or "grpc" not in info.ports:
+            raise ValueError(f"Ports not set: {info.ports}")
+        assert info.ports["http"] > 0
+        assert info.ports["grpc"] > 0
 
-    info = get_job_info()
-    if info is None:
-        raise RuntimeError("Not running in an Iris job context")
-    print(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
-    return f"Task {info.task_index} done"
+    @staticmethod
+    def validate_job_context():
+        """Validate job context via get_job_info() in a coscheduled job."""
+        import logging
 
+        from iris.cluster.client import get_job_info
 
-def _reservation_child():
-    """Child job that runs on a reserved worker."""
-    print("Child running on reserved worker")
-    return 1
+        logger = logging.getLogger("iris.test.context")
+        info = get_job_info()
+        if info is None:
+            raise RuntimeError("Not running in an Iris job context")
+        logger.info(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
+        return f"Task {info.task_index} done"
 
+    @staticmethod
+    def wait_for_sentinel(s):
+        """Wait on a sentinel with a short timeout, used for concurrency tests."""
+        from iris.time_utils import Duration
 
-def _reservation_parent_job(num_children: int, device_variant: str):
-    """Parent job that spawns children consuming the reservation."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, ResourceSpec, tpu_device
-
-    ctx = iris_ctx()
-    children = []
-    for i in range(num_children):
-        child = ctx.client.submit(
-            entrypoint=Entrypoint.from_callable(_reservation_child),
-            name=f"reserved-child-{i}",
-            resources=ResourceSpec(device=tpu_device(device_variant)),
-        )
-        children.append(child)
-
-    for child in children:
-        child.wait(timeout=120, raise_on_failure=True)
-    print(f"All {num_children} children completed on reserved workers")
-
-
-# ---------------------------------------------------------------------------
-# Dashboard / log test job functions
-# ---------------------------------------------------------------------------
-
-
-def _verbose_task():
-    """Emit 200 numbered log lines with categorized prefixes for filter testing."""
-    for i in range(200):
-        if i % 3 == 0:
-            print(f"[INFO] step {i}: processing data batch")
-        elif i % 3 == 1:
-            print(f"[WARN] step {i}: slow operation detected")
-        else:
-            print(f"[ERROR] step {i}: validation failed for item")
-    print("DONE: all 200 lines emitted")
-    return 1
-
-
-def _emit_multi_level_logs():
-    """Callable that emits log lines at multiple levels using the unified format."""
-    import logging
-    import sys
-
-    _LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
-
-    class _Fmt(logging.Formatter):
-        def format(self, record):
-            record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
-            return super().format(record)
-
-    root = logging.getLogger()
-    root.handlers.clear()
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(_Fmt(fmt="%(levelprefix)s%(asctime)s %(name)s %(message)s", datefmt="%Y%m%d %H:%M:%S"))
-    root.addHandler(handler)
-    root.setLevel(logging.DEBUG)
-
-    log = logging.getLogger("test.levels")
-    log.debug("debug-marker")
-    log.info("info-marker")
-    log.warning("warning-marker")
-    log.error("error-marker")
-
-
-# ---------------------------------------------------------------------------
-# Endpoint / port test job functions (migrated from test_endpoints.py)
-# ---------------------------------------------------------------------------
-
-
-def _register_endpoint_job(prefix):
-    """Runs inside the worker. Registers an endpoint and verifies it via RPC."""
-    from iris.cluster.client import get_job_info
-    from iris.rpc import cluster_pb2
-    from iris.rpc.cluster_connect import ControllerServiceClientSync
-
-    info = get_job_info()
-    if info is None:
-        raise ValueError("JobInfo not available")
-
-    client = ControllerServiceClientSync(address=info.controller_address, timeout_ms=5000)
-    try:
-        endpoint_name = f"{prefix}/actor1"
-        request = cluster_pb2.Controller.RegisterEndpointRequest(
-            name=endpoint_name,
-            address="localhost:5000",
-            task_id=info.task_id.to_wire(),
-            metadata={"type": "actor"},
-        )
-        response = client.register_endpoint(request)
-        assert response.endpoint_id
-
-        list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{prefix}/")
-        list_response = client.list_endpoints(list_request)
-        assert len(list_response.endpoints) == 1
-        names = [ep.name for ep in list_response.endpoints]
-        assert endpoint_name in names
-        time.sleep(0.5)
-    finally:
-        client.close()
-
-
-def _port_job():
-    """Runs inside the worker. Validates that requested ports are allocated."""
-    from iris.cluster.client import get_job_info
-
-    info = get_job_info()
-    if info is None:
-        raise ValueError("JobInfo not available")
-    if "http" not in info.ports or "grpc" not in info.ports:
-        raise ValueError(f"Ports not set: {info.ports}")
-    assert info.ports["http"] > 0
-    assert info.ports["grpc"] > 0
+        s.wait(timeout=Duration.from_seconds(2))
+        return "done"
