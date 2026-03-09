@@ -5128,3 +5128,143 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Commit: `none (failed attempt; code reverted after measurement)`
 - Next bold hypothesis:
   - Do not keep retrying chunk-start-only tape reductions on this boundary. The next serious bet should either move the reconstruction work into a different lowering-visible boundary (for example, segment-start checkpoints inside the backward Pallas kernel) or pivot to a fresh diagnostic control arm instead of another same-boundary tape shrink.
+
+### Iteration 74 - Macro Move R / in-kernel backward prepare recompute on the full-sequence train path (validated, regressed, reverted)
+
+- Coverage slot: `R`
+- Why this attacks the train-path control bottleneck:
+  - The latest validated entries show the residual CE shell is down to about `9 ms`, while the larger unresolved problem is that tape/control changes keep leaking cost into `remainder_budget_ms` instead of making the full step faster.
+  - This variant tested the specific ejkernel-style bet that mattered next on the chunked flash/train path: keep only raw inputs plus chunk-start state, and move backward prepare recompute inside the full-sequence backward Pallas launch so the separate backward-side prepare materialization stops sitting on the step critical path.
+- Hot-path scan/cond status:
+  - No hot-path `lax.scan`.
+  - No new hot-path `lax.cond`; the candidate keeps the existing full-sequence backward `shard_map/pallas_call` surface and does the extra recompute inside that launch.
+- Change class: `outer control structure`
+
+- Codex loop iteration: `7 / 10`
+- Date: `2026-03-09T15:19:17Z`
+- Starting commit: `2a4b709a97b105bb658674e6016e2a27baf27fa5`
+- Dominant bottleneck carried in (current deployable baseline from Iteration 72, run `gdn_i03_P_ce_bwd_supertile_130m_ch128_seg16_20steps-216db2`, trace `scratch/iter3_candidate_download/plugins/profile/2026_03_09_10_52_04/perfetto_trace.json.gz`):
+  - Forward closed-call: `20.664 ms`
+  - Backward closed-call: `13.128 ms`
+  - while: `9.180 ms`
+  - conditional: `0.025 ms`
+  - CE-attributed while: `9.180 ms`
+  - Kernel budget: `33.792 ms`
+  - Control budget: `9.205 ms`
+  - Train-path budget: `42.997 ms`
+  - Step duration: `165.151 ms`
+  - Remainder budget: `122.154 ms`
+
+- Current train-path control bottleneck read from the latest validated evidence:
+  - The residual hot `while` is still the CE backward/custom-VJP shell, but it is now small enough that it is no longer the dominant unknown.
+  - The actual control bottleneck for the next chunk-path move is the unexplained post-train-path remainder: recent tape/control rewrites can hold train-path cost flat or slightly down while `step_duration_ms` gets worse because `remainder_budget_ms` grows.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro R (selected):** recompute backward prepare terms inside the full-sequence backward Pallas kernel from raw `q/k/v/g/beta` plus saved `chunk_starts`, eliminating backward-side materialization of `v_pseudo`, `k_cumdecay`, and `solve_transform` (`+0.5-2.0%`, medium/high risk).
+  2. **Macro P:** refresh the CE backward A/B under the current head only if attribution became unclear again (`0-0.75%`, low risk, but already substantially closed on Iteration 72).
+  3. **Macro O:** reduced-Pallas / XLA control-arm benchmark to bound whether the remaining remainder loss is still caused by the current train-path boundary (`0%` deployable upside, high probe risk).
+
+- Selected macro-move category: **R) ejkernel-style training control arm**.
+
+- Expected effect on `while_ms`: flat to slightly down; this move is not aimed at the residual CE loop directly.
+- Expected effect on `step_duration_ms`: down, if backward-side prepare materialization was still leaking into the critical path.
+- Expected effect on `remainder_budget_ms`: down materially if the smaller residual/recompute contract was the right tradeoff.
+- Reject if `while_ms` remains flat? **No.** Flat CE `while` is acceptable if the step gets faster through a smaller remainder/tape burden.
+- Reject if `remainder_budget_ms` grows? **Yes.** A larger remainder would mean the recompute work only moved around instead of leaving the step.
+
+- Change summary:
+  - `lib/levanter/src/levanter/layers/gated_deltanet.py` (reverted after measurement):
+    - Added a full-sequence backward Pallas path that recomputed chunk-local prepare terms in the reverse pipeline from raw `q/k/v/g/beta` and saved `chunk_starts`.
+    - Removed the separate backward-side `_gdn_chunk_fullseq_prepare_pallas(...)` materialization from the `use_fullseq_bwd` path when the forward residual did not already carry prepare tapes.
+    - Kept the segmented fallback unchanged so the experiment stayed isolated to the deployable full-sequence train chunk path.
+
+- Correctness checks:
+  - Local focused tests:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash_chunk_backward_chunk_size_invariance_kernel_level or chunk_equals_recurrent_for_random_inputs"` -> `4 passed, 34 deselected`
+    - `uv run python -m py_compile lib/levanter/src/levanter/layers/gated_deltanet.py` -> passed
+    - `uv run pyrefly check lib/levanter/src/levanter/layers/gated_deltanet.py` -> failed locally because `pyrefly` is not installed in this environment
+  - TPU validation (`tests=both`, managed dev TPU):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped`
+
+- Profile runs (managed dev TPU, CE fixed to `pallas_tpu` + `pallas`):
+  - First attempt (failed before training):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i07_R_bwd_prepare_inkernel --marin-prefix gs://marin-us-east5 --no-sync`
+    - result: failed with `ValueError: data.components.fineweb-edu-10B.source.cache_dir is not in the same region (us-east5) as the VM (us-central1)`
+  - Ray fallback (failed in infra):
+    - command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --profile-env MARIN_PREFIX=gs://marin-us-east5 --run-name-prefix gdn_i07_R_bwd_prepare_inkernel`
+    - result: failed waiting for the Ray dashboard tunnel with `ConnectionError: Failed to connect to Ray at address: http://localhost:8283`
+  - Successful retry:
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i07_R_bwd_prepare_inkernel --marin-prefix gs://marin-us-central1 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_i07_R_bwd_prepare_inkernel_130m_ch128_seg16_20steps-30c80b`
+    - profiler artifact: `run-gdn_i07_R_bwd_prepare_inkernel_130m_ch128_seg16_20steps-30c80b-profiler:v0`
+    - downloaded trace: `scratch/iter7_candidate_download/plugins/profile/2026_03_09_15_05_44/perfetto_trace.json.gz`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+
+- Hotspot metrics (candidate vs current deployable baseline):
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - CE-attributed while: `9.180 ms -> 9.013 ms`
+  - Forward closed-call: `20.664 ms -> 20.664 ms`
+  - Backward closed-call: `13.128 ms -> 13.128 ms`
+  - `while: 9.180 ms -> 9.013 ms`
+  - `conditional: 0.025 ms -> 0.026 ms`
+  - `Kernel budget: 33.792 ms -> 33.792 ms`
+  - `Control budget: 9.205 ms -> 9.039 ms`
+  - `Train-path budget: 42.997 ms -> 42.831 ms`
+  - `Step duration: 165.151 ms -> 166.399 ms`
+  - `Remainder budget: 122.154 ms -> 123.568 ms`
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - Candidate vs current deployable baseline:
+    - `throughput/mfu`: `6.133327 -> 6.087345` (`-0.75%`)
+    - `throughput/tokens_per_second`: `198411.969 -> 196924.444` (`-0.75%`)
+    - `throughput/duration`: `0.165151s -> 0.166399s` (`+0.76%`)
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - The dominant `while` remains the CE backward/custom-VJP shell in `fused_cross_entropy_loss/pallas_tpu.py`; the GDN-side recompute did not create a new large control-flow region.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - No. The full-sequence backward path still avoids a host-visible reverse `lax.scan`.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The added recompute lives inside the existing full-sequence backward Pallas launch, so it should change kernel-local work rather than introduce another lowering-visible control-flow shell.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - Not applicable; the point of this arm was to remove backward-side materialization without reintroducing a serial train-path shell.
+  - Is the residual `while` still CE-attributed in this design?
+    - Yes.
+  - What do you expect to happen to `while_ms`?
+    - Roughly flat; the measured result is slightly down (`9.180 ms -> 9.013 ms`).
+  - What do you expect to happen to `remainder_budget_ms`?
+    - Down materially if the in-kernel recompute removed real step-critical tape cost; the measured result instead regressed (`122.154 ms -> 123.568 ms`).
+  - Should this candidate be rejected if `while_ms` remains flat or `remainder_budget_ms` grows? Why?
+    - Reject if `remainder_budget_ms` grows. This arm is only justified if the smaller backward contract reduces the full step, not if it merely hides work behind the same CE shell.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: 9.180 ms -> 9.013 ms`
+    - Forward closed-call `20.664 ms -> 20.664 ms`
+    - Backward closed-call `13.128 ms -> 13.128 ms`
+    - `while: 9.180 ms -> 9.013 ms`
+    - `conditional: 0.025 ms -> 0.026 ms`
+    - `Kernel budget: 33.792 ms -> 33.792 ms`
+    - `Control budget: 9.205 ms -> 9.039 ms`
+    - `Train-path budget: 42.997 ms -> 42.831 ms`
+    - `Step duration: 165.151 ms -> 166.399 ms`
+    - `Remainder budget: 122.154 ms -> 123.568 ms`
+    - `throughput/mfu -0.75%`, `throughput/tokens_per_second -0.75%`, `throughput/duration +0.76%`
+  - Governance:
+    - CE stayed fixed at the required deployable setting: `pallas_tpu` backend, `pallas` backward.
+    - The candidate did not introduce a new control-flow regression: `while` is slightly down and `conditional` stays negligible.
+    - The step still gets slower (`+1.248 ms`) even though the measured train-path budget is slightly lower (`-0.166 ms`), which means the recompute work moved into the remainder rather than leaving the critical path.
+    - `remainder_budget_ms` grows by `+1.414 ms`, violating the candidate’s own acceptance criterion.
+    - Primary metric regresses by `-0.75%` vs the current deployable head, so this is a reject under active performance governance even without a new `while` wall.
+
+- Assessment: **validated, regressed, and reverted**. Pulling backward prepare recompute into the full-sequence Pallas kernel did not unlock the step. The train-path buckets stay essentially flat, the residual CE shell remains, and the step slows because the untracked remainder grows. This is another remainder-loss result, not a viable promotion candidate.
+- Next bold hypothesis:
+  - Do not spend another standalone iteration on the same full-sequence backward recompute boundary. The next serious bet should either move to a different outer control surface (`O`/`M`) or return to CE attribution only if the residual shell becomes ambiguous again.
