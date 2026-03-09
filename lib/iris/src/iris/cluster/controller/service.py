@@ -803,25 +803,44 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         """Register a service endpoint.
 
-        Endpoints are registered regardless of job state, but only become visible to clients
-        (via lookup/list) when the job is executing (not in a terminal state).
+        The ``task_id`` field carries the calling task's wire-format task ID
+        (e.g. ``/user/job/0``).  The endpoint is associated with the owning
+        task so that retry cleanup removes stale endpoints from earlier
+        attempts.
+
+        Endpoints are registered regardless of job state, but only become
+        visible to clients (via lookup/list) when the job is executing (not
+        in a terminal state).
         """
         endpoint_id = str(uuid.uuid4())
 
-        job = self._state.get_job(JobName.from_wire(request.job_id))
+        task_id = JobName.from_wire(request.task_id)
+        job_id, _task_index = task_id.require_task()
+
+        job = self._state.get_job(job_id)
         if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.task_id} not found")
+
+        task = self._state.get_task(task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        if request.attempt_id != task.current_attempt_id:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Stale attempt: task {request.task_id} attempt {request.attempt_id} "
+                f"!= current {task.current_attempt_id}",
+            )
 
         endpoint = ControllerEndpoint(
             endpoint_id=endpoint_id,
             name=request.name,
             address=request.address,
-            job_id=JobName.from_wire(request.job_id),
+            task_id=task_id,
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
         )
 
-        self._state.add_endpoint(endpoint)
+        self._state.add_endpoint(endpoint, task_id=task_id)
 
         return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
@@ -847,7 +866,7 @@ class ControllerServiceImpl:
                     endpoint_id=e.endpoint_id,
                     name=e.name,
                     address=e.address,
-                    job_id=e.job_id.to_wire(),
+                    task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
                 )
                 for e in endpoints
