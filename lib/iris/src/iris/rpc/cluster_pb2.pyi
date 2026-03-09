@@ -173,6 +173,52 @@ class FetchLogsResponse(_message.Message):
     cursor: int
     def __init__(self, entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., cursor: _Optional[int] = ...) -> None: ...
 
+class ProcessInfo(_message.Message):
+    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "cpu_percent", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count")
+    HOSTNAME_FIELD_NUMBER: _ClassVar[int]
+    PID_FIELD_NUMBER: _ClassVar[int]
+    PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
+    UPTIME_MS_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_RSS_BYTES_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_VMS_BYTES_FIELD_NUMBER: _ClassVar[int]
+    CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
+    THREAD_COUNT_FIELD_NUMBER: _ClassVar[int]
+    OPEN_FD_COUNT_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
+    CPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    hostname: str
+    pid: int
+    python_version: str
+    uptime_ms: int
+    memory_rss_bytes: int
+    memory_vms_bytes: int
+    cpu_percent: float
+    thread_count: int
+    open_fd_count: int
+    memory_total_bytes: int
+    cpu_count: int
+    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., cpu_percent: _Optional[float] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ...) -> None: ...
+
+class GetProcessStatusRequest(_message.Message):
+    __slots__ = ("max_log_lines", "log_substring", "min_log_level", "target")
+    MAX_LOG_LINES_FIELD_NUMBER: _ClassVar[int]
+    LOG_SUBSTRING_FIELD_NUMBER: _ClassVar[int]
+    MIN_LOG_LEVEL_FIELD_NUMBER: _ClassVar[int]
+    TARGET_FIELD_NUMBER: _ClassVar[int]
+    max_log_lines: int
+    log_substring: str
+    min_log_level: str
+    target: str
+    def __init__(self, max_log_lines: _Optional[int] = ..., log_substring: _Optional[str] = ..., min_log_level: _Optional[str] = ..., target: _Optional[str] = ...) -> None: ...
+
+class GetProcessStatusResponse(_message.Message):
+    __slots__ = ("process_info", "log_entries")
+    PROCESS_INFO_FIELD_NUMBER: _ClassVar[int]
+    LOG_ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    process_info: ProcessInfo
+    log_entries: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
+    def __init__(self, process_info: _Optional[_Union[ProcessInfo, _Mapping]] = ..., log_entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ...) -> None: ...
+
 class TaskStatus(_message.Message):
     __slots__ = ("task_id", "state", "worker_id", "worker_address", "exit_code", "error", "started_at", "finished_at", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled")
     class PortsEntry(_message.Message):

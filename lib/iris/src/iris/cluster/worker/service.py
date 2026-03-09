@@ -13,6 +13,7 @@ from connectrpc.request import RequestContext
 
 from iris.chaos import chaos
 from iris.cluster.log_store import LogStore
+from iris.cluster.process_status import get_process_status as _get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import cluster_pb2
@@ -132,6 +133,14 @@ class WorkerServiceImpl:
 
             # Delegate to worker for reconciliation
             return self._provider.handle_heartbeat(request)
+
+    def get_process_status(
+        self,
+        request: cluster_pb2.GetProcessStatusRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.GetProcessStatusResponse:
+        """Return local process info and recent process logs."""
+        return _get_process_status(request, self._log_store, self._timer)
 
     def profile_task(
         self,

@@ -35,12 +35,13 @@ from iris.cluster.controller.state import (
     ControllerWorker,
 )
 from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
+from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.proto_utils import job_state_name, task_state_name
-from iris.time_utils import Timestamp
+from iris.time_utils import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,21 @@ def worker_status_message(w: ControllerWorker) -> str:
         age = w.last_heartbeat.age_ms()
         return f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {age // 1000}s ago)"
     return "Unhealthy (no failures recorded)"
+
+
+_WORKER_TARGET_PREFIX = "/system/worker/"
+
+
+def _parse_worker_target(target: str) -> str | None:
+    """Extract worker_id from a /system/worker/<worker_id> target.
+
+    Returns the worker_id string, or None if the target does not match.
+    """
+    if target.startswith(_WORKER_TARGET_PREFIX):
+        worker_id = target[len(_WORKER_TARGET_PREFIX) :]
+        if worker_id:
+            return worker_id
+    return None
 
 
 def _task_state_key(state: int) -> str:
@@ -267,6 +283,7 @@ class ControllerServiceImpl:
         self._state = state
         self._controller = controller
         self._bundle_store = bundle_store
+        self._timer = Timer()
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -975,6 +992,15 @@ class ControllerServiceImpl:
 
     # --- Profiling ---
 
+    def _resolve_worker_stub(self, worker_id_str: str) -> WorkerServiceClientSync:
+        """Resolve a worker ID to a healthy stub, raising ConnectError on failure."""
+        worker = self._state.get_worker(WorkerId(worker_id_str))
+        if not worker:
+            raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
+        if not worker.healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id_str} is unavailable")
+        return self._controller.stub_factory.get_stub(worker.address)
+
     def profile_task(
         self,
         request: cluster_pb2.ProfileTaskRequest,
@@ -983,8 +1009,8 @@ class ControllerServiceImpl:
         """Profile a running task or system process.
 
         Target routing:
-        - /system/process with threads: handled locally (controller thread dump)
-        - /system/process with cpu/memory: not yet supported
+        - /system/process: the controller process itself
+        - /system/worker/<worker_id>: proxy to a specific worker (profiles the worker process)
         - /job/.../task/N: proxied to the task's worker
         """
         # Handle controller-local targets: profile the controller process itself
@@ -998,6 +1024,22 @@ class ControllerServiceImpl:
             except Exception as e:
                 return cluster_pb2.ProfileTaskResponse(error=str(e))
 
+        # /system/worker/<worker_id>: proxy profile to the worker's own process
+        worker_id = _parse_worker_target(request.target)
+        if worker_id is not None:
+            stub = self._resolve_worker_stub(worker_id)
+            forwarded = cluster_pb2.ProfileTaskRequest(
+                target="/system/process",
+                duration_seconds=request.duration_seconds,
+                profile_type=request.profile_type,
+            )
+            timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
+            resp = stub.profile_task(forwarded, timeout_ms=timeout_ms)
+            return cluster_pb2.ProfileTaskResponse(
+                profile_data=resp.profile_data,
+                error=resp.error,
+            )
+
         # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
             parsed = parse_profile_target(request.target)
@@ -1009,13 +1051,13 @@ class ControllerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 
-        worker_id = task.worker_id
-        if not worker_id:
+        task_worker_id = task.worker_id
+        if not task_worker_id:
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not assigned to a worker")
 
-        worker = self._state.get_worker(worker_id)
+        worker = self._state.get_worker(task_worker_id)
         if not worker or not worker.healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
         stub = self._controller.stub_factory.get_stub(worker.address)
@@ -1105,7 +1147,26 @@ class ControllerServiceImpl:
         request: cluster_pb2.FetchLogsRequest,
         ctx: Any,
     ) -> cluster_pb2.FetchLogsResponse:
-        """Fetch logs from the LogStore by key with filtering and pagination."""
+        """Fetch logs by source key with filtering and pagination.
+
+        Source routing:
+        - /system/process, /job/...: served from the controller's own LogStore
+        - /system/worker/<worker_id>: proxied to the worker's FetchLogs(/system/process)
+        """
+        worker_id = _parse_worker_target(request.source)
+        if worker_id is not None:
+            stub = self._resolve_worker_stub(worker_id)
+            forwarded = cluster_pb2.FetchLogsRequest(
+                source="/system/process",
+                since_ms=request.since_ms,
+                cursor=request.cursor,
+                substring=request.substring,
+                max_lines=request.max_lines,
+                tail=request.tail,
+                min_level=request.min_level,
+            )
+            return stub.fetch_logs(forwarded, timeout_ms=10000)
+
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._state.log_store.get_logs(
             request.source,
@@ -1195,3 +1256,39 @@ class ControllerServiceImpl:
         )
         resp.created_at.CopyFrom(result.proto.created_at)
         return resp
+
+    def get_process_status(
+        self,
+        request: cluster_pb2.GetProcessStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetProcessStatusResponse:
+        """Return process info and recent logs.
+
+        Target routing (same convention as ProfileTask/FetchLogs):
+        - empty or /system/process: the controller process itself
+        - /system/worker/<worker_id>: proxy to a specific worker
+        """
+        target = request.target
+        if not target or target == "/system/process":
+            return get_process_status(request, self._state.log_store, self._timer)
+
+        # Parse /system/worker/<worker_id>
+        worker_id = _parse_worker_target(target)
+        if worker_id is None:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
+
+        worker = self._state.get_worker(WorkerId(worker_id))
+        if not worker:
+            raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
+        if not worker.healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+
+        stub = self._controller.stub_factory.get_stub(worker.address)
+        # Forward with target set to /system/process so the worker returns its own status
+        forwarded = cluster_pb2.GetProcessStatusRequest(
+            max_log_lines=request.max_log_lines,
+            log_substring=request.log_substring,
+            min_log_level=request.min_log_level,
+            target="/system/process",
+        )
+        return stub.get_process_status(forwarded, timeout_ms=10000)

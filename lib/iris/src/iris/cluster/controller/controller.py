@@ -1173,6 +1173,10 @@ class Controller:
                         # All workers on the same slice must be failed immediately
                         # so their tasks (including reservation holders) are cascaded
                         # rather than waiting for heartbeat timeouts.
+                        # TODO(#3425): This prunes sibling workers before their in-flight
+                        # heartbeat results are processed, causing complete_heartbeat() to
+                        # silently drop any logs/states those workers reported this round.
+                        # See the corresponding TODO in state.py complete_heartbeat().
                         sibling_vms = self._autoscaler.notify_worker_failed(snapshot.vm_address)
                         if sibling_vms:
                             sibling_failed = self._state.fail_workers_by_vm_addresses(
