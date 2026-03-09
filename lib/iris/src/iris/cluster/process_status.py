@@ -9,9 +9,9 @@ logs into a GetProcessStatusResponse. Used identically by both services.
 
 import os
 import platform
+import resource
 import sys
-
-import psutil
+import threading
 
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore
 from iris.cluster.runtime.process import _read_proc_cpu_percent
@@ -23,20 +23,39 @@ _prev_cpu_total: float = 0.0
 _prev_cpu_utime: float = 0.0
 
 
+def _memory_bytes() -> tuple[int, int]:
+    """Return (rss_bytes, vms_bytes). vms is approximated as ru_maxrss.
+
+    Linux reports ru_rss and ru_maxrss in kilobytes; macOS reports bytes.
+    """
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    scale = 1024 if sys.platform == "linux" else 1
+    rss = usage.ru_rss * scale
+    vms = usage.ru_maxrss * scale
+    return rss, vms
+
+
+def _total_memory_bytes() -> int:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError):
+        return 0
+
+
+def _open_fd_count() -> int:
+    if sys.platform == "linux":
+        try:
+            return len(os.listdir("/proc/self/fd"))
+        except OSError:
+            pass
+    return 0
+
+
 def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
     """Collect information about the current process and host."""
     global _prev_cpu_total, _prev_cpu_utime
 
-    proc = psutil.Process(os.getpid())
-    mem = proc.memory_info()
-    vm = psutil.virtual_memory()
-
-    # File descriptor count (Linux only; returns -1 on unsupported platforms)
-    try:
-        fd_count = proc.num_fds()
-    except AttributeError:
-        fd_count = 0
-
+    rss, vms = _memory_bytes()
     cpu_pct, _prev_cpu_total, _prev_cpu_utime = _read_proc_cpu_percent(os.getpid(), _prev_cpu_total, _prev_cpu_utime)
 
     return cluster_pb2.ProcessInfo(
@@ -44,12 +63,12 @@ def collect_process_info(timer: Timer) -> cluster_pb2.ProcessInfo:
         pid=os.getpid(),
         python_version=sys.version.split()[0],
         uptime_ms=timer.elapsed_ms(),
-        memory_rss_bytes=mem.rss,
-        memory_vms_bytes=mem.vms,
+        memory_rss_bytes=rss,
+        memory_vms_bytes=vms,
         cpu_percent=cpu_pct,
-        thread_count=proc.num_threads(),
-        open_fd_count=fd_count,
-        memory_total_bytes=vm.total,
+        thread_count=threading.active_count(),
+        open_fd_count=_open_fd_count(),
+        memory_total_bytes=_total_memory_bytes(),
         cpu_count=os.cpu_count() or 0,
         git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
     )

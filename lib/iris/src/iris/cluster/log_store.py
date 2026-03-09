@@ -86,6 +86,7 @@ class LogStore:
         self._read_conn = self._make_conn(db_path)
 
         self._write_lock = Lock()
+        self._read_lock = Lock()
         self._max_records = max_records
         self._rows_since_eviction_check = 0
         self._eviction_check_interval = max_records // 10
@@ -170,22 +171,24 @@ class LogStore:
 
         if tail and max_lines > 0:
             params.append(max_lines)
-            rows = self._read_conn.execute(
-                f"SELECT id, source, data, epoch_ms, level FROM logs "
-                f"WHERE key = ? AND id > ?{where_extra} ORDER BY id DESC LIMIT ?",
-                params,
-            ).fetchall()
+            with self._read_lock:
+                rows = self._read_conn.execute(
+                    f"SELECT id, source, data, epoch_ms, level FROM logs "
+                    f"WHERE key = ? AND id > ?{where_extra} ORDER BY id DESC LIMIT ?",
+                    params,
+                ).fetchall()
             rows.reverse()
         else:
             limit_clause = ""
             if max_lines > 0:
                 limit_clause = " LIMIT ?"
                 params.append(max_lines)
-            rows = self._read_conn.execute(
-                f"SELECT id, source, data, epoch_ms, level FROM logs "
-                f"WHERE key = ? AND id > ?{where_extra} ORDER BY id{limit_clause}",
-                params,
-            ).fetchall()
+            with self._read_lock:
+                rows = self._read_conn.execute(
+                    f"SELECT id, source, data, epoch_ms, level FROM logs "
+                    f"WHERE key = ? AND id > ?{where_extra} ORDER BY id{limit_clause}",
+                    params,
+                ).fetchall()
 
         if not rows:
             return LogReadResult(entries=[], cursor=cursor)
@@ -235,10 +238,11 @@ class LogStore:
             limit_clause = " LIMIT ?"
             params.append(max_lines)
 
-        rows = self._read_conn.execute(
-            f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
-            params,
-        ).fetchall()
+        with self._read_lock:
+            rows = self._read_conn.execute(
+                f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
+                params,
+            ).fetchall()
 
         max_id = max((r[0] for r in rows), default=cursor)
         entries = []
@@ -255,10 +259,11 @@ class LogStore:
         return LogReadResult(entries=entries, cursor=max_id)
 
     def has_logs(self, key: str) -> bool:
-        row = self._read_conn.execute(
-            "SELECT 1 FROM logs WHERE key = ? LIMIT 1",
-            (key,),
-        ).fetchone()
+        with self._read_lock:
+            row = self._read_conn.execute(
+                "SELECT 1 FROM logs WHERE key = ? LIMIT 1",
+                (key,),
+            ).fetchone()
         return row is not None
 
     def clear(self, key: str) -> None:
