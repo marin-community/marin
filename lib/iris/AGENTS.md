@@ -40,6 +40,14 @@ See `TESTING.md` for the complete testing policy, markers, and additional comman
 - Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
 - Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
 
+## Playwright Test Screenshot Review
+
+After running E2E tests that involve the dashboard:
+- Check `IRIS_SCREENSHOT_DIR` (or `tmp_path` from conftest) for captured screenshots
+- For each screenshot: verify the dashboard rendered without error states, spinner overlays, or blank panels
+- If a screenshot shows an error toast, blank table, or missing data that should be present: treat as test failure even if the Playwright assertion passed
+- Use `mcp__plugin_playwright_playwright__browser_take_screenshot` if running interactively and want to capture live state
+
 ## Architecture Notes
 
 Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).

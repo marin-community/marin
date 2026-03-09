@@ -1,5 +1,7 @@
 # Agent Guidelines for Marin
 
+@CODING.md
+
 Start with the shared practices below. Consult subproject manuals for directory-specific guidance:
 
 - `lib/levanter/AGENTS.md` — Levanter (JAX training library)
@@ -95,9 +97,21 @@ rollout_queue = InMemoryRolloutQueue()
 - Produce detailed plans with code snippets. Ask questions up front instead of guessing.
 - When a request is too large for one pass, capture a plan in `.agents/projects/` before pausing.
 
+## Code Reuse
+
+Before writing any utility function, helper, or data structure:
+1. Search the codebase: `grep -r "def <function_concept>" lib/`
+2. Check subproject utils: `lib/marin/src/marin/`, `lib/iris/src/iris/`, `lib/levanter/`
+3. Check `pyproject.toml` for available third-party packages before adding new ones
+
+If a suitable implementation exists, use it. Do not create parallel implementations.
+
 ## Testing
 
 - Always fix tests you broke. Do not relax tolerances or hack around failures.
 - Prefer integration-style tests that validate externally-observable behavior.
-- Do not create tautological tests (type exists, constant has value, etc.).
+- **DO NOT write tautological tests**: tests that only verify the code you just wrote (e.g., object has attribute, constant equals value, function returns its input). A test must fail if the behavior is wrong, not just if the implementation changes.
 - Use pytest fixtures and parameterization to avoid duplication.
+- **Before writing any test**: search for existing test files in `tests/` covering the module you changed. Extend an existing test file before creating a new one.
+- **No mocks** unless testing I/O boundaries (network, filesystem). Test against real behavior.
+- See `CODING.md` for detailed anti-patterns with examples.
