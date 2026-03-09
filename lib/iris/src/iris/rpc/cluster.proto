@@ -101,6 +101,41 @@ message FetchLogsResponse {
   int64 cursor = 2;            // Max autoincrement id seen (cursor for next poll)
 }
 
+// --- Process Status ---
+// Shared by both ControllerService and WorkerService.
+// Returns local process info (host, resource usage) and recent process logs.
+
+message ProcessInfo {
+  string hostname = 1;
+  int32 pid = 2;
+  string python_version = 3;
+  int64 uptime_ms = 4;          // Process uptime in milliseconds
+  int64 memory_rss_bytes = 5;   // Resident set size
+  int64 memory_vms_bytes = 6;   // Virtual memory size
+  float cpu_percent = 7;        // CPU utilization (0-100)
+  int32 thread_count = 8;
+  int32 open_fd_count = 9;      // Open file descriptors
+  int64 memory_total_bytes = 10; // Total system memory
+  int32 cpu_count = 11;          // Number of CPU cores
+  string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
+}
+
+message GetProcessStatusRequest {
+  int32 max_log_lines = 1;     // Max log entries to include (0 = default 200)
+  string log_substring = 2;    // Substring filter for logs
+  string min_log_level = 3;    // Minimum log level filter
+
+  // Target process. Uses the same naming convention as profiling/logs:
+  //   /system/process              - the local process (default if empty)
+  //   /system/worker/<worker_id>   - proxy to a specific worker
+  string target = 4;
+}
+
+message GetProcessStatusResponse {
+  ProcessInfo process_info = 1;
+  repeated iris.logging.LogEntry log_entries = 2;
+}
+
 enum JobState {
   JOB_STATE_UNSPECIFIED = 0;
   JOB_STATE_PENDING = 1;
@@ -433,6 +468,10 @@ message WorkerMetadata {
   // VM IP address used for autoscaler slice/worker matching.
   // Self-discovered by the worker at startup via socket probe.
   string vm_address = 41;
+
+  // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
+  // Allows the controller to surface per-worker version info for debugging.
+  string git_hash = 42;
 }
 
 // ============================================================================
@@ -696,16 +735,6 @@ message Controller {
     int32 worker_count = 5;
   }
 
-  // --- Cluster Summary ---
-  message GetClusterSummaryRequest {}
-  message GetClusterSummaryResponse {
-    map<string, int32> job_state_counts = 1;
-    int32 total_jobs = 2;
-    int32 total_workers = 3;
-    int32 healthy_workers = 4;
-    int32 total_users = 5;
-  }
-
   message UserSummary {
     string user = 1;
     map<string, int32> task_state_counts = 2;
@@ -889,8 +918,6 @@ service ControllerService {
   // Transactions / Actions Log
   rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 
-  // Cluster summary (aggregated counts)
-  rpc GetClusterSummary(Controller.GetClusterSummaryRequest) returns (Controller.GetClusterSummaryResponse);
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
 
   // Task logs (proxied to worker)
@@ -907,6 +934,9 @@ service ControllerService {
 
   // Checkpoint
   rpc BeginCheckpoint(Controller.BeginCheckpointRequest) returns (Controller.BeginCheckpointResponse);
+
+  // Process status (local process info + recent logs)
+  rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
 }
 
 service WorkerService {
@@ -916,4 +946,7 @@ service WorkerService {
   rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc ProfileTask(ProfileTaskRequest) returns (ProfileTaskResponse);
+
+  // Process status (local process info + recent logs)
+  rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
 }

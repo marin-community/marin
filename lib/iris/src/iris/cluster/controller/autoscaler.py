@@ -805,20 +805,10 @@ class Autoscaler:
         self._last_routing_decision = result
 
         if result.unmet_entries:
-            logger.error(
-                "CAPACITY INSUFFICIENT: %d demand entries cannot be satisfied by any group",
+            logger.debug(
+                "Unmet demand: %d entries cannot be satisfied (visible in dashboard)",
                 len(result.unmet_entries),
             )
-            for unmet in result.unmet_entries[:10]:
-                entry = unmet.entry
-                logger.warning(
-                    "Unmet demand: reason=%s device=%s:%s resources=%s tasks=%s",
-                    unmet.reason,
-                    entry.normalized.device_type,
-                    entry.normalized.device_variants,
-                    entry.resources,
-                    entry.task_ids,
-                )
 
         decisions = []
         for name, group in self._groups.items():
@@ -1266,7 +1256,7 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
-    def notify_worker_failed(self, vm_address: str) -> None:
+    def notify_worker_failed(self, vm_address: str) -> list[str]:
         """Called by controller when a worker fails. Terminates the containing slice.
 
         This integrates with the existing controller failure cascade:
@@ -1277,11 +1267,19 @@ class Autoscaler:
 
         If the slice was short-lived (died soon after creation), applies backoff
         to the scale group to prevent thrashing on bad zones/preemption.
+
+        Returns:
+            List of sibling VM addresses from the same slice (excluding the
+            originally failed VM). The controller uses these to immediately
+            fail sibling workers, since the entire slice is being terminated.
         """
         slice_id, group = self._find_slice_for_worker(vm_address)
         if not slice_id or not group:
             logger.debug("VM %s not found in any managed slice", vm_address)
-            return
+            return []
+
+        # Collect sibling VM addresses before termination removes them.
+        sibling_vms = [addr for addr in group.get_slice_vm_addresses(slice_id) if addr != vm_address]
 
         logger.info("Worker at VM %s failed, terminating slice %s", vm_address, slice_id)
         self._log_action(
@@ -1299,6 +1297,8 @@ class Autoscaler:
             self._unregister_slice_workers(slice_id)
         except Exception as e:
             logger.warning("Failed to terminate slice %s: %s", slice_id, e)
+
+        return sibling_vms
 
     def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
         """Find the slice and group containing a worker by VM address."""

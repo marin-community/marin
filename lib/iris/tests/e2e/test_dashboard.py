@@ -368,10 +368,10 @@ def test_autoscaler_tab(cluster, page, screenshot):
     screenshot("autoscaler-tab")
 
 
-def test_controller_logs(cluster, page, screenshot):
-    """Logs tab renders the log viewer component."""
+def test_controller_status(cluster, page, screenshot):
+    """Status tab renders process info and log viewer."""
     wait_for_dashboard_ready(page)
-    dashboard_click(page, 'button.tab-btn:has-text("Logs")')
+    dashboard_click(page, 'button.tab-btn:has-text("Status")')
 
     if not _is_noop_page(page):
         page.wait_for_selector(".log-container", timeout=10000)
@@ -380,4 +380,4 @@ def test_controller_logs(cluster, page, screenshot):
             " || document.querySelector('.log-empty') !== null",
             timeout=10000,
         )
-    screenshot("controller-logs")
+    screenshot("controller-status")
