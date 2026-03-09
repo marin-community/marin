@@ -335,6 +335,7 @@ class LocalPlatform:
         port_allocator: PortAllocator | None = None,
         worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
         gpu_count_by_group: dict[str, int] | None = None,
+        storage_prefix: str = "",
     ):
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix)
@@ -347,6 +348,7 @@ class LocalPlatform:
         self._port_allocator = port_allocator
         self._worker_attributes_by_group = worker_attributes_by_group or {}
         self._gpu_count_by_group = gpu_count_by_group or {}
+        self._storage_prefix = storage_prefix
         self._local_controller: object | None = None
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
@@ -490,6 +492,7 @@ class LocalPlatform:
                 worker_id=worker_id,
                 default_task_image="process-runtime-unused",
                 poll_interval=Duration.from_seconds(0.1),
+                storage_prefix=self._storage_prefix,
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
             worker = Worker(

@@ -86,6 +86,8 @@ def create_local_autoscaler(
         if sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and sg_config.resources.device_count > 0:
             gpu_count_by_group[name] = sg_config.resources.device_count
 
+    storage_prefix = config.storage.bundle_prefix or ""
+
     platform = LocalPlatform(
         label_prefix=label_prefix,
         threads=threads,
@@ -95,6 +97,7 @@ def create_local_autoscaler(
         port_allocator=port_allocator,
         worker_attributes_by_group=worker_attributes_by_group,
         gpu_count_by_group=gpu_count_by_group,
+        storage_prefix=storage_prefix,
     )
 
     scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
