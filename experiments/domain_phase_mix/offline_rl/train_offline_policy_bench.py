@@ -417,6 +417,16 @@ def _decision_state_defaults(frame: pd.DataFrame, feature_keys: tuple[str, ...])
     return defaults
 
 
+def _family_decision_state_defaults(
+    frame: pd.DataFrame,
+    feature_keys: tuple[str, ...],
+) -> dict[str, dict[str, dict[str, float]]]:
+    defaults: dict[str, dict[str, dict[str, float]]] = {}
+    for run_family, family_frame in frame.groupby("run_family", sort=True):
+        defaults[str(run_family)] = _decision_state_defaults(family_frame, feature_keys)
+    return defaults
+
+
 def _build_discrete_dataset(
     frame: pd.DataFrame,
     feature_keys: tuple[str, ...],
@@ -1007,9 +1017,12 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
     full_models_dir.mkdir(parents=True, exist_ok=True)
     final_artifacts: dict[str, str] = {}
     decision_state_defaults_path = output_dir / "artifacts" / "decision_state_defaults.json"
+    family_decision_state_defaults_path = output_dir / "artifacts" / "decision_state_defaults_by_family.json"
     decision_state_defaults_path.parent.mkdir(parents=True, exist_ok=True)
     with decision_state_defaults_path.open("w") as f:
         json.dump(_decision_state_defaults(decisions, feature_keys), f, indent=2, sort_keys=True)
+    with family_decision_state_defaults_path.open("w") as f:
+        json.dump(_family_decision_state_defaults(decisions, feature_keys), f, indent=2, sort_keys=True)
 
     outcome_bundle_path = full_models_dir / "outcome_planner" / "planner.joblib"
     outcome_bundle_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1084,7 +1097,10 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={"support_threshold": config.support_threshold},
-            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
+            aux_paths={
+                "decision_state_defaults": str(decision_state_defaults_path.resolve()),
+                "decision_state_defaults_by_family": str(family_decision_state_defaults_path.resolve()),
+            },
         ),
         "discrete_iql": _policy_artifact(
             kind="torch_discrete_iql_v2",
@@ -1096,7 +1112,10 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={},
-            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
+            aux_paths={
+                "decision_state_defaults": str(decision_state_defaults_path.resolve()),
+                "decision_state_defaults_by_family": str(family_decision_state_defaults_path.resolve()),
+            },
         ),
         "discrete_cql": _policy_artifact(
             kind="d3rlpy_discrete_cql_v2",
@@ -1108,7 +1127,10 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={},
-            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
+            aux_paths={
+                "decision_state_defaults": str(decision_state_defaults_path.resolve()),
+                "decision_state_defaults_by_family": str(family_decision_state_defaults_path.resolve()),
+            },
         ),
         "discrete_bc": _policy_artifact(
             kind="d3rlpy_discrete_bc_v2",
@@ -1120,7 +1142,10 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={},
-            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
+            aux_paths={
+                "decision_state_defaults": str(decision_state_defaults_path.resolve()),
+                "decision_state_defaults_by_family": str(family_decision_state_defaults_path.resolve()),
+            },
         ),
     }
     if config.include_continuous_cql and "continuous_cql_ablation" in final_artifacts:
@@ -1134,7 +1159,10 @@ def run_offline_policy_bench(config: OfflinePolicyBenchConfig) -> dict[str, Any]
             reward_std=full_reward_std,
             objective_metric=config.objective_metric,
             metadata={},
-            aux_paths={"decision_state_defaults": str(decision_state_defaults_path.resolve())},
+            aux_paths={
+                "decision_state_defaults": str(decision_state_defaults_path.resolve()),
+                "decision_state_defaults_by_family": str(family_decision_state_defaults_path.resolve()),
+            },
         )
 
     artifacts_dir = output_dir / "artifacts"

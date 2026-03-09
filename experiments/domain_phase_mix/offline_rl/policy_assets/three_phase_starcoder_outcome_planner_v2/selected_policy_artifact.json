@@ -25,7 +25,8 @@
     0.949999988079071
   ],
   "aux_paths": {
-    "decision_state_defaults": "decision_state_defaults.json"
+    "decision_state_defaults": "decision_state_defaults.json",
+    "decision_state_defaults_by_family": "decision_state_defaults_by_family.json"
   },
   "kind": "sklearn_outcome_planner_v2",
   "metadata": {

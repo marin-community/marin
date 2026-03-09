@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from experiments.domain_phase_mix.offline_rl import evaluate_policy_two_phase_starcoder as two_phase_eval
 from experiments.domain_phase_mix.offline_rl import evaluate_policy_three_phase_starcoder as eval_runner
 from experiments.domain_phase_mix.offline_rl.build_pooled_transition_dataset import (
     BuildPooledTransitionConfig,
@@ -509,6 +510,232 @@ def test_initial_policy_state_uses_decision_zero_defaults(tmp_path):
     assert state["decision_index"] == 0.0
     assert state["last_obj_bpb"] == 1.23
     assert state["remaining_decisions"] == 2.0
+
+
+def test_initial_policy_state_prefers_family_specific_defaults(tmp_path):
+    artifact_dir = tmp_path / "family_defaults_eval"
+    artifact_dir.mkdir(parents=True)
+    defaults_path = artifact_dir / "decision_state_defaults.json"
+    defaults_path.write_text(json.dumps({"0": {"last_obj_bpb": 9.0}}))
+    family_defaults_path = artifact_dir / "decision_state_defaults_by_family.json"
+    family_defaults_path.write_text(
+        json.dumps(
+            {
+                "two_phase_starcoder": {
+                    "0": {
+                        "decision_index": 0.0,
+                        "num_phases_total": 2.0,
+                        "remaining_decisions": 1.0,
+                        "budget_frac_consumed": 0.0,
+                        "budget_frac_remaining": 1.0,
+                        "last_obj_bpb": 1.5,
+                        "prev_action_starcoder": 0.5,
+                    }
+                }
+            }
+        )
+    )
+    artifact_path = artifact_dir / "selected_policy_artifact.json"
+    save_policy_artifact(
+        artifact_path,
+        PolicyArtifactV2(
+            kind="d3rlpy_discrete_bc_v2",
+            objective_metric="eval/loss",
+            state_keys=(
+                "decision_index",
+                "num_phases_total",
+                "remaining_decisions",
+                "budget_frac_consumed",
+                "budget_frac_remaining",
+                "last_obj_bpb",
+                "prev_action_starcoder",
+            ),
+            action_low=0.05,
+            action_high=0.95,
+            action_values=[0.05, 0.5, 0.95],
+            state_mean=[9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0],
+            state_std=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            reward_mean=0.0,
+            reward_std=1.0,
+            model_path="model.d3",
+            aux_paths={
+                "decision_state_defaults": str(defaults_path),
+                "decision_state_defaults_by_family": str(family_defaults_path),
+            },
+        ),
+    )
+    eval_runner._load_policy_artifact_cached.cache_clear()
+    eval_runner._load_decision_state_defaults.cache_clear()
+    eval_runner._load_family_decision_state_defaults.cache_clear()
+
+    state = eval_runner._initial_policy_state(
+        str(artifact_path),
+        num_phases_total=2,
+        total_steps=3814,
+        phase_end_steps=(1904,),
+        run_family="two_phase_starcoder",
+    )
+    assert state["decision_index"] == 0.0
+    assert state["last_obj_bpb"] == 1.5
+    assert state["remaining_decisions"] == 1.0
+
+
+def test_two_phase_hypothetical_state_uses_family_defaults_and_prior_action(tmp_path):
+    artifact_dir = tmp_path / "two_phase_eval"
+    artifact_dir.mkdir(parents=True)
+    family_defaults_path = artifact_dir / "decision_state_defaults_by_family.json"
+    family_defaults_path.write_text(
+        json.dumps(
+            {
+                "two_phase_starcoder": {
+                    "1": {
+                        "decision_index": 1.0,
+                        "num_phases_total": 2.0,
+                        "remaining_decisions": 0.0,
+                        "budget_frac_consumed": 1904.0 / 3814.0,
+                        "budget_frac_remaining": 1.0 - (1904.0 / 3814.0),
+                        "last_obj_bpb": 0.9,
+                        "steps_since_last_eval_frac": 0.2,
+                        "global_step": 1904.0,
+                        "prev_action_starcoder": 0.05,
+                        "cumulative_starcoder_exposure": 0.05,
+                        "delta_prev_action": 0.0,
+                    }
+                }
+            }
+        )
+    )
+    artifact_path = artifact_dir / "selected_policy_artifact.json"
+    save_policy_artifact(
+        artifact_path,
+        PolicyArtifactV2(
+            kind="d3rlpy_discrete_bc_v2",
+            objective_metric="eval/loss",
+            state_keys=(
+                "decision_index",
+                "num_phases_total",
+                "remaining_decisions",
+                "budget_frac_consumed",
+                "budget_frac_remaining",
+                "last_obj_bpb",
+                "steps_since_last_eval_frac",
+                "global_step",
+                "prev_action_starcoder",
+                "cumulative_starcoder_exposure",
+                "delta_prev_action",
+            ),
+            action_low=0.05,
+            action_high=0.95,
+            action_values=[0.05, 0.5, 0.95],
+            state_mean=[0.0] * 11,
+            state_std=[1.0] * 11,
+            reward_mean=0.0,
+            reward_std=1.0,
+            model_path="model.d3",
+            aux_paths={"decision_state_defaults_by_family": str(family_defaults_path)},
+        ),
+    )
+    eval_runner._load_policy_artifact_cached.cache_clear()
+    eval_runner._load_family_decision_state_defaults.cache_clear()
+
+    state = two_phase_eval._hypothetical_state_for_decision(
+        artifact_path=str(artifact_path),
+        config=two_phase_eval.EvaluateTwoPhaseConfig(
+            policy_artifact_path=str(artifact_path),
+            output_dir=str(tmp_path / "out"),
+        ),
+        decision_index=1,
+        prior_actions=[0.23],
+    )
+    assert math.isclose(state["prev_action_starcoder"], 0.23, rel_tol=0.0, abs_tol=1e-6)
+    assert math.isclose(state["cumulative_starcoder_exposure"], 0.23, rel_tol=0.0, abs_tol=1e-6)
+    assert state["remaining_decisions"] == 0.0
+    assert state["last_obj_bpb"] == 0.9
+    assert state["steps_since_last_eval_frac"] == 0.2
+
+
+def test_two_phase_inspect_policy_writes_actions(tmp_path, monkeypatch):
+    artifact_dir = tmp_path / "two_phase_inspect"
+    artifact_dir.mkdir(parents=True)
+    family_defaults_path = artifact_dir / "decision_state_defaults_by_family.json"
+    family_defaults_path.write_text(
+        json.dumps(
+            {
+                "two_phase_starcoder": {
+                    "0": {
+                        "decision_index": 0.0,
+                        "num_phases_total": 2.0,
+                        "remaining_decisions": 1.0,
+                        "budget_frac_consumed": 0.0,
+                        "budget_frac_remaining": 1.0,
+                        "last_obj_bpb": 5.0,
+                        "global_step": 0.0,
+                        "prev_action_starcoder": 0.5,
+                        "cumulative_starcoder_exposure": 0.0,
+                        "delta_prev_action": 0.0,
+                    },
+                    "1": {
+                        "decision_index": 1.0,
+                        "num_phases_total": 2.0,
+                        "remaining_decisions": 0.0,
+                        "budget_frac_consumed": 1904.0 / 3814.0,
+                        "budget_frac_remaining": 1.0 - (1904.0 / 3814.0),
+                        "last_obj_bpb": 1.0,
+                        "global_step": 1904.0,
+                        "prev_action_starcoder": 0.05,
+                        "cumulative_starcoder_exposure": 0.05,
+                        "delta_prev_action": 0.0,
+                    },
+                }
+            }
+        )
+    )
+    artifact_path = artifact_dir / "selected_policy_artifact.json"
+    save_policy_artifact(
+        artifact_path,
+        PolicyArtifactV2(
+            kind="d3rlpy_discrete_bc_v2",
+            objective_metric="eval/loss",
+            state_keys=(
+                "decision_index",
+                "num_phases_total",
+                "remaining_decisions",
+                "budget_frac_consumed",
+                "budget_frac_remaining",
+                "last_obj_bpb",
+                "global_step",
+                "prev_action_starcoder",
+                "cumulative_starcoder_exposure",
+                "delta_prev_action",
+            ),
+            action_low=0.05,
+            action_high=0.95,
+            action_values=[0.05, 0.5, 0.95],
+            state_mean=[0.0] * 10,
+            state_std=[1.0] * 10,
+            reward_mean=0.0,
+            reward_std=1.0,
+            model_path="model.d3",
+            aux_paths={"decision_state_defaults_by_family": str(family_defaults_path)},
+        ),
+    )
+    eval_runner._load_policy_artifact_cached.cache_clear()
+    eval_runner._load_family_decision_state_defaults.cache_clear()
+
+    def _fake_predict(_artifact_path, state, device="cpu"):
+        return 0.05 if state["remaining_decisions"] == 1.0 else 0.23
+
+    monkeypatch.setattr(eval_runner, "_policy_predict_action", _fake_predict)
+    config = two_phase_eval.EvaluateTwoPhaseConfig(
+        policy_artifact_path=str(artifact_path),
+        output_dir=str(tmp_path / "inspect_out"),
+        inspect_only=True,
+    )
+    result = two_phase_eval.inspect_policy(config)
+
+    assert result.iloc[0]["phase_0_starcoder"] == 0.05
+    assert result.iloc[0]["phase_1_starcoder"] == 0.23
+    assert (tmp_path / "inspect_out" / "policy_inspection_summary.json").exists()
 
 
 def test_torch_discrete_iql_policy_prediction(tmp_path):

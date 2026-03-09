@@ -279,24 +279,46 @@ def _artifact_state_defaults(artifact: PolicyArtifactV1 | PolicyArtifactV2) -> d
     }
 
 
-def _initial_policy_state(artifact_path: str) -> dict[str, float]:
+def _state_from_defaults(
+    artifact_path: str,
+    *,
+    decision_index: int,
+    num_phases_total: int,
+    total_steps: int,
+    phase_end_steps: tuple[int, ...],
+    prior_actions: list[float],
+    run_family: str | None = None,
+) -> dict[str, float]:
     artifact = _load_policy_artifact_cached(artifact_path)
     state = _artifact_state_defaults(artifact)
     if isinstance(artifact, PolicyArtifactV2):
-        decision_defaults = _load_decision_state_defaults(artifact_path).get("0", {})
+        decision_defaults = _decision_state_default(
+            artifact_path,
+            decision_index=decision_index,
+            run_family=run_family,
+        )
         state.update({key: float(value) for key, value in decision_defaults.items() if key in artifact.state_keys})
+        phase_lengths = _phase_lengths(total_steps, phase_end_steps)
+        prev_action_value, cumulative_exposure, delta_prev_action = _compute_exposure(
+            prior_actions,
+            phase_lengths,
+            decision_index,
+        )
+        decision_steps = _decision_steps(phase_end_steps)
+        decision_step = decision_steps[decision_index]
+        budget_frac_consumed = float(decision_step) / float(total_steps)
         state.update(
             {
-                "decision_index": 0.0,
-                "num_phases_total": 3.0,
-                "remaining_decisions": 2.0,
-                "budget_frac_consumed": 0.0,
-                "budget_frac_remaining": 1.0,
-                "global_step": 0.0,
+                "decision_index": float(decision_index),
+                "num_phases_total": float(num_phases_total),
+                "remaining_decisions": float(max(0, num_phases_total - decision_index - 1)),
+                "budget_frac_consumed": budget_frac_consumed,
+                "budget_frac_remaining": 1.0 - budget_frac_consumed,
+                "global_step": float(decision_step),
                 "steps_since_last_eval_frac": 1.0,
-                "prev_action_starcoder": 0.5,
-                "cumulative_starcoder_exposure": 0.0,
-                "delta_prev_action": 0.0,
+                "prev_action_starcoder": float(prev_action_value),
+                "cumulative_starcoder_exposure": float(cumulative_exposure),
+                "delta_prev_action": float(delta_prev_action),
             }
         )
         return {key: float(state[key]) for key in artifact.state_keys}
@@ -313,6 +335,25 @@ def _initial_policy_state(artifact_path: str) -> dict[str, float]:
         }
     )
     return {key: float(state[key]) for key in artifact.state_keys}
+
+
+def _initial_policy_state(
+    artifact_path: str,
+    *,
+    num_phases_total: int = 3,
+    total_steps: int = DEFAULT_TOTAL_STEPS,
+    phase_end_steps: tuple[int, ...] = DEFAULT_PHASE_END_STEPS,
+    run_family: str | None = None,
+) -> dict[str, float]:
+    return _state_from_defaults(
+        artifact_path,
+        decision_index=0,
+        num_phases_total=num_phases_total,
+        total_steps=total_steps,
+        phase_end_steps=phase_end_steps,
+        prior_actions=[],
+        run_family=run_family,
+    )
 
 
 def _resolve_policy_model_path(artifact_path: str, model_path_str: str) -> Path:
@@ -388,6 +429,40 @@ def _load_decision_state_defaults(artifact_path: str) -> dict[str, dict[str, flo
         str(decision_index): {str(key): float(value) for key, value in values.items()}
         for decision_index, values in payload.items()
     }
+
+
+@cache
+def _load_family_decision_state_defaults(artifact_path: str) -> dict[str, dict[str, dict[str, float]]]:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2):
+        return {}
+    path = artifact.aux_paths.get("decision_state_defaults_by_family")
+    if not path:
+        return {}
+    resolved = _resolve_artifact_aux_path(artifact_path, path)
+    with resolved.open() as f:
+        payload = json.load(f)
+    return {
+        str(run_family): {
+            str(decision_index): {str(key): float(value) for key, value in values.items()}
+            for decision_index, values in family_payload.items()
+        }
+        for run_family, family_payload in payload.items()
+    }
+
+
+def _decision_state_default(
+    artifact_path: str,
+    *,
+    decision_index: int,
+    run_family: str | None = None,
+) -> dict[str, float]:
+    family_defaults = _load_family_decision_state_defaults(artifact_path)
+    if run_family is not None:
+        run_family_defaults = family_defaults.get(run_family, {})
+        if str(decision_index) in run_family_defaults:
+            return dict(run_family_defaults[str(decision_index)])
+    return dict(_load_decision_state_defaults(artifact_path).get(str(decision_index), {}))
 
 
 @cache
@@ -488,6 +563,8 @@ def _state_from_completed_run(
     artifact_path: str,
     prior_actions: list[float],
     phase_end_steps: tuple[int, ...],
+    num_phases_total: int = 3,
+    run_family: str | None = None,
 ) -> dict[str, float]:
     artifact = _load_policy_artifact_cached(artifact_path)
     if isinstance(artifact, PolicyArtifactV2):
@@ -503,9 +580,20 @@ def _state_from_completed_run(
             ),
         )
         defaults = _artifact_state_defaults(artifact)
+        defaults.update(
+            {
+                key: float(value)
+                for key, value in _decision_state_default(
+                    artifact_path,
+                    decision_index=phase_index,
+                    run_family=run_family,
+                ).items()
+                if key in artifact.state_keys
+            }
+        )
         phase_lengths = _phase_lengths(total_steps, phase_end_steps)
         decision_steps = _decision_steps(phase_end_steps)
-        next_step = decision_steps[phase_index + 1] if phase_index < 2 else total_steps
+        next_step = decision_steps[phase_index + 1] if phase_index < num_phases_total - 1 else total_steps
         prev_action_value, cumulative_exposure, delta_prev_action = _compute_exposure(
             prior_actions,
             phase_lengths,
@@ -531,8 +619,8 @@ def _state_from_completed_run(
         state.update(
             {
                 "decision_index": float(phase_index),
-                "num_phases_total": 3.0,
-                "remaining_decisions": float(max(0, 3 - phase_index - 1)),
+                "num_phases_total": float(num_phases_total),
+                "remaining_decisions": float(max(0, num_phases_total - phase_index - 1)),
                 "budget_frac_consumed": float(decision_step) / float(total_steps),
                 "budget_frac_remaining": 1.0 - (float(decision_step) / float(total_steps)),
                 "last_train_loss": defaults.get("last_train_loss", 0.0)
@@ -726,7 +814,13 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
         actions = []
         run_ids = []
 
-        state = _initial_policy_state(config.policy_artifact_path)
+        state = _initial_policy_state(
+            config.policy_artifact_path,
+            num_phases_total=3,
+            total_steps=config.total_steps,
+            phase_end_steps=config.phase_end_steps,
+            run_family="three_phase_starcoder",
+        )
 
         checkpoint_path: str | None = None
         final_metric = None
@@ -813,6 +907,8 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
                             artifact_path=config.policy_artifact_path,
                             prior_actions=actions,
                             phase_end_steps=config.phase_end_steps,
+                            num_phases_total=3,
+                            run_family="three_phase_starcoder",
                         )
                     else:
                         summary_value = wb_run.summary.get(objective_metric)

@@ -23,6 +23,9 @@ This asset is the pooled `sklearn_outcome_planner_v2` selected from the offline 
 - [evaluate_policy_three_phase_starcoder.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/evaluate_policy_three_phase_starcoder.py)
   - runs chained 3-phase online validation
   - supports both older pooled `reward_models` planner bundles and newer `q_models` planner bundles
+- [evaluate_policy_two_phase_starcoder.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/evaluate_policy_two_phase_starcoder.py)
+  - inspects or evaluates the same policy family on the 2-phase StarCoder setup
+  - `--inspect-only` computes phase-0 and hypothetical phase-1 actions from family-specific historical defaults without submitting a run
 - [collect_three_phase_starcoder_dataset.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/collect_three_phase_starcoder_dataset.py)
   - shared W&B history collection and wide-history normalization for rollout feature extraction
 
