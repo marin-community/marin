@@ -43,6 +43,7 @@ class JpegRunConfig:
     model: JpegLmConfig
     token_store_path: str
     resources: ResourceConfig
+    pip_packages: tuple[str, ...] = ()
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: JpegTrainerConfig = field(default_factory=JpegTrainerConfig)
     eval: JpegEvalConfig | None = field(default_factory=JpegEvalConfig)
@@ -73,6 +74,7 @@ def run_jpeg_tokenizer(config: JpegRunConfig) -> None:
         config=config,
         local_entrypoint=_run_jpeg_local,
         resources=config.resources,
+        pip_packages=config.pip_packages,
     )
 
 

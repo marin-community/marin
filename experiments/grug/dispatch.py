@@ -37,6 +37,7 @@ def dispatch_grug_training_run(
     config: ConfigT,
     local_entrypoint: Callable[[ConfigT], None],
     resources: ResourceConfig,
+    pip_packages: tuple[str, ...] = (),
     max_retries_failure: int = 3,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion."""
@@ -46,7 +47,7 @@ def dispatch_grug_training_run(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(extras=extras),
+        environment=create_environment(extras=extras, pip_packages=pip_packages),
         max_retries_failure=max_retries_failure,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)

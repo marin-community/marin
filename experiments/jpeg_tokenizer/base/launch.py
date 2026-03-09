@@ -46,6 +46,7 @@ class JpegTokenizerLaunchConfig:
     mp: str
     tracker: TrackerConfig
     optimizer: OptimizerConfig
+    pip_packages: tuple[str, ...] = ()
     checkpoint_minutes: int = 10
     checkpoint_keep_every_steps: int = 1_000
     jpeg_trainer: JpegTrainerConfig = field(default_factory=JpegTrainerConfig)
@@ -108,6 +109,7 @@ def run_jpeg_tokenizer_trial(config: JpegTokenizerLaunchConfig) -> None:
         model=config.model,
         token_store_path=config.token_store_path,
         resources=config.resources,
+        pip_packages=config.pip_packages,
         optimizer=config.optimizer,
         trainer=dataclasses.replace(config.jpeg_trainer, trainer=trainer),
         eval=config.eval,
@@ -287,6 +289,7 @@ coeff_k8_smoke = ExecutorStep(
         output_path=this_output_path(),
         run_id=RESOLVED_K8_SMOKE_RUN_ID,
         resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        pip_packages=versioned(("jpeglib>=1.0.2",)),
         steps=versioned(96),
         batch_size=versioned(128),
         seed=versioned(0),
@@ -336,6 +339,7 @@ coeff_k8_trial = ExecutorStep(
         output_path=this_output_path(),
         run_id=RESOLVED_K8_RUN_ID,
         resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        pip_packages=versioned(("jpeglib>=1.0.2",)),
         steps=versioned(2_000),
         batch_size=versioned(128),
         seed=versioned(0),

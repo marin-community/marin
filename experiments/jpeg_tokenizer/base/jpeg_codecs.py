@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-import jpeglib
 import numpy as np
 from PIL import Image, ImageOps
 from scipy.fft import dctn, idctn
@@ -464,6 +463,8 @@ def _quantized_luma_blocks(luma_plane: np.ndarray, *, quality: int) -> np.ndarra
 
 def _libjpeg_quantized_luma_blocks(canonical_jpeg: CanonicalJpegRepresentation) -> np.ndarray:
     """Return libjpeg's exact quantized luma blocks for canonical JPEG bytes."""
+
+    import jpeglib
 
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
         handle.write(canonical_jpeg.jpeg_bytes)
