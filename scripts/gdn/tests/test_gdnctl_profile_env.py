@@ -115,3 +115,28 @@ def test_validation_mode_profile_only_skips_tests(monkeypatch: pytest.MonkeyPatc
     assert info["profile_prefix"] == "iter-007"
     assert called["profile"]
     assert not called["tests"]
+
+
+def test_validation_gate_records_full_parity_test_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_tests(_: argparse.Namespace) -> tuple[int, bool]:
+        return 0, True
+
+    def _fake_profile(_: argparse.Namespace, *, iteration: int) -> tuple[int, bool, dict[str, object]]:
+        return 0, True, {"profile_prefix": f"iter-{iteration:03d}", "metrics": {"throughput/mfu": 1.23}}
+
+    monkeypatch.setattr(gdnctl, "_run_validation_tests_once", _fake_tests)
+    monkeypatch.setattr(gdnctl, "_run_validation_profile_once", _fake_profile)
+
+    args = argparse.Namespace(
+        validation_mode="required",
+        validation_max_attempts=1,
+        validation_retry_sleep=0.0,
+        validation_tests="both",
+    )
+    ok, rc, info = gdnctl._run_validation_gate_for_iteration(args, iteration=9)
+    assert ok
+    assert rc == 0
+    assert info["validation_tests_full_parity"] is True
+    assert info["validation_test_dependencies"] == ["torch", "transformers"]
+    assert info["validation_test_targets"] == [gdnctl.GDN_KERNEL_TEST, gdnctl.GDN_LAYER_TEST]
+    assert info["profile_prefix"] == "iter-009"

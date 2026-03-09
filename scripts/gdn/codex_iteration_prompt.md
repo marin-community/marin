@@ -128,6 +128,7 @@ Hot-path control-flow checklist (answer this in your writeup):
 Acceptance gate checklist (must appear in the iteration writeup):
 - Correctness:
   - TPU tests command + result.
+  - Treat TPU correctness as complete only when it runs through `gdnctl`'s remote TPU test wrapper with both `torch` and `transformers` installed. A result like `49 passed, 40 skipped` is incomplete; the full parity slice is expected to look like `87 passed, 2 skipped`.
 - Perf:
   - `CE backend selected: ...`
   - `CE bwd mode: pallas | xla_streaming`

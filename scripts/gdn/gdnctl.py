@@ -43,6 +43,7 @@ DEV_TPU = ["uv", "run", "scripts/ray/dev_tpu.py"]
 GDN_KERNEL_TEST = "tests/test_gdn_kernels.py"
 GDN_LAYER_TEST = "tests/test_gdn_layer.py"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+FULL_GDN_TEST_DEPS = ("torch", "transformers")
 DEFAULT_HF_TRACE_PATTERN = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$)"
 DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$|xplane\\.pb$)"
 DEFAULT_HILLCLIMB_LOG = REPO_ROOT / "lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md"
@@ -1015,6 +1016,12 @@ def _apply_performance_policy(
     metric_points = metric_points_obj if isinstance(metric_points_obj, dict) else {}
     warnings_obj = validation_info.get("warnings")
     warnings = warnings_obj if isinstance(warnings_obj, list) else []
+    full_parity_obj = validation_info.get("validation_tests_full_parity")
+    full_parity = bool(full_parity_obj) if isinstance(full_parity_obj, bool) else False
+    validation_test_dependencies_obj = validation_info.get("validation_test_dependencies")
+    validation_test_dependencies = (
+        validation_test_dependencies_obj if isinstance(validation_test_dependencies_obj, list) else []
+    )
     ce_backend_selected_obj = validation_info.get("ce_backend_selected")
     ce_backend_selected = str(ce_backend_selected_obj) if isinstance(ce_backend_selected_obj, str) else None
     ce_requested_impl_obj = validation_info.get("ce_requested_implementation")
@@ -1034,6 +1041,9 @@ def _apply_performance_policy(
 
     for warning in warnings:
         print(f"[gdnctl] WARNING: {warning}", file=sys.stderr)
+    if full_parity:
+        deps_text = ", ".join(str(dep) for dep in validation_test_dependencies) or "unknown deps"
+        print(f"[gdnctl] validation tests covered the full HF parity slice ({deps_text}).")
     if ce_backend_selected is not None:
         requested_text = ce_requested_implementation or "auto"
         bwd_text = ce_bwd_mode or "unknown"
@@ -1786,6 +1796,14 @@ def _build_remote_test_command(test_selection: str, extra_pytest_args: str | Non
     return " && ".join(pieces)
 
 
+def _full_gdn_test_metadata(test_selection: str) -> dict[str, object]:
+    return {
+        "validation_tests_full_parity": True,
+        "validation_test_dependencies": list(FULL_GDN_TEST_DEPS),
+        "validation_test_targets": _test_targets(test_selection),
+    }
+
+
 def _extract_submission_id(text: str) -> str | None:
     match = SUBMISSION_ID_RE.search(text)
     return None if match is None else match.group(1)
@@ -2068,6 +2086,7 @@ def _resolve_codex_binary(
 
 def cmd_ray_test(args: argparse.Namespace) -> int:
     remote_cmd = _build_remote_test_command(args.tests, args.pytest_args)
+    print("[gdnctl] remote TPU test setup installs torch + transformers; full HF parity slice is enabled.")
 
     cmd = [
         *RAY_RUN,
@@ -2112,6 +2131,7 @@ def cmd_dev_tpu_allocate(args: argparse.Namespace) -> int:
 
 def cmd_dev_tpu_test(args: argparse.Namespace) -> int:
     remote_cmd = _build_remote_test_command(args.tests, args.pytest_args)
+    print("[gdnctl] remote TPU test setup installs torch + transformers; full HF parity slice is enabled.")
     cmd = [
         *DEV_TPU,
         "--cluster",
@@ -2969,6 +2989,8 @@ def _run_validation_gate_for_iteration(
     if args.validation_mode == "off":
         return True, 0, {}
 
+    validation_info: dict[str, object] = {}
+
     def should_continue(attempt: int) -> bool:
         if args.validation_max_attempts < 0:
             return True
@@ -2980,11 +3002,12 @@ def _run_validation_gate_for_iteration(
             print(f"[gdnctl] validation tests attempt {attempt}")
             rc, retryable = _run_validation_tests_once(args)
             if rc == 0:
+                validation_info.update(_full_gdn_test_metadata(args.validation_tests))
                 break
             if not retryable:
-                return False, rc, {}
+                return False, rc, validation_info
             if not should_continue(attempt):
-                return False, rc, {}
+                return False, rc, validation_info
             if args.validation_retry_sleep > 0:
                 print(
                     f"[gdnctl] validation tests failed; waiting {args.validation_retry_sleep:.1f}s before retry.",
@@ -2994,10 +3017,10 @@ def _run_validation_gate_for_iteration(
             attempt += 1
 
     attempt = 1
-    validation_info: dict[str, object] = {}
     while True:
         print(f"[gdnctl] validation profile attempt {attempt}")
-        rc, retryable, validation_info = _run_validation_profile_once(args, iteration=iteration)
+        rc, retryable, profile_info = _run_validation_profile_once(args, iteration=iteration)
+        validation_info = {**validation_info, **profile_info}
         if rc == 0:
             return True, 0, validation_info
         if not retryable:

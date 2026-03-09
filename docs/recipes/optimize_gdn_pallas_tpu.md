@@ -557,6 +557,7 @@ Notes:
 - Add `--hold-dev-tpu --dev-tpu-name <name>` to make `codex-loop` allocate/hold/release a dev TPU allocation for the entire loop session.
 - In managed dev TPU mode, use `dev-tpu-test`/`dev-tpu-profile` (not Ray TPU test/profile commands) for loop validation/profiling.
 - Keep managed-mode `--post-check` commands aligned with the held allocation `--cluster` and `--tpu-name`.
+- `ray-test` and `dev-tpu-test` now install both `torch` and `transformers` before running `tests/test_gdn_kernels.py` and `tests/test_gdn_layer.py`. Treat `49 passed, 40 skipped` as an incomplete dependency-starved result; the full HF parity slice should look like `87 passed, 2 skipped`.
 - Performance governance is enabled by default:
   - `--perf-mode required` ensures each validated iteration has parseable performance metrics.
   - `--perf-metric throughput/mfu` controls champion comparisons.
