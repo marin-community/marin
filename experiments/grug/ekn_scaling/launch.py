@@ -1,15 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""EKN scaling experiment: expert-count sweep at Nano scale on v4-8.
+"""EKN scaling experiment: layer-count sweep (Small=12L, Medium=16L) on v4p-64.
 
-Nano config (from scaling law):
-    hidden_dim=512, intermediate_dim=512, shared_expert_intermediate_dim=512,
-    num_experts_per_token=2, num_layers=8, num_heads=8, num_kv_heads=2,
-    max_seq_len=4096, vocab_size=128256, initializer_std=0.006,
-    load_balancing_loss_coef=0.01, router_z_loss_coef=0.001,
-    AdamW (lr=1.68e-3, b1=0.9, b2=0.95, wd=0.1), linear LR with 10% decay,
-    batch_size=96, ~16,810 steps, compute C=3.61e18, TPU v4-8.
+Fixed K=4, E=32. Sweep lbl_coef in {0.0025, 0.01, 0.04}.
+Steps truncated to 5k for quick iteration.
+
+Small (12L): d_model=768, d_expert=384, lr=1.22e-3, bs=208.
+Medium (16L): d_model=1024, d_expert=512, lr=9.57e-4, bs=376.
 """
 
 import dataclasses
@@ -35,13 +33,16 @@ from experiments.grug.ekn_scaling.model import GrugModelConfig
 from experiments.grug.ekn_scaling.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.tootsie.exp1295_32b import nemotron_mix
 
-# Base active width = K * intermediate_dim = 2 * 512 = 1024.
-# When scaling K, we reduce intermediate_dim to keep active width constant.
-BASE_K = 2
-BASE_INTERMEDIATE_DIM = 512
-SWEEP_K = [2, 4, 8]
-SWEEP_E = [8, 32, 128]
 SWEEP_LBL = [0.0025, 0.01, 0.04]
+
+# (num_layers, hidden_dim, num_heads, num_kv_heads, lr, batch_size)
+SCALE_CONFIGS = {
+    "small": (12, 768, 12, 4, 1.22e-3, 208),
+    "medium": (16, 1024, 16, 4, 9.57e-4, 376),
+}
+FIXED_K = 4
+FIXED_E = 32
+FIXED_STEPS = 5_000
 
 
 @dataclass(frozen=True)
@@ -64,16 +65,16 @@ class EknScalingLaunchConfig:
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
 
 
-EKN_NANO_MODEL = GrugModelConfig(
+EKN_BASE_MODEL = GrugModelConfig(
     vocab_size=128_256,
-    hidden_dim=512,
-    intermediate_dim=512,
-    shared_expert_intermediate_dim=512,
-    num_experts=8,
-    num_experts_per_token=2,
-    num_layers=8,
-    num_heads=8,
-    num_kv_heads=2,
+    hidden_dim=768,
+    intermediate_dim=384,
+    shared_expert_intermediate_dim=384,
+    num_experts=FIXED_E,
+    num_experts_per_token=FIXED_K,
+    num_layers=12,
+    num_heads=12,
+    num_kv_heads=4,
     max_seq_len=4096,
     initializer_std=0.006,
     load_balancing_loss_coef=0.01,
@@ -141,82 +142,83 @@ def run_ekn_scaling_trial(config: EknScalingLaunchConfig) -> None:
 # Build one training step per (K, E, lbl) combination
 # ---------------------------------------------------------------------------
 
-RESOLVED_RUN_ID = _resolve_run_id("ekn-scaling-nano-run1-sweep")
+RESOLVED_RUN_ID = _resolve_run_id("ekn-scaling-layer-run1-sweep")
 
 training_steps: list[ExecutorStep] = []
-for _k in SWEEP_K:
-    _intermediate = BASE_INTERMEDIATE_DIM * BASE_K // _k
-    for _e in SWEEP_E:
-        for _lbl in SWEEP_LBL:
-            _model = dataclasses.replace(
-                EKN_NANO_MODEL,
-                num_experts=_e,
-                num_experts_per_token=_k,
-                intermediate_dim=_intermediate,
-                shared_expert_intermediate_dim=_intermediate,
-                load_balancing_loss_coef=_lbl,
-            )
-            _lbl_tag = f"lbl{_lbl}".replace(".", "p")
-            _run_id = f"{RESOLVED_RUN_ID}-k{_k}-e{_e}-{_lbl_tag}"
+for _scale_name, (_layers, _hidden, _heads, _kv_heads, _lr, _bs) in SCALE_CONFIGS.items():
+    _intermediate = _hidden // 2
+    for _lbl in SWEEP_LBL:
+        _model = dataclasses.replace(
+            EKN_BASE_MODEL,
+            hidden_dim=_hidden,
+            intermediate_dim=_intermediate,
+            shared_expert_intermediate_dim=_intermediate,
+            num_layers=_layers,
+            num_heads=_heads,
+            num_kv_heads=_kv_heads,
+            load_balancing_loss_coef=_lbl,
+        )
+        _lbl_tag = f"lbl{_lbl}".replace(".", "p")
+        _run_id = f"{RESOLVED_RUN_ID}-{_scale_name}-{_lbl_tag}"
 
-            _step = ExecutorStep(
-                name=f"grug/ekn-scaling-nano-run1-k{_k}-e{_e}-{_lbl_tag}",
-                fn=run_ekn_scaling_trial,
-                config=EknScalingLaunchConfig(
-                    model=versioned(_model),
-                    data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-                    output_path=this_output_path(),
-                    run_id=_run_id,
-                    resources=versioned(ResourceConfig.with_tpu("v4-8")),
-                    steps=versioned(16_810),
-                    batch_size=versioned(96),
-                    seed=versioned(0),
-                    mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-                    description=(
-                        f"EKN scaling Nano: K={_k}, E={_e}, d_expert={_intermediate},"
-                        f" lbl={_lbl}, aux loss averaged over layers."
-                    ),
-                    tracker=WandbConfig(
-                        project="dial_moe",
-                        tags=["grug", "ekn_scaling", "nano", "moe", f"k{_k}", f"e{_e}", _lbl_tag],
-                        group="ekn-scaling-nano-sweep",
-                        name=None,
-                    ),
-                    optimizer=versioned(
-                        AdamConfig(
-                            learning_rate=1.68e-3,
-                            weight_decay=0.1,
-                            beta1=0.9,
-                            beta2=0.95,
-                            lr_schedule="linear",
-                            decay=0.1,
-                            min_lr_ratio=0.1,
-                            warmup=0.01,
-                        )
-                    ),
-                    grug_trainer=versioned(
-                        GrugTrainerConfig(
-                            z_loss_weight=0,
-                            ema_beta=None,
-                            log_every=1,
-                        )
-                    ),
-                    eval=versioned(
-                        GrugEvalConfig(
-                            eval_batch_size=512,
-                            steps_per_eval=1000,
-                            max_eval_batches=8,
-                            eval_current=True,
-                            eval_ema=False,
-                        )
-                    ),
+        _step = ExecutorStep(
+            name=f"grug/ekn-scaling-layer-run1-{_scale_name}-{_lbl_tag}",
+            fn=run_ekn_scaling_trial,
+            config=EknScalingLaunchConfig(
+                model=versioned(_model),
+                data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
+                output_path=this_output_path(),
+                run_id=_run_id,
+                resources=versioned(ResourceConfig.with_tpu("v4p-64")),
+                steps=versioned(FIXED_STEPS),
+                batch_size=versioned(_bs),
+                seed=versioned(0),
+                mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+                description=(
+                    f"EKN layer scaling {_scale_name}: {_layers}L, d_model={_hidden},"
+                    f" K={FIXED_K}, E={FIXED_E}, lbl={_lbl}, aux loss averaged over layers."
                 ),
-            )
-            training_steps.append(_step)
+                tracker=WandbConfig(
+                    project="dial_moe",
+                    tags=["grug", "ekn_scaling", _scale_name, "moe", f"k{FIXED_K}", f"e{FIXED_E}", _lbl_tag],
+                    group="ekn-scaling-layer-sweep",
+                    name=None,
+                ),
+                optimizer=versioned(
+                    AdamConfig(
+                        learning_rate=_lr,
+                        weight_decay=0.1,
+                        beta1=0.9,
+                        beta2=0.95,
+                        lr_schedule="linear",
+                        decay=0.1,
+                        min_lr_ratio=0.1,
+                        warmup=0.01,
+                    )
+                ),
+                grug_trainer=versioned(
+                    GrugTrainerConfig(
+                        z_loss_weight=0,
+                        ema_beta=None,
+                        log_every=1,
+                    )
+                ),
+                eval=versioned(
+                    GrugEvalConfig(
+                        eval_batch_size=512,
+                        steps_per_eval=1000,
+                        max_eval_batches=8,
+                        eval_current=True,
+                        eval_ema=False,
+                    )
+                ),
+            ),
+        )
+        training_steps.append(_step)
 
 
 if __name__ == "__main__":
     executor_main(
         steps=training_steps,
-        description="EKN scaling Nano: expert-count sweep (aux loss averaged over layers).",
+        description="EKN layer scaling: 12L/16L sweep with K=4, E=32, lbl_coef sweep.",
     )
