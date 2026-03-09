@@ -64,7 +64,6 @@ already encoded in `IRIS_JOB_ID`.
 The controller exposes live user aggregates over RPC:
 
 - `ListUsers` returns one `UserSummary` per user
-- `GetClusterSummary` includes `total_users`
 
 The controller dashboard exposes a `users` tab in the existing hash-based tab
 navigation and renders:

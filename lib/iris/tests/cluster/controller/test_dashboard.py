@@ -356,21 +356,6 @@ def test_list_users_returns_aggregates(client, state):
     assert users["bob"]["taskStateCounts"]["pending"] == 1
 
 
-def test_cluster_summary_includes_total_users(client, state):
-    """GetClusterSummary includes unique user count."""
-    request = cluster_pb2.Controller.LaunchJobRequest(
-        entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(),
-        replicas=1,
-    )
-    submit_job(state, "/alice/train", request)
-    submit_job(state, "/bob/train", request)
-
-    resp = rpc_post(client, "GetClusterSummary")
-    assert resp["totalUsers"] == 2
-
-
 def test_get_job_status_returns_retry_info(client, state, job_request):
     """GetJobStatus RPC returns retry counts and current state.
 
