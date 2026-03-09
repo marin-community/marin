@@ -1090,32 +1090,6 @@ class ControllerServiceImpl:
                 actions.append(proto_action)
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
 
-    # --- Cluster Summary ---
-
-    def get_cluster_summary(
-        self,
-        request: cluster_pb2.Controller.GetClusterSummaryRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.GetClusterSummaryResponse:
-        """Lightweight cluster-wide counters for the dashboard header."""
-        jobs = self._state.list_all_jobs()
-        state_counts: dict[str, int] = {}
-        for job in jobs:
-            name = job_state_name(job.state)
-            key = name.removeprefix("JOB_STATE_").lower()
-            state_counts[key] = state_counts.get(key, 0) + 1
-
-        workers = self._state.list_all_workers()
-        healthy = sum(1 for w in workers if w.healthy)
-
-        return cluster_pb2.Controller.GetClusterSummaryResponse(
-            job_state_counts=state_counts,
-            total_jobs=len(jobs),
-            total_workers=len(workers),
-            healthy_workers=healthy,
-            total_users=len(self._state.list_user_stats()),
-        )
-
     def list_users(
         self,
         request: cluster_pb2.Controller.ListUsersRequest,

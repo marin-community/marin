@@ -665,12 +665,13 @@ class ScalingGroup:
                 idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
                 logger.info(
                     "Scale group %s: scaling down slice %s "
-                    "(idle for %dms, never_active=%s, ready=%d, pending=%d, target=%d)",
+                    "(idle for %dms, never_active=%s, ready=%d/%d, pending=%d, target=%d)",
                     self.name,
                     slice_state.handle.slice_id,
                     idle_duration.to_ms(),
                     never_active,
                     ready,
+                    self.num_vms,
                     pending,
                     target_capacity,
                 )
