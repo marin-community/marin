@@ -16,7 +16,6 @@ from experiments.evals.evalchemy_task_configs import (
     AIME25,
     AIME26,
     AMC23,
-    CODEELO,
     CODEFORCES,
     GPQA_DIAMOND,
     HMMT,
@@ -72,7 +71,7 @@ SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
 
 CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
     ([LIVECODEBENCH, LIVECODEBENCH_V5_OFFICIAL], SEEDS[:6]),
-    ([CODEELO, CODEFORCES], SEEDS[:3]),
+    ([CODEFORCES], SEEDS[:3]),
 ]
 
 SUITE_TO_TASK_SEED_GROUPS: dict[str, list[tuple[list, list[int]]]] = {

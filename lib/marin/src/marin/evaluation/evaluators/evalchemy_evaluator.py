@@ -1011,6 +1011,31 @@ _patch_autoconfig_for_gcs()
                     log_file=log_file,
                 )
 
+                # Verify results were actually written — evalchemy can return 0
+                # but silently fail to write results (e.g. sympy hang during scoring).
+                results_files = glob.glob(os.path.join(result_dir, "*", "results_*.json"))
+                if returncode == 0 and not results_files:
+                    # Log what's actually in the result dir for debugging
+                    all_files = []
+                    for root, dirs, files in os.walk(result_dir):
+                        for f in files:
+                            all_files.append(os.path.join(root, f))
+                    log_tail = ""
+                    if os.path.exists(log_file):
+                        with open(log_file, "r") as lf:
+                            content = lf.read()
+                            log_tail = content[-3000:] if len(content) > 3000 else content
+                    logger.error(
+                        f"Evalchemy returned exit code 0 for {eval_task.name} but no results_*.json "
+                        f"found in {result_dir}. Scoring likely hung or crashed silently.\n"
+                        f"Files in result_dir: {all_files}\n"
+                        f"=== Last 3000 chars of evalchemy log ===\n{log_tail}"
+                    )
+                    raise RuntimeError(
+                        f"Evalchemy returned success for {eval_task.name} but no results_*.json "
+                        f"found in {result_dir}. Scoring likely hung or crashed silently."
+                    )
+
                 if returncode != 0:
                     # Read log file contents to include in the error message
                     log_contents = ""
