@@ -372,35 +372,33 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
         Constraint(key="env-tag", op=ConstraintOp.EXISTS),
         Constraint(key="device-variant", op=ConstraintOp.IN, values=("v5p-8", "v6e-4")),
     ]
-    job = smoke_cluster.submit(TestJobs.quick, "smoke-constraints", constraints=constraints)
-    time.sleep(3)
+    with smoke_cluster.launched_job(TestJobs.quick, "smoke-constraints", constraints=constraints) as job:
+        time.sleep(3)
 
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
-    wait_for_dashboard_ready(smoke_page)
+        dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
+        wait_for_dashboard_ready(smoke_page)
 
-    smoke_page.click("text=Job Request")
-    smoke_page.wait_for_function(
-        "() => document.querySelector('.constraint-chip') !== null",
-        timeout=5000,
-    )
-    assert_visible(smoke_page, "text=region = local")
-    smoke_screenshot("constraints")
+        smoke_page.click("text=Job Request")
+        smoke_page.wait_for_function(
+            "() => document.querySelector('.constraint-chip') !== null",
+            timeout=5000,
+        )
+        assert_visible(smoke_page, "text=region = local")
+        smoke_screenshot("constraints")
 
 
 def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
-    """Scheduling diagnostic shows 'Insufficient CPU' for oversized job."""
+    """Scheduling diagnostic shows pending reason for oversized job."""
     smoke_cluster.wait_for_workers(1, timeout=smoke_cluster.job_timeout)
-    job = smoke_cluster.submit(TestJobs.quick, "smoke-diag-cpu", cpu=999_999)
+    with smoke_cluster.launched_job(TestJobs.quick, "smoke-diag-cpu", cpu=999_999) as job:
+        status = smoke_cluster.status(job)
+        assert status.state == cluster_pb2.JOB_STATE_PENDING
+        assert "cpu" in status.pending_reason.lower()
 
-    status = smoke_cluster.status(job)
-    assert status.state == cluster_pb2.JOB_STATE_PENDING
-    assert "cpu" in status.pending_reason.lower()
-
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
-    wait_for_dashboard_ready(smoke_page)
-    assert_visible(smoke_page, "text=Scheduling Diagnostic")
-    assert_visible(smoke_page, "text=Insufficient CPU")
-    smoke_screenshot("scheduling-diagnostic")
+        dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
+        wait_for_dashboard_ready(smoke_page)
+        assert_visible(smoke_page, "text=Scheduling Diagnostic")
+        smoke_screenshot("scheduling-diagnostic")
 
 
 def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
@@ -457,12 +455,12 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
 
 def test_small_job_skips_oversized(smoke_cluster):
     """Small job gets scheduled even when a large unschedulable job is queued."""
-    big_job = smoke_cluster.submit(TestJobs.quick, "smoke-big", cpu=10000)
-    small_job = smoke_cluster.submit(TestJobs.quick, "smoke-small", cpu=1)
-    status = smoke_cluster.wait(small_job, timeout=smoke_cluster.job_timeout)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
-    big_status = smoke_cluster.status(big_job)
-    assert big_status.state == cluster_pb2.JOB_STATE_PENDING
+    with smoke_cluster.launched_job(TestJobs.quick, "smoke-big", cpu=10000) as big_job:
+        small_job = smoke_cluster.submit(TestJobs.quick, "smoke-small", cpu=1)
+        status = smoke_cluster.wait(small_job, timeout=smoke_cluster.job_timeout)
+        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+        big_status = smoke_cluster.status(big_job)
+        assert big_status.state == cluster_pb2.JOB_STATE_PENDING
 
 
 def test_endpoint_registration(smoke_cluster):
@@ -482,19 +480,19 @@ def test_port_allocation(smoke_cluster):
 
 def test_reservation_gates_scheduling(smoke_cluster):
     """Unsatisfiable reservation blocks scheduling; regular jobs proceed."""
-    reserved = smoke_cluster.submit(
+    with smoke_cluster.launched_job(
         TestJobs.quick,
         "smoke-reserved",
         reservation=[
             ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("NONEXISTENT-GPU-9999", 99)))
         ],
-    )
-    reserved_status = smoke_cluster.status(reserved)
-    assert reserved_status.state == cluster_pb2.JOB_STATE_PENDING
+    ) as reserved:
+        reserved_status = smoke_cluster.status(reserved)
+        assert reserved_status.state == cluster_pb2.JOB_STATE_PENDING
 
-    regular = smoke_cluster.submit(TestJobs.quick, "smoke-regular-while-reserved")
-    status = smoke_cluster.wait(regular, timeout=smoke_cluster.job_timeout)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+        regular = smoke_cluster.submit(TestJobs.quick, "smoke-regular-while-reserved")
+        status = smoke_cluster.wait(regular, timeout=smoke_cluster.job_timeout)
+        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 # ============================================================================

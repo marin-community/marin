@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -162,6 +163,19 @@ class IrisTestCluster:
                 return status
             time.sleep(poll_interval)
         raise TimeoutError(f"Job {job.job_id} did not reach state {state} in {timeout}s " f"(current: {status.state})")
+
+    @contextmanager
+    def launched_job(self, fn, name: str, *args, **kwargs):
+        """Submit a job and guarantee it's killed on exit, even if the test fails.
+
+        kill() is safe on already-finished jobs (controller silently returns),
+        so this works for both pending and completed jobs.
+        """
+        job = self.submit(fn, name, *args, **kwargs)
+        try:
+            yield job
+        finally:
+            self.kill(job)
 
     def kill(self, job: Job) -> None:
         """Terminate a running job."""
