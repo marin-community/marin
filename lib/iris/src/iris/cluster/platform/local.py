@@ -40,6 +40,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
@@ -57,20 +58,6 @@ from iris.rpc import config_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# Local Providers (in-process implementations for testing)
-# ============================================================================
-
-
-class _LocalBundleProvider:
-    def __init__(self, bundle_path: Path):
-        self._bundle_path = bundle_path
-
-    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
-        del gcs_path, expected_hash
-        return self._bundle_path
 
 
 # ============================================================================
@@ -436,9 +423,12 @@ class LocalPlatform:
                 logger.debug("Unknown accelerator variant %r; TPU topology not available", config.accelerator_variant)
 
         for tpu_worker_id in range(worker_count):
-            bundle_provider = _LocalBundleProvider(self._fake_bundle)
-            container_runtime = ProcessRuntime()
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
+            bundle_store = BundleStore(
+                db_path=self._cache_path / f"bundles-{worker_id}.sqlite3",
+                controller_address=self._controller_address,
+            )
+            container_runtime = ProcessRuntime()
             worker_port = find_free_port()
 
             # Collect extra worker attributes from scale group config
@@ -504,7 +494,7 @@ class LocalPlatform:
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
             worker = Worker(
                 wc,
-                bundle_provider=bundle_provider,
+                bundle_store=bundle_store,
                 container_runtime=container_runtime,
                 environment_provider=env_provider,
                 port_allocator=self._port_allocator,

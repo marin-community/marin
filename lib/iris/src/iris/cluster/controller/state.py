@@ -902,7 +902,7 @@ class ControllerEndpoint:
         endpoint_id: Unique endpoint identifier
         name: Full prefixed service name (e.g., "abc123/my-actor")
         address: Network address (host:port)
-        job_id: Job that registered this endpoint
+        task_id: Task that registered this endpoint (wire-format, e.g. "/user/job/0")
         metadata: Additional key-value metadata
         registered_at: Timestamp when endpoint was registered
     """
@@ -910,7 +910,7 @@ class ControllerEndpoint:
     endpoint_id: str
     name: str  # Full prefixed name: "{root_job_id}/{actor_name}"
     address: str
-    job_id: JobName
+    task_id: JobName
     metadata: dict[str, str] = field(default_factory=dict)
     registered_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
@@ -1976,6 +1976,34 @@ class ControllerState:
         with self._lock:
             return self._workers.pop(worker_id, None)
 
+    def fail_workers_by_vm_addresses(self, vm_addresses: list[str], reason: str) -> list[tuple[WorkerId, str]]:
+        """Immediately fail all workers whose vm_address matches any in the given list.
+
+        Used when a slice is terminated: all sibling workers must be failed
+        so their tasks (including reservation holders) are cascaded immediately
+        rather than waiting for heartbeat timeouts.
+
+        Returns list of (worker_id, worker_address) tuples for each failed worker.
+        """
+        with self._lock:
+            matched: list[tuple[WorkerId, str]] = []
+            vm_set = set(vm_addresses)
+            for worker in self._workers.values():
+                if worker.healthy and (worker.metadata.vm_address or "") in vm_set:
+                    matched.append((worker.worker_id, worker.address))
+
+            failed: list[tuple[WorkerId, str]] = []
+            for worker_id, worker_address in matched:
+                event = WorkerFailedEvent(
+                    worker_id=worker_id,
+                    error=reason,
+                )
+                txn = TransactionLog(event=event)
+                self._on_worker_failed(txn, event)
+                self._transactions.append(txn)
+                failed.append((worker_id, worker_address))
+            return failed
+
     def get_available_workers(self) -> list[ControllerWorker]:
         with self._lock:
             return [w for w in self._workers.values() if w.healthy]
@@ -2135,7 +2163,13 @@ class ControllerState:
         with self._lock:
             worker = self._workers.get(snapshot.worker_id)
             if not worker:
-                return HeartbeatAction.OK  # Worker removed while heartbeat in flight
+                # TODO(#3425): When a sibling worker is pruned by fail_workers_by_vm_addresses()
+                # during the same heartbeat round, this early return silently drops any logs or
+                # terminal task states the worker reported in its in-flight response. Task states
+                # are already terminal from the cascade so the main loss is log entries. A clean
+                # fix would decouple log flushing from the worker-existence check, but this is an
+                # edge case — the affected tasks will be retried regardless.
+                return HeartbeatAction.OK
 
             # Check worker health before marking it as available. If the worker
             # reported itself unhealthy we must handle it under this same lock
@@ -2327,7 +2361,11 @@ class ControllerState:
 
     def _is_endpoint_visible(self, ep: ControllerEndpoint) -> bool:
         """An endpoint is visible when its owning job is still running."""
-        job = self._jobs.get(ep.job_id)
+        try:
+            job_id, _ = ep.task_id.require_task()
+        except ValueError:
+            job_id = ep.task_id
+        job = self._jobs.get(job_id)
         return job is not None and not job.is_finished()
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[ControllerEndpoint]:

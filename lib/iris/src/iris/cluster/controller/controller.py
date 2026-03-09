@@ -6,6 +6,7 @@
 import logging
 import queue
 import sys
+import tempfile
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,7 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     merge_constraints,
 )
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
@@ -520,9 +522,7 @@ class ControllerConfig:
     """Port to bind the HTTP server to. Use 0 for auto-assign."""
 
     bundle_prefix: str | None = None
-    """URI prefix for storing job bundles (e.g., gs://bucket/path or file:///var/cache/iris/bundles).
-    Uses fsspec for storage, so supports both GCS and local filesystems. For distributed deployments,
-    use a GCS path so workers can download bundles."""
+    """Storage prefix for snapshots (e.g. gs://bucket/path, s3://bucket/path)."""
 
     scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
     """How often to run the scheduling loop."""
@@ -593,24 +593,21 @@ class Controller:
         autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
     ):
-        if not config.bundle_prefix:
-            raise ValueError(
-                "bundle_prefix is required. Set via ControllerConfig.bundle_prefix. "
-                "Example: bundle_prefix='gs://my-bucket/iris/bundles'"
-            )
-
         self._config = config
         self.stub_factory = worker_stub_factory
+
+        bundle_db_path = Path(tempfile.gettempdir()) / "iris-controller-bundles.sqlite3"
 
         self._state = ControllerState(
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             log_dir=config.log_dir,
         )
         self._scheduler = Scheduler()
+        self._bundle_store = BundleStore(db_path=bundle_db_path)
         self._service = ControllerServiceImpl(
             self._state,
             self,
-            bundle_prefix=config.bundle_prefix,
+            bundle_store=self._bundle_store,
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -1025,7 +1022,7 @@ class Controller:
                     num_tasks=job.num_tasks,
                     entrypoint=job.request.entrypoint,
                     environment=job.request.environment,
-                    bundle_gcs_path=job.request.bundle_gcs_path,
+                    bundle_id=job.request.bundle_id,
                     resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
@@ -1172,7 +1169,30 @@ class Controller:
                     failed_workers.append(snapshot.worker_id)
                     self.stub_factory.evict(snapshot.worker_address)
                     if self._autoscaler and snapshot.vm_address:
-                        self._autoscaler.notify_worker_failed(snapshot.vm_address)
+                        # Terminate the slice and get sibling VM addresses.
+                        # All workers on the same slice must be failed immediately
+                        # so their tasks (including reservation holders) are cascaded
+                        # rather than waiting for heartbeat timeouts.
+                        # TODO(#3425): This prunes sibling workers before their in-flight
+                        # heartbeat results are processed, causing complete_heartbeat() to
+                        # silently drop any logs/states those workers reported this round.
+                        # See the corresponding TODO in state.py complete_heartbeat().
+                        sibling_vms = self._autoscaler.notify_worker_failed(snapshot.vm_address)
+                        if sibling_vms:
+                            sibling_failed = self._state.fail_workers_by_vm_addresses(
+                                sibling_vms,
+                                reason=f"sibling worker at VM {snapshot.vm_address} failed, slice terminated",
+                            )
+                            for _wid, addr in sibling_failed:
+                                self.stub_factory.evict(addr)
+                            if sibling_failed:
+                                fail_count += len(sibling_failed)
+                                failed_workers.extend(wid for wid, _ in sibling_failed)
+                                logger.info(
+                                    "Failed %d sibling workers from slice: %s",
+                                    len(sibling_failed),
+                                    [wid for wid, _ in sibling_failed],
+                                )
                 elif action == HeartbeatAction.TRANSIENT_FAILURE:
                     fail_count += 1
                     failed_workers.append(snapshot.worker_id)

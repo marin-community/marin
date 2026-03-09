@@ -121,7 +121,7 @@ You can specify a path to either a config file or a region to operate on e.g. `e
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml start-cluster
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml stop-cluster
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml restart-cluster
-uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml get-status
+uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml list-workers
 
 # List and update configurations
 uv run scripts/ray/cluster.py list-configs
@@ -131,19 +131,14 @@ uv run scripts/ray/cluster.py update-configs
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml ssh-head
 uv run scripts/ray/cluster.py ssh-tpu 10.130.1.40
 
-# Maintenance operations
-uv run scripts/ray/cluster.py clean-tpu-processes --dry-run
-uv run scripts/ray/cluster.py clean-tpu-processes --tpu-type v4-8
-uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml clean-preempted-tpus
-
 # Job operations
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml list-jobs
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml submit-job "python experiments/tutorials/hello_world.py"
+uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml wait-job <JOB_ID> --show-logs
 
 # Monitoring and logs
-uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml monitor-cluster --wandb
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml show-logs --tail 100
-uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml open-dashboard
+uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml dashboard
 ```
 
 ### Legacy Commands (still supported)

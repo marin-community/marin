@@ -17,7 +17,12 @@ from jaxtyping import Array, Float, Int
 from levanter.kernels.pallas import autotune_cache_utils
 
 from .config import BlockSizes
-from .tuned_block_sizes import infer_block_sizes, infer_block_sizes_with_tuned_match
+from .tuned_block_sizes import (
+    infer_block_sizes,
+    infer_block_sizes_with_tuned_match,
+    shape_bucket_name,
+    widest_dtype_name,
+)
 from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
@@ -250,17 +255,43 @@ def _autotune_cache_key(
     )
 
 
-def _candidate_block_sizes(impl_name: str, inferred: BlockSizes) -> list[BlockSizes]:
+def _candidate_block_sizes(
+    impl_name: str,
+    inferred: BlockSizes,
+    *,
+    x: jax.Array,
+    w: jax.Array,
+    dtype: Optional[jnp.dtype],
+) -> list[BlockSizes]:
     candidates: list[BlockSizes] = [inferred]
     if impl_name == "pallas_tpu":
-        for v_block in (256, 512, 1024, 2048, 4096):
-            candidates.append(
-                BlockSizes(
-                    b_block_size=inferred.b_block_size,
-                    h_block_size=inferred.h_block_size,
-                    v_block_size=v_block,
+        bucket = shape_bucket_name(x.shape[0], x.shape[1], w.shape[1])
+        if bucket == "large-batch-medium-h":
+            for h_block in (256, 512, 1024, 2048):
+                if x.shape[1] % h_block != 0:
+                    continue
+                for v_block in (128, 256, 512, 768, 1024):
+                    candidates.append(
+                        BlockSizes(
+                            b_block_size=1024,
+                            h_block_size=h_block,
+                            v_block_size=v_block,
+                        )
+                    )
+        else:
+            widest_dtype = widest_dtype_name(dtype=dtype, x_dtype=x.dtype, w_dtype=w.dtype)
+            if widest_dtype == jnp.dtype(jnp.float32).name:
+                v_blocks = (256, 512, 768, 1024)
+            else:
+                v_blocks = (256, 512, 1024, 2048, 4096)
+            for v_block in v_blocks:
+                candidates.append(
+                    BlockSizes(
+                        b_block_size=inferred.b_block_size,
+                        h_block_size=inferred.h_block_size,
+                        v_block_size=v_block,
+                    )
                 )
-            )
     elif impl_name == "pallas_gpu":
         for v_block in (64, 128, 256, 512, 1024, 2048, 4096):
             candidates.append(
@@ -370,14 +401,15 @@ def _autotune_block_sizes_on_miss(
         logger.info("Fused CE autotune cache hit for %s. Using cached block sizes %s.", impl_name, cached)
         return cached
 
-    candidates = _candidate_block_sizes(impl_name, inferred)
+    candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
     logger.info(
         "Fused CE autotune miss for %s. Sweeping %d block-size candidates.",
         impl_name,
         len(candidates),
     )
-    best = inferred
+    best: BlockSizes | None = None
     best_score = float("inf")
+    errors: list[Exception] = []
     for candidate in candidates:
         try:
             score = _benchmark_block_sizes_candidate(
@@ -391,11 +423,18 @@ def _autotune_block_sizes_on_miss(
                 precision=precision,
                 return_argmax=return_argmax,
             )
-        except Exception:
+        except Exception as exc:
+            errors.append(exc)
             continue
         if score < best_score:
             best_score = score
             best = candidate
+
+    if best is None:
+        raise ExceptionGroup(
+            f"Fused CE autotune found no viable block-size candidates for {impl_name}",
+            errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
+        )
 
     _AUTOTUNE_BLOCK_SIZE_CACHE[cache_key] = best
     _persist_autotune_cache()
@@ -428,7 +467,7 @@ def _resolve_block_sizes(
 ) -> BlockSizes:
     if block_sizes is None:
         if block_size is None:
-            return infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
+            return infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype, x_dtype=x.dtype, w_dtype=w.dtype)
         return BlockSizes(v_block_size=block_size)
     if block_size is not None and block_size != block_sizes.v_block_size:
         raise ValueError(
@@ -562,6 +601,8 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                 x.shape[1],
                 w.shape[1],
                 dtype=dtype,
+                x_dtype=x.dtype,
+                w_dtype=w.dtype,
             )
             if has_tuned_match:
                 block_sizes_for_impl = inferred
@@ -583,7 +624,14 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                         return_argmax=return_argmax,
                     )
         else:
-            block_sizes_for_impl = infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
+            block_sizes_for_impl = infer_block_sizes(
+                x.shape[0],
+                x.shape[1],
+                w.shape[1],
+                dtype=dtype,
+                x_dtype=x.dtype,
+                w_dtype=w.dtype,
+            )
         if callable(impl_for_call):
             try:
                 kwargs = dict(

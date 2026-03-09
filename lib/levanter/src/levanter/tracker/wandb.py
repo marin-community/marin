@@ -7,6 +7,7 @@ import tempfile
 import typing
 import warnings
 import json
+import hashlib
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
@@ -31,6 +32,9 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"]
+
+
+_WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
 
 
 class WandbTracker(Tracker):
@@ -98,7 +102,11 @@ class WandbTracker(Tracker):
         self.run.summary.update(_convert_value_to_loggable_rec(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
-        self.run.log_artifact(artifact_path, name=name, type=type)
+        self.run.log_artifact(
+            artifact_path,
+            name=_truncate_wandb_artifact_name(name),
+            type=type,
+        )
 
     def finish(self):
         logger.info("Finishing wandb run...")
@@ -360,3 +368,22 @@ class WandbConfig(TrackerConfig):
                 raise e
 
         return git_sha
+
+
+def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
+    """Truncate artifact names to keep within WandB's artifact-name limit."""
+    if name is None:
+        return None
+    if len(name) <= _WANDB_ARTIFACT_NAME_MAX_LENGTH:
+        return name
+    # Keep names stable and unique across different long inputs by keeping a short hash suffix.
+    hash_suffix = hashlib.sha256(name.encode("utf-8")).hexdigest()[:7]
+    max_truncated_prefix_len = _WANDB_ARTIFACT_NAME_MAX_LENGTH - len(hash_suffix) - 1
+    truncated = f"{name[:max_truncated_prefix_len]}-{hash_suffix}"
+    logger.warning(
+        "Wandb artifact name exceeds %d characters and will be truncated: %s -> %s",
+        _WANDB_ARTIFACT_NAME_MAX_LENGTH,
+        name,
+        truncated,
+    )
+    return truncated

@@ -27,7 +27,7 @@ class RemoteClusterClient:
     def __init__(
         self,
         controller_address: str,
-        bundle_gcs_path: str | None = None,
+        bundle_id: str | None = None,
         bundle_blob: bytes | None = None,
         timeout_ms: int = 30000,
     ):
@@ -35,12 +35,12 @@ class RemoteClusterClient:
 
         Args:
             controller_address: Controller URL (e.g., "http://localhost:8080")
-            bundle_gcs_path: GCS path to workspace bundle for job inheritance
+            bundle_id: Workspace bundle identifier for job inheritance
             bundle_blob: Workspace bundle as bytes (for initial job submission)
             timeout_ms: RPC timeout in milliseconds
         """
         self._address = controller_address
-        self._bundle_gcs_path = bundle_gcs_path
+        self._bundle_id = bundle_id
         self._bundle_blob = bundle_blob
         self._timeout_ms = timeout_ms
         self._client = ControllerServiceClientSync(
@@ -86,8 +86,8 @@ class RemoteClusterClient:
             max_retries_preemption=max_retries_preemption,
             fail_if_exists=False,
         )
-        if self._bundle_gcs_path:
-            request.bundle_gcs_path = self._bundle_gcs_path
+        if self._bundle_id:
+            request.bundle_id = self._bundle_id
         else:
             request.bundle_blob = self._bundle_blob or b""
 
@@ -251,13 +251,15 @@ class RemoteClusterClient:
         self,
         name: str,
         address: str,
-        job_id: JobName,
+        task_id: JobName,
+        attempt_id: int = 0,
         metadata: dict[str, str] | None = None,
     ) -> str:
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
-            job_id=job_id.to_wire(),
+            task_id=task_id.to_wire(),
+            attempt_id=attempt_id,
             metadata=metadata or {},
         )
         response = self._client.register_endpoint(request)
