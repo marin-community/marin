@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -83,7 +83,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     }
 
     resource_cfgs = {
-        "130m": ResourceConfig.with_gpu(),  # ResourceConfig.with_tpu("v5p-32"),
+        "130m": ResourceConfig.with_tpu("v5p-32"),
     }
 
     adaMuon_configs = {
