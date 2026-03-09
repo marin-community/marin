@@ -1255,6 +1255,13 @@ def test_infer_block_sizes_uses_widest_operand_dtype_bucket(monkeypatch: pytest.
     assert mixed_block_sizes != bf16_block_sizes
 
 
+def test_shape_bucket_name_large_batch_medium_h_boundary():
+    assert (
+        tuned_block_sizes.shape_bucket_name(32_767, 2_048, 128_256, device_kind="TPU v5p") == "medium-batch-medium-h"
+    )
+    assert tuned_block_sizes.shape_bucket_name(32_768, 2_048, 128_256, device_kind="TPU v5p") == "large-batch-medium-h"
+
+
 def test_pallas_autotune_only_runs_when_block_sizes_are_not_explicit(monkeypatch: pytest.MonkeyPatch):
     inferred = fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)
     autotuned = fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=768)

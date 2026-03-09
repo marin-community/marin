@@ -399,7 +399,7 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
     ShapeBucket(
         name="medium-batch-medium-h",
         b_min=8192,
-        b_max=32768,
+        b_max=32767,
         h_min=1536,
         h_max=3072,
         v_min=120000,
@@ -797,4 +797,6 @@ __all__ = [
     "infer_block_sizes",
     "infer_block_sizes_with_tuned_match",
     "infer_xla_v_block_size",
+    "shape_bucket_name",
+    "widest_dtype_name",
 ]
