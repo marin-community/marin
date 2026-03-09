@@ -152,10 +152,49 @@ def summarize_metric(values: Sequence[float]) -> AggregateMetrics:
     )
 
 
+def coefficient_prefix_loss_mask(
+    seq_len: int,
+    *,
+    tokens_per_block: int,
+    prefix_tokens_per_block: int,
+) -> np.ndarray:
+    """Return a per-position loss mask for shared-prefix coefficient evaluation.
+
+    The coefficient tokenizer lays out tokens block-major, then zigzag index within
+    each block. A prefix comparison like "first 4 coefficients per block" is a
+    statement about target labels, not source positions. The returned mask therefore
+    marks source positions whose *next token* belongs to the requested prefix.
+    """
+
+    if seq_len <= 0:
+        raise ValueError(f"seq_len must be positive, got {seq_len}")
+    if tokens_per_block <= 0:
+        raise ValueError(f"tokens_per_block must be positive, got {tokens_per_block}")
+    if prefix_tokens_per_block <= 0:
+        raise ValueError(f"prefix_tokens_per_block must be positive, got {prefix_tokens_per_block}")
+    if prefix_tokens_per_block > tokens_per_block:
+        raise ValueError(
+            f"prefix_tokens_per_block ({prefix_tokens_per_block}) must be <= tokens_per_block ({tokens_per_block})"
+        )
+    if seq_len % tokens_per_block != 0:
+        raise ValueError(f"seq_len ({seq_len}) must be divisible by tokens_per_block ({tokens_per_block})")
+
+    blocks_per_image = seq_len // tokens_per_block
+    label_mask = np.zeros(seq_len, dtype=np.float32)
+    for block_index in range(blocks_per_image):
+        start = block_index * tokens_per_block
+        label_mask[start : start + prefix_tokens_per_block] = 1.0
+
+    loss_mask = np.zeros(seq_len, dtype=np.float32)
+    loss_mask[:-1] = label_mask[1:]
+    return loss_mask
+
+
 __all__ = [
     "AggregateMetrics",
     "ReconstructionMetrics",
     "TokenSequenceStats",
+    "coefficient_prefix_loss_mask",
     "compute_reconstruction_metrics",
     "compute_ssim",
     "compute_token_sequence_stats",

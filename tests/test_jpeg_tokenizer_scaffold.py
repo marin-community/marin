@@ -25,7 +25,11 @@ from experiments.jpeg_tokenizer.base.data import (
     read_token_store_metadata,
     write_token_store,
 )
-from experiments.jpeg_tokenizer.base.eval import compute_reconstruction_metrics, compute_token_sequence_stats
+from experiments.jpeg_tokenizer.base.eval import (
+    coefficient_prefix_loss_mask,
+    compute_reconstruction_metrics,
+    compute_token_sequence_stats,
+)
 from experiments.jpeg_tokenizer.base.model import JpegLmConfig
 from experiments.jpeg_tokenizer.base.train import JpegEvalConfig, JpegRunConfig, JpegTrainerConfig, run_jpeg_tokenizer
 from experiments.jpeg_tokenizer.base.jpeg_codecs import (
@@ -115,6 +119,14 @@ def test_coeff_reconstruction_metrics_are_well_formed():
     assert metrics.psnr > 0.0
     assert 0.0 <= metrics.ssim <= 1.0
     assert 0.0 <= metrics.dssim <= 0.5
+
+
+def test_coefficient_prefix_loss_mask_tracks_target_prefixes_across_blocks():
+    mask = coefficient_prefix_loss_mask(8, tokens_per_block=4, prefix_tokens_per_block=2)
+    assert mask.tolist() == [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0]
+
+    full_mask = coefficient_prefix_loss_mask(8, tokens_per_block=4, prefix_tokens_per_block=4)
+    assert full_mask.tolist() == [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0]
 
 
 def test_file_backed_token_store_round_trip(tmp_path):
