@@ -24,6 +24,7 @@ import jmp
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from jax.sharding import PartitionSpec as P
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 
@@ -35,6 +36,7 @@ from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
@@ -217,6 +219,102 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
 
     required_keys = [
         "train/loss",
+        "global_step",
+        "throughput/duration",
+        "throughput/hook_time",
+        "throughput/loading_time",
+        "throughput/total_tokens",
+        "throughput/examples_per_second",
+        "throughput/tokens_per_second",
+        "throughput/flops_per_example_analytic",
+        "eval/loss",
+        "eval/loading_time",
+        "eval/total_time",
+    ]
+    for key in required_keys:
+        assert key in summary
+
+
+def test_grug_moe_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+
+    vocab_size = 128
+    seq_len = 32
+    examples = []
+    for i in range(8):
+        tokens = (jnp.arange(seq_len, dtype=jnp.int32) + i) % vocab_size
+        examples.append(GrugLmExample.causal(tokens))
+    eval_examples = [GrugLmExample.causal((jnp.arange(seq_len, dtype=jnp.int32) + 100) % vocab_size)]
+
+    train_dataset = ListAsyncDataset(examples)
+    eval_dataset = ListAsyncDataset(eval_examples)
+    data_config = LmDataConfig(
+        components={"direct": DirectDatasetComponent(datasets={"train": train_dataset, "validation": eval_dataset})},
+        vocab_size=vocab_size,
+        tokenizer="passthrough",
+    )
+
+    logger_name = f"test_grug_json_tracker_moe_{uuid.uuid4().hex}"
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger(logger_name)
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+    try:
+        variant_tmp = tmp_path / "moe"
+        variant_tmp.mkdir(parents=True, exist_ok=True)
+        trainer_config = TrainerConfig(
+            id="test-grug-moe-metrics",
+            num_train_steps=1,
+            train_batch_size=max(1, len(jax.devices())),
+            tracker=JsonLoggerConfig(logger_name=logger_name),
+            require_accelerator=False,
+            use_explicit_mesh_axes=True,
+            mesh=MeshConfig(axes={"expert": 1}),
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            ray=RayConfig(auto_start_cluster=False),
+            log_dir=variant_tmp / "logs",
+            checkpointer=CheckpointerConfig(base_path=str(variant_tmp / "checkpoints")),
+        )
+
+        run_cfg = train_module.GrugRunConfig(
+            model=_small_model_config(model_module.GrugModelConfig, vocab_size=vocab_size, seq_len=seq_len),
+            data=data_config,
+            resources=ResourceConfig.with_cpu(),
+            trainer=train_module.GrugTrainerConfig(
+                trainer=trainer_config,
+                log_every=1,
+                train_batch_pspec=P(("data", "expert")),
+            ),
+            eval=train_module.GrugEvalConfig(
+                eval_batch_size=1,
+                eval_batch_pspec=P(("data", "expert")),
+                steps_per_eval=1,
+                max_eval_batches=1,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            ),
+        )
+        train_module.run_grug(run_cfg)
+    finally:
+        logger.removeHandler(handler)
+
+    records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+    finish_records = [record for record in records if record.get("event") == "finish"]
+    assert len(finish_records) == 1
+    summary = finish_records[0]["summary"]
+
+    required_keys = [
+        "train/loss",
+        "train/cross_entropy_loss",
+        "train/router/aux_loss",
+        "train/router/load_balancing_loss",
+        "train/router/router_z_loss",
         "global_step",
         "throughput/duration",
         "throughput/hook_time",

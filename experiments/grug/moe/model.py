@@ -43,6 +43,10 @@ def _batch_spec() -> P:
     return P(("data", "expert"))
 
 
+def _token_batch_spec() -> P:
+    return P(_batch_spec()[0], None)
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the compact grug MoE transformer."""
@@ -175,11 +179,12 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_batch_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_batch_spec())
+        out = rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        return reshard(out, _batch_spec())
 
 
 def _routing_stats(
@@ -298,8 +303,13 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None)))
+        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_batch_spec())
+        router_logits = jnp.einsum(
+            "td,de->te",
+            x_flat,
+            reshard(self.router, P(None, None)),
+            out_sharding=_token_batch_spec(),
+        )
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
         combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
