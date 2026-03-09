@@ -17,7 +17,7 @@ from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerRuntime
 from iris.cluster.types import JobName
-from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -112,7 +112,7 @@ class Worker:
     def __init__(
         self,
         config: WorkerConfig,
-        bundle_provider: BundleProvider | None = None,
+        bundle_store: BundleStore | None = None,
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
@@ -127,7 +127,11 @@ class Worker:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Use overrides if provided, otherwise create defaults
-        self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
+        self._bundle_store = bundle_store or BundleStore(
+            db_path=self._cache_dir / "bundles.sqlite3",
+            controller_address=config.controller_address,
+            max_items=100,
+        )
         self._runtime = container_runtime or DockerRuntime()
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
@@ -459,7 +463,7 @@ class Worker:
 
         attempt = TaskAttempt(
             config=config,
-            bundle_provider=self._bundle_cache,
+            bundle_store=self._bundle_store,
             container_runtime=self._runtime,
             worker_metadata=self._worker_metadata,
             worker_id=self._worker_id,

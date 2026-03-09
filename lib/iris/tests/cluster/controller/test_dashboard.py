@@ -12,6 +12,7 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     JobSubmittedEvent,
@@ -124,9 +125,9 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def service(state, scheduler):
+def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
-    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
+    return ControllerServiceImpl(state, controller_mock, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"))
 
 
 @pytest.fixture
@@ -136,10 +137,10 @@ def client(service):
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler):
+def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
+    return ControllerServiceImpl(state, controller_mock, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"))
 
 
 def rpc_post(client: TestClient, method: str, body: dict | None = None):
@@ -864,3 +865,14 @@ def test_list_jobs_returns_all_jobs_for_pagination(client, state):
     resp = rpc_post(client, "ListJobs")
     jobs = resp.get("jobs", [])
     assert len(jobs) == 60
+
+
+def test_bundle_download_route_serves_bundle_bytes(client, service):
+    bundle_id = "a" * 64
+    bundle_bytes = b"zip-bytes"
+    service.bundle_zip = Mock(return_value=bundle_bytes)
+
+    resp = client.get(f"/bundles/{bundle_id}.zip")
+    assert resp.status_code == 200
+    assert resp.content == bundle_bytes
+    assert resp.headers["content-type"] == "application/zip"

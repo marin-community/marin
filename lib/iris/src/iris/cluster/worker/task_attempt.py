@@ -34,7 +34,7 @@ from iris.cluster.types import (
     JobName,
     is_task_finished,
 )
-from iris.cluster.worker.bundle_cache import BundleProvider
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
@@ -167,7 +167,7 @@ def build_iris_env(
     env["IRIS_JOB_ID"] = task.task_id.to_wire()
     env["IRIS_NUM_TASKS"] = str(task.num_tasks)
     env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
-    env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
+    env["IRIS_BUNDLE_ID"] = task.request.bundle_id
 
     if worker_id:
         env["IRIS_WORKER_ID"] = worker_id
@@ -176,10 +176,7 @@ def build_iris_env(
         # With --network=host, containers share the host's network directly,
         # so no address rewriting is needed.
         env["IRIS_CONTROLLER_ADDRESS"] = controller_address
-
-    # Inject bundle path for sub-task inheritance
-    if task.request.bundle_gcs_path:
-        env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
+        env["IRIS_CONTROLLER_URL"] = controller_address
 
     # With --network=host, containers share the host's network stack.
     # Compute the host's routable IP so container code can read it via
@@ -240,7 +237,7 @@ class TaskAttempt:
     def __init__(
         self,
         config: TaskAttemptConfig,
-        bundle_provider: BundleProvider,
+        bundle_store: BundleStore,
         container_runtime: ContainerRuntime,
         worker_metadata: WorkerMetadata,
         worker_id: str | None,
@@ -261,7 +258,7 @@ class TaskAttempt:
 
         Args:
             config: Immutable configuration for this attempt
-            bundle_provider: Provider for downloading code bundles
+            bundle_store: Bundle store for resolving task bundles
             container_runtime: Runtime for creating and managing containers
             worker_metadata: Worker's hardware/environment metadata
             worker_id: Worker identifier for env injection
@@ -275,7 +272,7 @@ class TaskAttempt:
             log_store: Shared LogStore for appending and querying task logs.
             poll_interval_seconds: How often to poll container status
         """
-        self._bundle_provider = bundle_provider
+        self._bundle_store = bundle_store
         self._runtime = container_runtime
         self._worker_metadata = worker_metadata
         self._worker_id = worker_id
@@ -477,7 +474,7 @@ class TaskAttempt:
 
         The lifecycle is:
         0. Setup: allocate ports, create workdir
-        1. Download bundle from GCS
+        1. Download bundle by bundle ID
         2. Resolve base image
         3. Create container handle
         4. Build phase: run setup_commands (uv sync) - BUILDING state
@@ -527,7 +524,7 @@ class TaskAttempt:
             )
 
     def _download_bundle(self) -> None:
-        """Download the code bundle from GCS.
+        """Stage the code bundle from the configured bundle ID.
 
         Transitions task to BUILDING state and performs chaos injection checks
         for testing delayed builds.
@@ -549,15 +546,16 @@ class TaskAttempt:
         # Periodically check should_stop during download to support kill during BUILDING
         # (RF-3: For now, we defer kill handling until container starts, as bundle
         # downloads are typically fast. Future work could add cancellation support
-        # to BundleProvider.get_bundle if long downloads become a problem.)
+        # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
         self._runtime.stage_bundle(
-            bundle_gcs_path=self.request.bundle_gcs_path,
+            bundle_id=self.request.bundle_id,
             workdir=self.workdir,
             workdir_files=dict(self.request.entrypoint.workdir_files),
-            fetch_bundle=lambda path: self._bundle_provider.get_bundle(path, expected_hash=None),
+            bundle_store=self._bundle_store,
         )
+
         logger.info(
             "Bundle staged for task %s in %.2fs",
             self.task_id,

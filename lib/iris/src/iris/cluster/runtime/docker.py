@@ -20,12 +20,11 @@ import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from iris.cluster.runtime.bundle import stage_bundle_to_local
+from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -778,18 +777,15 @@ class DockerRuntime:
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        stage_bundle_to_local(
-            bundle_gcs_path=bundle_gcs_path,
-            workdir=workdir,
-            workdir_files=workdir_files,
-            fetch_bundle=fetch_bundle,
-        )
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        bundle_store.write_workdir_files(workdir, workdir_files)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

@@ -19,7 +19,7 @@ from iris.cluster.controller.local import LocalController
 from iris.cluster.platform.base import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.cluster.worker.bundle_cache import BundleCache
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
@@ -149,7 +149,11 @@ class E2ECluster:
             timeout_ms=30000,
         )
 
-        bundle_provider = BundleCache(cache_path, max_bundles=10)
+        bundle_store = BundleStore(
+            db_path=cache_path / "bundles.sqlite3",
+            controller_address=f"http://127.0.0.1:{self._controller_port}",
+            max_items=10,
+        )
         self._container_runtime = DockerRuntime()
         container_runtime = self._container_runtime
 
@@ -170,7 +174,7 @@ class E2ECluster:
                 env_provider = self._env_provider_factory(i, self._num_workers)
             worker = Worker(
                 worker_config,
-                bundle_provider=bundle_provider,
+                bundle_store=bundle_store,
                 container_runtime=container_runtime,
                 environment_provider=env_provider,
             )

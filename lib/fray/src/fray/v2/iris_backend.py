@@ -416,15 +416,15 @@ class FrayIrisClient:
         self,
         controller_address: str,
         workspace: Path | None = None,
-        bundle_gcs_path: str | None = None,
+        bundle_id: str | None = None,
     ):
         logger.info(
-            "FrayIrisClient connecting to %s (workspace=%s, bundle_gcs_path=%s)",
+            "FrayIrisClient connecting to %s (workspace=%s, bundle_id=%s)",
             controller_address,
             workspace,
-            bundle_gcs_path,
+            bundle_id,
         )
-        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
+        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_id=bundle_id)
 
     @staticmethod
     def from_iris_client(iris_client: IrisClientLib) -> FrayIrisClient:
