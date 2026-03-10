@@ -4,7 +4,10 @@
 """Checkpoint restore helpers for autoscaler state.
 
 The controller runtime state is checkpointed as a SQLite DB copy. This module
-only contains autoscaler reconciliation helpers used when restoring from that DB.
+provides reconciliation helpers for restoring autoscaler state on restart.
+
+Data types and serialization live in checkpoint_data.py to avoid circular
+imports with autoscaler.py and scaling_group.py.
 """
 
 from __future__ import annotations
@@ -14,9 +17,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from iris.cluster.controller.autoscaler import TrackedWorker
+from iris.cluster.controller.checkpoint_data import (
+    ScalingGroupSnapshotData,
+    SliceSnapshotData,
+    TrackedWorkerSnapshotData,
+    deserialize_scaling_group,
+    serialize_scaling_group,
+)
 from iris.cluster.controller.scaling_group import SliceLifecycleState, SliceState, _zones_from_config
 from iris.cluster.platform.base import CloudWorkerState, CommandResult, Labels, Platform, SliceHandle, WorkerStatus
-from iris.rpc import config_pb2, snapshot_pb2
+from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -81,7 +91,8 @@ class ScalingGroupRestoreResult:
     quota_exceeded_until: Deadline | None = None
 
 
-def _restore_tracked_worker(snap: snapshot_pb2.TrackedWorkerSnapshot) -> TrackedWorker:
+def restore_tracked_worker(snap: TrackedWorkerSnapshotData) -> TrackedWorker:
+    """Restore a single tracked worker from snapshot data."""
     handle = _RestoredWorkerHandle(worker_id=snap.worker_id, internal_address=snap.internal_address)
     return TrackedWorker(
         worker_id=snap.worker_id,
@@ -91,11 +102,11 @@ def _restore_tracked_worker(snap: snapshot_pb2.TrackedWorkerSnapshot) -> Tracked
     )
 
 
-def restore_tracked_workers(proto: snapshot_pb2.ControllerSnapshot) -> dict[str, TrackedWorker]:
-    """Restore tracked workers from checkpoint metadata."""
+def restore_tracked_workers(snapshots: list[TrackedWorkerSnapshotData]) -> dict[str, TrackedWorker]:
+    """Restore tracked workers from checkpoint data."""
     workers: dict[str, TrackedWorker] = {}
-    for tw_snap in proto.tracked_workers:
-        tw = _restore_tracked_worker(tw_snap)
+    for snap in snapshots:
+        tw = restore_tracked_worker(snap)
         workers[tw.worker_id] = tw
     return workers
 
@@ -108,7 +119,7 @@ def _wall_clock_to_deadline(wall_clock_ts: Timestamp) -> Deadline | None:
 
 
 def restore_scaling_group(
-    group_snapshot: snapshot_pb2.ScalingGroupSnapshot,
+    group_snapshot: ScalingGroupSnapshotData,
     platform: Platform,
     config: config_pb2.ScaleGroupConfig,
     label_prefix: str,
@@ -147,7 +158,7 @@ def restore_scaling_group(
             handle=cloud_handle,
             lifecycle=lifecycle,
             vm_addresses=list(slice_snap.vm_addresses),
-            last_active=Timestamp.from_proto(slice_snap.last_active),
+            last_active=Timestamp.from_ms(slice_snap.last_active_ms),
             error_message=slice_snap.error_message,
         )
 
@@ -158,23 +169,23 @@ def restore_scaling_group(
         result.slices[slice_id] = SliceState(handle=cloud_handle, lifecycle=SliceLifecycleState.BOOTING)
         result.adopted_count += 1
 
-    if group_snapshot.HasField("backoff_until") and group_snapshot.backoff_until.epoch_ms > 0:
-        backoff_ts = Timestamp.from_proto(group_snapshot.backoff_until)
+    backoff_ts = Timestamp.from_ms(group_snapshot.backoff_until_ms)
+    if backoff_ts.epoch_ms() > 0:
         result.backoff_until = _wall_clock_to_deadline(backoff_ts)
         result.backoff_active = result.backoff_until is not None and not result.backoff_until.expired()
 
-    if group_snapshot.HasField("quota_exceeded_until") and group_snapshot.quota_exceeded_until.epoch_ms > 0:
-        quota_ts = Timestamp.from_proto(group_snapshot.quota_exceeded_until)
+    quota_ts = Timestamp.from_ms(group_snapshot.quota_exceeded_until_ms)
+    if quota_ts.epoch_ms() > 0:
         result.quota_exceeded_until = _wall_clock_to_deadline(quota_ts)
         result.quota_exceeded_active = (
             result.quota_exceeded_until is not None and not result.quota_exceeded_until.expired()
         )
         result.quota_reason = group_snapshot.quota_reason
 
-    if group_snapshot.HasField("last_scale_up") and group_snapshot.last_scale_up.epoch_ms > 0:
-        result.last_scale_up = Timestamp.from_proto(group_snapshot.last_scale_up)
-    if group_snapshot.HasField("last_scale_down") and group_snapshot.last_scale_down.epoch_ms > 0:
-        result.last_scale_down = Timestamp.from_proto(group_snapshot.last_scale_down)
+    if group_snapshot.last_scale_up_ms > 0:
+        result.last_scale_up = Timestamp.from_ms(group_snapshot.last_scale_up_ms)
+    if group_snapshot.last_scale_down_ms > 0:
+        result.last_scale_down = Timestamp.from_ms(group_snapshot.last_scale_down_ms)
 
     logger.info(
         "Restored scaling group %s: %d slices (%d discarded, %d adopted), consecutive_failures=%d, "

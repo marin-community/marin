@@ -59,7 +59,12 @@ from iris.cluster.controller.scheduler import (
     WorkerSnapshot,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.snapshot import restore_scaling_group, restore_tracked_workers
+from iris.cluster.controller.snapshot import (
+    TrackedWorkerSnapshotData,
+    deserialize_scaling_group,
+    restore_scaling_group,
+    restore_tracked_workers,
+)
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
@@ -78,7 +83,7 @@ from iris.cluster.types import (
 )
 from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, snapshot_pb2
+from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
 
@@ -1594,20 +1599,19 @@ class Controller:
                     TRACKED_WORKERS.c.internal_address,
                 ),
             )
-        scaling_groups: dict[str, snapshot_pb2.ScalingGroupSnapshot] = {}
+        scaling_groups = {}
         for row in scaling_rows:
-            snap = snapshot_pb2.ScalingGroupSnapshot()
-            snap.ParseFromString(row.snapshot_proto)
-            scaling_groups[row.name] = snap
+            scaling_groups[row.name] = deserialize_scaling_group(row.snapshot_proto)
 
-        tracked_workers: dict[str, snapshot_pb2.TrackedWorkerSnapshot] = {}
-        for row in tracked_rows:
-            tracked_workers[row.worker_id] = snapshot_pb2.TrackedWorkerSnapshot(
+        tracked_worker_snapshots: list[TrackedWorkerSnapshotData] = [
+            TrackedWorkerSnapshotData(
                 worker_id=row.worker_id,
                 slice_id=row.slice_id,
                 scale_group=row.scale_group,
                 internal_address=row.internal_address,
             )
+            for row in tracked_rows
+        ]
 
         # Restore autoscaler scaling groups (parallelized — each calls platform.list_slices())
         if self._autoscaler is not None:
@@ -1647,9 +1651,7 @@ class Controller:
             # including task reassignment and resource release.
 
             # Restore tracked workers into the autoscaler.
-            tracked_proto = snapshot_pb2.ControllerSnapshot()
-            tracked_proto.tracked_workers.extend(tracked_workers.values())
-            restored_workers = restore_tracked_workers(tracked_proto)
+            restored_workers = restore_tracked_workers(tracked_worker_snapshots)
             self._autoscaler.restore_tracked_workers(restored_workers)
             logger.info("Restored %d tracked workers", len(restored_workers))
 

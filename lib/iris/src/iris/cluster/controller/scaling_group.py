@@ -28,12 +28,13 @@ from iris.cluster.constraints import (
     evaluate_constraint,
     is_cpu_device_type_constraint,
 )
+from iris.cluster.controller.checkpoint_data import ScalingGroupSnapshotData, SliceSnapshotData
 from iris.cluster.types import (
     VmWorkerStatusMap,
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, time_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
 from iris.time_utils import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
@@ -927,44 +928,39 @@ class ScalingGroup:
         for handle in snapshot:
             handle.terminate()
 
-    def to_snapshot(self) -> snapshot_pb2.ScalingGroupSnapshot:
+    def to_snapshot(self) -> ScalingGroupSnapshotData:
         """Serialize this group's state for checkpointing.
 
         Captures slice inventory and timing state under lock. Deadlines are
         stored as wall-clock timestamps for portability across restarts.
         """
-
-        snap = snapshot_pb2.ScalingGroupSnapshot(
-            name=self.name,
-            consecutive_failures=self._consecutive_failures,
-        )
-
+        slices: list[SliceSnapshotData] = []
         with self._slices_lock:
             for slice_id, slice_state in self._slices.items():
-                slice_snap = snapshot_pb2.SliceSnapshot(
-                    slice_id=slice_id,
-                    scale_group=self.name,
-                    lifecycle=slice_state.lifecycle.value,
-                    error_message=slice_state.error_message,
+                slices.append(
+                    SliceSnapshotData(
+                        slice_id=slice_id,
+                        scale_group=self.name,
+                        lifecycle=slice_state.lifecycle.value,
+                        vm_addresses=list(slice_state.vm_addresses),
+                        created_at_ms=slice_state.handle.created_at.epoch_ms(),
+                        last_active_ms=slice_state.last_active.epoch_ms(),
+                        error_message=slice_state.error_message,
+                    )
                 )
-                slice_snap.vm_addresses.extend(slice_state.vm_addresses)
-                slice_snap.created_at.CopyFrom(slice_state.handle.created_at.to_proto())
-                slice_snap.last_active.CopyFrom(slice_state.last_active.to_proto())
-                snap.slices.append(slice_snap)
 
-        if self._backoff_until is not None:
-            snap.backoff_until.CopyFrom(self._backoff_until.as_timestamp().to_proto())
-
-        if self._last_scale_up.epoch_ms() > 0:
-            snap.last_scale_up.CopyFrom(self._last_scale_up.to_proto())
-        if self._last_scale_down.epoch_ms() > 0:
-            snap.last_scale_down.CopyFrom(self._last_scale_down.to_proto())
-
-        if self._quota_exceeded_until is not None:
-            snap.quota_exceeded_until.CopyFrom(self._quota_exceeded_until.as_timestamp().to_proto())
-        snap.quota_reason = self._quota_reason
-
-        return snap
+        return ScalingGroupSnapshotData(
+            name=self.name,
+            consecutive_failures=self._consecutive_failures,
+            slices=slices,
+            backoff_until_ms=self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
+            last_scale_up_ms=self._last_scale_up.epoch_ms(),
+            last_scale_down_ms=self._last_scale_down.epoch_ms(),
+            quota_exceeded_until_ms=(
+                self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0
+            ),
+            quota_reason=self._quota_reason,
+        )
 
     def restore_from_snapshot(
         self,

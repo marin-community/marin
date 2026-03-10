@@ -40,10 +40,11 @@ from iris.cluster.constraints import (
     get_device_type_enum,
     routing_constraints,
 )
+from iris.cluster.controller.checkpoint_data import TrackedWorkerSnapshotData
 from iris.cluster.types import VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -1093,11 +1094,10 @@ class Autoscaler:
         self.refresh(vm_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
-    def to_tracked_worker_snapshots(self) -> list[snapshot_pb2.TrackedWorkerSnapshot]:
+    def to_tracked_worker_snapshots(self) -> list[TrackedWorkerSnapshotData]:
         """Serialize tracked worker state for checkpointing."""
-
         return [
-            snapshot_pb2.TrackedWorkerSnapshot(
+            TrackedWorkerSnapshotData(
                 worker_id=tw.worker_id,
                 slice_id=tw.slice_id,
                 scale_group=tw.scale_group,

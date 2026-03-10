@@ -13,10 +13,12 @@ import pytest
 
 from iris.cluster.controller.scaling_group import SliceLifecycleState
 from iris.cluster.controller.snapshot import (
+    ScalingGroupSnapshotData,
+    SliceSnapshotData,
     restore_scaling_group,
 )
 from iris.cluster.platform.base import Labels
-from iris.rpc import config_pb2, snapshot_pb2
+from iris.rpc import config_pb2
 from iris.time_utils import Timestamp
 from tests.cluster.platform.fakes import (
     FakePlatform,
@@ -52,18 +54,16 @@ def _make_slice_snapshot(
     vm_addresses: list[str] | None = None,
     created_at_ms: int = 1000000,
     error_message: str = "",
-) -> snapshot_pb2.SliceSnapshot:
-    snap = snapshot_pb2.SliceSnapshot(
+) -> SliceSnapshotData:
+    return SliceSnapshotData(
         slice_id=slice_id,
         scale_group=scale_group,
         lifecycle=lifecycle,
+        vm_addresses=vm_addresses or [],
+        created_at_ms=created_at_ms,
+        last_active_ms=created_at_ms,
         error_message=error_message,
     )
-    if vm_addresses:
-        snap.vm_addresses.extend(vm_addresses)
-    snap.created_at.CopyFrom(Timestamp.from_ms(created_at_ms).to_proto())
-    snap.last_active.CopyFrom(Timestamp.from_ms(created_at_ms).to_proto())
-    return snap
 
 
 def _make_fake_slice(
@@ -115,7 +115,7 @@ class ReconciliationEnv:
         lifecycle: str = "ready",
         vm_addresses: list[str] | None = None,
         created_at_ms: int = 1000000,
-    ) -> snapshot_pb2.SliceSnapshot:
+    ) -> SliceSnapshotData:
         return _make_slice_snapshot(
             slice_id=slice_id,
             scale_group=self.group_name,
@@ -155,7 +155,7 @@ def test_restore_slice_in_checkpoint_and_cloud_preserves_lifecycle(reconciliatio
     env.platform.inject_slice(cloud_handle)
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[slice_snap]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[slice_snap]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -178,7 +178,7 @@ def test_restore_booting_slice_that_became_ready_transitions_on_refresh(reconcil
     env.platform.inject_slice(cloud_handle)
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[slice_snap]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[slice_snap]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -196,7 +196,7 @@ def test_restore_initializing_slice_with_cloud_ready(reconciliation_env: Reconci
     env.platform.inject_slice(cloud_handle)
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[slice_snap]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[slice_snap]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -217,7 +217,7 @@ def test_restore_discards_slice_missing_from_cloud(reconciliation_env: Reconcili
     slice_snap = env.make_slice_snapshot("slice-gone", lifecycle="ready", vm_addresses=["10.0.0.99"])
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[slice_snap]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[slice_snap]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -233,7 +233,7 @@ def test_restore_discards_failed_slice_missing_from_cloud(reconciliation_env: Re
     slice_snap = env.make_slice_snapshot("slice-failed", lifecycle="failed")
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[slice_snap]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[slice_snap]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -252,7 +252,7 @@ def test_restore_multiple_slices_some_missing(reconciliation_env: Reconciliation
     env.platform.inject_slice(cloud_alive)
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(
+        group_snapshot=ScalingGroupSnapshotData(
             name="tpu-group",
             slices=[snap_alive, snap_gone],
         ),
@@ -278,7 +278,7 @@ def test_restore_adopts_unknown_cloud_slice_as_booting(reconciliation_env: Recon
     env.platform.inject_slice(orphan)
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -297,7 +297,7 @@ def test_restore_adopts_creating_cloud_slice(reconciliation_env: ReconciliationE
     env.platform.inject_slice(creating)
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -318,7 +318,7 @@ def test_restore_mixed_known_and_unknown_slices(reconciliation_env: Reconciliati
     env.platform.inject_slice(cloud_b)
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[snap_a]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[snap_a]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -354,7 +354,7 @@ def test_restore_multiple_groups_independent_reconciliation():
     platform.inject_slice(cloud_b_orphan)
 
     result_a = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(
+        group_snapshot=ScalingGroupSnapshotData(
             name="group-a",
             slices=[
                 _make_slice_snapshot("slice-a1", scale_group="group-a"),
@@ -367,7 +367,7 @@ def test_restore_multiple_groups_independent_reconciliation():
     )
 
     result_b = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(
+        group_snapshot=ScalingGroupSnapshotData(
             name="group-b",
             slices=[_make_slice_snapshot("slice-b1", scale_group="group-b")],
         ),
@@ -388,7 +388,7 @@ def test_restore_empty_checkpoint_with_cloud_slices(reconciliation_env: Reconcil
     env.platform.inject_slice(env.make_fake_slice("slice-2"))
 
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[]),
         platform=env.platform,
         config=env.config,
         label_prefix=env.label_prefix,
@@ -401,7 +401,7 @@ def test_restore_empty_checkpoint_with_cloud_slices(reconciliation_env: Reconcil
 def test_restore_empty_checkpoint_empty_cloud(reconciliation_env: ReconciliationEnv):
     """Fresh start: no checkpoint, no cloud slices. Clean slate."""
     result = restore_scaling_group(
-        group_snapshot=snapshot_pb2.ScalingGroupSnapshot(name="tpu-group", slices=[]),
+        group_snapshot=ScalingGroupSnapshotData(name="tpu-group", slices=[]),
         platform=reconciliation_env.platform,
         config=reconciliation_env.config,
         label_prefix=reconciliation_env.label_prefix,
@@ -418,13 +418,13 @@ def test_restore_empty_checkpoint_empty_cloud(reconciliation_env: Reconciliation
 def test_restore_preserves_backoff_state(reconciliation_env: ReconciliationEnv):
     """Backoff timers survive checkpoint/restore."""
     env = reconciliation_env
-    snapshot = snapshot_pb2.ScalingGroupSnapshot(
+    # Set backoff_until to 5 minutes in the future
+    backoff_ms = Timestamp.now().epoch_ms() + 300_000
+    snapshot = ScalingGroupSnapshotData(
         name="tpu-group",
         consecutive_failures=3,
+        backoff_until_ms=backoff_ms,
     )
-    # Set backoff_until to 5 minutes in the future
-    backoff_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() + 300_000)
-    snapshot.backoff_until.CopyFrom(backoff_ts.to_proto())
 
     result = restore_scaling_group(
         group_snapshot=snapshot,
@@ -440,13 +440,13 @@ def test_restore_preserves_backoff_state(reconciliation_env: ReconciliationEnv):
 def test_restore_expired_backoff_is_inactive(reconciliation_env: ReconciliationEnv):
     """Backoff that expired during the restart window is correctly inactive."""
     env = reconciliation_env
-    snapshot = snapshot_pb2.ScalingGroupSnapshot(
+    # Set backoff_until to 1 minute in the past
+    backoff_ms = Timestamp.now().epoch_ms() - 60_000
+    snapshot = ScalingGroupSnapshotData(
         name="tpu-group",
         consecutive_failures=2,
+        backoff_until_ms=backoff_ms,
     )
-    # Set backoff_until to 1 minute in the past
-    backoff_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() - 60_000)
-    snapshot.backoff_until.CopyFrom(backoff_ts.to_proto())
 
     result = restore_scaling_group(
         group_snapshot=snapshot,
@@ -462,13 +462,13 @@ def test_restore_expired_backoff_is_inactive(reconciliation_env: ReconciliationE
 def test_restore_preserves_quota_exceeded_state(reconciliation_env: ReconciliationEnv):
     """Quota exceeded state and reason survive restore."""
     env = reconciliation_env
-    snapshot = snapshot_pb2.ScalingGroupSnapshot(
+    # Set quota_exceeded_until to 5 minutes in the future
+    quota_ms = Timestamp.now().epoch_ms() + 300_000
+    snapshot = ScalingGroupSnapshotData(
         name="tpu-group",
         quota_reason="RESOURCE_EXHAUSTED: out of v5 TPUs in us-central2",
+        quota_exceeded_until_ms=quota_ms,
     )
-    # Set quota_exceeded_until to 5 minutes in the future
-    quota_ts = Timestamp.from_ms(Timestamp.now().epoch_ms() + 300_000)
-    snapshot.quota_exceeded_until.CopyFrom(quota_ts.to_proto())
 
     result = restore_scaling_group(
         group_snapshot=snapshot,
