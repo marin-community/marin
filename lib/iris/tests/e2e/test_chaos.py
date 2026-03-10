@@ -321,7 +321,7 @@ def test_checkpoint_returns_metadata(cluster):
     job = cluster.submit(TestJobs.quick, "pre-checkpoint")
     cluster.wait(job, timeout=30)
     resp = cluster.controller_client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
-    assert resp.snapshot_path
+    assert resp.checkpoint_path
     assert resp.created_at.epoch_ms > 0
     assert resp.job_count >= 1
 

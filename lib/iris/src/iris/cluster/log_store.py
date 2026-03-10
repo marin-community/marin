@@ -68,22 +68,31 @@ class LogStore:
     allows readers to proceed without blocking the writer.
     """
 
-    def __init__(self, log_dir: Path | None = None, *, max_records: int = _MAX_RECORDS):
+    def __init__(
+        self,
+        log_dir: Path | None = None,
+        *,
+        db_path: Path | None = None,
+        max_records: int = _MAX_RECORDS,
+    ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
-        if log_dir is not None:
+        if db_path is not None:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_path_str = str(db_path)
+        elif log_dir is not None:
             log_dir.mkdir(parents=True, exist_ok=True)
-            db_path = str(log_dir / "logs.db")
+            db_path_str = str(log_dir / "logs.db")
         else:
             self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_controller_logs_")
-            db_path = str(Path(self._temp_dir.name) / "logs.db")
+            db_path_str = str(Path(self._temp_dir.name) / "logs.db")
 
         # Separate connections for writers and readers so WAL concurrency
         # actually works: readers never block the writer and vice-versa.
-        self._write_conn = self._make_conn(db_path)
+        self._write_conn = self._make_conn(db_path_str)
         self._write_conn.executescript(_SCHEMA)
         self._write_conn.commit()
 
-        self._read_conn = self._make_conn(db_path)
+        self._read_conn = self._make_conn(db_path_str)
 
         self._write_lock = Lock()
         self._read_lock = Lock()

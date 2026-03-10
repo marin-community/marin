@@ -11,7 +11,7 @@ from iris.cluster.controller.autoscaler import (
     UnmetDemand,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.state import ReservationClaim
+from iris.cluster.controller.transitions import ReservationClaim
 from iris.cluster.controller.vm_lifecycle import (
     start_controller,
     stop_controller,
