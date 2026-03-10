@@ -14,6 +14,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import zipfile
 
 
@@ -479,7 +480,7 @@ def test_k8s_init_script_fetches_and_extracts_bundle(tmp_path):
             "IRIS_WORKDIR": str(workdir),
         }
         result = subprocess.run(
-            ["python", script_path],
+            [sys.executable, "-I", script_path],
             env=env,
             capture_output=True,
             text=True,
