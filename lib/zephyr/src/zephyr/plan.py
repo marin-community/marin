@@ -21,7 +21,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from itertools import groupby, islice
+from itertools import chain, groupby, islice
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -644,6 +644,21 @@ def _group_items_by_hash(
     return output_chunks
 
 
+def _scatter_with_pickle(
+    items: Iterable,
+    key_fn: Callable,
+    num_output_shards: int,
+    chunk_size: int,
+    sort_fn: Callable | None,
+    source_shard: int,
+) -> Iterator[StageResultChunk]:
+    """Scatter items using pickle-based chunking (fallback path)."""
+    output_chunks = _group_items_by_hash(items, key_fn, num_output_shards, chunk_size, sort_fn=sort_fn)
+    for shard_idx in range(num_output_shards):
+        for chunk in output_chunks[shard_idx]:
+            yield StageResultChunk(source_shard=source_shard, target_shard=shard_idx, chunk=chunk)
+
+
 def _scatter_to_vortex(
     items: Iterable,
     key_fn: Callable,
@@ -664,8 +679,11 @@ def _scatter_to_vortex(
     chunk is pre-sorted by key, preserving the invariant needed for k-way
     merge in the Reduce phase.
 
+    If the first batch fails Vortex/Arrow conversion, falls back to pickle-based
+    scatter with a performance warning.
+
     Args:
-        items: Input items (must be dicts)
+        items: Input items (dicts for Vortex; arbitrary objects fall back to pickle)
         key_fn: Function to extract grouping key from item
         num_output_shards: Number of output shards to distribute across
         chunk_size: Number of items per streaming batch
@@ -675,7 +693,7 @@ def _scatter_to_vortex(
 
     Yields:
         One StageResultChunk per non-empty (target_shard, chunk_idx) pair,
-        each containing a VortexDiskChunk reference to the shared Vortex file.
+        each containing a VortexDiskChunk (Vortex path) or iterator (pickle fallback).
     """
     import pyarrow as pa
 
@@ -715,12 +733,44 @@ def _scatter_to_vortex(
             original_columns = [c for c in schema.names if c not in internal_cols]
         return vx.array(batch.to_struct_array())
 
-    def _batch_generator() -> Iterator:
+    # Buffer first batch to test Vortex/Arrow compatibility before committing.
+    items_iter = iter(items)
+    first_buffers: dict[int, list] = defaultdict(list)
+    first_count = 0
+    for item in items_iter:
+        key = key_fn(item)
+        target = deterministic_hash(key) % num_output_shards
+        first_buffers[target].append(item)
+        first_count += 1
+        if chunk_size > 0 and first_count >= chunk_size:
+            break
+
+    if not first_buffers:
+        return
+
+    try:
+        first_arr = _to_vx_array(first_buffers, 0)
+    except Exception:
+        logger.warning(
+            "Vortex scatter serialization failed for shard %d; "
+            "falling back to pickle. Performance will be degraded for large shuffles.",
+            source_shard,
+            exc_info=True,
+        )
+        # Chain buffered items back with remaining stream for pickle fallback
+        buffered = [item for buf in first_buffers.values() for item in buf]
+        yield from _scatter_with_pickle(
+            chain(buffered, items_iter), key_fn, num_output_shards, chunk_size, sort_fn, source_shard
+        )
+        return
+
+    # Vortex conversion succeeded — stream remaining batches
+    def _remaining_batches() -> Iterator:
         shard_buffers: dict[int, list] = defaultdict(list)
         total_buffered = 0
-        chunk_idx = 0
+        chunk_idx = 1
 
-        for item in items:
+        for item in items_iter:
             key = key_fn(item)
             target = deterministic_hash(key) % num_output_shards
             shard_buffers[target].append(item)
@@ -734,16 +784,9 @@ def _scatter_to_vortex(
         if shard_buffers:
             yield _to_vx_array(shard_buffers, chunk_idx)
 
-    gen = _batch_generator()
-    try:
-        first_arr = next(gen)
-    except StopIteration:
-        # Empty input — nothing to scatter
-        return
-
     def _chained() -> Iterator:
         yield first_arr
-        yield from gen
+        yield from _remaining_batches()
 
     ensure_parent_dir(vortex_path)
     iterator = vx.ArrayIterator.from_iter(first_arr.dtype, _chained())
@@ -954,36 +997,16 @@ def run_stage(
 
         elif isinstance(op, Scatter):
             num_output_shards = op.num_output_shards if op.num_output_shards > 0 else ctx.total_shards
-            # Consume the stream once — Vortex needs it materialized for fallback anyway
-            items_list = list(stream)
-            try:
-                vortex_path = (
-                    f"{ctx.chunk_prefix}/{ctx.execution_id}/{ctx.stage_name}" f"/shard-{ctx.shard_idx:04d}.vortex"
-                )
-                yield from _scatter_to_vortex(
-                    items_list,
-                    op.key_fn,
-                    num_output_shards,
-                    ctx.chunk_size,
-                    sort_fn=op.sort_fn,
-                    vortex_path=vortex_path,
-                    source_shard=ctx.shard_idx,
-                )
-            except Exception:
-                logger.exception(
-                    "Vortex scatter serialization failed for stage %s shard %d; "
-                    "falling back to pickle. Performance will be degraded! It is recommended to use "
-                    "Vortex-compatible data types for shuffle operations (dicts, lists, primitives).",
-                    ctx.stage_name,
-                    ctx.shard_idx,
-                )
-                output_chunks = _group_items_by_hash(
-                    items_list, op.key_fn, num_output_shards, ctx.chunk_size, sort_fn=op.sort_fn
-                )
-                for shard_idx in range(num_output_shards):
-                    if output_chunks[shard_idx]:
-                        for chunk in output_chunks[shard_idx]:
-                            yield StageResultChunk(source_shard=ctx.shard_idx, target_shard=shard_idx, chunk=chunk)
+            vortex_path = f"{ctx.chunk_prefix}/{ctx.execution_id}/{ctx.stage_name}" f"/shard-{ctx.shard_idx:04d}.vortex"
+            yield from _scatter_to_vortex(
+                stream,
+                op.key_fn,
+                num_output_shards,
+                ctx.chunk_size,
+                sort_fn=op.sort_fn,
+                vortex_path=vortex_path,
+                source_shard=ctx.shard_idx,
+            )
             return
 
         elif isinstance(op, Reduce):
