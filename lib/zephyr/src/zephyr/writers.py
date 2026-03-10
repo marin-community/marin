@@ -24,6 +24,29 @@ logger = logging.getLogger(__name__)
 # 64 MB write blocks — controls S3 multipart upload part size.
 _WRITE_BLOCK_SIZE = 64 * 1024 * 1024
 
+# Default target buffer size for writer batching. Writers accumulate records
+# until the estimated in-memory size reaches this threshold, then use the
+# resulting record count for all subsequent batches.
+DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
+
+# Clamp auto-calculated batch sizes to this range.
+_MIN_BATCH_SIZE = 1
+_MAX_BATCH_SIZE = 1_000_000
+
+
+def _estimate_batch_size(sample: list[dict], schema: object, target_bytes: int) -> int:
+    """Estimate optimal batch size from a sample of records.
+
+    Converts the sample to a PyArrow table and uses its nbytes to extrapolate
+    how many records fit in ``target_bytes``.
+    """
+    import pyarrow as pa
+
+    table = pa.Table.from_pylist(sample, schema=schema)
+    bytes_per_row = max(table.nbytes / len(sample), 1)
+    batch_size = int(target_bytes / bytes_per_row)
+    return max(_MIN_BATCH_SIZE, min(batch_size, _MAX_BATCH_SIZE))
+
 
 def unique_temp_path(output_path: str) -> str:
     """Return a unique temporary path derived from ``output_path``.
@@ -116,7 +139,11 @@ def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
 
 
 def write_parquet_file(
-    records: Iterable, output_path: str, *, schema: object | None = None, batch_size: int = 1000
+    records: Iterable,
+    output_path: str,
+    *,
+    schema: object | None = None,
+    target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
 ) -> dict:
     """Write records to a Parquet file.
 
@@ -124,7 +151,9 @@ def write_parquet_file(
         records: Records to write (iterable of dicts)
         output_path: Path to output file
         schema: PyArrow schema (optional, will be inferred from first record if None)
-        batch_size: Number of records per batch (default: 1000)
+        target_buffer_bytes: Target buffer size in bytes. The writer samples the
+            first 1024 records to estimate per-row size and derives a batch count
+            that approximates this buffer size.
 
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
@@ -148,12 +177,19 @@ def write_parquet_file(
 
     maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
 
-    # Collect first batch and infer schema from multiple records so that
-    # None/optional values are resolved from non-None values in the batch.
-    first_batch = [maybe_map_to_dict(first_record)]
-    for record in itertools.islice(record_iter, batch_size - 1):
+    # Collect a sample to infer schema and estimate batch size.
+    _SAMPLE_SIZE = 1024
+    sample = [maybe_map_to_dict(first_record)]
+    for record in itertools.islice(record_iter, _SAMPLE_SIZE - 1):
+        sample.append(maybe_map_to_dict(record))
+    actual_schema = schema or infer_arrow_schema(sample)
+
+    batch_size = _estimate_batch_size(sample, actual_schema, target_buffer_bytes)
+
+    # Accumulate to batch_size for the first batch.
+    first_batch = sample
+    for record in itertools.islice(record_iter, max(batch_size - len(sample), 0)):
         first_batch.append(maybe_map_to_dict(record))
-    actual_schema = schema or infer_arrow_schema(first_batch)
 
     count = len(first_batch)
     with atomic_rename(output_path) as temp_path:
@@ -174,7 +210,11 @@ def write_parquet_file(
 
 
 def write_vortex_file(
-    records: Iterable, output_path: str, *, schema: object | None = None, batch_size: int = 32_000
+    records: Iterable,
+    output_path: str,
+    *,
+    schema: object | None = None,
+    target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
 ) -> dict:
     """Write records to a Vortex file using streaming writes.
 
@@ -182,7 +222,9 @@ def write_vortex_file(
         records: Records to write (iterable of dicts)
         output_path: Path to output .vortex file
         schema: PyArrow schema (optional, will be inferred from first batch if None)
-        batch_size: Number of records per batch
+        target_buffer_bytes: Target buffer size in bytes. The writer samples the
+            first 1024 records to estimate per-row size and derives a batch count
+            that approximates this buffer size.
 
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
@@ -206,11 +248,20 @@ def write_vortex_file(
 
     maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
 
-    first_batch = [maybe_map_to_dict(first_record)]
-    for record in itertools.islice(record_iter, batch_size - 1):
-        first_batch.append(maybe_map_to_dict(record))
-    actual_schema = schema or infer_arrow_schema(first_batch)
+    # Collect a sample to infer schema and estimate batch size.
+    _SAMPLE_SIZE = 1024
+    sample = [maybe_map_to_dict(first_record)]
+    for record in itertools.islice(record_iter, _SAMPLE_SIZE - 1):
+        sample.append(maybe_map_to_dict(record))
+    actual_schema = schema or infer_arrow_schema(sample)
+
+    batch_size = _estimate_batch_size(sample, actual_schema, target_buffer_bytes)
     dtype = vortex.DType.from_arrow(actual_schema, non_nullable=True)
+
+    # Accumulate to batch_size for the first batch.
+    first_batch = sample
+    for record in itertools.islice(record_iter, max(batch_size - len(sample), 0)):
+        first_batch.append(maybe_map_to_dict(record))
 
     count = 0
 
@@ -322,9 +373,22 @@ class ThreadedBatchWriter:
 
 
 def write_levanter_cache(
-    records: Iterable[dict[str, Any]], output_path: str, *, metadata: dict[str, Any], batch_size: int = 1024
+    records: Iterable[dict[str, Any]],
+    output_path: str,
+    *,
+    metadata: dict[str, Any],
+    target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
 ) -> dict:
-    """Write tokenized records to Levanter cache format."""
+    """Write tokenized records to Levanter cache format.
+
+    Args:
+        records: Tokenized records (iterable of dicts with array values)
+        output_path: Path to output cache directory
+        metadata: Metadata for the cache
+        target_buffer_bytes: Target buffer size in bytes. The writer samples the
+            first 1024 records to estimate per-row size and derives a batch count
+            that approximates this buffer size.
+    """
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
@@ -335,8 +399,16 @@ def write_levanter_cache(
     except StopIteration:
         return {"path": output_path, "count": 0}
 
-    count = 1
-    logger.info("write_levanter_cache: starting write to %s", output_path)
+    # Collect a sample to estimate batch size.
+    _SAMPLE_SIZE = 1024
+    sample = [exemplar]
+    for record in itertools.islice(record_iter, _SAMPLE_SIZE - 1):
+        sample.append(record)
+    sample_schema = infer_arrow_schema(sample)
+    batch_size = _estimate_batch_size(sample, sample_schema, target_buffer_bytes)
+
+    count = len(sample)
+    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
 
     with atomic_rename(output_path) as tmp_path:
         with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
@@ -346,7 +418,7 @@ def write_levanter_cache(
                     writer.write_batch(batch)
 
             with ThreadedBatchWriter(_drain_batches) as threaded:
-                threaded.submit([exemplar])
+                threaded.submit(sample)
                 for batch in batchify(record_iter, n=batch_size):
                     threaded.submit(batch)
                     count += len(batch)
