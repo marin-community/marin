@@ -107,6 +107,11 @@ def _load_results_from_input_paths(
                     expected = str(example.get("answer", example.get("expected_answer", ""))).strip()
                     model_answers = example.get("model_answers", [])
                     model_answer = str(model_answers[0]).strip() if model_answers else ""
+                    # TODO: This naive string comparison produces wrong results for benchmarks
+                    # that use symbolic answers (e.g. HMMT with \frac{22}{7}, \sqrt{3}) or
+                    # execution-based grading (CodeForces, LiveCodeBench, JEEBench). The
+                    # evaluators store per-item correctness in example["label"] or
+                    # example["correctness"] — use those instead of re-grading here.
                     correct = 1 if (model_answer == expected and expected) else 0
 
                     record = {
