@@ -687,6 +687,7 @@ class Dataset(Generic[T]):
     def write_vortex(
         self,
         output_pattern: str | Callable[[int, int], str],
+        schema: object | None = None,
         skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Vortex files."""
@@ -697,6 +698,7 @@ class Dataset(Generic[T]):
                 WriteOp(
                     _normalize_output_pattern(output_pattern),
                     writer_type="vortex",
+                    schema=schema,
                     skip_existing=skip_existing,
                 ),
             ],
