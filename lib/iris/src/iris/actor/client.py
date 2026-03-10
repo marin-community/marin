@@ -118,6 +118,61 @@ class ActorClient:
         )
         return self._rpc_client
 
+    def _clear_connection(self, _exc: Exception) -> None:
+        self._rpc_client = None
+
+    def start_operation(self, method_name: str, *args: Any, **kwargs: Any) -> str:
+        """Start a long-running operation. Returns the operation ID."""
+        call = actor_pb2.ActorCall(
+            method_name=method_name,
+            actor_name=self._name,
+            serialized_args=cloudpickle.dumps(args),
+            serialized_kwargs=cloudpickle.dumps(kwargs),
+        )
+
+        def do_call():
+            client = self.rpc_client()
+            return client.start_operation(call)
+
+        op = call_with_retry(
+            f"{self._name}.start_operation({method_name})",
+            do_call,
+            on_retry=self._clear_connection,
+            max_attempts=self._max_call_attempts,
+            backoff=self._backoff,
+        )
+        return op.operation_id
+
+    def get_operation(self, operation_id: str) -> actor_pb2.Operation:
+        """Poll the state of a long-running operation."""
+        req = actor_pb2.OperationId(operation_id=operation_id)
+
+        def do_call():
+            return self.rpc_client().get_operation(req)
+
+        return call_with_retry(
+            f"{self._name}.get_operation({operation_id[:8]})",
+            do_call,
+            on_retry=self._clear_connection,
+            max_attempts=self._max_call_attempts,
+            backoff=self._backoff,
+        )
+
+    def cancel_operation(self, operation_id: str) -> actor_pb2.Operation:
+        """Cancel a long-running operation."""
+        req = actor_pb2.OperationId(operation_id=operation_id)
+
+        def do_call():
+            return self.rpc_client().cancel_operation(req)
+
+        return call_with_retry(
+            f"{self._name}.cancel_operation({operation_id[:8]})",
+            do_call,
+            on_retry=self._clear_connection,
+            max_attempts=self._max_call_attempts,
+            backoff=self._backoff,
+        )
+
     def __getattr__(self, method_name: str) -> "_RpcMethod":
         return _RpcMethod(self, method_name)
 
@@ -140,13 +195,10 @@ class _RpcMethod:
             resp = client.call(call)
             return unwrap_actor_response(resp)
 
-        def clear_connection(_exc):
-            self._client._rpc_client = None
-
         return call_with_retry(
             f"{self._client._name}.{self._method_name}",
             do_call,
-            on_retry=clear_connection,
+            on_retry=self._client._clear_connection,
             max_attempts=self._client._max_call_attempts,
             backoff=self._client._backoff,
         )
