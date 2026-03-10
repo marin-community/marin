@@ -789,3 +789,48 @@
     - coefficients win compactness
 - Next action: write the exact three-way SWA comparison into the Phase 1 report and then prefer evaluation/analysis of
   whole-sequence metrics over launching more JPEG variants immediately.
+
+### 2026-03-10 08:35 - Exact sequence-level JPEG evaluator completed
+
+- Hypothesis: the JPEG head-to-head should be written up from exact per-image sequence losses, not from rough
+  back-of-the-envelope conversions from mean token loss, because the whole-image byte and symbol runs have variable
+  sequence lengths and masked pad tails.
+- Command:
+  - first submit failed because the evaluator itself needed a TPU and I had not reserved one:
+    `ray-run-dlwh-evaluate_representation_head2head-20260310-160818`
+  - successful retry:
+    `RAY_AUTH_MODE=token RAY_AUTH_TOKEN_PATH=$HOME/.ray/auth_token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a --tpu auto -e WANDB_API_KEY=$WANDB_API_KEY -- python scripts/jpeg_tokenizer/evaluate_representation_head2head.py --run-spec name=coeff_k8_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-libjpeg-swa4096-trial-392707/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0,sliding_window=4096,unit_name=block,unit_count=1024 --run-spec name=bytes_whole,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-swa4096-trial-7cc718/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_whole_v0,sliding_window=4096 --run-spec name=symbols_whole_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0,sliding_window=4096 --output-dir gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-ebf28526a-r2`
+  - successful Ray job:
+    `ray-run-dlwh-evaluate_representation_head2head-20260310-162115`
+- Result:
+  - summary:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-ebf28526a-r2/summary.md`
+  - json:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-ebf28526a-r2/representation_eval.json`
+  - exact `coeff_k8` metrics:
+    - mean actual tokens/image: `8192.00`
+    - mean bits/image: `44928.74`
+    - mean bits/pixel: `0.6856`
+    - mean bits/modeled-token: `5.4851`
+    - mean bits/block: `43.8757`
+  - exact `bytes_whole` metrics:
+    - mean actual tokens/image: `25662.39`
+    - mean bits/image: `159685.81`
+    - mean bits/pixel: `2.4366`
+    - mean bits/modeled-token: `6.1948`
+  - exact `symbols_whole_exact` metrics:
+    - mean actual tokens/image: `32598.44`
+    - mean bits/image: `145094.24`
+    - mean bits/pixel: `2.2140`
+    - mean bits/modeled-token: `4.3496`
+- Interpretation:
+  - the coarse earlier estimates were directionally right, but the exact evaluator makes the conclusion much firmer:
+    - symbols beat bytes on both token-level predictability and total bits/image
+    - coeffs remain far more compact than either whole-image syntax stream
+    - bytes are worst on both axes the current evaluator measures well
+  - the JPEG thread now has a stable baseline story:
+    - symbols = best predictability
+    - coeff `K=8` = best compactness
+    - bytes = weakest representation of the three
+- Next action: treat JPEG as baseline-complete and move the next mechanism work to the gzip/reset thread rather than
+  launching more JPEG training variants.

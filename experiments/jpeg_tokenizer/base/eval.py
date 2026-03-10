@@ -152,6 +152,31 @@ def summarize_metric(values: Sequence[float]) -> AggregateMetrics:
     )
 
 
+def causal_loss_mask_from_lengths(lengths: Sequence[int], *, seq_len: int) -> np.ndarray:
+    """Build a causal next-token loss mask from per-example sequence lengths.
+
+    Each sequence contributes loss on positions whose next token belongs to the
+    unpadded payload. For a payload length `n`, that means the first `n - 1`
+    source positions are active.
+    """
+
+    if seq_len <= 0:
+        raise ValueError(f"seq_len must be positive, got {seq_len}")
+    if not lengths:
+        raise ValueError("Expected at least one sequence length")
+
+    lengths_array = np.asarray(lengths, dtype=np.int32)
+    if lengths_array.ndim != 1:
+        raise ValueError(f"Expected rank-1 lengths, got shape {lengths_array.shape}")
+    if np.any(lengths_array <= 0):
+        raise ValueError(f"Sequence lengths must be positive, got {lengths_array.tolist()}")
+    if np.any(lengths_array > seq_len):
+        raise ValueError(f"Sequence lengths must be <= seq_len ({seq_len}), got {lengths_array.tolist()}")
+
+    positions = np.arange(seq_len, dtype=np.int32)[None, :]
+    return (positions < (lengths_array[:, None] - 1)).astype(np.float32)
+
+
 def coefficient_prefix_loss_mask(
     seq_len: int,
     *,
@@ -194,6 +219,7 @@ __all__ = [
     "AggregateMetrics",
     "ReconstructionMetrics",
     "TokenSequenceStats",
+    "causal_loss_mask_from_lengths",
     "coefficient_prefix_loss_mask",
     "compute_reconstruction_metrics",
     "compute_ssim",

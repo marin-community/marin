@@ -88,8 +88,7 @@ metadata tells the LM path to mask loss on the pad tail. On full Imagenette, the
 - mean length: `25524.86`
 - max length: `54544`
 
-So the whole-image byte data path is ready, but a direct run is intentionally not staged yet because the current JPEG
-baseline still uses the plain full-attention grug transformer.
+That whole-image path is now exercised under `SWA=4096`, so the byte comparison is no longer hypothetical.
 
 The exact libjpeg-backed `K=8` coefficient store lives at:
 
@@ -120,6 +119,35 @@ The exact `K=8` store contains:
 - validation: `3925` examples
 - sequence length: `8192`
 - vocab size: `4095`
+
+The exact libjpeg-backed whole-image symbol store lives at:
+
+- `/Users/dlwh/.codex/worktrees/1bd2/marin/artifacts/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0`
+- `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0`
+
+It was built with:
+
+```bash
+uv run python scripts/jpeg_tokenizer/build_whole_image_symbol_token_store.py \
+  --pad-to-multiple 128 \
+  --log-every 2000 \
+  --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0
+```
+
+and mirrored to GCS with:
+
+```bash
+gsutil -m rsync -r \
+  artifacts/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0 \
+  gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0
+```
+
+The exact symbol store contains:
+
+- train: `9469` examples
+- validation: `3925` examples
+- padded sequence length: `58240`
+- vocab size: `36835`
 
 ## V0 Decisions
 
@@ -156,6 +184,24 @@ WebVision is useful for later robustness checks because it captures real web-ima
 
 ## Immediate Next Steps
 
-1. Decide the attention/windowing regime for a fair whole-image byte vs coefficient comparison.
-2. If the comparison should stay whole-image, add the same attention constraint across both byte and coefficient runs before launching bytes.
-3. If the goal stays with the current full-attention model, keep bytes as a windowed baseline and treat whole-image bytes as a separate future comparison.
+The first clean `SWA=4096` whole-image comparison is now complete:
+
+- exact JPEG symbols:
+  eval loss `2.8858`, mean bits/image `145094.24`
+- exact `K=8` coeffs:
+  eval loss `3.262`, mean bits/image `44928.74`
+- canonical JPEG bytes:
+  eval loss `4.211`, mean bits/image `159685.81`
+
+The exact sequence-level evaluator can be rerun with:
+
+```bash
+uv run python scripts/jpeg_tokenizer/evaluate_representation_head2head.py \
+  --run-spec name=coeff_k8_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k8-libjpeg-swa4096-trial-392707/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_libjpeg_v0,sliding_window=4096,unit_name=block,unit_count=1024 \
+  --run-spec name=bytes_whole,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-swa4096-trial-7cc718/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_whole_v0,sliding_window=4096 \
+  --run-spec name=symbols_whole_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0,sliding_window=4096 \
+  --output-dir gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-manual
+```
+
+The next experiment thread should move to the gzip reset mechanism test; JPEG is now strong enough to serve as the
+codec-structured baseline.

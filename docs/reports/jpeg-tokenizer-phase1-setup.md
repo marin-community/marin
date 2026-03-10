@@ -781,44 +781,52 @@ piece was the Ray job-supervisor startup path under cluster pressure."
 
 ## Sequence-Level Context
 
-For the validation split, the raw sequence lengths are:
+I then reran the comparison with a dedicated whole-sequence evaluator over the exact final checkpoints, rather than
+backing out image-level numbers from mean token loss. The evaluation artifact lives at:
+
+- summary:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-ebf28526a-r2/summary.md`
+- json:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-ebf28526a-r2/representation_eval.json`
+
+The exact validation metrics are:
+
+| Representation | Mean actual tokens/image | Mean bits/image | Mean bits/pixel | Mean bits/modeled-token |
+| --- | ---: | ---: | ---: | ---: |
+| Exact coeffs (`K=8`) | `8192.00` | `44928.74` | `0.6856` | `5.4851` |
+| Canonical JPEG bytes | `25662.39` | `159685.81` | `2.4366` | `6.1948` |
+| Exact JPEG symbols | `32598.44` | `145094.24` | `2.2140` | `4.3496` |
+
+The length distributions remain:
 
 - exact symbols:
-  mean `32598.44`, p95 `47842`, max `57948`
+  mean `32598.44`, p95 `47850.80`, max `57948`
 - whole-image bytes:
-  mean `25662.39`, p95 `39165`, max `50316`
+  mean `25662.39`, p95 `39221.00`, max `50316`
 - exact `K=8` coeffs:
   mean `8192.00`, fixed by construction
 
-Using the final eval losses as average token NLLs, the implied validation bits-per-image are approximately:
+This sharpens the tradeoff:
 
-- exact symbols:
-  `135717.76`
-- whole-image bytes:
-  `155903.86`
+- symbols have the best per-token predictability and also beat bytes on total bits/image despite being longer
+- coefficients are still dramatically more compact than either whole-image syntax stream
+- bytes lose on both token-level predictability and total image code length relative to symbols
+
+For the coefficient stream, the evaluator also reports a directly normalized compactness metric:
+
 - exact `K=8` coeffs:
-  `38552.14`
+  mean `bits_per_block = 43.8757`
 
-This clarifies the tradeoff:
+So the real JPEG result is no longer just "codec structure beats raw bytes." It is:
 
-- symbols have the best per-token predictive loss
-- coefficients still have the smallest total description length because the representation is dramatically shorter
-- bytes lose on both token-level loss and total image code length relative to symbols
-
-So the next analysis should not be "which single scalar is best?" but rather:
-
-- token-level predictability (`symbols` win here)
-- representation compactness (`coeffs` win here)
-- rollout robustness / downstream usefulness (still open)
+- exact JPEG syntax symbols are the easiest of these three representations to model autoregressively
+- bounded coefficient streams are much more compact
+- raw canonical bytes are worst on both axes that the current evaluator measures well
 
 ## Current Recommendation
 
-The next logical step is a generic whole-sequence evaluator for the exact final checkpoints (`bytes`, `symbols`,
-`coeff_k8`) that reports:
+The JPEG baseline work is complete enough to stop training churn here. The next useful steps are:
 
-- exact NLL / bits per image
-- optional normalization by block / pixel
-- any shared-prefix or ablation metrics that remain meaningful across representations
-
-I would not launch more JPEG training variants before that. The three-way training comparison is now strong enough that
-the highest-value remaining work is evaluation and interpretation, or moving on to the gzip-reset mechanism test.
+- use the exact evaluator outputs above in any project-level writeup instead of the earlier coarse implied bits/image
+- keep `symbols` as the strongest token-level JPEG baseline and `coeff_k8` as the compactness baseline
+- move the next mechanism test to gzip/reset behavior rather than launching more JPEG variants immediately

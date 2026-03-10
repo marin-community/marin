@@ -27,6 +27,7 @@ from experiments.jpeg_tokenizer.base.data import (
     write_token_store,
 )
 from experiments.jpeg_tokenizer.base.eval import (
+    causal_loss_mask_from_lengths,
     coefficient_prefix_loss_mask,
     compute_reconstruction_metrics,
     compute_token_sequence_stats,
@@ -66,6 +67,7 @@ from scripts.jpeg_tokenizer.evaluate_coefficient_sweep import (
     _coefficient_prefix_context_keep_mask,
     _pad_batch,
 )
+from scripts.jpeg_tokenizer.evaluate_representation_head2head import parse_run_spec as parse_representation_run_spec
 
 
 def test_in_memory_token_dataset_and_passthrough_config_round_trip():
@@ -207,6 +209,15 @@ def test_coefficient_prefix_loss_mask_tracks_target_prefixes_across_blocks():
     assert full_mask.tolist() == [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0]
 
 
+def test_causal_loss_mask_from_lengths_masks_pad_tail_per_example():
+    mask = causal_loss_mask_from_lengths([4, 2], seq_len=6)
+
+    assert mask.tolist() == [
+        [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ]
+
+
 def test_sequence_eval_tail_batch_padding_repeats_last_example():
     batch = np.asarray([[1, 2, 3], [4, 5, 6]], dtype=np.int32)
 
@@ -223,6 +234,17 @@ def test_sequence_eval_context_prefix_only_ablation_masks_tail_coefficients():
     batch = np.asarray([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=np.int32)
     ablated = _ablate_context_batch(batch, keep_mask=keep_mask, replacement_token_id=2047)
     assert ablated.tolist() == [[1, 2, 2047, 2047, 5, 6, 2047, 2047]]
+
+
+def test_representation_eval_run_spec_parses_optional_normalization():
+    spec = parse_representation_run_spec(
+        "name=symbols,checkpoint=gs://bucket/checkpoint,store=gs://bucket/store,sliding_window=4096,unit_name=block,unit_count=1024"
+    )
+
+    assert spec.name == "symbols"
+    assert spec.sliding_window == 4096
+    assert spec.normalization_unit_name == "block"
+    assert spec.normalization_unit_count == 1024
 
 
 def test_file_backed_token_store_round_trip(tmp_path):
