@@ -55,6 +55,7 @@ def pytest_addoption(parser):
         help="Cluster mode: local (in-process), full (start+stop), keep, redeploy",
     )
     parser.addoption("--iris-controller-url", default=None, help="Connect to existing controller")
+    parser.addoption("--iris-label-prefix", default=None, help="Override platform.label_prefix in config")
 
 
 @dataclass

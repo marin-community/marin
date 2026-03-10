@@ -126,13 +126,16 @@ def _make_smoke_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
-def _cloud_smoke_cluster(config_path: str, mode: str):
+def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None = None):
     """Manage full cloud cluster lifecycle: stop old → build images → start → test → stop.
 
     Uses the Iris Python API directly instead of subprocess to avoid stdout
     parsing and to get proper tunnel management via the platform abstraction.
     """
     config = load_config(config_path)
+
+    if label_prefix:
+        config.platform.label_prefix = label_prefix
 
     logger.info("Pinning and building cluster images...")
     _pin_latest_images(config)
@@ -188,9 +191,13 @@ def smoke_cluster(request):
     controller_url = request.config.getoption("--iris-controller-url")
     config_path = request.config.getoption("--iris-config")
     mode = request.config.getoption("--iris-mode")
+    label_prefix = request.config.getoption("--iris-label-prefix")
 
     is_cloud = mode != "local"
     timeout = 600.0 if is_cloud else 60.0
+
+    if is_cloud and not controller_url:
+        assert label_prefix, "--iris-label-prefix is required in cloud mode to avoid stomping on production clusters"
 
     if controller_url:
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
@@ -209,7 +216,7 @@ def smoke_cluster(request):
         return
 
     if config_path and mode != "local":
-        yield from _cloud_smoke_cluster(config_path, mode)
+        yield from _cloud_smoke_cluster(config_path, mode, label_prefix=label_prefix)
         return
 
     config = _make_smoke_config()
