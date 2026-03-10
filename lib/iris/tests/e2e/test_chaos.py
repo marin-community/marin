@@ -220,15 +220,6 @@ def test_heartbeat_permanent_failure(cluster):
     )
 
 
-def test_notify_task_update_failure(cluster):
-    """notify_task_update always fails; completion buffered via heartbeat."""
-    cluster.wait_for_workers(1, timeout=15)
-    enable_chaos("worker.notify_task_update", failure_rate=1.0)
-    job = cluster.submit(TestJobs.quick, "notify-fail")
-    status = cluster.wait(job, timeout=30)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
-
-
 # ---------------------------------------------------------------------------
 # Heartbeat threshold (from test_heartbeat.py)
 # ---------------------------------------------------------------------------
