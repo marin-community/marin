@@ -6768,3 +6768,160 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - The outer-structure question now looks less like “save less tape” and more like “change the remaining train-shell abstraction boundary.” A reduced-Pallas / XLA control arm (`O`) is the cleanest next diagnostic if more iteration budget exists.
   - If CE attribution drifts again, refresh the `pallas_tpu` CE backward A/B matrix before spending more budget on another GDN-local residual/tape variant.
+
+### Iteration 85 - Coverage Slot S / current-head hybrid-vs-attention remainder attribution (validated, attribution-only)
+
+- Coverage slot: `S`
+- Change class: `attribution`
+- Why this is mainline-worthy now:
+  - The current validated hybrid baseline is still commit `70a947614d96e9c4f008e09b359e5b13409d536f` at `throughput/mfu=6.090697` and `step_duration=166.307253 ms`.
+  - The practical ceiling remains the attention-only control near `57.860499 ms`, so the unresolved question is not whether GDN closed-call time can go down again, but what still dominates the full-step gap after CE was fixed to TPU Pallas.
+  - This slot refreshes that accounting on the current head with CE held fixed and a fresh attention-only control run, before spending budget on `T` or any bounded `U` side-arm.
+
+- Codex loop iteration: `1 / 10`
+- Date: `2026-03-10T23:57:35Z`
+- Starting commit: `72f1f7148b944184ede20bac3d69eb77efb898bd`
+- Commit: `72f1f7148b944184ede20bac3d69eb77efb898bd`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion: `70a947614d96e9c4f008e09b359e5b13409d536f`
+  - `throughput/mfu=6.090697`
+  - `throughput/tokens_per_second=197032.897899`
+  - `throughput/duration=0.166307253 s`
+  - `step_duration=166.307253 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot S (selected):** current-head hybrid vs attention-only accounting with CE fixed to `pallas_tpu` + `pallas` to measure how much of the upper-bound gap is still outside the tracked train path (`highest information`, `low implementation risk`).
+  2. **Coverage slot T:** `gdn_layers_per_block in {0,1,2,3}` sweep at `gdn_block_size=4` to quantify throughput penalty per GDN fraction (`high product-side information`, `medium infra/time risk`).
+  3. **Coverage slot U:** bounded CE backward-side check only if the fresh `S` run made residual CE attribution ambiguous again (`bounded upside`, `lower information value while the gap remains mostly remainder`).
+
+- Selected slot rationale:
+  - More than half of the hybrid-vs-attention gap was already outside the tracked train-path budget on the validated champion, so the next mainline-worthy action was to refresh the full-step attribution picture instead of repeating another same-boundary GDN shell/tape change.
+
+- CE hygiene:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - Why CE stayed fixed:
+    - This was not an explicit CE A/B. Both successful profiles logged `Fused cross-entropy selected implementation: pallas_tpu`, and the backward mode stayed on the required `pallas` path.
+
+- Expected effect on `step_duration_ms`:
+  - No intentional improvement; this slot is measurement-only. The expectation was that hybrid would remain far slower than attention-only and that the gap could be measured cleanly on the current head.
+- Expected effect on `train_path_budget_ms`:
+  - Approximately flat. No source code or benchmark-shape changes were made.
+- Expected effect on `remainder_budget_ms`:
+  - Approximately flat in absolute hybrid terms; the goal was to quantify it, not to reduce it in this iteration.
+- Expected effect on `upper_bound_gap_ms`:
+  - A fresh same-family gap around `108-115 ms`, with attention-only reproducing the existing ceiling if the fallback cluster behaved normally.
+- Reject if `step_duration_ms` does not improve? **No.**
+  - This is an attribution-only `S` slot with no model/kernel diff, so the value is in tighter accounting, not in a new champion attempt.
+- Reject if `remainder_budget_ms` grows? **No.**
+  - Same reason: this slot was meant to measure and explain the remainder, not reduce it. Reject only if the attribution got less clear or CE settings drifted.
+
+- Change summary:
+  - No code or config changes.
+  - This iteration is measurement-only on the current head.
+
+- Correctness checks:
+  - Managed dev TPU path failed as an execution path:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - failed before test execution because `dev-tpu-calvinxu-gdn` was not a resolvable host in this session.
+  - Required remote TPU wrapper fallback:
+    - submit: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both --no-wait`
+    - waited to completion with `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-levanter-20260310-235241 --show-logs --tail 180`
+    - result: `88 passed, 2 skipped in 238.11s (0:03:58)`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - Hybrid current head:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-central1 --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_s_attrib_hybrid_i85 --no-wait`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s_attrib_hybrid_i85_gdn3of4_130m_ch128_seg16_20step-78567b`
+    - profiler summary: `scratch/gdn_s_attrib_hybrid_i85_summary_200.json`
+  - Attention-only control:
+    - `us-central1` attempts `ray-run-calvinxu-bash-20260310-233100` and `ray-run-calvinxu-bash-20260310-233705` both failed during TPU bootstrap and fell back to CPU, so they were rejected as infra failures rather than performance data.
+    - successful fallback command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_s_attrib_attn_i85d --no-wait`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s_attrib_attn_i85d_attnonly_130m_ch128_seg16_20step-d56b91`
+    - profiler summary: `scratch/gdn_s_attrib_attn_i85d_summary_200.json`
+
+- Hybrid current-head attribution metrics:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - `gdn_layer_fraction: 0.75`
+  - `CE-attributed while: 8.860128 ms`
+  - `Forward closed-call: 20.663540 ms`
+  - `Backward closed-call: 13.128211 ms`
+  - `while: 8.860128 ms`
+  - `conditional: 0.001368 ms`
+  - `Kernel budget: 33.791751 ms`
+  - `Control budget: 8.861495 ms`
+  - `Train-path budget: 42.653247 ms`
+  - `Step duration: 172.612896 ms`
+  - `Remainder budget: 129.959649 ms`
+  - `throughput/mfu=5.868201`
+  - `throughput/tokens_per_second=189835.178943`
+  - `throughput/duration=0.172612896 s`
+
+- Attention-only control reference:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - `gdn_layer_fraction: 0.00`
+  - `Step duration: 58.155731 ms`
+  - `throughput/mfu=20.979282`
+  - `throughput/tokens_per_second=563452.637128`
+  - `throughput/duration=0.058155731 s`
+  - The fresh control reproduced the standing `57.860499 ms` ceiling within `+0.295232 ms` and `-0.52% MFU`, so the fallback cluster did not materially change the upper-bound reference.
+
+- Gap accounting:
+  - `Upper-bound gap: 114.457165 ms`
+  - `Gap explained by train-path: 37.27%`
+  - Unexplained remainder outside the tracked train path: `71.803918 ms` (`62.73%` of the gap)
+
+- Remainder top-k on the hybrid head (outside tracked hybrid forward/backward closed-call and CE backward while):
+  - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/shard_map/pallas_call:` `5.214300 ms`
+  - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map:` `4.524950 ms`
+  - `jit(_train_step)/jvp()/shard_map/jit(linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu)/pallas_call:` `2.703330 ms`
+  - `jit(_train_step)/transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map:` `2.000731 ms`
+  - `jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/reshape:` `1.832561 ms`
+
+- Hybrid-only remainder leaders vs the fresh attention-only control:
+  - `HackableDecoderLayer/shard_map/pallas_call` `+5.214300 ms`
+  - `HackableDecoderLayer/closed_call/shard_map` `+4.524950 ms`
+  - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map` `+2.000731 ms`
+  - `HackableDecoderLayer/reshape` `+1.832561 ms`
+  - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any` `+1.790428 ms`
+
+- Interpretation:
+  - The tracked hybrid train path is still only about `42.65 ms`, while the fresh hybrid-vs-attention step gap is about `114.46 ms`.
+  - That means the tracked train path explains only `37.27%` of the current gap, leaving about `71.80 ms` outside the currently tracked GDN closed-call + CE-while budget.
+  - The largest hybrid-only remainder categories are not the already-tracked closed-call buckets; they are decoder-layer shell/tape/scaffolding categories (`shard_map`, `closed_call/shard_map`, reshape/add-any) that disappear in the attention-only control.
+  - This keeps `S` ahead of another same-boundary GDN kernel tweak: the mainline problem is still full-step remainder attribution and model boundary, not another closed-call-only win.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both --no-wait` + `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 ray-run-calvinxu-levanter-20260310-235241 --show-logs --tail 180` -> `88 passed, 2 skipped in 238.11s (0:03:58)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.75`
+    - `Forward closed-call: 20.663540 ms`
+    - `Backward closed-call: 13.128211 ms`
+    - `while: 8.860128 ms`
+    - `conditional: 0.001368 ms`
+    - `Kernel budget: 33.791751 ms`
+    - `Control budget: 8.861495 ms`
+    - `Train-path budget: 42.653247 ms`
+    - `Step duration: 172.612896 ms`
+    - `Remainder budget: 129.959649 ms`
+    - `Upper-bound gap: 114.457165 ms`
+    - `Gap explained by train-path: 37.27%`
+    - `Remainder top-k: HackableDecoderLayer/shard_map/pallas_call 5.214300 ms; HackableDecoderLayer/closed_call/shard_map 4.524950 ms; CE forward pallas_call 2.703330 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.000731 ms; HackableDecoderLayer/reshape 1.832561 ms`
+    - Hybrid `throughput/mfu=5.868201`, `throughput/tokens_per_second=189835.178943`, `throughput/duration=0.172612896 s`
+    - Attention-only `throughput/mfu=20.979282`, `throughput/tokens_per_second=563452.637128`, `throughput/duration=0.058155731 s`
+  - Governance:
+    - This is an attribution-only slot with no source diff, so it is not judged as a promotion candidate.
+    - CE stayed fixed to the required deployable setting throughout.
+    - The current-head hybrid measurement itself is slower than the validated deployable baseline (`172.612896 ms` vs `166.307253 ms`), which reinforces that this entry is informational rather than promotable.
+    - The fresh control run still reproduced the standing attention-only ceiling closely enough that the main conclusion is unchanged: the loop is still blind to most of the hybrid-vs-attention gap unless it tracks more of the full-step remainder.
+
+- Assessment: **validated, attribution-only, and informative**. The fresh attention-only control confirms that the practical ceiling is still real on the current benchmark family and fixed CE settings. The current-head hybrid run shows that only `37.27%` of the hybrid-vs-attention gap is explained by the tracked train path, while the largest hybrid-only remainder buckets sit in decoder-layer shell/tape/scaffolding outside the currently tracked closed-call budget.
+- Next bold hypothesis:
+  - Take coverage slot `T` next and measure the throughput penalty per GDN layer fraction directly (`gdn_layers_per_block in {0,1,2,3}` with `gdn_block_size=4` and CE fixed).
+  - If a future `S` refresh is needed, extend the trace parser to pull the hybrid-only decoder-layer shell categories into the tracked boundary rather than spending another iteration on same-boundary GDN math.
