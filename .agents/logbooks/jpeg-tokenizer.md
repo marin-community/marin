@@ -689,3 +689,33 @@
     when both are modeled as whole-image sequences
   - the open question is now purely runtime/training behavior, not data preparation or representation plumbing
 - Next action: monitor the symbol smoke through trainer startup; if it clears, submit the full exact-symbol SWA trial.
+
+### 2026-03-09 22:47 - Exact whole-image JPEG symbol smoke succeeded and trial launched
+
+- Hypothesis: if the exact symbol stream trains cleanly under the same whole-image `SWA=4096` setup as bytes, it is
+  worth launching the full head-to-head trial immediately rather than adding another intermediate debug pass.
+- Command:
+  - monitored the smoke via a single `JobSubmissionClient` + W&B polling loop for `raysubmit_XNjfpJ91vCFmCTs5`
+  - submitted the full trial through the forwarded dashboard with:
+    `raysubmit_Yi8WRcbCjnP3qEsp`
+- Result:
+  - smoke submit id: `raysubmit_XNjfpJ91vCFmCTs5`
+  - smoke W&B:
+    `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke`
+  - smoke output path:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke-ee1834`
+  - smoke terminal state: `SUCCEEDED`
+  - smoke eval trajectory:
+    - startup eval loss `10.662`
+    - final eval loss `4.01261`
+  - smoke final checkpoint:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke-ee1834/checkpoints/step-32`
+  - full trial submit id: `raysubmit_Yi8WRcbCjnP3qEsp`
+  - full trial initial controller state: `PENDING`
+- Interpretation:
+  - the exact symbol representation is now validated end-to-end on the production TPU path rather than just as a local
+    token-store artifact
+  - the smoke result is strong enough to justify the real run without additional launch-surface work
+  - the next meaningful comparison is the completed symbol trial versus whole-image bytes and exact `K=8` coefficients
+    under matched `SWA=4096`
+- Next action: monitor `raysubmit_Yi8WRcbCjnP3qEsp` through startup and the first eval boundary.
