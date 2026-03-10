@@ -43,6 +43,9 @@ DEV_TPU = ["uv", "run", "scripts/ray/dev_tpu.py"]
 GDN_KERNEL_TEST = "tests/test_gdn_kernels.py"
 GDN_LAYER_TEST = "tests/test_gdn_layer.py"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+# Keep the remote TPU wrapper on the same CPU torch build selected by the lockfile.
+# Pulling "latest" from the CPU index has caused tiny HF parity drift on dev TPU.
+TORCH_CPU_REQUIREMENT = "torch==2.9.0+cpu"
 FULL_GDN_TEST_DEPS = ("torch", "transformers")
 DEFAULT_HF_TRACE_PATTERN = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$)"
 DEFAULT_HF_TRACE_PATTERN_WITH_XPLANE = r"(perfetto_trace\\.json\\.gz$|trace\\.json\\.gz$|profile\\.json$|xplane\\.pb$)"
@@ -1783,17 +1786,29 @@ def _test_targets(selection: str) -> list[str]:
 def _build_remote_test_command(test_selection: str, extra_pytest_args: str | None) -> str:
     test_files = " ".join(_test_targets(test_selection))
     pytest_cmd = f"EQX_ON_ERROR=nan WANDB_MODE=offline uv run pytest {test_files} -v"
+    pytest_cmd_active = f"EQX_ON_ERROR=nan WANDB_MODE=offline uv run --active pytest {test_files} -v"
     if extra_pytest_args:
         pytest_cmd = f"{pytest_cmd} {extra_pytest_args.strip()}"
+        pytest_cmd_active = f"{pytest_cmd_active} {extra_pytest_args.strip()}"
 
-    pieces = [
-        "cd lib/levanter",
-        "uv sync --extra=tpu --group test",
-        f"uv pip install torch --index-url {shlex.quote(TORCH_CPU_INDEX)}",
-        "uv pip install transformers",
-        pytest_cmd,
-    ]
-    return " && ".join(pieces)
+    return " && ".join(
+        [
+            "cd lib/levanter",
+            'if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then '
+            "uv sync --active --extra=tpu --group test && "
+            f'uv pip install --python "$VIRTUAL_ENV/bin/python" --index-url {shlex.quote(TORCH_CPU_INDEX)} '
+            f"--force-reinstall {shlex.quote(TORCH_CPU_REQUIREMENT)} && "
+            'uv pip install --python "$VIRTUAL_ENV/bin/python" transformers && '
+            f"{pytest_cmd_active}; "
+            "else "
+            "uv sync --extra=tpu --group test && "
+            f"uv pip install --python ../../.venv/bin/python --index-url {shlex.quote(TORCH_CPU_INDEX)} "
+            f"--force-reinstall {shlex.quote(TORCH_CPU_REQUIREMENT)} && "
+            "uv pip install --python ../../.venv/bin/python transformers && "
+            f"{pytest_cmd}; "
+            "fi",
+        ]
+    )
 
 
 def _full_gdn_test_metadata(test_selection: str) -> dict[str, object]:
@@ -2156,16 +2171,22 @@ def _profile_command_lines(
     profile_args: Sequence[str],
 ) -> list[str]:
     lines = ["set -e"]
-    if include_tpu_sync:
-        lines.append("uv sync --all-packages --extra=tpu --python=3.11")
-    else:
-        lines.append("uv sync")
+    sync_cmd = "uv sync --all-packages --extra=tpu --python=3.11" if include_tpu_sync else "uv sync"
     lines.append(
-        f"uv pip install --python .venv/bin/python --index-url {shlex.quote(TORCH_CPU_INDEX)} --force-reinstall torch"
-    )
-    lines.append("(uv pip uninstall --python .venv/bin/python torchvision || true)")
-    lines.append(
-        f".venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile {shlex.join(profile_args)}"
+        'if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then '
+        f"{sync_cmd} --active && "
+        f'uv pip install --python "$VIRTUAL_ENV/bin/python" --index-url {shlex.quote(TORCH_CPU_INDEX)} '
+        f"--force-reinstall {shlex.quote(TORCH_CPU_REQUIREMENT)} && "
+        '(uv pip uninstall --python "$VIRTUAL_ENV/bin/python" torchvision || true) && '
+        "uv run --active python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile "
+        f"{shlex.join(profile_args)}; "
+        "else "
+        f"{sync_cmd} && "
+        f"uv pip install --python ../../.venv/bin/python --index-url {shlex.quote(TORCH_CPU_INDEX)} "
+        f"--force-reinstall {shlex.quote(TORCH_CPU_REQUIREMENT)} && "
+        "(uv pip uninstall --python ../../.venv/bin/python torchvision || true) && "
+        f"uv run python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile {shlex.join(profile_args)}; "
+        "fi"
     )
     return lines
 

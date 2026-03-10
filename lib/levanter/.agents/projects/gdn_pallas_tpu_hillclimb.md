@@ -5412,3 +5412,131 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Commit: `none (failed attempt; code reverted after measurement)`
 - Next bold hypothesis:
   - Do not spend another mainline iteration on this backward outer-shell boundary without a different control surface. The next serious bet should either use `O` as a clearer diagnostic control arm or return to CE-specific work only if the residual CE attribution becomes ambiguous again.
+
+### Iteration 76 - Macro Move P / CE backward supertile-threshold refresh (blocked at TPU validation, reverted)
+
+- Coverage slot: `P`
+- Why this attacks the train-path control bottleneck:
+  - The latest validated entries still point at the residual CE backward/custom-VJP shell as the dominant hot `while`, while several recent `R`/`M` attempts only shifted cost into `remainder_budget_ms`.
+  - This arm kept CE fixed at `pallas_tpu` + explicit `pallas` backward and tried a smaller CE-shell nudge before spending another iteration on a different GDN-side train-path boundary.
+- Hot-path scan/cond status:
+  - Preserves the existing CE backward `while`; no new hot-path `lax.scan`.
+  - Adds no new hot-path `lax.cond` / runtime dispatch.
+- Change class: `CE backend`
+
+- Codex loop iteration: `2 / 10`
+- Date: `2026-03-10T05:52:00Z`
+- Starting commit: `51080bca1dd078ebec03046f59897db09e8a3fa4`
+- Dominant bottleneck carried in (latest validated deployable baseline from Iteration 72, run `gdn_loopgate_iter003_130m_ch128_seg16_20steps-57cd12`, trace `scratch/iter3_baseline_download/plugins/profile/2026_03_08_18_34_44/perfetto_trace.json.gz`):
+  - Forward closed-call: `20.663 ms`
+  - Backward closed-call: `13.126 ms`
+  - while: `10.133 ms`
+  - conditional: `0.026 ms`
+  - CE-attributed while: `10.133 ms`
+  - Kernel budget: `33.789 ms`
+  - Control budget: `10.159 ms`
+  - Train-path budget: `43.948 ms`
+  - Step duration: `167.311 ms`
+  - Remainder budget: `123.363 ms`
+
+- Current train-path control bottleneck read from the latest validated evidence:
+  - The residual train-step control bottleneck is still the CE backward/custom-VJP shell, not another GDN-local `closed_call` tweak.
+  - The last several validated GDN-side structural arms also kept proving that `train_path_budget_ms` down is not enough if `remainder_budget_ms` grows, so this iteration stayed on the CE axis first.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro P (selected):** keep the existing TPU Pallas CE backward grouped-supertiling, but force a 2-tile supertile at the `64 MiB` delta-materialization threshold on 2-tensorcore TPU shapes (`+0.25-1.00%`, medium risk).
+  2. **Macro P control:** refresh the current-head `pallas_tpu + pallas` vs `pallas_tpu + xla_streaming` CE backward A/B without changing CE code (`0-0.50%`, low risk).
+  3. **Macro P follow-up:** try a more aggressive CE backward supertile cap / threshold change only if the small threshold nudge showed a clean `while_ms` reduction (`+0.50-1.50%`, medium/high risk).
+
+- Selected macro-move category: **P) CE backward-mode / shell work on the real train run**.
+
+- Expected effect on `while_ms`: down slightly, because this change only reduces the CE backward loop trip count at the current large-batch `v_block_size=2048` threshold.
+- Expected effect on `step_duration_ms`: down slightly if the residual CE shell is still on the critical path.
+- Expected effect on `remainder_budget_ms`: flat to slightly down; this arm should not push cost into the post-train-path remainder.
+- Reject if `while_ms` remains flat? **Yes.** This candidate is CE-shell-only, so a flat residual `while` means the threshold nudge is not buying anything.
+- Reject if `remainder_budget_ms` grows? **Yes.** That would make the result another off-critical-path / overlap-loss outcome even if CE-local work looked cheaper.
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - From the residual CE backward/custom-VJP shell carried in from Iteration 72; this candidate does not touch the GDN-side train-path control surface.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - No new scan; it preserves the existing CE-side loop shell only.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The attempted change only adjusted grouped-vocab iteration width inside the existing CE Pallas backward, so it should have changed CE loop trip count rather than introducing another lowering-visible control-flow region.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - Because this is explicitly a CE-axis refresh; recent evidence says the remaining large train-step control bucket is still CE-attributed.
+  - Is the residual `while` still CE-attributed in this design?
+    - Expected yes, but not re-measured because TPU correctness never cleared the acceptance gate.
+  - What do you expect to happen to `while_ms`?
+    - Down slightly.
+  - What do you expect to happen to `remainder_budget_ms`?
+    - Flat to slightly down.
+  - Should this candidate be rejected if `while_ms` remains flat or `remainder_budget_ms` grows? Why?
+    - Yes. This candidate only makes sense if it reduces the residual CE shell without leaking cost elsewhere.
+
+- Change summary:
+  - Attempted and then reverted:
+    - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`
+      - Tried forcing a minimum `2x` CE backward vocab supertile when `bytes_per_block <= 64 MiB` on 2-tensorcore TPU shapes.
+    - `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`
+      - Added focused unit coverage for the threshold nudge, then reverted with the candidate.
+  - Kept:
+    - `scripts/gdn/gdnctl.py`
+      - Fixed the remote TPU wrapper to target the actual active TPU virtualenv / repo-root `.venv` fallback path.
+      - Pinned the remote CPU Torch install to `torch==2.9.0+cpu` so the wrapper matches the repo lockfile instead of reinstalling latest `2.10.0+cpu`.
+    - `scripts/gdn/tests/test_gdnctl_codex_loop.py`
+      - Updated the wrapper test to assert the pinned Torch requirement is present.
+
+- Correctness checks:
+  - Local wrapper checks:
+    - `uv run pytest -q scripts/gdn/tests/test_gdnctl_codex_loop.py -o addopts='' -k build_remote_test_command_installs_torch_and_transformers` -> `1 passed`
+    - `uv run python -m py_compile scripts/gdn/gdnctl.py` -> passed
+  - TPU validation blocker details:
+    - Managed dev TPU full slice:
+      - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync`
+      - result after the Torch pin: `85 passed, 2 skipped, 2 failed`
+      - failing tests: `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]`, `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[False]`
+    - Managed dev TPU targeted retry:
+      - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests layer --pytest-args="-k test_gdn_layer_backward_matches_hf" --no-sync`
+      - result: `1 failed, 1 passed`
+      - remaining failure: `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]`
+    - Ray targeted fallback:
+      - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests layer --pytest-args="-k 'test_gdn_layer_backward_matches_hf and True'"`
+      - result: `1 passed, 23 deselected`
+    - Ray full fallback:
+      - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+      - result: `86 passed, 2 skipped, 1 failed`
+      - remaining failure: `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]`
+      - failure mode: tiny TPU-vs-HF backward mismatch (`max absolute difference 1.7341226e-05`) while the HF side reports `The fast path is not available because one of the required library is not installed. Falling back to torch implementation.`
+
+- Profile runs:
+  - Not run.
+  - Reason: the required TPU correctness gate never reached the expected `87 passed, 2 skipped` parity slice on either the managed dev TPU wrapper or the Ray fallback wrapper, so profiling this CE candidate would have left an unvalidated speculative kernel change in the tree.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - Incomplete. The best full-wrapper result this iteration was `86 passed, 2 skipped, 1 failed` on `ray-test`, blocked by `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]`.
+  - Perf:
+    - `CE backend selected`: not measured
+    - `CE bwd mode`: not measured
+    - `CE-attributed while`: not measured
+    - Forward closed-call: not measured
+    - Backward closed-call: not measured
+    - `while`: not measured
+    - `conditional`: not measured
+    - `Kernel budget`: not measured
+    - `Control budget`: not measured
+    - `Train-path budget`: not measured
+    - `Step duration`: not measured
+    - `Remainder budget`: not measured
+  - Governance:
+    - The CE heuristic candidate was reverted because TPU correctness never cleared the acceptance gate.
+    - The only retained changes are the remote-wrapper fixes that reduced environment skew and narrowed the blocker.
+
+- Assessment: **blocked before TPU-valid profile, candidate reverted**. The selected CE-shell threshold nudge never reached a valid TPU correctness run. The real output of this iteration is tighter infra attribution: the remote wrapper had been reinstalling the wrong CPU Torch version, fixing that reduced the parity failures, but one tiny `use_flash=True` HF backward mismatch still remains on full TPU validation. That blocker is upstream of this CE candidate, so the candidate was reverted rather than profiled speculatively.
+- Commit: `none (blocked before profile; CE candidate reverted)`
+- Next bold hypothesis:
+  - Treat `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]` on TPU as the first blocker for the next iteration.
+  - The most plausible cause is the HF reference path falling back because its optional fast-path dependency is unavailable in the remote TPU test environment; resolve that environment gap or stabilize the reference path before spending another CE-profile iteration.
