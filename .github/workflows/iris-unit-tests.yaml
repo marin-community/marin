@@ -145,7 +145,7 @@ jobs:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v1
+        uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
@@ -204,18 +204,16 @@ jobs:
             done
 
           echo "Cleaning up TPU VMs with label ${MANAGED_LABEL}=true..."
-          for zone in europe-west4-b us-west4-a; do
-            gcloud compute tpus tpu-vm list \
-              --project="$PROJECT" --zone="$zone" \
-              --filter="labels.${MANAGED_LABEL}=true" \
-              --format="csv[no-heading](name)" 2>/dev/null \
-            | while read -r name; do
-                [ -z "$name" ] && continue
-                echo "Deleting TPU $name ($zone)"
-                gcloud compute tpus tpu-vm delete "$name" \
-                  --project="$PROJECT" --zone="$zone" --quiet || true
-              done
-          done
+          gcloud compute tpus tpu-vm list \
+            --project="$PROJECT" --zone=- \
+            --filter="labels.${MANAGED_LABEL}=true" \
+            --format="csv[no-heading](name,zone)" 2>/dev/null \
+          | while IFS=, read -r name zone; do
+              [ -z "$name" ] && continue
+              echo "Deleting TPU $name ($zone)"
+              gcloud compute tpus tpu-vm delete "$name" \
+                --project="$PROJECT" --zone="$zone" --quiet || true
+            done
 
       - name: Upload screenshots
         if: always()
