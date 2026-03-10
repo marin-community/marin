@@ -67,6 +67,8 @@ SESSION_DIRECTIVE_PRESET_FILES = {
     "associative-summaries": REPO_ROOT / "scripts/gdn/session_directives/associative-summaries.md",
     "xla-first-train-path": REPO_ROOT / "scripts/gdn/session_directives/xla-first-train-path.md",
     "ejkernel-recompute-backward": REPO_ROOT / "scripts/gdn/session_directives/ejkernel-recompute-backward.md",
+    "remainder-attribution-mainline": REPO_ROOT / "scripts/gdn/session_directives/remainder-attribution-mainline.md",
+    "model-boundary-sweep": REPO_ROOT / "scripts/gdn/session_directives/model-boundary-sweep.md",
 }
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
@@ -95,6 +97,12 @@ ITERATION_MS_DELTA_RE = re.compile(
     r"(?P<after>[+\-]?(?:\d+(?:\.\d*)?|\.\d+))\s*ms`"
 )
 FUSED_CE_SELECTED_RE = re.compile(r"Fused cross-entropy selected implementation:\s*(?P<impl>\S+)")
+GDN_PROFILE_MODEL_RE = re.compile(
+    r"GDN profile model:\s+all_transformer=(?P<all_transformer>[01])\s+"
+    r"gdn_layers_per_block=(?P<layers>\d+)\s+"
+    r"gdn_block_size=(?P<block>\d+)\s+"
+    r"gdn_layer_fraction=(?P<fraction>[+\-]?(?:\d+(?:\.\d*)?|\.\d+))"
+)
 FUSED_CE_IMPLEMENTATION_ENV = "LEVANTER_FUSED_CE_IMPLEMENTATION"
 FUSED_CE_IMPLEMENTATION_CHOICES = ("auto", "xla", "reference", "pallas_tpu", "pallas_gpu")
 PALLAS_TPU_CE_BWD_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
@@ -629,6 +637,19 @@ def _collect_profile_metrics(
     if duration_seconds is not None:
         metrics["step_duration_ms"] = duration_seconds * 1000.0
 
+    profile_metadata = _configured_gdn_profile_metadata(args)
+    profile_model_match = GDN_PROFILE_MODEL_RE.search(output_text)
+    if profile_model_match is not None:
+        resolved_all_transformer = profile_model_match.group("all_transformer") == "1"
+        profile_metadata.update(
+            {
+                "profile_architecture": "attn_only" if resolved_all_transformer else "hybrid",
+                "gdn_layers_per_block": int(profile_model_match.group("layers")),
+                "gdn_block_size": int(profile_model_match.group("block")),
+                "gdn_layer_fraction": float(profile_model_match.group("fraction")),
+            }
+        )
+
     return {
         "profile_prefix": profile_prefix,
         "run_url": run_url,
@@ -638,6 +659,7 @@ def _collect_profile_metrics(
         "ce_backend_selected": ce_backend_selected,
         "ce_requested_implementation": requested_ce_impl,
         "ce_bwd_mode": requested_ce_bwd_mode,
+        **profile_metadata,
         "warnings": warnings,
     }
 
@@ -660,6 +682,9 @@ def _profile_metric_args(
         validation_profile_wandb_mode=args.validation_profile_wandb_mode,
         ce_implementation=ce_implementation,
         ce_bwd_mode=ce_bwd_mode,
+        gdn_layers_per_block=getattr(args, "validation_profile_gdn_layers_per_block", None),
+        gdn_block_size=getattr(args, "validation_profile_gdn_block_size", None),
+        all_transformer=getattr(args, "validation_profile_all_transformer", False),
     )
 
 
@@ -887,6 +912,7 @@ def _with_step_and_remainder_metrics(
     hotspot_metrics: dict[str, object],
     *,
     profile_metrics: dict[str, object],
+    upper_bound_step_ms: float | None = None,
 ) -> dict[str, object]:
     augmented = dict(hotspot_metrics)
     step_duration_ms = _coerce_float(augmented.get("step_duration_ms"))
@@ -903,7 +929,7 @@ def _with_step_and_remainder_metrics(
     if train_path_budget_ms is not None and step_duration_ms is not None:
         augmented["remainder_budget_ms"] = step_duration_ms - train_path_budget_ms
 
-    return augmented
+    return _with_upper_bound_gap_metrics(augmented, upper_bound_step_ms=upper_bound_step_ms)
 
 
 def _evaluate_control_flow_gate(
@@ -1033,6 +1059,11 @@ def _apply_performance_policy(
     ce_bwd_mode = str(ce_bwd_mode_obj) if isinstance(ce_bwd_mode_obj, str) else None
     ce_ab_compare_obj = validation_info.get("ce_ab_compare")
     ce_ab_compare = ce_ab_compare_obj if isinstance(ce_ab_compare_obj, dict) else None
+    profile_architecture_obj = validation_info.get("profile_architecture")
+    profile_architecture = str(profile_architecture_obj) if isinstance(profile_architecture_obj, str) else None
+    gdn_layers_per_block = validation_info.get("gdn_layers_per_block")
+    gdn_block_size = validation_info.get("gdn_block_size")
+    gdn_layer_fraction = _coerce_float(validation_info.get("gdn_layer_fraction"))
     hotspot_metrics_obj = validation_info.get("hotspot_metrics")
     hotspot_metrics = hotspot_metrics_obj if isinstance(hotspot_metrics_obj, dict) else {}
     hotspot_heading_obj = validation_info.get("hotspot_heading")
@@ -1071,8 +1102,21 @@ def _apply_performance_policy(
             if compare_metric_value is not None:
                 details += f" {args.perf_metric}={compare_metric_value:.6g}"
             print(f"[gdnctl] validation profile CE compare run: {details}")
+    if profile_architecture is not None:
+        fraction_text = "unknown"
+        if gdn_layer_fraction is not None:
+            fraction_text = f"{gdn_layer_fraction:.3f}"
+        print(
+            "[gdnctl] validation profile architecture: "
+            f"{profile_architecture} gdn_layers_per_block={gdn_layers_per_block} "
+            f"gdn_block_size={gdn_block_size} gdn_layer_fraction={fraction_text}"
+        )
 
-    hotspot_metrics = _with_step_and_remainder_metrics(hotspot_metrics, profile_metrics=metrics)
+    hotspot_metrics = _with_step_and_remainder_metrics(
+        hotspot_metrics,
+        profile_metrics=metrics,
+        upper_bound_step_ms=getattr(args, "perf_upper_bound_step_ms", None),
+    )
 
     if metric_value is None:
         print(
@@ -1108,6 +1152,10 @@ def _apply_performance_policy(
         "ce_requested_implementation": ce_requested_implementation,
         "ce_bwd_mode": ce_bwd_mode,
         "ce_ab_compare": ce_ab_compare,
+        "profile_architecture": profile_architecture,
+        "gdn_layers_per_block": gdn_layers_per_block,
+        "gdn_block_size": gdn_block_size,
+        "gdn_layer_fraction": gdn_layer_fraction,
         "metrics": metrics,
         "hotspot_metrics": hotspot_metrics,
         "hotspot_heading": hotspot_heading,
@@ -1155,7 +1203,11 @@ def _apply_performance_policy(
         history=history,
         preferred_source=hotspot_baseline_source,
     )
-    hotspot_baseline = _with_step_and_remainder_metrics(hotspot_baseline, profile_metrics=baseline_profile_metrics)
+    hotspot_baseline = _with_step_and_remainder_metrics(
+        hotspot_baseline,
+        profile_metrics=baseline_profile_metrics,
+        upper_bound_step_ms=getattr(args, "perf_upper_bound_step_ms", None),
+    )
     candidate_record["hotspot_baseline_source"] = hotspot_baseline_source
     if hotspot_baseline:
         candidate_record["hotspot_baseline_metrics"] = hotspot_baseline
@@ -1899,9 +1951,9 @@ def _ce_backend_session_directive(args: argparse.Namespace) -> str:
     primary_bwd_mode = _normalize_ce_bwd_mode(args.validation_profile_ce_bwd_mode)
     compare_bwd_mode = args.validation_profile_ce_bwd_compare_mode
     return (
-        "Cross-entropy training-shell evidence is now first-class for this run.\n\n"
-        "- Treat residual `while` as potentially CE-backward/custom-VJP-attributed unless "
-        "trace evidence says otherwise.\n"
+        "Cross-entropy is now a bounded side-arm for this run.\n\n"
+        "- Hold CE fixed across non-CE experiments so hybrid-vs-attention comparisons stay clean.\n"
+        "- Treat residual CE work as worth measuring, but not as the mainline explanation for the full gap.\n"
         f"- Primary validation profile CE implementation request: `{primary_impl}`.\n"
         f"- Primary validation profile CE backward mode: `{primary_bwd_mode}`.\n"
         f"- Secondary CE compare implementation request: `{compare_impl}`.\n"
@@ -1909,11 +1961,9 @@ def _ce_backend_session_directive(args: argparse.Namespace) -> str:
         "- Every iteration writeup must record:\n"
         "  - `CE backend selected: <impl>`\n"
         "  - `CE bwd mode: pallas | xla_streaming`\n"
-        "  - whether the change class is `CE backend`, `outer control structure`, or `inner kernel math`\n"
-        "  - whether the candidate should be rejected if `while_ms` remains flat.\n"
-        "- Lock CE settings explicitly for experiment hygiene.\n"
-        "- Before resuming major GDN structural work, prefer the CE backward A/B matrix "
-        "(`pallas_tpu` + `pallas` bwd vs `pallas_tpu` + `xla_streaming` bwd)."
+        "  - `CE-attributed while: <before> ms -> <after> ms` when available\n"
+        "- Only spend an iteration on CE when you have a concrete end-to-end hypothesis.\n"
+        "- Reject CE-only work unless `step_duration_ms` improves materially."
     )
 
 
@@ -1928,6 +1978,14 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         )
     else:
         window_line = "\n- Metric aggregation: `summary` (final summary value)."
+
+    upper_bound_line = ""
+    if args.perf_upper_bound_step_ms is not None:
+        upper_bound_line = (
+            "\n"
+            f"- Attention-only upper-bound step time: `{args.perf_upper_bound_step_ms:.6f} ms`.\n"
+            "- Record `upper_bound_gap_ms` and `gap_explained_by_train_path` in every iteration writeup."
+        )
 
     return (
         "Performance governance is active for this codex-loop run.\n\n"
@@ -1948,10 +2006,14 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - `Train-path budget: <before> ms -> <after> ms`\n"
         "  - `Step duration: <before> ms -> <after> ms`\n"
         "  - `Remainder budget: <before> ms -> <after> ms`\n"
+        "  - `Upper-bound gap: <before> ms -> <after> ms`\n"
+        "  - `Gap explained by train-path: <before> -> <after>`\n"
+        "  - `gdn_layer_fraction: ...`\n"
+        "  - `remainder_topk: ...`\n"
         "- Classification is mandatory in the iteration writeup:\n"
-        "  - `Change class: CE backend | outer control structure | inner kernel math`\n"
-        "  - `Expected effect on while_ms: ...`\n"
-        "  - `Reject if while_ms remains flat? yes/no + why`\n"
+        "  - `Change class: attribution | model boundary | CE backend | outer control structure | inner kernel math`\n"
+        "  - `Expected effect on step_duration_ms: ...`\n"
+        "  - `Reject if remainder_budget_ms grows? yes/no + why`\n"
         "- Hard control-flow gate: reject candidates when `while_ms` grows by > "
         f"{args.perf_max_while_increase_ms:.3f} ms or `train_path_budget_ms` grows by > "
         f"{args.perf_max_train_path_budget_increase_ms:.3f} ms unless "
@@ -1969,6 +2031,7 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         f"- Validation profile CE compare backward mode: `{args.validation_profile_ce_bwd_compare_mode}`.\n"
         f"- State file: `{perf_state_path}`"
         f"{window_line}"
+        f"{upper_bound_line}"
     )
 
 
@@ -2223,6 +2286,55 @@ def _normalize_ce_bwd_mode(mode: str | None) -> str:
     )
 
 
+def _configured_gdn_profile_metadata(args: argparse.Namespace) -> dict[str, object]:
+    all_transformer = bool(getattr(args, "all_transformer", False))
+    gdn_layers_per_block = getattr(args, "gdn_layers_per_block", None)
+    gdn_block_size = getattr(args, "gdn_block_size", None)
+
+    metadata: dict[str, object] = {
+        "profile_architecture": "attn_only" if all_transformer else "hybrid",
+    }
+
+    if gdn_layers_per_block is not None:
+        metadata["gdn_layers_per_block"] = int(gdn_layers_per_block)
+    if gdn_block_size is not None:
+        metadata["gdn_block_size"] = int(gdn_block_size)
+
+    if all_transformer:
+        metadata["gdn_layer_fraction"] = 0.0
+        return metadata
+
+    if isinstance(gdn_layers_per_block, int) and isinstance(gdn_block_size, int) and gdn_block_size > 0:
+        clamped_layers = max(0, min(gdn_layers_per_block, gdn_block_size))
+        metadata["gdn_layer_fraction"] = clamped_layers / gdn_block_size
+        if clamped_layers == 0:
+            metadata["profile_architecture"] = "attn_only"
+
+    return metadata
+
+
+def _with_upper_bound_gap_metrics(
+    hotspot_metrics: dict[str, object],
+    *,
+    upper_bound_step_ms: float | None,
+) -> dict[str, object]:
+    augmented = dict(hotspot_metrics)
+    if upper_bound_step_ms is None:
+        return augmented
+
+    step_duration_ms = _coerce_float(augmented.get("step_duration_ms"))
+    train_path_budget_ms = _coerce_float(augmented.get("train_path_budget_ms"))
+    if step_duration_ms is None:
+        return augmented
+
+    upper_bound_gap_ms = step_duration_ms - upper_bound_step_ms
+    augmented["upper_bound_step_ms"] = upper_bound_step_ms
+    augmented["upper_bound_gap_ms"] = upper_bound_gap_ms
+    if train_path_budget_ms is not None and upper_bound_gap_ms > 0:
+        augmented["gap_explained_by_train_path"] = train_path_budget_ms / upper_bound_gap_ms
+    return augmented
+
+
 def _append_profile_env(cmd: list[str], args: argparse.Namespace) -> None:
     cmd += ["-e", "EQX_ON_ERROR=nan"]
     cmd += ["-e", f"WANDB_MODE={args.wandb_mode}"]
@@ -2238,6 +2350,12 @@ def _append_profile_env(cmd: list[str], args: argparse.Namespace) -> None:
         cmd += ["-e", f"GDN_PROFILE_CHUNK_SIZE={args.chunk_size}"]
     if args.segment_size is not None:
         cmd += ["-e", f"GDN_PROFILE_SEGMENT_SIZE={args.segment_size}"]
+    if getattr(args, "gdn_layers_per_block", None) is not None:
+        cmd += ["-e", f"GDN_PROFILE_GDN_LAYERS_PER_BLOCK={args.gdn_layers_per_block}"]
+    if getattr(args, "gdn_block_size", None) is not None:
+        cmd += ["-e", f"GDN_PROFILE_GDN_BLOCK_SIZE={args.gdn_block_size}"]
+    if getattr(args, "all_transformer", False):
+        cmd += ["-e", "GDN_PROFILE_ALL_TRANSFORMER=1"]
     ce_implementation = _normalize_ce_implementation(getattr(args, "ce_implementation", "auto"))
     if ce_implementation != "auto":
         cmd += ["-e", f"{FUSED_CE_IMPLEMENTATION_ENV}={ce_implementation}"]
@@ -2753,6 +2871,9 @@ def _run_validation_ray_profile_once(
         batch_size=args.validation_profile_batch_size,
         chunk_size=args.validation_profile_chunk_size,
         segment_size=args.validation_profile_segment_size,
+        gdn_layers_per_block=args.validation_profile_gdn_layers_per_block,
+        gdn_block_size=args.validation_profile_gdn_block_size,
+        all_transformer=args.validation_profile_all_transformer,
         profile_env=args.validation_profile_env,
         ce_implementation=ce_implementation,
         ce_bwd_mode=ce_bwd_mode,
@@ -2816,6 +2937,9 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
                 batch_size=args.validation_profile_batch_size,
                 chunk_size=args.validation_profile_chunk_size,
                 segment_size=args.validation_profile_segment_size,
+                gdn_layers_per_block=args.validation_profile_gdn_layers_per_block,
+                gdn_block_size=args.validation_profile_gdn_block_size,
+                all_transformer=args.validation_profile_all_transformer,
                 run_name_prefix=profile_prefix,
                 wandb_mode=args.validation_profile_wandb_mode,
                 profile_env=args.validation_profile_env,
@@ -3589,6 +3713,23 @@ def build_parser() -> argparse.ArgumentParser:
     dev_profile.add_argument("--chunk-size", type=int, default=None, help="Optional GDN chunk override")
     dev_profile.add_argument("--segment-size", type=int, default=None, help="Optional GDN segment override")
     dev_profile.add_argument(
+        "--gdn-layers-per-block",
+        type=int,
+        default=None,
+        help="Optional GDN layers-per-block override for model-boundary sweeps.",
+    )
+    dev_profile.add_argument(
+        "--gdn-block-size",
+        type=int,
+        default=None,
+        help="Optional GDN block-size override for model-boundary sweeps.",
+    )
+    dev_profile.add_argument(
+        "--all-transformer",
+        action="store_true",
+        help="Disable all GDN layers and benchmark an all-transformer control run.",
+    )
+    dev_profile.add_argument(
         "--profile-env",
         action="append",
         default=[],
@@ -3632,6 +3773,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ray_profile.add_argument("--chunk-size", type=int, default=None, help="Optional GDN chunk override")
     ray_profile.add_argument("--segment-size", type=int, default=None, help="Optional GDN segment override")
+    ray_profile.add_argument(
+        "--gdn-layers-per-block",
+        type=int,
+        default=None,
+        help="Optional GDN layers-per-block override for model-boundary sweeps.",
+    )
+    ray_profile.add_argument(
+        "--gdn-block-size",
+        type=int,
+        default=None,
+        help="Optional GDN block-size override for model-boundary sweeps.",
+    )
+    ray_profile.add_argument(
+        "--all-transformer",
+        action="store_true",
+        help="Disable all GDN layers and benchmark an all-transformer control run.",
+    )
     ray_profile.add_argument(
         "--profile-env",
         action="append",
@@ -3723,7 +3881,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="fail",
         help="Behavior when sync-main merge conflicts occur.",
     )
-    codex_loop.add_argument("--model", default="gpt-5.3-codex", help="Codex model")
+    codex_loop.add_argument("--model", default="gpt-5.4", help="Codex model")
     codex_loop.add_argument(
         "--codex-bin",
         default=None,
@@ -3902,6 +4060,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional GDN segment override for validation profile runs.",
     )
     codex_loop.add_argument(
+        "--validation-profile-gdn-layers-per-block",
+        type=int,
+        default=None,
+        help="Optional GDN layers-per-block override for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-gdn-block-size",
+        type=int,
+        default=None,
+        help="Optional GDN block-size override for validation profile runs.",
+    )
+    codex_loop.add_argument(
+        "--validation-profile-all-transformer",
+        action="store_true",
+        help="Run validation profiles with all GDN layers disabled to measure the attention-only control.",
+    )
+    codex_loop.add_argument(
         "--validation-profile-env",
         action="append",
         default=[],
@@ -4034,6 +4209,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--perf-wandb-project",
         default="marin",
         help="W&B project used when discovering/fetching profile summaries.",
+    )
+    codex_loop.add_argument(
+        "--perf-upper-bound-step-ms",
+        type=float,
+        default=None,
+        help="Optional attention-only upper-bound step time used to report hybrid-vs-attention gap metrics.",
     )
     codex_loop.add_argument(
         "--perf-max-while-increase-ms",

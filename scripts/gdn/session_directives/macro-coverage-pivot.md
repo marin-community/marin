@@ -1,52 +1,48 @@
-# Session Directive: CE-Backward / Remainder-Budget Coverage Before More GDN Retuning
+# Session Directive: Coverage Pivot To Remainder Attribution And Model Boundary
 
-Goal: use iteration budget on the residual CE backward/control bottleneck and on measuring the off-train-path remainder, not more kernel-local wins that preserve the same step-critical-path ambiguity.
+Goal:
+- stop treating same-boundary GDN Pallas hillclimbing as the mainline,
+- spend iteration budget on the biggest unresolved questions:
+  1. what is inside the unexplained full-step remainder,
+  2. how much throughput penalty comes from GDN layer fraction itself,
+  3. whether any bounded CE side-arm is still worth taking.
 
 Coverage rule for this session:
-- Before repeating a kernel-math move (`E`, `H`, `G`, `I`, `J`) in isolation, complete at least one **validated** attempt for each of:
-  - `R` ejkernel-style minimal-tape backward recompute control arm,
-  - `P` CE backward-mode A/B on the real train run,
-  - `O` reduced-Pallas / XLA control arm benchmark,
-  - `M` XLA-first outer train path with Pallas only as leaf kernels.
-- `N` and `L` should only consume mainline budget when nested inside `M`/`O` or when fresh evidence says CE backward and remainder budget are no longer the dominant unknowns.
+- Before repeating a same-boundary GDN structural move (`M`, `N`, `O`, `R`) as the mainline,
+  complete at least one **validated** attempt for each of:
+  - `S` remainder attribution against the attention-only control,
+  - `T` model-boundary sweep over `gdn_layers_per_block in {0, 1, 2, 3}` with `gdn_block_size=4`.
+- `U` CE side-arm work is optional and bounded. Use it only after `S` or `T`, or when attribution becomes unclear again.
 
 Selection order guidance:
-1. Prefer `R` first now that the CE false wall is removed and the next high-value external idea is the ejkernel-style backward/tape tradeoff.
-2. Keep `P` available to refresh CE evidence when attribution becomes unclear.
-3. Use `O` as a diagnostic control arm, not a mainline promotion target.
-4. Use `M` only after `R` or when you can explain why the ejkernel-style backward/tape diagnosis no longer applies.
-5. Choose `N` or `L` only inside `M`/`O`/`R`, or when you can explain why the current CE backward diagnosis no longer applies.
-6. Only choose `E/H/G/I/J` when they are embedded inside one of the moves above or when you can explain why the current CE/remainder diagnosis does not apply.
+1. `S` remainder attribution / gap accounting.
+2. `T` model-boundary sweep.
+3. `U` bounded CE side-arm only if it has a clear end-to-end path.
+4. `O` or `M` only as diagnostic control arms after `S/T`.
+5. `R` and other same-boundary GDN train-path variants only as research branches, not the mainline.
 
 Repeat-avoidance rules:
-- Do not pick the same macro move as the immediately previous validated attempt unless you are changing the outer train-path control structure materially.
-- If a macro move regresses twice in a row because `while`/`conditional` grows or stays dominant, place it on cooldown.
-- Do not keep retrying “train-path budget down, step not faster” variants as if they were near-wins. Classify them as `off-critical-path` / `overlap-loss`.
-- Do not spend a fresh iteration on standalone `L` if CE backward mode has not yet been benchmarked and remainder budget is still unexplained.
-- Do not spend a fresh iteration on tape-heavy variants if the point of the run is to validate the recompute-heavy backward tradeoff.
+- Do not spend the next mainline iteration on another same-boundary GDN shell/tape change unless:
+  - `remainder_budget_ms` is already explained well enough to show it is on the critical path, or
+  - the iteration is explicitly diagnostic and not promotable.
+- Do not repeat a kernel-local or same-boundary move just because it lowered a closed-call bucket.
+- Classify `train_path_budget_ms down, step_duration_ms flat/up` as `off-critical-path`, not as a near-win.
 
 Writeup requirement:
 - At the top of each iteration writeup, include:
-  - `Coverage slot: <macro>`
-  - `Why this attacks the train-path control bottleneck:`
-  - `Hot-path scan/cond status:`
-  - `Change class: CE backend | outer control structure | inner kernel math`
+  - `Coverage slot: S | T | U | diagnostic`
+  - `Change class: attribution | model boundary | CE backend | outer control structure | inner kernel math`
+  - `Why this is mainline-worthy now:`
 - In the perf section, always include:
-  - `CE backend selected`
-  - `CE bwd mode`
-  - `CE-attributed while` when available
-  - `Forward closed-call`
-  - `Backward closed-call`
-  - `while`
-  - `conditional`
-  - `Kernel budget`
-  - `Control budget`
-  - `Train-path budget`
-  - `Step duration`
-  - `Remainder budget`
+  - `gdn_layer_fraction`
+  - `upper_bound_gap_ms`
+  - `gap_explained_by_train_path`
+  - `remainder_budget_ms`
+  - `remainder_topk`
+  - `ce_backend_selected`
+  - `ce_bwd_mode`
 
 Guardrails:
-- Keep focus on the training chunk path.
-- Avoid introducing new hot-path `lax.cond` / runtime dispatch unless the end-to-end gain case is overwhelming.
-- Hold CE fixed across GDN experiments unless the point of the run is the CE matrix itself.
-- Revert speculative code on failed/regressed attempts per governance policy.
+- Hold CE fixed at `pallas_tpu` + `pallas` during `S` and `T`.
+- Do not mix new GDN kernel changes into the `T` model-boundary sweep.
+- Treat the attention-only control as the practical ceiling reference for this benchmark family.

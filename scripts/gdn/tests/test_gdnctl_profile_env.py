@@ -77,6 +77,58 @@ def test_append_profile_env_supports_xla_streaming_ce_backward_mode() -> None:
     assert f"{gdnctl.PALLAS_TPU_CE_BWD_STREAMING_ENV}=1" in cmd
 
 
+def test_append_profile_env_supports_model_boundary_overrides() -> None:
+    args = argparse.Namespace(
+        wandb_mode="offline",
+        size="130m",
+        num_steps=20,
+        profile_start_step=2,
+        profile_num_steps=6,
+        run_name_prefix="demo",
+        tpu="v5p-8",
+        batch_size=8,
+        chunk_size=128,
+        segment_size=16,
+        gdn_layers_per_block=1,
+        gdn_block_size=4,
+        all_transformer=False,
+        profile_env=[],
+        ce_implementation="pallas_tpu",
+        ce_bwd_mode="pallas",
+    )
+
+    cmd = ["execute"]
+    gdnctl._append_profile_env(cmd, args)
+    assert "GDN_PROFILE_GDN_LAYERS_PER_BLOCK=1" in cmd
+    assert "GDN_PROFILE_GDN_BLOCK_SIZE=4" in cmd
+    assert "GDN_PROFILE_ALL_TRANSFORMER=1" not in cmd
+
+
+def test_append_profile_env_supports_attention_only_flag() -> None:
+    args = argparse.Namespace(
+        wandb_mode="offline",
+        size="130m",
+        num_steps=20,
+        profile_start_step=2,
+        profile_num_steps=6,
+        run_name_prefix="demo",
+        tpu="v5p-8",
+        batch_size=8,
+        chunk_size=None,
+        segment_size=None,
+        gdn_layers_per_block=None,
+        gdn_block_size=None,
+        all_transformer=True,
+        profile_env=[],
+        ce_implementation="pallas_tpu",
+        ce_bwd_mode="pallas",
+    )
+
+    cmd = ["execute"]
+    gdnctl._append_profile_env(cmd, args)
+    assert "GDN_PROFILE_ALL_TRANSFORMER=1" in cmd
+
+
 @pytest.mark.parametrize(
     "item",
     [
@@ -140,3 +192,80 @@ def test_validation_gate_records_full_parity_test_metadata(monkeypatch: pytest.M
     assert info["validation_test_dependencies"] == ["torch", "transformers"]
     assert info["validation_test_targets"] == [gdnctl.GDN_KERNEL_TEST, gdnctl.GDN_LAYER_TEST]
     assert info["profile_prefix"] == "iter-009"
+
+
+def test_collect_profile_metrics_records_profile_architecture_metadata() -> None:
+    args = argparse.Namespace(
+        perf_metric="throughput/mfu",
+        perf_aggregation="summary",
+        perf_history_step_start=10,
+        perf_history_step_end=18,
+        perf_history_aggregation="median",
+        perf_history_min_points=5,
+        perf_wandb_entity="marin-community",
+        perf_wandb_project="marin",
+        validation_profile_wandb_mode="disabled",
+        ce_implementation="pallas_tpu",
+        ce_bwd_mode="pallas",
+        gdn_layers_per_block=1,
+        gdn_block_size=4,
+        all_transformer=False,
+    )
+
+    info = gdnctl._collect_profile_metrics(
+        args,
+        output_text=(
+            "throughput/mfu=6.0\nthroughput/duration=0.1\nFused cross-entropy selected implementation: pallas_tpu\n"
+        ),
+        profile_prefix="demo",
+    )
+    assert info["profile_architecture"] == "hybrid"
+    assert info["gdn_layers_per_block"] == 1
+    assert info["gdn_block_size"] == 4
+    assert info["gdn_layer_fraction"] == pytest.approx(0.25)
+    assert info["metrics"]["step_duration_ms"] == pytest.approx(100.0)
+
+
+def test_collect_profile_metrics_prefers_reported_model_boundary_metadata() -> None:
+    args = argparse.Namespace(
+        perf_metric="throughput/mfu",
+        perf_aggregation="summary",
+        perf_history_step_start=10,
+        perf_history_step_end=18,
+        perf_history_aggregation="median",
+        perf_history_min_points=5,
+        perf_wandb_entity="marin-community",
+        perf_wandb_project="marin",
+        validation_profile_wandb_mode="disabled",
+        ce_implementation="pallas_tpu",
+        ce_bwd_mode="pallas",
+        gdn_layers_per_block=None,
+        gdn_block_size=None,
+        all_transformer=False,
+    )
+
+    output_text = (
+        "[gdnctl] GDN profile model: all_transformer=1 gdn_layers_per_block=0 "
+        "gdn_block_size=4 gdn_layer_fraction=0.000000\n"
+        "throughput/mfu=21.0\nthroughput/duration=0.05\n"
+    )
+    info = gdnctl._collect_profile_metrics(args, output_text=output_text, profile_prefix="demo")
+    assert info["profile_architecture"] == "attn_only"
+    assert info["gdn_layers_per_block"] == 0
+    assert info["gdn_block_size"] == 4
+    assert info["gdn_layer_fraction"] == 0.0
+
+
+def test_with_step_and_remainder_metrics_adds_upper_bound_gap() -> None:
+    hotspot_metrics = {
+        "train_path_budget_ms": 42.7,
+        "step_duration_ms": 166.307,
+    }
+    augmented = gdnctl._with_step_and_remainder_metrics(
+        hotspot_metrics,
+        profile_metrics={},
+        upper_bound_step_ms=57.8605,
+    )
+    assert augmented["remainder_budget_ms"] == pytest.approx(123.607)
+    assert augmented["upper_bound_gap_ms"] == pytest.approx(108.4465)
+    assert augmented["gap_explained_by_train_path"] == pytest.approx(42.7 / 108.4465)

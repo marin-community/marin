@@ -88,6 +88,44 @@ Current mainline priority order:
 3. Macro O as a diagnostic control arm only.
 4. Macro M only after CE backward and remainder-budget work.
 
+## Post-upper-bound regime (March 2026, after the attention-only control)
+
+The practical ceiling is now measured on the same benchmark family:
+
+- Hybrid validated regime: about `6.09 MFU`, `~166.3 ms` step time.
+- Attention-only control (`gdn_layers_per_block = 0`): about `21.09 MFU`, `~57.86 ms` step time.
+
+Interpretation:
+
+- The hybrid-vs-attention gap is now the dominant fact.
+- The gap is too large to treat as a few missing milliseconds inside the current GDN train shell.
+- More than half of the gap is outside the currently tracked GDN closed-call + CE while budget.
+- Therefore, same-boundary GDN Pallas train-path hillclimbing is no longer the mainline strategy.
+
+Mainline priorities in this regime:
+1. Full-step remainder attribution:
+   - `upper_bound_gap_ms = hybrid_step_ms - attn_only_step_ms`
+   - `gap_explained_by_train_path = train_path_budget_ms / upper_bound_gap_ms`
+   - `remainder_topk`
+2. Model-boundary sweep:
+   - measure throughput penalty as `gdn_layers_per_block` varies with `gdn_block_size` fixed.
+3. Bounded CE side-arms only if they improve end-to-end step time materially.
+4. Treat Macro M/N/O/R style same-boundary GDN changes as research/diagnostic branches, not the mainline.
+
+Required metrics from now on:
+- `gdn_layer_fraction`
+- `step_duration_ms`
+- `train_path_budget_ms`
+- `remainder_budget_ms`
+- `upper_bound_gap_ms`
+- `gap_explained_by_train_path`
+- `remainder_topk`
+
+Promotion policy in this regime:
+- Reject candidates whose `step_duration_ms` does not improve, unless they are explicitly diagnostic.
+- Reject candidates whose `remainder_budget_ms` grows, unless they are explicitly diagnostic.
+- Classify `train_path_budget_ms down, step not faster` as `off-critical-path`.
+
 ## ejkernel / EasyDeL takeaways (March 2026)
 
 Local reference repos:
@@ -511,40 +549,46 @@ Run multiple autonomous iterations:
 ```bash
 uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 10 \
-  --model gpt-5.3-codex \
+  --model gpt-5.4 \
   --reasoning-effort xhigh \
   --resilient \
   --directive-preset training-chunk-kernel-focus \
-  --directive-preset tpu-layout-and-dtypes \
-  --directive-preset triangular-inversion \
+  --directive-preset ce-backend-priority \
+  --directive-preset control-structure-pivot \
+  --directive-preset macro-coverage-pivot \
+  --directive-preset remainder-attribution-mainline \
+  --directive-preset model-boundary-sweep \
+  --validation-profile-ce-implementation pallas_tpu \
+  --validation-profile-ce-bwd-mode pallas \
+  --perf-upper-bound-step-ms 57.860499 \
   --dirty-policy stash \
   --no-commit-policy count-failure \
   --hold-dev-tpu \
-  --dev-tpu-cluster us-central1 \
-  --dev-tpu-fallback-cluster us-east5-a \
+  --dev-tpu-cluster us-east5-a \
+  --dev-tpu-fallback-cluster us-central1 \
   --dev-tpu-name "$USER-gdn" \
   --dev-tpu-type v5p-8 \
   --dev-tpu-allocate-attempts 2 \
   --dev-tpu-allocate-retry-sleep 20 \
   --prompt-file scripts/gdn/codex_iteration_prompt.md \
-  --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-central1 --tpu-name $USER-gdn --tests both" \
+  --post-check "uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name $USER-gdn --tests both" \
   --post-check "uv run python scripts/gdn/gdnctl.py lint-log"
 ```
 
 Notes:
-- Use `--codex-profile <profile-name>` if you have a Codex CLI profile for `gpt-5.3-codex` / high reasoning settings.
+- Use `--codex-profile <profile-name>` if you have a Codex CLI profile for `gpt-5.4` / high reasoning settings.
 - `codex-loop` defaults to `codex exec --ephemeral` so long unattended runs do not persist thousands of loop-created Codex sessions/threads into the app database. Opt out with `--no-codex-ephemeral` only when you explicitly need saved sessions for debugging or resume.
 - By default, `codex-loop` stops if an iteration does not create a new commit.
 - Use `--allow-dirty` or `--allow-no-commit` only when intentionally debugging the loop harness.
 - The default iteration prompt (`scripts/gdn/codex_iteration_prompt.md`) is intentionally aggressive; keep it aligned with this policy.
 - Use `--resilient` for unattended loops to keep running through transient failures (network, connectivity, allocation).
-- `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance (for example triangular inversion focus) without editing prompt files.
-- Preset directives are stored as markdown docs under `scripts/gdn/session_directives/` (`triangular-inversion` maps to `scripts/gdn/session_directives/triangular-inversion.md`).
-- For the current post-Iteration 32 phase, include:
-  - `--directive-preset expdiff-outer-product`
-  - `--directive-preset matmul-batching`
-  Useful presets:
-  - `training-chunk-kernel-focus`: prioritize chunked train kernels and de-prioritize decode-only wins.
+- `--directive`, `--directive-file`, and `--directive-preset` inject per-session guidance without editing prompt files.
+- Preset directives are stored as markdown docs under `scripts/gdn/session_directives/`.
+- For the current phase, prioritize:
+  - `remainder-attribution-mainline`
+  - `model-boundary-sweep`
+  - `control-structure-pivot`
+  - `ce-backend-priority`
   - `tpu-layout-and-dtypes`: avoid TPU register-layout cliffs (singleton last-axis, transpose fusion, BF16/F32 policy).
   - `emit-pipeline-fullseq`: design sketch for collapsing segmentation using `pltpu.emit_pipeline`.
 - Use `--validation-mode profile-only` when running intentional ablation probes that may fail correctness tests.

@@ -33,6 +33,16 @@ Run the same profile with TPU Pallas CE forced:
 uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --no-sync
 ```
 
+Run the attention-only upper-bound control on the same benchmark family:
+```bash
+uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --no-sync
+```
+
+Run one point from the GDN-layer-fraction sweep:
+```bash
+uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-central1 --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 1 --no-sync
+```
+
 Wait for a profile job:
 ```bash
 uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-central1 <job_id> --show-logs
@@ -52,14 +62,18 @@ Run unattended Codex loop:
 ```bash
 uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 5 \
-  --model gpt-5.3-codex \
+  --model gpt-5.4 \
   --reasoning-effort xhigh \
   --resilient \
   --directive-preset training-chunk-kernel-focus \
   --directive-preset ce-backend-priority \
   --directive-preset control-structure-pivot \
   --directive-preset macro-coverage-pivot \
-  --validation-profile-ce-compare-implementation pallas_tpu \
+  --directive-preset remainder-attribution-mainline \
+  --directive-preset model-boundary-sweep \
+  --validation-profile-ce-implementation pallas_tpu \
+  --validation-profile-ce-bwd-mode pallas \
+  --perf-upper-bound-step-ms 57.860499 \
   --dirty-policy stash \
   --no-commit-policy count-failure
 ```
@@ -72,7 +86,7 @@ To allocate and hold a dev TPU for the whole loop session:
 ```bash
 uv run python scripts/gdn/gdnctl.py codex-loop \
   --iterations 5 \
-  --model gpt-5.3-codex \
+  --model gpt-5.4 \
   --reasoning-effort xhigh \
   --resilient \
   --hold-dev-tpu \
@@ -100,13 +114,17 @@ Prompt template used by the loop:
   - `ce-backend-priority` -> `scripts/gdn/session_directives/ce-backend-priority.md`
   - `control-structure-pivot` -> `scripts/gdn/session_directives/control-structure-pivot.md`
   - `macro-coverage-pivot` -> `scripts/gdn/session_directives/macro-coverage-pivot.md`
+  - `remainder-attribution-mainline` -> `scripts/gdn/session_directives/remainder-attribution-mainline.md`
+  - `model-boundary-sweep` -> `scripts/gdn/session_directives/model-boundary-sweep.md`
   - `associative-summaries` -> `scripts/gdn/session_directives/associative-summaries.md`
   - `xla-first-train-path` -> `scripts/gdn/session_directives/xla-first-train-path.md`
 
 The default prompt is aggressive by design:
-- treats fused CE backend selection as a first-class bottleneck split,
-- prioritizes train-path control-structure moves over more kernel-local closed-call wins,
-- tracks `while` / `conditional` overhead in addition to MFU,
+- treats full-step remainder attribution and the attention-only upper bound as first-class controls,
+- keeps CE fixed for non-CE experiments and demotes CE work to a bounded side-arm,
+- prioritizes model-boundary sweeps over more same-boundary GDN hillclimbing,
+- tracks `while` / `conditional` overhead and `remainder_budget_ms` in addition to MFU,
+- can report `upper_bound_gap_ms` against a fixed attention-only ceiling,
 - rejects candidates that worsen control-flow budget unless the end-to-end gain is large,
 - prioritizes high-upside kernel redesigns over small tuning,
 - disallows standalone scalar-only tweaks,

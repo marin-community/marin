@@ -1,28 +1,29 @@
-# Session Directive: Train-Path Control-Structure Pivot
+# Session Directive: Full-Step Critical-Path Pivot
 
 Current diagnosis:
-- Pre-CE, recent variants repeatedly cut forward/backward `shard_map/pallas_call` times by ~40-52% while the step still regressed.
-- Iteration 67 removed the giant CE/XLA false wall.
-- Iteration 68 then showed train-path budget can still drop while step duration gets worse.
-- Therefore the bottleneck is no longer "just reduce GDN closed-call time"; it is the full step critical path, including CE backward/control and the post-train-path remainder.
+- the hybrid-vs-attention gap is now the dominant fact:
+  - hybrid is around `6.09 MFU` and `~166 ms`,
+  - attention-only is around `21.09 MFU` and `~57.9 ms`,
+  - the current tracked train-path budget does not explain most of that gap.
+- current-boundary GDN train-path hillclimbing is therefore no longer the mainline.
 
 Implications for this session:
-- Closed-call reduction is not a success criterion by itself.
-- CE backward mode and step remainder are now first-class optimization levers, not background infra.
-- The candidate must either:
-  - change CE backend / CE-attributed control cost,
-  - reduce/remove hot-path scan/control-flow overhead, or
-  - move train-path orchestration to a different layer where that overhead does not dominate.
+- do not optimize toward smaller GDN closed-call buckets alone;
+- optimize toward a shorter full-step critical path;
+- prefer:
+  - better remainder attribution,
+  - model-boundary understanding,
+  - or genuinely different decomposition boundaries.
 
 Required questions to answer in the writeup:
-1. Where is the hot-path `while` / `conditional` coming from in this design?
-2. Does this candidate add or preserve a hot-path `lax.scan`?
-3. Does it add a hot-path `lax.cond` / runtime branch?
-4. Why should that not lower to the same losing `WhileOp` / `Conditional` pattern?
-5. Is the residual `while` still CE-attributed in this design?
-6. What happens to `remainder_budget_ms` in this design?
+1. What fraction of the hybrid-vs-attention gap is explained by the tracked train-path budget?
+2. What are the largest top-k remainder categories outside the tracked train path?
+3. Does this candidate shorten the full step, or only move cost between buckets?
+4. If this changes outer control structure, why should it beat the current off-critical-path failure mode?
+5. If this is still a same-boundary GDN move, why is it justified after the attention-only upper bound evidence?
 
 Hard guardrail:
-- If the result is another “train-path budget down, step not faster” iteration, classify it as `off-critical-path` / `overlap-loss`, revert it, and pivot again.
-- If CE backend remains `xla` and residual `while` stays large, prioritize CE/backend next.
-- Do not use Macro O or Macro M as mainline promotion candidates until CE backward mode has been explicitly benchmarked under forced `pallas_tpu` CE.
+- If the result is another `train_path_budget_ms down, step_duration_ms flat/up` iteration, classify it as
+  `off-critical-path` / `overlap-loss`, revert it, and pivot again.
+- Treat same-boundary Macro O/M/N/R work as diagnostic unless it clearly improves `step_duration_ms`.
+- Keep CE fixed unless the point of the run is an explicit CE side-arm.

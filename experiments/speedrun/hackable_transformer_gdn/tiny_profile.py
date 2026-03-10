@@ -20,6 +20,8 @@ Environment overrides:
 - GDN_PROFILE_BATCH_SIZE: optional global batch size override (default if unset: size-specific safe tiny-profile batch)
 - GDN_PROFILE_CHUNK_SIZE: optional GDN chunk size override
 - GDN_PROFILE_SEGMENT_SIZE: optional GDN segment size override
+- GDN_PROFILE_GDN_LAYERS_PER_BLOCK: optional GDN layer-count-per-block override
+- GDN_PROFILE_GDN_BLOCK_SIZE: optional GDN block-size override
 - GDN_PROFILE_ALL_TRANSFORMER: if `1`, disable all GDN layers and benchmark an all-transformer stack
 - GDN_PROFILE_RUN_NAME_PREFIX: run-name prefix (default: gdn_tinyprof)
 - GDN_PROFILE_RUN_NAME_SUFFIX: optional run-name suffix
@@ -62,11 +64,20 @@ def _env_flag(name: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _run_name(size: str, steps: int, chunk_size: int, segment_size: int, *, all_transformer: bool) -> str:
+def _run_name(
+    size: str,
+    steps: int,
+    chunk_size: int,
+    segment_size: int,
+    *,
+    all_transformer: bool,
+    gdn_layers_per_block: int,
+    gdn_block_size: int,
+) -> str:
     prefix = os.environ.get("GDN_PROFILE_RUN_NAME_PREFIX", "gdn_tinyprof")
     suffix = os.environ.get("GDN_PROFILE_RUN_NAME_SUFFIX", "").strip()
 
-    arch = "attnonly" if all_transformer else "gdn"
+    arch = "attnonly" if all_transformer else f"gdn{gdn_layers_per_block}of{gdn_block_size}"
     name = f"{prefix}_{arch}_{size}_ch{chunk_size}_seg{segment_size}_{steps}steps"
     if suffix:
         name = f"{name}_{suffix}"
@@ -82,6 +93,8 @@ if __name__ == "__main__":
     batch_size_override = _env_optional_int("GDN_PROFILE_BATCH_SIZE")
     chunk_size_override = _env_optional_int("GDN_PROFILE_CHUNK_SIZE")
     segment_size_override = _env_optional_int("GDN_PROFILE_SEGMENT_SIZE")
+    gdn_layers_per_block_override = _env_optional_int("GDN_PROFILE_GDN_LAYERS_PER_BLOCK")
+    gdn_block_size_override = _env_optional_int("GDN_PROFILE_GDN_BLOCK_SIZE")
     all_transformer = _env_flag("GDN_PROFILE_ALL_TRANSFORMER")
 
     if batch_size_override is None:
@@ -94,6 +107,10 @@ if __name__ == "__main__":
         model_cfg = dataclasses.replace(model_cfg, gdn_chunk_size=chunk_size_override)
     if segment_size_override is not None:
         model_cfg = dataclasses.replace(model_cfg, gdn_segment_size=segment_size_override)
+    if gdn_layers_per_block_override is not None:
+        model_cfg = dataclasses.replace(model_cfg, gdn_layers_per_block=gdn_layers_per_block_override)
+    if gdn_block_size_override is not None:
+        model_cfg = dataclasses.replace(model_cfg, gdn_block_size=gdn_block_size_override)
     if all_transformer:
         model_cfg = dataclasses.replace(
             model_cfg,
@@ -131,11 +148,28 @@ if __name__ == "__main__":
         model_cfg.gdn_chunk_size,
         model_cfg.gdn_segment_size,
         all_transformer=all_transformer,
+        gdn_layers_per_block=model_cfg.gdn_layers_per_block,
+        gdn_block_size=model_cfg.gdn_block_size,
     )
 
     tags = ["speedrun", "gdn", "gdn_tiny_profile", "kernel_optimization"]
     if all_transformer:
         tags.append("attn_only_baseline")
+    else:
+        tags.append(f"gdn_fraction_{model_cfg.gdn_layers_per_block}of{model_cfg.gdn_block_size}")
+
+    gdn_layer_fraction = 0.0
+    if model_cfg.use_gated_deltanet and model_cfg.gdn_block_size > 0:
+        gdn_layer_fraction = model_cfg.num_gdn_layers / model_cfg.num_layers
+    resolved_all_transformer = int(model_cfg.num_gdn_layers == 0)
+    print(
+        "[gdnctl] GDN profile model: "
+        f"all_transformer={resolved_all_transformer} "
+        f"gdn_layers_per_block={model_cfg.gdn_layers_per_block} "
+        f"gdn_block_size={model_cfg.gdn_block_size} "
+        f"gdn_layer_fraction={gdn_layer_fraction:.6f}",
+        flush=True,
+    )
 
     step = default_train(
         name=f"speedrun/{run_name}",

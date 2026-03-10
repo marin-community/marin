@@ -1,28 +1,30 @@
-# Session Directive: CE Backward First
+# Session Directive: CE Is Now A Bounded Side-Arm
 
 Current diagnosis:
-- Iteration 67 was the real regime change: forcing TPU fused CE to `pallas_tpu` removed the giant CE/XLA false wall and improved MFU materially.
-- Iteration 68 then proved that reducing GDN train-path budget is no longer sufficient by itself; the step can still regress.
-- The remaining CE-attributed `while` is now much smaller than before, but still large enough to matter, and the most plausible remaining CE opportunity is the backward/custom-VJP shell.
+- forcing TPU fused CE to `pallas_tpu` was the last giant false wall and produced the largest recent win,
+- the current validated regime already uses `pallas_tpu` CE with `pallas` backward,
+- the remaining CE-attributed `while` is still worth measuring, but it is no longer the mainline explanation
+  for the hybrid-vs-attention gap.
 
-Implications for this session:
-- Hold CE implementation fixed at `pallas_tpu` unless the point of the run is explicit CE implementation A/B.
-- Treat CE backward mode as the first experiment axis:
-  - `pallas`
-  - `xla_streaming`
-- Do not spend mainline budget on new GDN-local work until the CE backward A/B has been run or refreshed under the current head.
+Policy:
+- For non-CE experiments, hold CE fixed at:
+  - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`
+  - CE backward mode `pallas`
+- Do not let CE settings drift while comparing GDN or model-boundary experiments.
+- Treat CE work as a bounded side-arm:
+  - useful for cleanup or diagnostic clarity,
+  - not the mainline optimization target.
 
-Required behavior:
-1. Record `CE backend selected: <impl>` in every profiled iteration writeup.
-2. Record `CE bwd mode: pallas | xla_streaming` in every profiled iteration writeup.
-3. If available, record `CE-attributed while: <before> ms -> <after> ms`.
-4. If CE implementation or CE backward mode changed, treat the iteration as `Change class: CE backend`.
-5. If CE is not the axis under test, keep CE fixed and explain why another direction is justified now.
+When CE work is justified:
+- residual `while` attribution becomes ambiguous again,
+- you have a specific CE backward-shell hypothesis,
+- or you are evaluating a narrow CE diff with a strict end-to-end promotion bar.
 
-Preferred experiment matrix:
-- current deployable head + `pallas_tpu` CE + `pallas` CE backward
-- current deployable head + `pallas_tpu` CE + `xla_streaming` CE backward
-- optional sanity run: explicit `xla` CE when bottleneck attribution is unclear
+Required recording:
+- `CE backend selected: ...`
+- `CE bwd mode: pallas | xla_streaming`
+- `CE-attributed while: ... ms -> ... ms` when trace attribution is available
 
-Goal:
-- Determine whether the residual CE control cost is best attacked by backward-mode selection before resuming major GDN structural work.
+Promotion bar for CE-only work:
+- accept only if `step_duration_ms` improves materially,
+- and either `ce_attributed_while_ms` drops clearly or `remainder_budget_ms` does not regress.
