@@ -719,3 +719,73 @@
   - the next meaningful comparison is the completed symbol trial versus whole-image bytes and exact `K=8` coefficients
     under matched `SWA=4096`
 - Next action: monitor `raysubmit_Yi8WRcbCjnP3qEsp` through startup and the first eval boundary.
+
+### 2026-03-09 23:04 - Exact whole-image JPEG symbol trial timed out before worker startup
+
+- Hypothesis: the newly launched exact-symbol trial is healthy at the code/config level and only needs the normal
+  startup stabilization check before it proceeds into training.
+- Command:
+  - monitored `raysubmit_Yi8WRcbCjnP3qEsp` with `JobSubmissionClient.get_job_status(...)`,
+    `JobSubmissionClient.get_job_info(...)`, and W&B run lookup for
+    `jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial`
+- Result:
+  - controller state: `FAILED`
+  - W&B runs created: `0`
+  - Ray error type: `JOB_SUPERVISOR_ACTOR_START_TIMEOUT`
+  - Ray message:
+    `Job supervisor actor failed to start within 900.0 seconds. This timeout can be configured by setting the environment variable RAY_JOB_START_TIMEOUT_SECONDS.`
+  - there was no trainer traceback and no worker-side log output for the trial
+- Interpretation:
+  - this failure happened before the actual training job came up, so it does not invalidate the symbol smoke result
+    or indicate a modeling/code regression in the symbol path itself
+  - the immediate blocker is Ray job-supervisor startup latency / cluster pressure rather than the symbol tokenizer
+    implementation
+- Next action: resubmit the exact-symbol trial when capacity looks better, or raise the Ray job start timeout if this
+  continues to recur on otherwise healthy large runtime-env submissions.
+
+### 2026-03-10 06:25 - Exact whole-image JPEG symbol trial completed on the standard submit path
+
+- Hypothesis: the repeated symbol-trial startup failures are submit-path / cluster-pressure issues, not a real problem
+  with the symbol tokenizer or training config, so the standard `ray_run.py` path should still get the exact-symbol
+  baseline through if we keep retrying.
+- Command:
+  - two direct-dashboard retries both failed before worker startup with
+    `JOB_SUPERVISOR_ACTOR_START_TIMEOUT`:
+    - `raysubmit_Yi8WRcbCjnP3qEsp`
+    - `raysubmit_L6djGtQv6BgXFUF2`
+  - resubmitted via:
+    `RAY_AUTH_MODE=token RAY_AUTH_TOKEN_PATH=$HOME/.ray/auth_token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial"]'`
+  - successful Ray job:
+    `ray-run-dlwh-launch-20260310-111410`
+- Result:
+  - exact-symbol W&B:
+    `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial`
+  - final output path:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3`
+  - final checkpoint:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3/checkpoints/step-2000`
+  - executor terminal status:
+    `SUCCESS`
+  - final eval loss:
+    `2.885793924331665`
+  - validation mean sequence lengths:
+    - symbols: `32598.44`
+    - bytes: `25662.39`
+    - exact `K=8` coeffs: `8192.00`
+  - coarse implied bits/image from final token-NLLs:
+    - symbols: `135717.76`
+    - bytes: `155903.86`
+    - exact `K=8` coeffs: `38552.14`
+- Interpretation:
+  - exact JPEG symbols are now the strongest token-level baseline on the current JPEG ladder:
+    - symbols: `2.886`
+    - exact `K=8` coeffs: `3.262`
+    - whole-image bytes: `4.211`
+  - symbols beat bytes by a wide margin and also beat the exact coefficient stream even though the symbol sequence is
+    much longer on average
+  - coefficients still win on total representation compactness, which means the representation story now has a real
+    two-axis tradeoff:
+    - symbols win predictability
+    - coefficients win compactness
+- Next action: write the exact three-way SWA comparison into the Phase 1 report and then prefer evaluation/analysis of
+  whole-sequence metrics over launching more JPEG variants immediately.

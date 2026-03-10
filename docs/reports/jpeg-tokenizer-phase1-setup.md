@@ -716,3 +716,109 @@ That makes the modeling constraint explicit: the current JPEG baseline still use
 transformer, so a `54544`-token whole-image byte run is not a credible next TPU experiment without also changing the
 attention regime. In other words, the code is now ready for a whole-image byte store, but the comparison itself needs a
 consistent attention/windowing decision across bytes and coefficients before it is worth launching.
+
+## Whole-Image SWA Head-to-Head
+
+The exact whole-image symbol baseline has now completed, which gives the first clean three-way comparison under the
+same `SWA=4096` attention regime:
+
+| Representation | Sequence regime | Validation mean tokens/image | Final eval loss |
+| --- | --- | ---: | ---: |
+| Exact coeffs (`K=8`) | whole image, fixed length | `8192.00` | `3.262` |
+| Canonical JPEG bytes | whole image, variable length | `25662.39` | `4.211` |
+| Exact JPEG symbols | whole image, variable length | `32598.44` | `2.886` |
+
+Concrete runs:
+
+- Exact `K=8` coeffs:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k8-libjpeg-swa4096-trial`
+- Whole-image bytes:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-bytes-whole-swa4096-trial`
+- Whole-image exact symbols:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial`
+
+The symbol trial details are:
+
+- final output path:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3`
+- final checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3/checkpoints/step-2000`
+- terminal executor status:
+  `SUCCESS`
+- final eval loss:
+  `2.885793924331665`
+
+This is the main JPEG result so far:
+
+- exact JPEG syntax symbols beat whole-image canonical JPEG bytes by a large margin
+- exact JPEG syntax symbols also beat exact `K=8` coefficient tokens, despite being much longer sequences
+- raw bytes are the worst of the three under this matched architectural setup
+
+So the current evidence favors the strongest version of the original codec-structure claim:
+
+- codec-aware token streams are materially easier to model than raw container bytes
+- the syntax/event stream appears even better than the bounded coefficient stream on this setup
+
+## Runtime Note On Symbol Trial Launch
+
+The exact-symbol trial did not launch cleanly on the first two direct dashboard submissions:
+
+- `raysubmit_Yi8WRcbCjnP3qEsp`
+- `raysubmit_L6djGtQv6BgXFUF2`
+
+Both failed before worker startup with:
+
+- `JOB_SUPERVISOR_ACTOR_START_TIMEOUT`
+
+Those failures produced no W&B run and no trainer traceback, so they were not modeling failures. The successful launch
+used the standard `ray_run.py` submit path instead:
+
+- Ray job:
+  `ray-run-dlwh-launch-20260310-111410`
+
+This matters operationally because the symbol result should be read as "runtime-env and model are good; the brittle
+piece was the Ray job-supervisor startup path under cluster pressure."
+
+## Sequence-Level Context
+
+For the validation split, the raw sequence lengths are:
+
+- exact symbols:
+  mean `32598.44`, p95 `47842`, max `57948`
+- whole-image bytes:
+  mean `25662.39`, p95 `39165`, max `50316`
+- exact `K=8` coeffs:
+  mean `8192.00`, fixed by construction
+
+Using the final eval losses as average token NLLs, the implied validation bits-per-image are approximately:
+
+- exact symbols:
+  `135717.76`
+- whole-image bytes:
+  `155903.86`
+- exact `K=8` coeffs:
+  `38552.14`
+
+This clarifies the tradeoff:
+
+- symbols have the best per-token predictive loss
+- coefficients still have the smallest total description length because the representation is dramatically shorter
+- bytes lose on both token-level loss and total image code length relative to symbols
+
+So the next analysis should not be "which single scalar is best?" but rather:
+
+- token-level predictability (`symbols` win here)
+- representation compactness (`coeffs` win here)
+- rollout robustness / downstream usefulness (still open)
+
+## Current Recommendation
+
+The next logical step is a generic whole-sequence evaluator for the exact final checkpoints (`bytes`, `symbols`,
+`coeff_k8`) that reports:
+
+- exact NLL / bits per image
+- optional normalization by block / pixel
+- any shared-prefix or ablation metrics that remain meaningful across representations
+
+I would not launch more JPEG training variants before that. The three-way training comparison is now strong enough that
+the highest-value remaining work is evaluation and interpretation, or moving on to the gzip-reset mechanism test.
