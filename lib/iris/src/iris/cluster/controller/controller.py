@@ -897,6 +897,7 @@ class Controller:
         logging.getLogger("iris").removeHandler(self._log_store_handler)
         self._log_store_handler.close()
         self._transitions.close()
+        self._bundle_store.close()
 
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""

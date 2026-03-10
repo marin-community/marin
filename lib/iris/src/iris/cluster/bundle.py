@@ -222,3 +222,6 @@ class BundleStore:
             victim_ids = [str(v[0]) for v in victims]
             self._conn.executemany("DELETE FROM bundles WHERE bundle_id = ?", [(v,) for v in victim_ids])
             self._conn.commit()
+
+    def close(self) -> None:
+        self._conn.close()

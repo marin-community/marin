@@ -12,6 +12,8 @@ stale worker state or chaos bleed. Chaos state is also reset per-test via an
 autouse fixture.
 """
 
+import logging
+import os
 import shutil
 import subprocess
 import time
@@ -335,6 +337,64 @@ def multi_worker_cluster():
 def _reset_chaos():
     yield
     reset_chaos()
+
+
+logger = logging.getLogger(__name__)
+
+
+def _open_fds() -> dict[int, Path]:
+    """Snapshot all open file descriptors for the current process via /proc or lsof."""
+    pid = os.getpid()
+    proc_fd = Path(f"/proc/{pid}/fd")
+
+    if proc_fd.is_dir():
+        fds: dict[int, Path] = {}
+        for entry in proc_fd.iterdir():
+            try:
+                fd = int(entry.name)
+                target = entry.resolve()
+                fds[fd] = target
+            except (ValueError, OSError):
+                continue
+        return fds
+
+    # macOS: fall back to lsof
+    try:
+        result = subprocess.run(
+            ["lsof", "-p", str(pid), "-Fn"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+
+    fds = {}
+    current_fd: int | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("f") and line[1:].isdigit():
+            current_fd = int(line[1:])
+        elif line.startswith("n") and current_fd is not None:
+            fds[current_fd] = Path(line[1:])
+            current_fd = None
+    return fds
+
+
+@pytest.fixture(autouse=True)
+def _detect_fd_leaks(request):
+    """Log file descriptors that were opened but not closed during a test."""
+    before = _open_fds()
+    yield
+    after = _open_fds()
+    leaked = {fd: path for fd, path in after.items() if fd not in before}
+    if leaked:
+        lines = [f"  fd {fd} -> {path}" for fd, path in sorted(leaked.items())]
+        logger.warning(
+            "Test %s leaked %d file descriptor(s):\n%s",
+            request.node.nodeid,
+            len(leaked),
+            "\n".join(lines),
+        )
 
 
 @pytest.fixture

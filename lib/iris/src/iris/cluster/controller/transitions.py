@@ -239,6 +239,7 @@ class ControllerTransitions:
         return self._db.db_path
 
     def close(self) -> None:
+        self._log_store.close()
         self._db.close()
 
     def backup_to(self, destination: Path) -> None:
