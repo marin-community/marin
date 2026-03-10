@@ -13,7 +13,10 @@ from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 from iris.marin_fs import open_url, url_to_fs
 import msgspec
@@ -34,7 +37,7 @@ _MIN_BATCH_SIZE = 1_000
 _MAX_BATCH_SIZE = 1_000_000
 
 
-def _estimate_batch_size(sample: list[dict], schema: object, target_bytes: int) -> int:
+def _estimate_batch_size(sample: list[dict], schema: pa.Schema, target_bytes: int) -> int:
     """Estimate optimal batch size from a sample of records.
 
     Converts the sample to a PyArrow table and uses its nbytes to extrapolate
@@ -142,7 +145,7 @@ def write_parquet_file(
     records: Iterable,
     output_path: str,
     *,
-    schema: object | None = None,
+    schema: pa.Schema | None = None,
     target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
 ) -> dict:
     """Write records to a Parquet file.
@@ -213,7 +216,7 @@ def write_vortex_file(
     records: Iterable,
     output_path: str,
     *,
-    schema: object | None = None,
+    schema: pa.Schema | None = None,
     target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
 ) -> dict:
     """Write records to a Vortex file using streaming writes.
