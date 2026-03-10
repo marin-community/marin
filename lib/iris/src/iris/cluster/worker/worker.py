@@ -244,6 +244,7 @@ class Worker:
         logging.getLogger().removeHandler(self._log_store_handler)
         self._log_store_handler.close()
         self._log_store.close()
+        self._bundle_store.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
