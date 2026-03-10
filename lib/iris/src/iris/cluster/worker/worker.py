@@ -356,25 +356,6 @@ class Worker:
 
         logger.info("Worker state reset complete")
 
-    def _notify_task_update(self, task: TaskAttempt) -> None:
-        """Notify controller that task state changed.
-
-        Sends a lightweight ping to the controller, triggering a priority heartbeat.
-        """
-        if not self._controller_client or not self._worker_id:
-            return
-
-        # Send a lightweight ping to trigger priority heartbeat (best-effort)
-        try:
-            self._controller_client.notify_task_update(
-                cluster_pb2.Controller.NotifyTaskUpdateRequest(
-                    worker_id=self._worker_id,
-                )
-            )
-        except Exception as e:
-            # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
-            logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
-
     # Task management methods
 
     _TERMINAL_STATES = frozenset(
@@ -476,7 +457,6 @@ class Worker:
             default_task_image=self._config.default_task_image,
             resolve_image=self._config.resolve_image,
             port_allocator=self._port_allocator,
-            report_state=lambda: self._notify_task_update(attempt),
             log_store=self._log_store,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )

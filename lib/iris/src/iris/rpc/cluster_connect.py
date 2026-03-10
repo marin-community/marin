@@ -40,9 +40,6 @@ class ControllerService(Protocol):
     async def list_workers(self, request: cluster__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListWorkersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def notify_task_update(self, request: cluster__pb2.Controller.NotifyTaskUpdateRequest, ctx: RequestContext) -> cluster__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def register_endpoint(self, request: cluster__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -164,16 +161,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_workers,
-                ),
-                "/iris.cluster.ControllerService/NotifyTaskUpdate": Endpoint.unary(
-                    method=MethodInfo(
-                        name="NotifyTaskUpdate",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.NotifyTaskUpdateRequest,
-                        output=cluster__pb2.Empty,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.notify_task_update,
                 ),
                 "/iris.cluster.ControllerService/RegisterEndpoint": Endpoint.unary(
                     method=MethodInfo(
@@ -461,26 +448,6 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.ListWorkersRequest,
                 output=cluster__pb2.Controller.ListWorkersResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def notify_task_update(
-        self,
-        request: cluster__pb2.Controller.NotifyTaskUpdateRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Empty:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="NotifyTaskUpdate",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.NotifyTaskUpdateRequest,
-                output=cluster__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -997,8 +964,6 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_workers(self, request: cluster__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListWorkersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def notify_task_update(self, request: cluster__pb2.Controller.NotifyTaskUpdateRequest, ctx: RequestContext) -> cluster__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def register_endpoint(self, request: cluster__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def unregister_endpoint(self, request: cluster__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Empty:
@@ -1108,16 +1073,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_workers,
-                ),
-                "/iris.cluster.ControllerService/NotifyTaskUpdate": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="NotifyTaskUpdate",
-                        service_name="iris.cluster.ControllerService",
-                        input=cluster__pb2.Controller.NotifyTaskUpdateRequest,
-                        output=cluster__pb2.Empty,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.notify_task_update,
                 ),
                 "/iris.cluster.ControllerService/RegisterEndpoint": EndpointSync.unary(
                     method=MethodInfo(
@@ -1405,26 +1360,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.ListWorkersRequest,
                 output=cluster__pb2.Controller.ListWorkersResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def notify_task_update(
-        self,
-        request: cluster__pb2.Controller.NotifyTaskUpdateRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> cluster__pb2.Empty:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="NotifyTaskUpdate",
-                service_name="iris.cluster.ControllerService",
-                input=cluster__pb2.Controller.NotifyTaskUpdateRequest,
-                output=cluster__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

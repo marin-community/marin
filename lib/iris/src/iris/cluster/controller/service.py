@@ -942,20 +942,6 @@ class ControllerServiceImpl:
             accepted=True,
         )
 
-    def notify_task_update(
-        self,
-        request: cluster_pb2.Controller.NotifyTaskUpdateRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Empty:
-        """Hint from worker that it has new completions. Triggers priority heartbeat.
-
-        This is a lightweight ping - the actual completion data comes via the next
-        heartbeat response.
-        """
-        # Just wake the scheduler; it will trigger a priority heartbeat for this worker
-        self._controller.wake()
-        return cluster_pb2.Empty()
-
     def list_workers(
         self,
         request: cluster_pb2.Controller.ListWorkersRequest,
