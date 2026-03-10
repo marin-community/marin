@@ -813,7 +813,7 @@ class ControllerServiceImpl:
         visible to clients (via lookup/list) when the job is executing (not
         in a terminal state).
         """
-        endpoint_id = str(uuid.uuid4())
+        endpoint_id = request.endpoint_id or str(uuid.uuid4())
 
         task_id = JobName.from_wire(request.task_id)
         job_id, _task_index = task_id.require_task()

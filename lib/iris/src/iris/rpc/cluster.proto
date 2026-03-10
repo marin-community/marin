@@ -682,6 +682,7 @@ message Controller {
     string task_id = 3;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 4;
     int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
+    string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
   }
 
   message RegisterEndpointResponse {
