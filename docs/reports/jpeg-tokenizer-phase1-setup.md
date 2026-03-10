@@ -831,9 +831,9 @@ The JPEG baseline work is complete enough to stop training churn here. The next 
 - keep `symbols` as the strongest token-level JPEG baseline and `coeff_k8` as the compactness baseline
 - move the next mechanism test to gzip/reset behavior rather than launching more JPEG variants immediately
 
-## Middle-Ground Baselines Staged
+## Middle-Ground Baselines
 
-Two additional JPEG representations are now staged in code, but not launched as TPU trials yet:
+Two additional whole-image JPEG representations are now built in `gs://marin-eu-west4/jpeg_tokenizer/token_store/`:
 
 - `scan_payload_bytes`
   - whole-image builder:
@@ -846,14 +846,26 @@ Two additional JPEG representations are now staged in code, but not launched as 
   - meaning:
     decoded JPEG entropy events where the event id and the amplitude payload are separate tokens
 
-On a `2`-train / `2`-validation local smoke build:
+On the full Imagenette train/validation stores:
 
-- `scan_payload_bytes` resolved to `seq_len=26055`, `vocab_size=258`
-- `huffman_events` resolved to `seq_len=71211`, `vocab_size=2224`
+- `scan_payload_bytes` resolved to `seq_len=53760`, `vocab_size=258`
+- `huffman_events` resolved to `seq_len=115840`, `vocab_size=2224`
 
-That makes the next JPEG-side decision fairly clear:
+The first `SWA=4096` smoke runs gave:
 
-- `scan_payload_bytes` is the realistic next baseline if we want to isolate whether raw-byte weakness is mostly
-  container/header noise
-- `huffman_events` is still useful conceptually, but under the current architecture it is more a sequence-length stress
-  test than a practical middle ground
+- `scan_payload_bytes`
+  - Ray job: `ray-run-dlwh-launch-20260310-171904`
+  - W&B: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-scan-bytes-whole-swa4096-smoke`
+  - final eval loss: `5.518`
+  - checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-scan-bytes-whole-swa4096-smoke-3f03e1/checkpoints/step-32`
+- `huffman_events`
+  - Ray job: `ray-run-dlwh-launch-20260310-172146`
+  - W&B: `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-smoke`
+  - final eval loss: `2.276`
+  - checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-smoke-96f3a8/checkpoints/step-32`
+
+That changes the JPEG-side decision:
+
+- `scan_payload_bytes` does not improve enough over whole-image bytes to be especially interesting, but it is now
+  cheap enough to keep as a control baseline
+- `huffman_events` is not just a stress test; despite the long sequence, it is strong enough to justify a full trial

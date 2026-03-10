@@ -149,7 +149,7 @@ The exact symbol store contains:
 - padded sequence length: `58240`
 - vocab size: `36835`
 
-Two additional middle-ground baselines are now staged locally in code:
+Two additional middle-ground baselines are now built and mirrored in `eu-west4`:
 
 - `scan_payload_bytes`
   - builder:
@@ -166,14 +166,18 @@ Two additional middle-ground baselines are now staged locally in code:
   - vocab:
     `2224`
 
-Small local smoke builds on `2` train + `2` validation examples resolved to:
+The full Imagenette stores resolved to:
 
-- `scan_payload_bytes`: `seq_len=26055`
-- `huffman_events`: `seq_len=71211`
+- `scan_payload_bytes`: `seq_len=53760`
+- `huffman_events`: `seq_len=115840`
 
-So `scan_payload_bytes` is the cleaner immediate "bytes but less container noise" baseline, while `huffman_events` is a
-semantic middle ground that is likely too long for the current `SWA=4096` setup without an additional architecture or
-packing change.
+The first `SWA=4096` smokes came back as:
+
+- `scan_payload_bytes`: eval loss `5.518` at step `32`
+- `huffman_events`: eval loss `2.276` at step `32`
+
+So `scan_payload_bytes` does not seem to buy much over whole-image bytes, while `huffman_events` is strong enough to
+justify a full trial even with the longer sequence.
 
 ## V0 Decisions
 

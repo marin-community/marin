@@ -29,12 +29,18 @@ DEFAULT_COEFF_K8_LIBJPEG_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_
 DEFAULT_COEFF_K16_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k16_v0"
 DEFAULT_BYTE_W8192_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_w8192_v0"
 DEFAULT_BYTE_WHOLE_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_whole_v0"
+DEFAULT_SCAN_BYTES_WHOLE_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_scan_bytes_whole_v0"
+DEFAULT_HUFFMAN_EVENTS_WHOLE_LIBJPEG_STORE_PATH = (
+    "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_huffman_events_whole_libjpeg_v0"
+)
 DEFAULT_SYMBOL_WHOLE_LIBJPEG_STORE_PATH = (
     "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0"
 )
 DEFAULT_TPU_TYPE = "v6e-8"
 DEFAULT_BYTE_WHOLE_SEQ_LEN = 54_656
+DEFAULT_SCAN_BYTES_WHOLE_SEQ_LEN = 53_760
 DEFAULT_BYTE_WHOLE_SWA = 4_096
+DEFAULT_HUFFMAN_EVENTS_WHOLE_SEQ_LEN = 115_840
 DEFAULT_SYMBOL_WHOLE_SEQ_LEN = 58_240
 
 
@@ -149,6 +155,14 @@ RESOLVED_BYTES_W8192_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-bytes-w8192-
 RESOLVED_BYTES_W8192_RUN_ID = _resolve_run_id("jpeg-tokenizer-bytes-w8192-trial")
 RESOLVED_BYTES_WHOLE_SWA4096_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-bytes-whole-swa4096-smoke")
 RESOLVED_BYTES_WHOLE_SWA4096_RUN_ID = _resolve_run_id("jpeg-tokenizer-bytes-whole-swa4096-trial")
+RESOLVED_SCAN_BYTES_WHOLE_SWA4096_SMOKE_RUN_ID = _resolve_run_id("jpeg-tokenizer-scan-bytes-whole-swa4096-smoke")
+RESOLVED_SCAN_BYTES_WHOLE_SWA4096_RUN_ID = _resolve_run_id("jpeg-tokenizer-scan-bytes-whole-swa4096-trial")
+RESOLVED_HUFFMAN_EVENTS_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID = _resolve_run_id(
+    "jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-smoke"
+)
+RESOLVED_HUFFMAN_EVENTS_WHOLE_LIBJPEG_SWA4096_RUN_ID = _resolve_run_id(
+    "jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial"
+)
 RESOLVED_SYMBOLS_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID = _resolve_run_id(
     "jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke"
 )
@@ -962,6 +976,230 @@ bytes_whole_swa4096_trial = ExecutorStep(
     ),
 )
 
+scan_bytes_whole_swa4096_smoke = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-scan-bytes-whole-swa4096-smoke",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(
+            dataclasses.replace(
+                JPEG_TOKENIZER_V0_MODEL,
+                vocab_size=258,
+                max_seq_len=DEFAULT_SCAN_BYTES_WHOLE_SEQ_LEN,
+                sliding_window=DEFAULT_BYTE_WHOLE_SWA,
+            )
+        ),
+        token_store_path=str(DEFAULT_SCAN_BYTES_WHOLE_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_SCAN_BYTES_WHOLE_SWA4096_SMOKE_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(32),
+        batch_size=versioned(8),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-middle-ground-smoke",
+            tags=["jpeg-tokenizer", "scan-bytes", "whole-image", "swa4096", "smoke", "middle-ground"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=16,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=8,
+                steps_per_eval=16,
+                max_eval_batches=4,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
+scan_bytes_whole_swa4096_trial = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-scan-bytes-whole-swa4096-trial",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(
+            dataclasses.replace(
+                JPEG_TOKENIZER_V0_MODEL,
+                vocab_size=258,
+                max_seq_len=DEFAULT_SCAN_BYTES_WHOLE_SEQ_LEN,
+                sliding_window=DEFAULT_BYTE_WHOLE_SWA,
+            )
+        ),
+        token_store_path=str(DEFAULT_SCAN_BYTES_WHOLE_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_SCAN_BYTES_WHOLE_SWA4096_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(2_000),
+        batch_size=versioned(8),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-middle-ground",
+            tags=["jpeg-tokenizer", "scan-bytes", "whole-image", "swa4096", "baseline", "middle-ground"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=1_000,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=8,
+                steps_per_eval=1_000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
+huffman_events_whole_libjpeg_swa4096_smoke = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-smoke",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(
+            dataclasses.replace(
+                JPEG_TOKENIZER_V0_MODEL,
+                vocab_size=2_224,
+                max_seq_len=DEFAULT_HUFFMAN_EVENTS_WHOLE_SEQ_LEN,
+                sliding_window=DEFAULT_BYTE_WHOLE_SWA,
+            )
+        ),
+        token_store_path=str(DEFAULT_HUFFMAN_EVENTS_WHOLE_LIBJPEG_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_HUFFMAN_EVENTS_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(32),
+        batch_size=versioned(8),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-middle-ground-smoke",
+            tags=["jpeg-tokenizer", "huffman-events", "whole-image", "libjpeg", "swa4096", "smoke", "middle-ground"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=16,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=8,
+                steps_per_eval=16,
+                max_eval_batches=2,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
+huffman_events_whole_libjpeg_swa4096_trial = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(
+            dataclasses.replace(
+                JPEG_TOKENIZER_V0_MODEL,
+                vocab_size=2_224,
+                max_seq_len=DEFAULT_HUFFMAN_EVENTS_WHOLE_SEQ_LEN,
+                sliding_window=DEFAULT_BYTE_WHOLE_SWA,
+            )
+        ),
+        token_store_path=str(DEFAULT_HUFFMAN_EVENTS_WHOLE_LIBJPEG_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_HUFFMAN_EVENTS_WHOLE_LIBJPEG_SWA4096_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(2_000),
+        batch_size=versioned(8),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-middle-ground",
+            tags=["jpeg-tokenizer", "huffman-events", "whole-image", "libjpeg", "swa4096", "baseline", "middle-ground"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=1_000,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=8,
+                steps_per_eval=1_000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
 symbols_whole_libjpeg_swa4096_smoke = ExecutorStep(
     name="tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke",
     fn=run_jpeg_tokenizer_trial,
@@ -1094,12 +1332,16 @@ if __name__ == "__main__":
             bytes_w8192_trial,
             bytes_whole_swa4096_smoke,
             bytes_whole_swa4096_trial,
+            scan_bytes_whole_swa4096_smoke,
+            scan_bytes_whole_swa4096_trial,
+            huffman_events_whole_libjpeg_swa4096_smoke,
+            huffman_events_whole_libjpeg_swa4096_trial,
             symbols_whole_libjpeg_swa4096_smoke,
             symbols_whole_libjpeg_swa4096_trial,
         ],
         description=(
             "JPEG tokenizer coefficient, libjpeg-coefficient, byte-window, "
-            "whole-image byte, and whole-image symbol SWA runs on Imagenette token stores, "
+            "whole-image byte, middle-ground JPEG, and whole-image symbol SWA runs on Imagenette token stores, "
             "including SWA head-to-head comparisons."
         ),
     )

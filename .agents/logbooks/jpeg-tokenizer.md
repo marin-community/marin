@@ -20,6 +20,51 @@
 
 ## Experiment Log
 
+### 2026-03-10 17:35 - Middle-ground JPEG smokes split cleanly
+
+- Hypothesis: a payload-only byte baseline and a decoded Huffman-event baseline should tell us whether the full-byte
+  weakness is mostly container noise or entropy-coding state.
+- Command:
+  - `uv run python scripts/jpeg_tokenizer/build_whole_image_scan_byte_token_store.py --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_scan_bytes_whole_v0`
+  - `uv run python scripts/jpeg_tokenizer/build_whole_image_huffman_event_token_store.py --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_huffman_events_whole_libjpeg_v0`
+  - `gsutil -m rsync -r artifacts/jpeg_tokenizer/token_store/imagenette_scan_bytes_whole_v0 gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_scan_bytes_whole_v0`
+  - `gsutil -m rsync -r artifacts/jpeg_tokenizer/token_store/imagenette_huffman_events_whole_libjpeg_v0 gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_huffman_events_whole_libjpeg_v0`
+  - `uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-scan-bytes-whole-swa4096-smoke"]'`
+  - `uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-smoke"]'`
+- Config:
+  - `scan_payload_bytes`: `seq_len=53760`, `vocab_size=258`
+  - `huffman_events`: `seq_len=115840`, `vocab_size=2224`
+  - both ran as whole-image `SWA=4096` smokes on `v6e-8`
+- Result:
+  - scan bytes smoke `ray-run-dlwh-launch-20260310-171904` `SUCCEEDED`, final eval loss `5.518`
+  - huffman-event smoke `ray-run-dlwh-launch-20260310-172146` `SUCCEEDED`, final eval loss `2.276`
+- Interpretation:
+  - stripping container bytes is not enough; payload-only bytes still behave much more like raw bytes than like the
+    structured JPEG baselines
+  - decoded Huffman events are much stronger than expected and immediately deserve a long run
+- Next action: launch both full trials so the control baseline exists, but prioritize monitoring the Huffman-event run.
+
+### 2026-03-10 17:45 - Huffman-event trial launched
+
+- Hypothesis: the strong `2.276` smoke should hold up over a full `2000`-step run and tell us whether decoded
+  entropy events can beat the exact symbol stream.
+- Command:
+  - `uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial"]'`
+- Config:
+  - whole-image `huffman_events`
+  - `seq_len=115840`
+  - vocab `2224`
+  - `SWA=4096`
+  - batch size `8`
+- Result so far:
+  - Ray job: `ray-run-dlwh-launch-20260310-173123`
+  - controller status: `RUNNING`
+  - W&B run started successfully at `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial`
+  - trainer reached `Starting from scratch` and entered the `2000`-step loop
+- Interpretation: despite the very long sequence, the current TPU path is healthy enough to test the full decoded
+  Huffman-event baseline directly.
+- Next action: add the matching `scan_payload_bytes` full trial and monitor both to terminal state.
+
 ### 2026-03-09 11:10 - SWA head-to-head staged
 
 - Hypothesis: the cleanest next comparison is whole-image bytes with `SWA=4096` versus exact-libjpeg `K=8` coefficients with the same `SWA=4096`, shared optimizer settings, and roughly matched tokens per step.
