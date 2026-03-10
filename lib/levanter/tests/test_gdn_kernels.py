@@ -13,6 +13,8 @@ import pytest
 
 from levanter.layers.gated_deltanet import (
     FusedRMSNormGated,
+    _gdn_chunk_fullseq_chunk_starts_from_prepare_associative_xla,
+    _gdn_chunk_fullseq_recurrent_fwd_associative_xla,
     chunk_gated_delta_rule,
     recurrent_gated_delta_rule,
     _rmsnorm_gated_flash,
@@ -156,6 +158,62 @@ def test_flash_chunk_backward_chunk_size_invariance_kernel_level(use_flash: bool
 
     for g8, g32 in zip(grads8, grads32):
         np.testing.assert_allclose(np.array(g8), np.array(g32), rtol=3e-5, atol=3e-5)
+
+
+def test_associative_xla_fullseq_recurrent_can_skip_chunk_start_materialization():
+    key = jax.random.PRNGKey(42)
+    B, H, Nc, Ct, K_pad, V_pad = 1, 2, 3, 4, 8, 8
+    keys = jax.random.split(key, 6)
+    q = jax.random.normal(keys[0], (B, H, Nc, Ct, K_pad), dtype=jnp.float32)
+    k = jax.random.normal(keys[1], (B, H, Nc, Ct, K_pad), dtype=jnp.float32)
+    g_cum = -jnp.abs(jax.random.normal(keys[2], (B, H, Nc, Ct), dtype=jnp.float32))
+    g_cum = jnp.cumsum(g_cum, axis=-1)
+    v_pseudo = jax.random.normal(keys[3], (B, H, Nc, Ct, V_pad), dtype=jnp.float32)
+    k_cumdecay = jax.random.normal(keys[4], (B, H, Nc, Ct, K_pad), dtype=jnp.float32)
+    S0 = jax.random.normal(keys[5], (B, H, K_pad, V_pad), dtype=jnp.float32)
+
+    out_ref, S_ref, chunk_starts = _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
+        q,
+        k,
+        g_cum,
+        v_pseudo,
+        k_cumdecay,
+        S0,
+        N_chunks=Nc,
+        Ct=Ct,
+        K_pad=K_pad,
+        V_pad=V_pad,
+        return_chunk_starts=True,
+    )
+    out_nomaterialize, S_nomaterialize, chunk_starts_none = _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
+        q,
+        k,
+        g_cum,
+        v_pseudo,
+        k_cumdecay,
+        S0,
+        N_chunks=Nc,
+        Ct=Ct,
+        K_pad=K_pad,
+        V_pad=V_pad,
+        return_chunk_starts=False,
+    )
+    rebuilt_chunk_starts = _gdn_chunk_fullseq_chunk_starts_from_prepare_associative_xla(
+        k,
+        g_cum,
+        v_pseudo,
+        k_cumdecay,
+        S0,
+        N_chunks=Nc,
+        Ct=Ct,
+        K_pad=K_pad,
+        V_pad=V_pad,
+    )
+
+    assert chunk_starts_none is None
+    np.testing.assert_allclose(np.array(out_nomaterialize), np.array(out_ref), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.array(S_nomaterialize), np.array(S_ref), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.array(rebuilt_chunk_starts), np.array(chunk_starts), rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.parametrize("use_flash", USE_FLASH_CASES)

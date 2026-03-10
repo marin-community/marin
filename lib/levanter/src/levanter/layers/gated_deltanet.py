@@ -2159,8 +2159,7 @@ def _gdn_chunk_fullseq_recurrent_fwd_pallas(
         return _local_call(q_bhncK, k_bhncK, g_cum_bhnc, v_pseudo_bhncV, k_cumdecay_bhncK, S_prev_bhKV)
 
 
-def _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
-    q_bhncK: jnp.ndarray,
+def _gdn_chunk_fullseq_affine_prefix_summaries_associative_xla(
     k_bhncK: jnp.ndarray,
     g_cum_bhnc: jnp.ndarray,
     v_pseudo_bhncV: jnp.ndarray,
@@ -2171,20 +2170,18 @@ def _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
     Ct: int,
     K_pad: int,
     V_pad: int,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Apply chunk summaries with XLA while keeping chunk-local prep in Pallas."""
-    B, H = q_bhncK.shape[0], q_bhncK.shape[1]
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Build associative prefix summaries for the chunked train shell."""
+    B, H = k_bhncK.shape[0], k_bhncK.shape[1]
     if N_chunks == 0:
-        out_empty = jnp.zeros((B, H, 0, Ct, V_pad), dtype=jnp.float32)
-        starts_empty = jnp.zeros((B, H, 0, K_pad, V_pad), dtype=jnp.float32)
-        return out_empty, S_prev_bhKV.astype(jnp.float32), starts_empty
+        prefix_a_empty = jnp.zeros((B, H, 0, K_pad, K_pad), dtype=jnp.float32)
+        prefix_b_empty = jnp.zeros((B, H, 0, K_pad, V_pad), dtype=jnp.float32)
+        return prefix_a_empty, prefix_b_empty, prefix_a_empty, prefix_b_empty
 
-    q_f = q_bhncK.astype(jnp.float32, copy=False)
     k_f = k_bhncK.astype(jnp.float32, copy=False)
     g_cum_f = g_cum_bhnc.astype(jnp.float32, copy=False)
     v_pseudo_f = v_pseudo_bhncV.astype(jnp.float32, copy=False)
     k_cum_f = k_cumdecay_bhncK.astype(jnp.float32, copy=False)
-    S0 = S_prev_bhKV.astype(jnp.float32, copy=False)
 
     g_tail = g_cum_f[..., -1]
     decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
@@ -2216,21 +2213,126 @@ def _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
     prefix_zero = jnp.zeros((B, H, 1, K_pad, V_pad), dtype=jnp.float32)
     prefix_a_exclusive = jnp.concatenate((prefix_identity, prefix_a[:, :, :-1, :, :]), axis=2)
     prefix_b_exclusive = jnp.concatenate((prefix_zero, prefix_b[:, :, :-1, :, :]), axis=2)
+    return prefix_a_exclusive, prefix_b_exclusive, prefix_a, prefix_b
 
-    chunk_starts = (
+
+def _gdn_chunk_fullseq_chunk_starts_from_prepare_associative_xla(
+    k_bhncK: jnp.ndarray,
+    g_cum_bhnc: jnp.ndarray,
+    v_pseudo_bhncV: jnp.ndarray,
+    k_cumdecay_bhncK: jnp.ndarray,
+    S_prev_bhKV: jnp.ndarray,
+    *,
+    N_chunks: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+) -> jnp.ndarray:
+    """Rebuild full per-chunk start state from raw chunk summaries plus the initial state."""
+    B, H = k_bhncK.shape[0], k_bhncK.shape[1]
+    if N_chunks == 0:
+        return jnp.zeros((B, H, 0, K_pad, V_pad), dtype=jnp.float32)
+
+    prefix_a_exclusive, prefix_b_exclusive, _, _ = _gdn_chunk_fullseq_affine_prefix_summaries_associative_xla(
+        k_bhncK,
+        g_cum_bhnc,
+        v_pseudo_bhncV,
+        k_cumdecay_bhncK,
+        S_prev_bhKV,
+        N_chunks=N_chunks,
+        Ct=Ct,
+        K_pad=K_pad,
+        V_pad=V_pad,
+    )
+    S0 = S_prev_bhKV.astype(jnp.float32, copy=False)
+    return (
         jnp.einsum("bhnij,bhjk->bhnik", prefix_a_exclusive, S0, precision=lax.Precision.HIGHEST) + prefix_b_exclusive
     )
+
+
+def _gdn_chunk_fullseq_recurrent_fwd_associative_xla(
+    q_bhncK: jnp.ndarray,
+    k_bhncK: jnp.ndarray,
+    g_cum_bhnc: jnp.ndarray,
+    v_pseudo_bhncV: jnp.ndarray,
+    k_cumdecay_bhncK: jnp.ndarray,
+    S_prev_bhKV: jnp.ndarray,
+    *,
+    N_chunks: int,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+    return_chunk_starts: bool = True,
+) -> tuple[jnp.ndarray, jnp.ndarray, Optional[jnp.ndarray]]:
+    """Apply chunk summaries with XLA while keeping chunk-local prep in Pallas."""
+    B, H = q_bhncK.shape[0], q_bhncK.shape[1]
+    if N_chunks == 0:
+        out_empty = jnp.zeros((B, H, 0, Ct, V_pad), dtype=jnp.float32)
+        starts_empty = jnp.zeros((B, H, 0, K_pad, V_pad), dtype=jnp.float32) if return_chunk_starts else None
+        return out_empty, S_prev_bhKV.astype(jnp.float32), starts_empty
+
+    q_f = q_bhncK.astype(jnp.float32, copy=False)
+    k_f = k_bhncK.astype(jnp.float32, copy=False)
+    k_cum_f = k_cumdecay_bhncK.astype(jnp.float32, copy=False)
+    S0 = S_prev_bhKV.astype(jnp.float32, copy=False)
+
+    prefix_a_exclusive, prefix_b_exclusive, prefix_a, prefix_b = (
+        _gdn_chunk_fullseq_affine_prefix_summaries_associative_xla(
+            k_bhncK,
+            g_cum_bhnc,
+            v_pseudo_bhncV,
+            k_cumdecay_bhncK,
+            S_prev_bhKV,
+            N_chunks=N_chunks,
+            Ct=Ct,
+            K_pad=K_pad,
+            V_pad=V_pad,
+        )
+    )
+
+    chunk_starts: Optional[jnp.ndarray]
+    if return_chunk_starts:
+        chunk_starts = (
+            jnp.einsum("bhnij,bhjk->bhnik", prefix_a_exclusive, S0, precision=lax.Precision.HIGHEST)
+            + prefix_b_exclusive
+        )
+    else:
+        chunk_starts = None
+
     S_final = (
         jnp.einsum("bhij,bhjk->bhik", prefix_a[:, :, -1, :, :], S0, precision=lax.Precision.HIGHEST)
         + prefix_b[:, :, -1, :, :]
     )
 
+    g_cum_f = g_cum_bhnc.astype(jnp.float32, copy=False)
     g_cum_cl = jnp.clip(g_cum_f, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
     q_scaled = q_f * jnp.exp(g_cum_cl)[..., None]
-    inter = jnp.einsum("bhnck,bhnkv->bhncv", q_scaled, chunk_starts, precision=lax.Precision.HIGHEST)
-
-    v_prime = jnp.einsum("bhnck,bhnkv->bhncv", k_cum_f, chunk_starts, precision=lax.Precision.HIGHEST)
-    v_new = v_pseudo_f - v_prime
+    if chunk_starts is None:
+        inter = jnp.einsum(
+            "bhnck,bhnkj,bhjv->bhncv",
+            q_scaled,
+            prefix_a_exclusive,
+            S0,
+            precision=lax.Precision.HIGHEST,
+        )
+        inter = inter + jnp.einsum("bhnck,bhnkv->bhncv", q_scaled, prefix_b_exclusive, precision=lax.Precision.HIGHEST)
+        v_prime = jnp.einsum(
+            "bhnck,bhnkj,bhjv->bhncv",
+            k_cum_f,
+            prefix_a_exclusive,
+            S0,
+            precision=lax.Precision.HIGHEST,
+        )
+        v_prime = v_prime + jnp.einsum(
+            "bhnck,bhnkv->bhncv",
+            k_cum_f,
+            prefix_b_exclusive,
+            precision=lax.Precision.HIGHEST,
+        )
+    else:
+        inter = jnp.einsum("bhnck,bhnkv->bhncv", q_scaled, chunk_starts, precision=lax.Precision.HIGHEST)
+        v_prime = jnp.einsum("bhnck,bhnkv->bhncv", k_cum_f, chunk_starts, precision=lax.Precision.HIGHEST)
+    v_new = v_pseudo_bhncV.astype(jnp.float32, copy=False) - v_prime
 
     qk = jnp.einsum("bhnik,bhnjk->bhnij", q_f, k_f, precision=lax.Precision.HIGHEST)
     g_row = g_cum_f[..., :, None]
@@ -3309,7 +3411,7 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
     segment_size: int,
     initial_state: Optional[jnp.ndarray],
     return_prepare_tape: Literal[True],
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]: ...
+) -> tuple[jnp.ndarray, jnp.ndarray, Optional[jnp.ndarray], jnp.ndarray, jnp.ndarray, jnp.ndarray]: ...
 
 
 def _chunk_gated_delta_rule_flash_pallas_impl(
@@ -3422,6 +3524,7 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
                 Ct=Ct,
                 K_pad=K_pad,
                 V_pad=V_pad,
+                return_chunk_starts=not return_prepare_tape,
             )
         else:
             out_bhncv, S_final, chunk_starts_bh_all = _gdn_chunk_fullseq_recurrent_fwd_pallas(
@@ -3437,7 +3540,7 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
                 V_pad=V_pad,
             )
 
-        chunk_starts_bh = chunk_starts_bh_all[:, :, :Nc, :, :]
+        chunk_starts_bh = None if chunk_starts_bh_all is None else chunk_starts_bh_all[:, :, :Nc, :, :]
         if return_prepare_tape:
             v_pseudo_bh = v_pseudo_bh_all[:, :, :Nc, :, :]
             k_cumdecay_bh = k_cumdecay_bh_all[:, :, :Nc, :, :]
@@ -3673,15 +3776,6 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
     g_c = g_pad.reshape(B, H, n_chunks_pad, C)
     b_c = b_pad.reshape(B, H, n_chunks_pad, C)
     dO_c = dO_pad.reshape(B, H, n_chunks_pad, C, V_pad)
-    chunk_starts = chunk_starts.astype(jnp.float32)
-    if n_chunks_pad != Nc:
-        if Nc == 0:
-            chunk_starts = jnp.zeros((B, H, n_chunks_pad, K_pad, V_pad), dtype=jnp.float32)
-        else:
-            tail_state = chunk_starts[:, :, -1:, :, :]
-            pad_states = jnp.repeat(tail_state, n_chunks_pad - Nc, axis=2)
-            chunk_starts = jnp.concatenate([chunk_starts, pad_states], axis=2)
-
     # pad Ct if needed
     if Ct != C:
         q_c = jnp.pad(q_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C), (0, 0)))
@@ -3720,6 +3814,32 @@ def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, segment_size: int,
                 (B, H, n_chunks_pad - Nc, Ct, Ct),
             )
             solve_transform_chunks = jnp.concatenate([solve_transform_chunks, eye_chunk], axis=2)
+
+    if chunk_starts is None:
+        if initial_state is None:
+            S0 = jnp.zeros((B, H, K_pad, V_pad), dtype=jnp.float32)
+        else:
+            S0 = _pad_kv_state_bh(initial_state.astype(jnp.float32), K_pad=K_pad, V_pad=V_pad)
+        chunk_starts = _gdn_chunk_fullseq_chunk_starts_from_prepare_associative_xla(
+            k_c,
+            gcum_c,
+            v_pseudo_chunks,
+            k_cumdecay_chunks,
+            S0,
+            N_chunks=n_chunks_pad,
+            Ct=Ct,
+            K_pad=K_pad,
+            V_pad=V_pad,
+        )
+    else:
+        chunk_starts = chunk_starts.astype(jnp.float32)
+        if n_chunks_pad != Nc:
+            if Nc == 0:
+                chunk_starts = jnp.zeros((B, H, n_chunks_pad, K_pad, V_pad), dtype=jnp.float32)
+            else:
+                tail_state = chunk_starts[:, :, -1:, :, :]
+                pad_states = jnp.repeat(tail_state, n_chunks_pad - Nc, axis=2)
+                chunk_starts = jnp.concatenate([chunk_starts, pad_states], axis=2)
 
     dS_next0 = jnp.pad(dS_final, ((0, 0), (0, 0), (0, K_pad - dk), (0, V_pad - dv)))
     use_fullseq_bwd = (K_pad >= _MXU_TILE) and (V_pad >= _MXU_TILE) and (n_chunks_pad > 0)
