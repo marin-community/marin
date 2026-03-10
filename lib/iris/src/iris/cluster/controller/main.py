@@ -12,8 +12,7 @@ from pathlib import Path
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.controller.snapshot import read_snapshot_from_path
-from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
+from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
 from iris.time_utils import Duration
@@ -46,9 +45,9 @@ def cli():
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
 @click.option(
-    "--snapshot-path",
+    "--checkpoint-path",
     default=None,
-    help="Restore from this specific snapshot file instead of the default latest.json",
+    help="Restore from this specific checkpoint DB copy instead of latest.sqlite3",
 )
 @click.option(
     "--checkpoint-interval",
@@ -63,7 +62,7 @@ def serve(
     scheduler_interval: float,
     config_file: str | None,
     log_level: str,
-    snapshot_path: str | None,
+    checkpoint_path: str | None,
     checkpoint_interval: float | None,
 ):
     """Start the Iris controller service.
@@ -162,20 +161,19 @@ def serve(
         logger.exception("Failed to create controller")
         raise click.ClickException(f"Failed to create controller: {e}") from e
 
-    # Restore from a specific snapshot file if requested; otherwise fall back to latest.json.
-    if snapshot_path:
-        logger.info("Restoring from explicit snapshot: %s", snapshot_path)
+    # Restore from a specific checkpoint DB copy if requested; otherwise use latest.sqlite3.
+    if checkpoint_path:
+        logger.info("Restoring from explicit checkpoint DB: %s", checkpoint_path)
         try:
-            proto = read_snapshot_from_path(snapshot_path)
-            if proto is None:
-                raise click.ClickException(f"Snapshot not found: {snapshot_path}")
-            controller.restore_from_snapshot(proto)
-            logger.info("Snapshot restored from %s", snapshot_path)
+            restored = controller.restore_from_checkpoint(checkpoint_path)
+            if not restored:
+                raise click.ClickException(f"Checkpoint DB not found: {checkpoint_path}")
+            logger.info("Checkpoint DB restored from %s", checkpoint_path)
         except Exception as e:
-            logger.exception("Failed to restore snapshot from %s", snapshot_path)
-            raise click.ClickException(f"Failed to restore snapshot: {e}") from e
+            logger.exception("Failed to restore checkpoint DB from %s", checkpoint_path)
+            raise click.ClickException(f"Failed to restore checkpoint DB: {e}") from e
     else:
-        controller.restore_from_snapshot()
+        controller.restore_from_checkpoint()
 
     try:
         controller.start()

@@ -219,7 +219,7 @@ def cluster(ctx):
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.option(
-    "--bundle-prefix", default=None, help="Override bundle/snapshot storage prefix (e.g. file:///tmp/iris-bundles)"
+    "--bundle-prefix", default=None, help="Override bundle/checkpoint storage prefix (e.g. file:///tmp/iris-bundles)"
 )
 @click.pass_context
 def cluster_start(ctx, local: bool, bundle_prefix: str | None):
@@ -469,7 +469,7 @@ def controller_checkpoint(ctx, stop: bool):
     """Take a checkpoint of the controller state.
 
     Calls BeginCheckpoint on the running controller, which pauses scheduling
-    briefly and writes a consistent snapshot to storage.
+    briefly and writes a consistent checkpoint DB copy.
     """
     controller_url = require_controller_url(ctx)
     client = cluster_connect.ControllerServiceClientSync(controller_url)
@@ -479,7 +479,7 @@ def controller_checkpoint(ctx, stop: bool):
         click.echo(f"Checkpoint failed: {e}", err=True)
         raise SystemExit(1) from e
 
-    click.echo(f"Snapshot written: {resp.snapshot_path}")
+    click.echo(f"Checkpoint DB written: {resp.checkpoint_path}")
     click.echo(f"  Jobs:    {resp.job_count}")
     click.echo(f"  Tasks:   {resp.task_count}")
     click.echo(f"  Workers: {resp.worker_count}")
@@ -503,7 +503,7 @@ def controller_checkpoint(ctx, stop: bool):
 
 
 @controller.command("restart")
-@click.option("--bundle-prefix", default=None, help="Override bundle/snapshot storage prefix (e.g. gs://bucket/path)")
+@click.option("--bundle-prefix", default=None, help="Override bundle/checkpoint storage prefix (e.g. gs://bucket/path)")
 @click.pass_context
 def controller_restart(ctx, bundle_prefix: str | None):
     """Restart controller with state preservation (remote platforms only).
@@ -537,7 +537,7 @@ def controller_restart(ctx, bundle_prefix: str | None):
         raise SystemExit(1) from e
     finally:
         client.close()
-    click.echo(f"Checkpoint: {resp.snapshot_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+    click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
     # Build fresh images so the new controller VM gets the latest code
     _pin_latest_images(config)

@@ -6,17 +6,15 @@
 import time
 
 import pytest
-from iris.cluster.controller.events import (
-    JobSubmittedEvent,
-    TaskAssignedEvent,
-    TaskStateChangedEvent,
-    WorkerRegisteredEvent,
-)
-from iris.cluster.controller.state import (
-    ControllerState,
+from iris.cluster.controller.db import TASKS, WORKERS
+from iris.cluster.controller.transitions import (
+    Assignment,
+    ControllerTransitions,
     HeartbeatAction,
+    HeartbeatApplyRequest,
     HeartbeatSnapshot,
     RunningTaskEntry,
+    TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
@@ -25,7 +23,7 @@ from iris.time_utils import Duration, Timestamp
 
 @pytest.fixture
 def state():
-    return ControllerState()
+    return ControllerTransitions()
 
 
 @pytest.fixture
@@ -40,19 +38,15 @@ def worker_metadata():
 
 
 def _register_worker(state, worker_id, worker_metadata, address="host:8080"):
-    """Helper: register a worker with the state."""
-    state.handle_event(
-        WorkerRegisteredEvent(
-            worker_id=WorkerId(worker_id),
-            address=address,
-            metadata=worker_metadata,
-            timestamp=Timestamp.now(),
-        )
+    state.register_or_refresh_worker(
+        worker_id=WorkerId(worker_id),
+        address=address,
+        metadata=worker_metadata,
+        ts=Timestamp.now(),
     )
 
 
 def _make_snapshot(worker_id, address="host:8080", running_tasks=None):
-    """Helper: create a HeartbeatSnapshot."""
     return HeartbeatSnapshot(
         worker_id=WorkerId(worker_id),
         worker_address=address,
@@ -64,20 +58,26 @@ def _make_snapshot(worker_id, address="host:8080", running_tasks=None):
 
 
 def test_worker_heartbeat_expired_check(state, worker_metadata):
-    """Test that ControllerWorker.is_heartbeat_expired detects expired heartbeats."""
-    _register_worker(state, "worker1", worker_metadata)
+    """Test heartbeat expiration checks against worker row last_heartbeat."""
+    state.register_or_refresh_worker(
+        worker_id=WorkerId("worker1"),
+        address="host:8080",
+        metadata=worker_metadata,
+        ts=Timestamp.now(),
+    )
 
-    workers = list(state.list_all_workers())
+    with state._db.snapshot() as q:
+        workers = q.select(WORKERS)
     worker = workers[0]
 
     # Short timeout should not expire immediately
     short_timeout = Duration.from_seconds(10.0)
-    assert not worker.is_heartbeat_expired(short_timeout)
+    assert worker.last_heartbeat.age_ms() < short_timeout.to_ms()
 
     # Very short timeout might expire after a brief sleep
     very_short_timeout = Duration.from_ms(1)
     time.sleep(0.01)  # 10ms
-    assert worker.is_heartbeat_expired(very_short_timeout)
+    assert worker.last_heartbeat.age_ms() > very_short_timeout.to_ms()
 
 
 def test_complete_heartbeat_success(state, worker_metadata):
@@ -86,10 +86,12 @@ def test_complete_heartbeat_success(state, worker_metadata):
     snapshot = _make_snapshot("worker1")
 
     response = cluster_pb2.HeartbeatResponse(worker_healthy=True)
-    action = state.complete_heartbeat(snapshot, response)
+    result = state.complete_heartbeat(snapshot, response)
 
-    assert action == HeartbeatAction.OK
-    worker = state.get_worker(WorkerId("worker1"))
+    assert result.action == HeartbeatAction.OK
+
+    with state._db.snapshot() as q:
+        worker = q.one(WORKERS, where=WORKERS.c.worker_id == "worker1")
     assert worker is not None
     assert worker.healthy
 
@@ -102,29 +104,27 @@ def test_fail_heartbeat_below_threshold(state, worker_metadata):
     action = state.fail_heartbeat(snapshot, "connection refused")
     assert action == HeartbeatAction.TRANSIENT_FAILURE
 
-    worker = state.get_worker(WorkerId("worker1"))
+    with state._db.snapshot() as q:
+        worker = q.one(WORKERS, where=WORKERS.c.worker_id == "worker1")
     assert worker is not None
     assert worker.consecutive_failures == 1
 
 
-def test_fail_heartbeat_at_threshold(state, worker_metadata):
+def test_fail_heartbeat_at_threshold(worker_metadata):
     """RPC failures at threshold return WORKER_FAILED and prune the worker."""
-    state_with_threshold = ControllerState(heartbeat_failure_threshold=3)
-    _register_worker(state_with_threshold, "worker1", worker_metadata)
+    state = ControllerTransitions(heartbeat_failure_threshold=3)
+    _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
-    # First two failures are transient
     for _i in range(2):
-        action = state_with_threshold.fail_heartbeat(snapshot, "timeout")
+        action = state.fail_heartbeat(snapshot, "timeout")
         assert action == HeartbeatAction.TRANSIENT_FAILURE
 
-    # Third failure exceeds the threshold
-    action = state_with_threshold.fail_heartbeat(snapshot, "timeout")
+    action = state.fail_heartbeat(snapshot, "timeout")
     assert action == HeartbeatAction.WORKER_FAILED
 
-    # Worker should be pruned from state
-    worker = state_with_threshold.get_worker(WorkerId("worker1"))
-    assert worker is None
+    with state._db.snapshot() as q:
+        assert not q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
 
 
 def test_complete_heartbeat_unhealthy_worker(state, worker_metadata):
@@ -136,41 +136,42 @@ def test_complete_heartbeat_unhealthy_worker(state, worker_metadata):
         worker_healthy=False,
         health_error="disk free space 2.1% below threshold 5%",
     )
-    action = state.complete_heartbeat(snapshot, response)
+    result = state.complete_heartbeat(snapshot, response)
 
-    assert action == HeartbeatAction.WORKER_FAILED
-    # Worker should be pruned from state
-    worker = state.get_worker(WorkerId("worker1"))
-    assert worker is None
+    assert result.action == HeartbeatAction.WORKER_FAILED
+    with state._db.snapshot() as q:
+        assert not q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
 
 
 def test_unhealthy_worker_cascades_to_tasks(state, worker_metadata):
     """An unhealthy worker's running tasks are marked WORKER_FAILED."""
     _register_worker(state, "worker1", worker_metadata)
 
-    # Submit and dispatch a job/task to the worker
     job_id = JobName.from_wire("/user/test-job")
-    state.handle_event(
-        JobSubmittedEvent(
-            job_id=job_id,
-            request=cluster_pb2.Controller.LaunchJobRequest(
-                name="/user/test-job",
-                replicas=1,
-            ),
-            timestamp=Timestamp.now(),
-        )
+    state.submit_job(
+        job_id,
+        cluster_pb2.Controller.LaunchJobRequest(
+            name="/user/test-job",
+            replicas=1,
+        ),
+        Timestamp.now(),
     )
     task_id = job_id.task(0)
-    state.handle_event(TaskAssignedEvent(task_id=task_id, worker_id=WorkerId("worker1")))
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=task_id,
-            new_state=cluster_pb2.TASK_STATE_RUNNING,
-            attempt_id=0,
+    state.queue_assignments([Assignment(task_id=task_id, worker_id=WorkerId("worker1"))])
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=WorkerId("worker1"),
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=0,
+                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                )
+            ],
         )
     )
 
-    # Now report unhealthy heartbeat via complete_heartbeat
     snapshot = _make_snapshot("worker1", running_tasks=[RunningTaskEntry(task_id, 0)])
     response = cluster_pb2.HeartbeatResponse(
         worker_healthy=False,
@@ -183,10 +184,10 @@ def test_unhealthy_worker_cascades_to_tasks(state, worker_metadata):
             )
         ],
     )
-    action = state.complete_heartbeat(snapshot, response)
-    assert action == HeartbeatAction.WORKER_FAILED
+    result = state.complete_heartbeat(snapshot, response)
+    assert result.action == HeartbeatAction.WORKER_FAILED
 
-    # Task should be marked WORKER_FAILED
-    task = state.get_task(task_id)
+    with state._db.snapshot() as q:
+        task = q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
     assert task is not None
     assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED

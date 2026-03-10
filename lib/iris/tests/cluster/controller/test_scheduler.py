@@ -10,18 +10,26 @@ modify state, or run threads.
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute, constraints_from_resources
-from iris.cluster.controller.events import (
-    JobSubmittedEvent,
-    TaskAssignedEvent,
-    TaskStateChangedEvent,
-    WorkerRegisteredEvent,
-)
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
     SchedulingResult,
 )
-from iris.cluster.controller.state import ControllerState, ControllerTask
+
+from iris.cluster.controller.db import (
+    ATTEMPTS,
+    JOBS,
+    TASKS,
+    TERMINAL_TASK_STATES,
+    WORKERS,
+    WORKER_ATTRIBUTES,
+    Job,
+    Task,
+    Worker,
+    _decode_attribute_rows,
+    _tasks_with_attempts,
+)
+from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2
@@ -36,7 +44,7 @@ def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
 
 
 def _job_requirements_from_job(job) -> JobRequirements:
-    """Convert a ControllerJob to JobRequirements for testing."""
+    """Convert a job row to JobRequirements for testing."""
     return JobRequirements(
         resources=job.request.resources,
         constraints=list(job.request.constraints),
@@ -45,26 +53,132 @@ def _job_requirements_from_job(job) -> JobRequirements:
     )
 
 
+def _schedulable_tasks(state: ControllerTransitions):
+    with state.db.snapshot() as q:
+        tasks = q.select(
+            TASKS,
+            where=TASKS.c.state.not_null() & ~TASKS.c.state.in_(list(TERMINAL_TASK_STATES)),
+            order_by=(
+                TASKS.c.priority_neg_depth.asc(),
+                TASKS.c.priority_root_submitted_ms.asc(),
+                TASKS.c.submitted_at_ms.asc(),
+                TASKS.c.task_id.asc(),
+            ),
+        )
+    return [t for t in tasks if t.can_be_scheduled()]
+
+
+def _worker_capacities(state: ControllerTransitions):
+    from dataclasses import replace as _replace
+
+    with state.db.snapshot() as q:
+        workers = q.select(WORKERS, where=(WORKERS.c.healthy == 1) & (WORKERS.c.active == 1))
+        if not workers:
+            return []
+        attrs = q.select(
+            WORKER_ATTRIBUTES,
+            columns=(
+                WORKER_ATTRIBUTES.c.worker_id,
+                WORKER_ATTRIBUTES.c.key,
+                WORKER_ATTRIBUTES.c.value_type,
+                WORKER_ATTRIBUTES.c.str_value,
+                WORKER_ATTRIBUTES.c.int_value,
+                WORKER_ATTRIBUTES.c.float_value,
+            ),
+            where=WORKER_ATTRIBUTES.c.worker_id.in_([str(w.worker_id) for w in workers]),
+        )
+    attrs_by_worker = _decode_attribute_rows(attrs)
+    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+
+
+def _building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
+    with state.db.snapshot() as snapshot:
+        rows = snapshot.raw(
+            "SELECT a.worker_id, COUNT(*) as c FROM tasks t "
+            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+            "JOIN jobs j ON t.job_id = j.job_id "
+            "WHERE t.state IN (?, ?) AND j.is_reservation_holder = 0 "
+            "GROUP BY a.worker_id ORDER BY a.worker_id ASC",
+            (
+                cluster_pb2.TASK_STATE_BUILDING,
+                cluster_pb2.TASK_STATE_ASSIGNED,
+            ),
+            decoders={"worker_id": WorkerId, "c": int},
+        )
+    return {row.worker_id: row.c for row in rows}
+
+
+def _task_by_id_with_attempts(state: ControllerTransitions, task_id: JobName) -> Task | None:
+    wire = task_id.to_wire()
+    with state.db.snapshot() as q:
+        tasks = q.select(TASKS, where=TASKS.c.task_id == wire)
+        attempts = q.select(
+            ATTEMPTS,
+            where=ATTEMPTS.c.task_id == wire,
+            order_by=(ATTEMPTS.c.attempt_id.asc(),),
+        )
+    hydrated = _tasks_with_attempts(tasks, attempts)
+    return hydrated[0] if hydrated else None
+
+
+def _query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
+    with state.db.snapshot() as q:
+        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+
+
+def _query_task(state: ControllerTransitions, task_id: JobName) -> Task | None:
+    with state.db.snapshot() as q:
+        return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
+
+
+def _query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
+    with state.db.snapshot() as q:
+        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+
+
+def _query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[Task]:
+    with state.db.snapshot() as q:
+        return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
+
+
+def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
+    with state.db.snapshot() as q:
+        rows = q.select(
+            WORKER_ATTRIBUTES,
+            columns=(
+                WORKER_ATTRIBUTES.c.worker_id,
+                WORKER_ATTRIBUTES.c.key,
+                WORKER_ATTRIBUTES.c.value_type,
+                WORKER_ATTRIBUTES.c.str_value,
+                WORKER_ATTRIBUTES.c.int_value,
+                WORKER_ATTRIBUTES.c.float_value,
+            ),
+            where=(WORKER_ATTRIBUTES.c.worker_id == str(worker_id)) & (WORKER_ATTRIBUTES.c.key == key),
+        )
+    if not rows:
+        return None
+    attrs = _decode_attribute_rows(rows)
+    return attrs.get(worker_id, {}).get(key)
+
+
 # =============================================================================
-# Event-Based Test Helpers
+# Command/Query Test Helpers
 # =============================================================================
 
 
 def register_worker(
-    state: ControllerState,
+    state: ControllerTransitions,
     worker_id: str,
     address: str,
     metadata: cluster_pb2.WorkerMetadata,
 ) -> WorkerId:
-    """Register a worker via event."""
+    """Register a worker via state command API."""
     wid = WorkerId(worker_id)
-    state.handle_event(
-        WorkerRegisteredEvent(
-            worker_id=wid,
-            address=address,
-            metadata=metadata,
-            timestamp=Timestamp.now(),
-        )
+    state.register_or_refresh_worker(
+        worker_id=wid,
+        address=address,
+        metadata=metadata,
+        ts=Timestamp.now(),
     )
     return wid
 
@@ -89,51 +203,67 @@ def _inject_device_constraints(request: cluster_pb2.Controller.LaunchJobRequest)
 
 
 def submit_job(
-    state: ControllerState,
+    state: ControllerTransitions,
     job_id: str,
     request: cluster_pb2.Controller.LaunchJobRequest,
     timestamp_ms: int | None = None,
-) -> list[ControllerTask]:
-    """Submit a job via event and return created tasks."""
+) -> list:
+    """Submit a job and return created task rows."""
     _inject_device_constraints(request)
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    state.handle_event(
-        JobSubmittedEvent(
-            job_id=jid,
-            request=request,
-            timestamp=Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
+    state.submit_job(
+        jid,
+        request,
+        Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
+    )
+    return _query_tasks_for_job(state, jid)
+
+
+def assign_task_to_worker(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
+    """Assign a task to a worker via command API."""
+    state.queue_assignments([Assignment(task_id=task.task_id, worker_id=worker_id)])
+
+
+def transition_task_to_running(state: ControllerTransitions, task) -> None:
+    """Transition a task to RUNNING state via heartbeat update command."""
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=task.worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=task.current_attempt_id,
+                    new_state=cluster_pb2.TASK_STATE_RUNNING,
+                )
+            ],
         )
     )
-    return state.get_job_tasks(jid)
 
 
-def assign_task_to_worker(state: ControllerState, task: ControllerTask, worker_id: WorkerId) -> None:
-    """Assign a task to a worker via event."""
-    state.handle_event(
-        TaskAssignedEvent(
-            task_id=task.task_id,
-            worker_id=worker_id,
-        )
-    )
-
-
-def transition_task_to_running(state: ControllerState, task: ControllerTask) -> None:
-    """Transition a task to RUNNING state via event."""
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=task.task_id,
-            new_state=cluster_pb2.TASK_STATE_RUNNING,
-            attempt_id=task.current_attempt_id,
+def transition_task_to_state(state: ControllerTransitions, task, new_state: int) -> None:
+    """Transition a task attempt to an arbitrary state via heartbeat update command."""
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
+            worker_id=task.worker_id,
+            worker_resource_snapshot=None,
+            updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=task.current_attempt_id,
+                    new_state=new_state,
+                )
+            ],
         )
     )
 
 
 def _build_context(scheduler, state):
     """Build a SchedulingContext from state, including pending tasks and job requirements."""
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-    building_counts = state.snapshot_building_counts()
+    pending_tasks = _schedulable_tasks(state)
+    workers = [w for w in _worker_capacities(state) if w.healthy]
+    building_counts = _building_counts(state)
 
     # Build task IDs and job requirements from pending tasks
     task_ids = []
@@ -143,7 +273,7 @@ def _build_context(scheduler, state):
             continue
         task_ids.append(task.task_id)
         if task.job_id not in jobs:
-            job = state.get_job(task.job_id)
+            job = _query_job(state, task.job_id)
             if job:
                 jobs[task.job_id] = _job_requirements_from_job(job)
 
@@ -157,7 +287,7 @@ def _build_context(scheduler, state):
 
 def schedule_until_done(
     scheduler: Scheduler,
-    state: ControllerState,
+    state: ControllerTransitions,
     max_cycles: int = 100,
 ) -> SchedulingResult:
     """Drive the scheduler until no more tasks can be assigned.
@@ -181,7 +311,7 @@ def schedule_until_done(
         all_assignments.extend(result.assignments)
 
         for task_id, worker_id in result.assignments:
-            task = state.get_task(task_id)
+            task = _query_task(state, task_id)
             if task:
                 assign_task_to_worker(state, task, worker_id)
 
@@ -312,8 +442,8 @@ def worker_metadata():
 
 @pytest.fixture
 def state():
-    """Create a fresh ControllerState for each test."""
-    return ControllerState()
+    """Create a fresh ControllerTransitions for each test."""
+    return ControllerTransitions()
 
 
 @pytest.fixture
@@ -408,9 +538,7 @@ def test_scheduler_detects_timed_out_tasks(state, worker_metadata):
     before calling find_assignments. This test verifies the overall behavior
     by testing the controller-level flow.
     """
-    import time
-
-    from iris.time_utils import Deadline, Duration
+    from iris.time_utils import Duration
 
     register_worker(state, "w1", "addr", worker_metadata(cpu=2))
 
@@ -425,12 +553,14 @@ def test_scheduler_detects_timed_out_tasks(state, worker_metadata):
     request.scheduling_timeout.CopyFrom(Duration.from_seconds(1).to_proto())
     tasks = submit_job(state, "j1", request)
 
-    # Manually set the deadline to 2 seconds ago (using monotonic time)
-    job = state.get_job(JobName.root("test-user", "j1"))
-    job.scheduling_deadline = Deadline(time.monotonic() - 2.0)
+    # Manually set deadline epoch to past timestamp in DB.
+    state._db.execute(
+        "UPDATE jobs SET scheduling_deadline_epoch_ms = ? WHERE job_id = ?",
+        (Timestamp.now().epoch_ms() - 2000, JobName.root("test-user", "j1").to_wire()),
+    )
 
     # When building context, the timed-out task should be filtered out
-    pending_tasks = state.peek_pending_tasks()
+    pending_tasks = _schedulable_tasks(state)
 
     # Simulate controller-level timeout filtering
     schedulable_task_ids = []
@@ -439,8 +569,12 @@ def test_scheduler_detects_timed_out_tasks(state, worker_metadata):
     for task in pending_tasks:
         if not task.can_be_scheduled():
             continue
-        j = state.get_job(task.job_id)
-        if j and j.scheduling_deadline is not None and j.scheduling_deadline.expired():
+        j = _query_job(state, task.job_id)
+        if (
+            j
+            and j.scheduling_deadline_epoch_ms is not None
+            and j.scheduling_deadline_epoch_ms <= Timestamp.now().epoch_ms()
+        ):
             timed_out_tasks.append(task)
             continue
         schedulable_task_ids.append(task.task_id)
@@ -490,7 +624,7 @@ def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state,
     assert len(result.assignments) == 2
 
     # Third task still pending
-    pending = state.peek_pending_tasks()
+    pending = _schedulable_tasks(state)
     assert len(pending) == 1
 
 
@@ -499,8 +633,7 @@ def test_scheduler_skips_unhealthy_workers(scheduler, state, job_request, worker
     register_worker(state, "w1", "addr1", worker_metadata())
     register_worker(state, "w2", "addr2", worker_metadata())
     # Mark second worker as unhealthy
-    unhealthy_worker = state.get_worker(WorkerId("w2"))
-    unhealthy_worker.healthy = False
+    state.set_worker_health_for_test(WorkerId("w2"), False)
 
     submit_job(state, "j1", job_request())
 
@@ -910,12 +1043,12 @@ def test_coscheduled_job_assigns_all_tasks_atomically(scheduler, state, worker_m
     assigned_worker_ids = {worker_id for _, worker_id in result.assignments}
     # Verify all workers are in the tpu-a group
     for worker_id in assigned_worker_ids:
-        worker = state.get_worker(worker_id)
-        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-a"
+        attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_NAME)
+        assert attr is not None and attr.value == "tpu-a"
 
     # Tasks assigned in order: task-0 -> worker-0, task-1 -> worker-1, etc.
     for task_id, worker_id in result.assignments:
-        task = state.get_task(task_id)
+        task = _query_task(state, task_id)
         expected_worker_id = f"w{task.task_index}"
         assert worker_id == WorkerId(expected_worker_id)
 
@@ -967,7 +1100,7 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     submit_job(state, "busy", busy_req)
 
     # Assign the busy job's tasks to wa0 and wa1
-    busy_tasks = state.get_job_tasks(JobName.root("test-user", "busy"))
+    busy_tasks = _query_tasks_for_job(state, JobName.root("test-user", "busy"))
     assign_task_to_worker(state, busy_tasks[0], WorkerId("wa0"))
     assign_task_to_worker(state, busy_tasks[1], WorkerId("wa1"))
     transition_task_to_running(state, busy_tasks[0])
@@ -997,8 +1130,8 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     # Job should be assigned to tpu-b (has 4 free workers)
     assert len(result.assignments) == 4
     for _, worker_id in result.assignments:
-        worker = state.get_worker(worker_id)
-        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-b"
+        attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_NAME)
+        assert attr is not None and attr.value == "tpu-b"
 
 
 def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadata):
@@ -1029,9 +1162,10 @@ def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadat
 
     # Verify task-0 -> worker with tpu-worker-id=0, task-1 -> worker with tpu-worker-id=1, etc.
     for task_id, worker_id in result.assignments:
-        task = state.get_task(task_id)
-        worker = state.get_worker(worker_id)
-        worker_tpu_id = worker.attributes[WellKnownAttribute.TPU_WORKER_ID].value
+        task = _query_task(state, task_id)
+        attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_WORKER_ID)
+        assert attr is not None
+        worker_tpu_id = attr.value
         assert (
             task.task_index == worker_tpu_id
         ), f"Task {task.task_index} assigned to worker with tpu-worker-id={worker_tpu_id}"
@@ -1076,8 +1210,8 @@ def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
     # Should be assigned to tpu-b (only group matching region=us-east)
     assert len(result.assignments) == 4
     for _, worker_id in result.assignments:
-        worker = state.get_worker(worker_id)
-        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-b"
+        attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_NAME)
+        assert attr is not None and attr.value == "tpu-b"
 
 
 def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata):
@@ -1121,8 +1255,8 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
     # All 4 tasks should now be assigned to tpu-b
     assert len(result.assignments) == 4
     for _, worker_id in result.assignments:
-        worker = state.get_worker(worker_id)
-        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-b"
+        attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_NAME)
+        assert attr is not None and attr.value == "tpu-b"
 
 
 # =============================================================================
@@ -1168,8 +1302,8 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
     # All 4 tasks should be assigned to tpu-b (tpu-a has a tainted worker)
     assert len(result.assignments) == 4
     for _, worker_id in result.assignments:
-        worker = state.get_worker(worker_id)
-        assert worker.attributes[WellKnownAttribute.TPU_NAME].value == "tpu-b"
+        attr = _worker_attr(state, worker_id, WellKnownAttribute.TPU_NAME)
+        assert attr is not None and attr.value == "tpu-b"
 
 
 # =============================================================================
@@ -1296,12 +1430,8 @@ def test_tpu_count_released_after_task_completion(scheduler, state, worker_metad
     assert len(result.assignments) == 0
 
     # Complete first task
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=tasks1[0].task_id,
-            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
-            attempt_id=tasks1[0].current_attempt_id,
-        )
+    transition_task_to_state(
+        state, _task_by_id_with_attempts(state, tasks1[0].task_id), cluster_pb2.TASK_STATE_SUCCEEDED
     )
 
     # Now second job can be scheduled
@@ -1432,12 +1562,14 @@ def test_scheduler_reports_device_variant_mismatch(scheduler, state, worker_meta
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(state.get_available_workers())
-    job = state.get_job(tasks[0].job_id)
+    context = scheduler.create_scheduling_context(_worker_capacities(state))
+    job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
-    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    schedulable_task_id = next(
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+    )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
-        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+        job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
     )
 
     # Constraint-based matching: the device-variant constraint key is reported
@@ -1467,12 +1599,14 @@ def test_scheduler_reports_tpu_count_exceeded(scheduler, state, worker_metadata)
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(state.get_available_workers())
-    job = state.get_job(tasks[0].job_id)
+    context = scheduler.create_scheduling_context(_worker_capacities(state))
+    job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
-    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    schedulable_task_id = next(
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+    )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
-        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+        job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
     )
 
     assert "tpu" in diagnostics.lower()
@@ -1501,12 +1635,14 @@ def test_scheduler_reports_device_type_mismatch(scheduler, state, worker_metadat
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(state.get_available_workers())
-    job = state.get_job(tasks[0].job_id)
+    context = scheduler.create_scheduling_context(_worker_capacities(state))
+    job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
-    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    schedulable_task_id = next(
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+    )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
-        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+        job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
     )
 
     # Constraint-based matching: the device-type constraint is in the diagnostic
@@ -1536,12 +1672,14 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state, worke
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(state.get_available_workers())
-    job = state.get_job(tasks[0].job_id)
+    context = scheduler.create_scheduling_context(_worker_capacities(state))
+    job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
-    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    schedulable_task_id = next(
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+    )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
-        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+        job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
     )
 
     # Should mention it's a coscheduling issue with capacity details
@@ -1555,12 +1693,14 @@ def test_diagnostics_for_schedulable_job_does_not_say_unknown_failure(scheduler,
     register_worker(state, "w1", "addr1", worker_metadata())
     tasks = submit_job(state, "j1", job_request())
 
-    context = scheduler.create_scheduling_context(state.get_available_workers())
-    job = state.get_job(tasks[0].job_id)
+    context = scheduler.create_scheduling_context(_worker_capacities(state))
+    job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
-    schedulable_task_id = next((t.task_id for t in state.get_job_tasks(job.job_id) if t.can_be_scheduled()), None)
+    schedulable_task_id = next(
+        (t.task_id for t in _query_tasks_for_job(state, job.job_id) if t.can_be_scheduled()), None
+    )
     diagnostics = scheduler.get_job_scheduling_diagnostics(
-        job_req, context, schedulable_task_id, num_tasks=len(state.get_job_tasks(job.job_id))
+        job_req, context, schedulable_task_id, num_tasks=len(_query_tasks_for_job(state, job.job_id))
     )
 
     assert "unknown" not in diagnostics.lower()
@@ -1617,13 +1757,7 @@ def test_coscheduled_tpu_jobs_cannot_double_book_group(scheduler, state, worker_
 
     # Complete all job 1 tasks
     for task in tasks1:
-        state.handle_event(
-            TaskStateChangedEvent(
-                task_id=task.task_id,
-                new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
-                attempt_id=task.current_attempt_id,
-            )
-        )
+        transition_task_to_state(state, _task_by_id_with_attempts(state, task.task_id), cluster_pb2.TASK_STATE_SUCCEEDED)
 
     # Job 2 should now be schedulable
     result3 = schedule_until_done(scheduler, state)
@@ -1693,7 +1827,7 @@ def test_mixed_variant_cluster_schedules_all_matching_jobs(scheduler, state, wor
     for task_id, worker_id in result.assignments:
         # The job name encodes the variant it targets; the worker should match
         expected_variant = str(task_id.parent).split("job-")[1]
-        worker = state.get_worker(worker_id)
+        worker = _query_worker(state, worker_id)
         assert worker.device_variant == expected_variant
 
 
@@ -1770,7 +1904,7 @@ def test_multiple_jobs_across_variants_in_single_cycle(scheduler, state, worker_
     assert len(result.assignments) == 3
     assigned_variants = set()
     for _, worker_id in result.assignments:
-        worker = state.get_worker(worker_id)
+        worker = _query_worker(state, worker_id)
         assigned_variants.add(worker.device_variant)
     assert assigned_variants == {"v5litepod-4", "v5litepod-16", "v5litepod-32"}
 
@@ -1841,9 +1975,9 @@ def test_many_jobs_on_single_variant_all_scheduled(state, worker_metadata):
 
     assert len(result.assignments) == num_jobs, (
         f"Expected all {num_jobs} jobs scheduled, got {len(result.assignments)}. "
-        f"Remaining pending: {len(state.peek_pending_tasks())}"
+        f"Remaining pending: {len(_schedulable_tasks(state))}"
     )
-    assert len(state.peek_pending_tasks()) == 0
+    assert len(_schedulable_tasks(state)) == 0
 
 
 def test_mixed_variant_cluster_many_jobs_all_scheduled(state, worker_metadata):
@@ -1888,14 +2022,14 @@ def test_mixed_variant_cluster_many_jobs_all_scheduled(state, worker_metadata):
 
     assert len(result.assignments) == total_jobs, (
         f"Expected all {total_jobs} jobs scheduled, got {len(result.assignments)}. "
-        f"Remaining pending: {len(state.peek_pending_tasks())}"
+        f"Remaining pending: {len(_schedulable_tasks(state))}"
     )
-    assert len(state.peek_pending_tasks()) == 0
+    assert len(_schedulable_tasks(state)) == 0
 
     # Verify each job landed on a worker with the correct variant
     for task_id, worker_id in result.assignments:
         job_name = str(task_id.parent)
-        worker = state.get_worker(worker_id)
+        worker = _query_worker(state, worker_id)
         if "v5litepod-4" in job_name:
             assert (
                 worker.device_variant == "v5litepod-4"
@@ -1934,9 +2068,9 @@ def test_gpu_job_matches_worker_with_config_variant(scheduler, state, worker_met
     tasks = submit_job(state, "j1", req)
 
     context = scheduler.create_scheduling_context(
-        state.get_available_workers(),
+        _worker_capacities(state),
         pending_tasks=[t.task_id for t in tasks],
-        jobs={tasks[0].job_id: _job_requirements_from_job(state.get_job(tasks[0].job_id))},
+        jobs={tasks[0].job_id: _job_requirements_from_job(_query_job(state, tasks[0].job_id))},
     )
     result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1, f"Expected 1 assignment, got {len(result.assignments)}"
