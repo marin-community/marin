@@ -87,6 +87,17 @@ V0_WHOLE_IMAGE_BYTE_CONFIG = WholeImageByteTokenizerConfig()
 
 
 @dataclass(frozen=True)
+class HuffmanEventTokenizerConfig:
+    """Frozen V0 defaults for a split JPEG entropy-event stream."""
+
+    dc_bound: int = 2047
+    ac_bound: int = 1023
+    quality: int = 95
+    source: CoefficientTokenSource = CoefficientTokenSource.LIBJPEG
+    version: str = "v0"
+
+
+@dataclass(frozen=True)
 class SymbolTokenizerConfig:
     """Frozen V0 defaults for the symbol-stream baseline."""
 
@@ -107,6 +118,7 @@ class CanonicalJpegRepresentation:
 
 
 V0_SYMBOL_CONFIG = SymbolTokenizerConfig()
+V0_HUFFMAN_EVENT_CONFIG = HuffmanEventTokenizerConfig()
 
 _JPEG_LUMA_QUANT_TABLE = np.asarray(
     [
@@ -217,6 +229,16 @@ def whole_image_byte_vocab_size(config: WholeImageByteTokenizerConfig = V0_WHOLE
     return max(config.eos_token_id, config.pad_token_id) + 1
 
 
+def huffman_event_vocab_size(config: HuffmanEventTokenizerConfig = V0_HUFFMAN_EVENT_CONFIG) -> int:
+    """Return the explicit vocabulary size for split JPEG entropy events."""
+
+    max_dc_category = config.dc_bound.bit_length()
+    max_ac_category = config.ac_bound.bit_length()
+    event_vocab = 2 + (max_dc_category + 1) + (16 * max_ac_category)
+    amplitude_vocab = 1 << max_dc_category
+    return event_vocab + amplitude_vocab
+
+
 def symbol_vocab_size(config: SymbolTokenizerConfig = V0_SYMBOL_CONFIG) -> int:
     """Return the explicit bounded symbol vocabulary size."""
 
@@ -273,6 +295,67 @@ def encode_jpeg_bytes(canonical_jpeg: CanonicalJpegRepresentation | bytes) -> np
     if isinstance(canonical_jpeg, CanonicalJpegRepresentation):
         canonical_jpeg = canonical_jpeg.jpeg_bytes
     return np.frombuffer(canonical_jpeg, dtype=np.uint8).astype(np.int32, copy=False)
+
+
+def extract_jpeg_scan_payload(canonical_jpeg: CanonicalJpegRepresentation | bytes) -> bytes:
+    """Return only the entropy-coded scan payload bytes from a canonical JPEG stream."""
+
+    if isinstance(canonical_jpeg, CanonicalJpegRepresentation):
+        canonical_jpeg = canonical_jpeg.jpeg_bytes
+    data = canonical_jpeg
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        raise ValueError("Expected a JPEG stream starting with SOI")
+
+    payload = bytearray()
+    position = 2
+    while position < len(data):
+        if data[position] != 0xFF:
+            raise ValueError(f"Expected marker prefix at offset {position}, found {data[position]:#x}")
+        while position < len(data) and data[position] == 0xFF:
+            position += 1
+        if position >= len(data):
+            break
+        marker = data[position]
+        position += 1
+        if marker == 0xD9:
+            break
+        if 0xD0 <= marker <= 0xD7 or marker == 0x01:
+            continue
+        if position + 2 > len(data):
+            raise ValueError(f"Truncated JPEG segment length for marker 0xFF{marker:02X}")
+        segment_length = int.from_bytes(data[position : position + 2], "big")
+        if segment_length < 2 or position + segment_length > len(data):
+            raise ValueError(f"Invalid JPEG segment length {segment_length} for marker 0xFF{marker:02X}")
+        if marker != 0xDA:
+            position += segment_length
+            continue
+
+        position += segment_length
+        while position < len(data):
+            value = data[position]
+            if value != 0xFF:
+                payload.append(value)
+                position += 1
+                continue
+            if position + 1 >= len(data):
+                raise ValueError("Truncated entropy-coded JPEG scan")
+            next_value = data[position + 1]
+            if next_value == 0x00:
+                payload.append(0xFF)
+                position += 2
+                continue
+            if 0xD0 <= next_value <= 0xD7:
+                position += 2
+                continue
+            break
+
+    return bytes(payload)
+
+
+def encode_jpeg_scan_bytes(canonical_jpeg: CanonicalJpegRepresentation | bytes) -> np.ndarray:
+    """Encode only the entropy-coded scan payload bytes from a canonical JPEG stream."""
+
+    return np.frombuffer(extract_jpeg_scan_payload(canonical_jpeg), dtype=np.uint8).astype(np.int32, copy=False)
 
 
 def window_byte_tokens(
@@ -403,6 +486,67 @@ def encode_jpeg_symbols(
     return np.asarray(tokens, dtype=np.int32)
 
 
+def encode_jpeg_huffman_events(
+    canonical_jpeg: CanonicalJpegRepresentation,
+    *,
+    config: HuffmanEventTokenizerConfig = V0_HUFFMAN_EVENT_CONFIG,
+) -> np.ndarray:
+    """Encode JPEG entropy events with event ids and amplitude payloads split apart."""
+
+    eob_token = 0
+    zrl_token = 1
+    max_dc_category = config.dc_bound.bit_length()
+    max_ac_category = config.ac_bound.bit_length()
+    dc_event_offset = 2
+    ac_event_offset = dc_event_offset + (max_dc_category + 1)
+    amplitude_offset = ac_event_offset + (16 * max_ac_category)
+
+    blocks = quantized_luma_blocks(
+        canonical_jpeg,
+        config=CoefficientTokenizerConfig(
+            quality=config.quality,
+            source=config.source,
+        ),
+    )
+    zigzag = blocks.reshape(-1, 64)[:, _ZIGZAG_ORDER]
+    tokens: list[int] = []
+    previous_dc = 0
+
+    for block in zigzag:
+        dc_value = int(block[0])
+        dc_delta = dc_value - previous_dc
+        previous_dc = dc_value
+        dc_category = abs(dc_delta).bit_length()
+        if dc_category > max_dc_category:
+            raise ValueError(f"DC category {dc_category} exceeds configured maximum {max_dc_category}")
+        tokens.append(dc_event_offset + dc_category)
+        if dc_category > 0:
+            tokens.append(amplitude_offset + _encode_category_value(dc_delta, dc_category, "dc_delta"))
+
+        zero_run = 0
+        for coeff in block[1:]:
+            coeff_value = int(coeff)
+            if coeff_value == 0:
+                zero_run += 1
+                if zero_run == 16:
+                    tokens.append(zrl_token)
+                    zero_run = 0
+                continue
+
+            magnitude_category = abs(coeff_value).bit_length()
+            if magnitude_category == 0 or magnitude_category > max_ac_category:
+                raise ValueError(f"AC coefficient magnitude category {magnitude_category} exceeds configured bounds")
+
+            tokens.append(ac_event_offset + zero_run * max_ac_category + (magnitude_category - 1))
+            tokens.append(amplitude_offset + _encode_category_value(coeff_value, magnitude_category, "ac_coefficient"))
+            zero_run = 0
+
+        if zero_run > 0:
+            tokens.append(eob_token)
+
+    return np.asarray(tokens, dtype=np.int32)
+
+
 def whole_image_symbol_vocab_size(
     config: SymbolTokenizerConfig = V0_SYMBOL_CONFIG,
     *,
@@ -424,6 +568,29 @@ def whole_image_symbol_length(
     """Return the whole-image symbol length including EOS if configured."""
 
     return len(symbol_tokens) + (1 if append_eos else 0)
+
+
+def whole_image_huffman_event_vocab_size(
+    config: HuffmanEventTokenizerConfig = V0_HUFFMAN_EVENT_CONFIG,
+    *,
+    append_eos: bool = True,
+) -> int:
+    """Return the whole-image huffman-event vocabulary size including reserved EOS/PAD ids."""
+
+    base_vocab = huffman_event_vocab_size(config)
+    if not append_eos:
+        return base_vocab + 1
+    return base_vocab + 2
+
+
+def whole_image_huffman_event_length(
+    event_tokens: np.ndarray,
+    *,
+    append_eos: bool = True,
+) -> int:
+    """Return the whole-image huffman-event length including EOS if configured."""
+
+    return len(event_tokens) + (1 if append_eos else 0)
 
 
 def pad_whole_image_symbol_tokens(
@@ -450,6 +617,35 @@ def pad_whole_image_symbol_tokens(
         payload = np.concatenate([payload, np.asarray([eos_token_id], dtype=np.int32)])
     if len(payload) > seq_len:
         raise ValueError(f"Symbol payload length {len(payload)} exceeds seq_len {seq_len}")
+    padded = np.full(seq_len, pad_token_id, dtype=np.int32)
+    padded[: len(payload)] = payload
+    return padded
+
+
+def pad_whole_image_huffman_event_tokens(
+    event_tokens: np.ndarray,
+    *,
+    seq_len: int,
+    config: HuffmanEventTokenizerConfig = V0_HUFFMAN_EVENT_CONFIG,
+    eos_token_id: int | None = None,
+    pad_token_id: int | None = None,
+    append_eos: bool = True,
+) -> np.ndarray:
+    """Right-pad one whole-image huffman-event stream to a fixed sequence length."""
+
+    base_vocab = huffman_event_vocab_size(config)
+    eos_token_id = base_vocab if eos_token_id is None else eos_token_id
+    pad_token_id = base_vocab + 1 if pad_token_id is None else pad_token_id
+    if eos_token_id < base_vocab:
+        raise ValueError(f"eos_token_id must reserve a non-event id, got {eos_token_id}")
+    if pad_token_id <= eos_token_id:
+        raise ValueError(f"pad_token_id must be greater than eos_token_id, got {pad_token_id} <= {eos_token_id}")
+
+    payload = np.asarray(event_tokens, dtype=np.int32)
+    if append_eos:
+        payload = np.concatenate([payload, np.asarray([eos_token_id], dtype=np.int32)])
+    if len(payload) > seq_len:
+        raise ValueError(f"Huffman-event payload length {len(payload)} exceeds seq_len {seq_len}")
     padded = np.full(seq_len, pad_token_id, dtype=np.int32)
     padded[: len(payload)] = payload
     return padded
@@ -602,11 +798,13 @@ __all__ = sorted(
         "CanonicalJpegRepresentation",
         "CoefficientTokenSource",
         "CoefficientTokenizerConfig",
+        "HuffmanEventTokenizerConfig",
         "JpegTokenizerFamily",
         "SymbolTokenizerConfig",
         "V0_BYTE_WINDOW_CONFIG",
         "V0_CANONICAL_JPEG_CONFIG",
         "V0_COEFFICIENT_CONFIG",
+        "V0_HUFFMAN_EVENT_CONFIG",
         "V0_SYMBOL_CONFIG",
         "V0_WHOLE_IMAGE_BYTE_CONFIG",
         "WholeImageByteTokenizerConfig",
@@ -615,13 +813,20 @@ __all__ = sorted(
         "coefficient_vocab_size",
         "encode_dct_coeffs",
         "encode_jpeg_bytes",
+        "encode_jpeg_huffman_events",
+        "encode_jpeg_scan_bytes",
         "encode_jpeg_symbols",
+        "extract_jpeg_scan_payload",
+        "huffman_event_vocab_size",
+        "pad_whole_image_huffman_event_tokens",
         "pad_whole_image_byte_tokens",
         "pad_whole_image_symbol_tokens",
         "quantized_luma_blocks",
         "reconstruct_luma_from_coeff_tokens",
         "stable_byte_checksum",
         "symbol_vocab_size",
+        "whole_image_huffman_event_length",
+        "whole_image_huffman_event_vocab_size",
         "whole_image_byte_length",
         "whole_image_byte_vocab_size",
         "whole_image_symbol_length",

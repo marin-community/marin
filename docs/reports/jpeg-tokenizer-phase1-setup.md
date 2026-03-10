@@ -830,3 +830,30 @@ The JPEG baseline work is complete enough to stop training churn here. The next 
 - use the exact evaluator outputs above in any project-level writeup instead of the earlier coarse implied bits/image
 - keep `symbols` as the strongest token-level JPEG baseline and `coeff_k8` as the compactness baseline
 - move the next mechanism test to gzip/reset behavior rather than launching more JPEG variants immediately
+
+## Middle-Ground Baselines Staged
+
+Two additional JPEG representations are now staged in code, but not launched as TPU trials yet:
+
+- `scan_payload_bytes`
+  - whole-image builder:
+    `scripts/jpeg_tokenizer/build_whole_image_scan_byte_token_store.py`
+  - meaning:
+    entropy-coded scan bytes only, with JPEG headers/tables/markers removed
+- `huffman_events`
+  - whole-image builder:
+    `scripts/jpeg_tokenizer/build_whole_image_huffman_event_token_store.py`
+  - meaning:
+    decoded JPEG entropy events where the event id and the amplitude payload are separate tokens
+
+On a `2`-train / `2`-validation local smoke build:
+
+- `scan_payload_bytes` resolved to `seq_len=26055`, `vocab_size=258`
+- `huffman_events` resolved to `seq_len=71211`, `vocab_size=2224`
+
+That makes the next JPEG-side decision fairly clear:
+
+- `scan_payload_bytes` is the realistic next baseline if we want to isolate whether raw-byte weakness is mostly
+  container/header noise
+- `huffman_events` is still useful conceptually, but under the current architecture it is more a sequence-length stress
+  test than a practical middle ground

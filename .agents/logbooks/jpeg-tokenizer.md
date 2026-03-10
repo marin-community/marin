@@ -834,3 +834,34 @@
     - bytes = weakest representation of the three
 - Next action: treat JPEG as baseline-complete and move the next mechanism work to the gzip/reset thread rather than
   launching more JPEG training variants.
+
+### 2026-03-10 09:58 - Two middle-ground JPEG baselines staged without launching TPU runs
+
+- Hypothesis: there should be at least one useful representation between full canonical JPEG bytes and the current
+  pre-Huffman symbol stream, but it is not obvious whether the best middle ground is "less container noise" or
+  "less collapsed syntax."
+- Changes:
+  - added `encode_jpeg_scan_bytes(...)` in
+    `experiments/jpeg_tokenizer/base/jpeg_codecs.py`
+    to extract only entropy-coded scan payload bytes from canonical JPEGs
+  - added `encode_jpeg_huffman_events(...)` in
+    `experiments/jpeg_tokenizer/base/jpeg_codecs.py`
+    to emit split entropy events: event ids plus separate amplitude payload tokens
+  - added builders:
+    - `scripts/jpeg_tokenizer/build_whole_image_scan_byte_token_store.py`
+    - `scripts/jpeg_tokenizer/build_whole_image_huffman_event_token_store.py`
+  - added focused regression coverage in `tests/test_jpeg_tokenizer_scaffold.py`
+- Validation:
+  - targeted pytest over the new codec helpers passed
+  - `py_compile` over the new codec and builder paths passed
+  - tiny local smoke stores on `2` train + `2` validation examples succeeded:
+    - `scan_payload_bytes`: `seq_len=26055`, `vocab_size=258`
+    - `huffman_events`: `seq_len=71211`, `vocab_size=2224`
+- Interpretation:
+  - `scan_payload_bytes` is the cleaner immediate next JPEG baseline because it isolates "bytes minus container noise"
+    without changing the sequence regime too radically
+  - `huffman_events` is a semantic middle ground, but not a length middle ground; it is substantially longer than the
+    existing exact symbol stream and would need a different architecture or packing story before it is an efficient TPU
+    baseline
+- Next action: keep the gzip/reset thread as the main follow-up, and if we return to JPEG first, prioritize
+  `scan_payload_bytes` over `huffman_events`.

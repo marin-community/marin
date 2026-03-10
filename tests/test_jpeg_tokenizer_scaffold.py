@@ -38,19 +38,27 @@ from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     ByteWindowTokenizerConfig,
     CoefficientTokenSource,
     CoefficientTokenizerConfig,
+    HuffmanEventTokenizerConfig,
     WholeImageByteTokenizerConfig,
     V0_SYMBOL_CONFIG,
     byte_window_vocab_size,
     canonicalize_image,
     encode_dct_coeffs,
     encode_jpeg_bytes,
+    encode_jpeg_huffman_events,
+    encode_jpeg_scan_bytes,
     encode_jpeg_symbols,
+    extract_jpeg_scan_payload,
+    huffman_event_vocab_size,
+    pad_whole_image_byte_tokens,
+    pad_whole_image_huffman_event_tokens,
     pad_whole_image_symbol_tokens,
-    whole_image_byte_vocab_size,
     whole_image_byte_length,
+    whole_image_byte_vocab_size,
+    whole_image_huffman_event_length,
+    whole_image_huffman_event_vocab_size,
     whole_image_symbol_length,
     whole_image_symbol_vocab_size,
-    pad_whole_image_byte_tokens,
     quantized_luma_blocks,
     reconstruct_luma_from_coeff_tokens,
     stable_byte_checksum,
@@ -135,6 +143,16 @@ def test_whole_image_symbol_tokenizer_appends_eos_and_masks_pad_tail():
     assert whole_image_symbol_vocab_size() == 36835
 
 
+def test_whole_image_huffman_event_tokenizer_appends_eos_and_masks_pad_tail():
+    config = HuffmanEventTokenizerConfig()
+    base_vocab = huffman_event_vocab_size(config)
+    padded = pad_whole_image_huffman_event_tokens(np.asarray([1, 2, 3], dtype=np.int32), seq_len=6, config=config)
+
+    assert padded.tolist() == [1, 2, 3, base_vocab, base_vocab + 1, base_vocab + 1]
+    assert whole_image_huffman_event_length(np.asarray([1, 2, 3], dtype=np.int32)) == 4
+    assert whole_image_huffman_event_vocab_size(config) == base_vocab + 2
+
+
 def test_canonicalization_and_reference_tokenizers_are_deterministic():
     pixels = np.arange(16 * 16, dtype=np.uint8).reshape(16, 16)
     image = Image.fromarray(pixels, mode="L").convert("RGB")
@@ -155,6 +173,19 @@ def test_canonicalization_and_reference_tokenizers_are_deterministic():
     assert symbol_tokens.min() >= 0
 
 
+def test_scan_payload_bytes_are_deterministic_and_shorter_than_full_jpeg():
+    pixels = np.arange(32 * 32, dtype=np.uint8).reshape(32, 32)
+    image = Image.fromarray(pixels, mode="L").convert("RGB")
+    canonical = canonicalize_image(image)
+
+    full_bytes = encode_jpeg_bytes(canonical)
+    scan_bytes = encode_jpeg_scan_bytes(canonical)
+
+    assert extract_jpeg_scan_payload(canonical) == extract_jpeg_scan_payload(canonical.jpeg_bytes)
+    assert scan_bytes.ndim == 1
+    assert 0 < len(scan_bytes) < len(full_bytes)
+
+
 def test_libjpeg_symbol_tokens_are_deterministic_and_within_vocab():
     pixels = np.arange(32 * 32, dtype=np.uint8).reshape(32, 32)
     image = Image.fromarray(pixels, mode="L").convert("RGB")
@@ -167,6 +198,20 @@ def test_libjpeg_symbol_tokens_are_deterministic_and_within_vocab():
     assert np.array_equal(first_tokens, second_tokens)
     assert first_tokens.min() >= 0
     assert first_tokens.max() < symbol_vocab_size(symbol_config)
+
+
+def test_libjpeg_huffman_event_tokens_are_deterministic_and_within_vocab():
+    pixels = np.arange(32 * 32, dtype=np.uint8).reshape(32, 32)
+    image = Image.fromarray(pixels, mode="L").convert("RGB")
+    canonical = canonicalize_image(image)
+    event_config = HuffmanEventTokenizerConfig(source=CoefficientTokenSource.LIBJPEG)
+    first_tokens = encode_jpeg_huffman_events(canonical, config=event_config)
+    second_tokens = encode_jpeg_huffman_events(canonical, config=event_config)
+
+    assert first_tokens.ndim == 1
+    assert np.array_equal(first_tokens, second_tokens)
+    assert first_tokens.min() >= 0
+    assert first_tokens.max() < huffman_event_vocab_size(event_config)
 
 
 def test_libjpeg_quantized_blocks_are_deterministic_and_match_expected_token_count():

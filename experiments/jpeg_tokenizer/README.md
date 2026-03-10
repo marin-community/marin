@@ -149,6 +149,32 @@ The exact symbol store contains:
 - padded sequence length: `58240`
 - vocab size: `36835`
 
+Two additional middle-ground baselines are now staged locally in code:
+
+- `scan_payload_bytes`
+  - builder:
+    `scripts/jpeg_tokenizer/build_whole_image_scan_byte_token_store.py`
+  - representation:
+    only the entropy-coded scan payload bytes, excluding JPEG container headers/tables/markers
+  - vocab:
+    `258` (`0..255` plus `EOS` and `PAD`)
+- `huffman_events`
+  - builder:
+    `scripts/jpeg_tokenizer/build_whole_image_huffman_event_token_store.py`
+  - representation:
+    decoded JPEG entropy events with event ids and amplitude payloads split into separate tokens
+  - vocab:
+    `2224`
+
+Small local smoke builds on `2` train + `2` validation examples resolved to:
+
+- `scan_payload_bytes`: `seq_len=26055`
+- `huffman_events`: `seq_len=71211`
+
+So `scan_payload_bytes` is the cleaner immediate "bytes but less container noise" baseline, while `huffman_events` is a
+semantic middle ground that is likely too long for the current `SWA=4096` setup without an additional architecture or
+packing change.
+
 ## V0 Decisions
 
 This section freezes the initial assumptions for the Phase 0 feasibility spike so later scripts do not drift.
@@ -203,5 +229,6 @@ uv run python scripts/jpeg_tokenizer/evaluate_representation_head2head.py \
   --output-dir gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-manual
 ```
 
-The next experiment thread should move to the gzip reset mechanism test; JPEG is now strong enough to serve as the
-codec-structured baseline.
+The next experiment thread should still move to the gzip reset mechanism test; JPEG is now strong enough to serve as
+the codec-structured baseline. If we come back to JPEG before that, `scan_payload_bytes` is the next clean baseline to
+run, not `huffman_events`.
