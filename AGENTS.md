@@ -119,11 +119,6 @@ uv run pyrefly
 - Assert absolute paths at boundaries.
 - Atomic writes: write to a temp file, then rename.
 
-## Performance / Distributed
-
-- Consider coordinator bottlenecks: N workers × M operations can overwhelm head nodes.
-- Overlap I/O with computation using thread pools and queues.
-
 ## LLM-Generated Code Pitfalls
 
 Watch for and eliminate these patterns in generated code:
