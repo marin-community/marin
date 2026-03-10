@@ -123,6 +123,11 @@ def _warn_vmem_compile_fallback_once(exc: Exception, *, impl_name: str) -> None:
     )
 
 
+def _pallas_impl_matches_current_backend(impl_name: str) -> bool:
+    backend = jax.default_backend()
+    return (impl_name == "pallas_tpu" and backend == "tpu") or (impl_name == "pallas_gpu" and backend == "gpu")
+
+
 def _autotune_enabled() -> bool:
     return autotune_cache_utils.is_enabled_from_env(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
@@ -596,33 +601,36 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         elif impl_for_call in ("xla", "reference"):
             block_sizes_for_impl = None
         elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "pallas_gpu"):
-            inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
-                x.shape[0],
-                x.shape[1],
-                w.shape[1],
-                dtype=dtype,
-                x_dtype=x.dtype,
-                w_dtype=w.dtype,
-            )
-            if has_tuned_match:
-                block_sizes_for_impl = inferred
+            if not _pallas_impl_matches_current_backend(impl_for_call):
+                block_sizes_for_impl = None
             else:
-                fn = IMPLEMENTATIONS.get(impl_for_call)
-                if fn is None:
+                inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
+                    x.shape[0],
+                    x.shape[1],
+                    w.shape[1],
+                    dtype=dtype,
+                    x_dtype=x.dtype,
+                    w_dtype=w.dtype,
+                )
+                if has_tuned_match:
                     block_sizes_for_impl = inferred
                 else:
-                    block_sizes_for_impl = _autotune_block_sizes_on_miss(
-                        impl_name=impl_for_call,
-                        fn=fn,
-                        x=x,
-                        labels=labels,
-                        w=w,
-                        inferred=inferred,
-                        dtype=dtype,
-                        logit_soft_cap=logit_soft_cap,
-                        precision=precision,
-                        return_argmax=return_argmax,
-                    )
+                    fn = IMPLEMENTATIONS.get(impl_for_call)
+                    if fn is None:
+                        block_sizes_for_impl = inferred
+                    else:
+                        block_sizes_for_impl = _autotune_block_sizes_on_miss(
+                            impl_name=impl_for_call,
+                            fn=fn,
+                            x=x,
+                            labels=labels,
+                            w=w,
+                            inferred=inferred,
+                            dtype=dtype,
+                            logit_soft_cap=logit_soft_cap,
+                            precision=precision,
+                            return_argmax=return_argmax,
+                        )
         else:
             block_sizes_for_impl = infer_block_sizes(
                 x.shape[0],

@@ -1282,6 +1282,7 @@ def test_pallas_autotune_only_runs_when_block_sizes_are_not_explicit(monkeypatch
         return zeros, zeros
 
     monkeypatch.setattr(fused_api, "_autotune_block_sizes_on_miss", fake_autotune)
+    monkeypatch.setattr(fused_api, "_pallas_impl_matches_current_backend", lambda impl_name: True)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
 
     x = jnp.ones((1024, 512), dtype=jnp.bfloat16)
