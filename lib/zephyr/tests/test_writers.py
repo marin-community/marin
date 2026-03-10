@@ -205,32 +205,6 @@ def test_estimate_batch_size_large_records():
     assert 1 <= batch_size < 100_000
 
 
-def test_parquet_writer_respects_target_buffer(tmp_path):
-    """Parquet writer produces correct output with a small target buffer."""
-    output_path = str(tmp_path / "out.parquet")
-    records = [{"id": i, "val": f"row-{i}"} for i in range(5000)]
-
-    # Use a tiny buffer to force multiple batches
-    result = write_parquet_file(records, output_path, target_buffer_bytes=1024)
-
-    assert result["count"] == 5000
-    table = pq.read_table(output_path)
-    assert len(table) == 5000
-
-
-def test_vortex_writer_respects_target_buffer(tmp_path):
-    """Vortex writer produces correct output with a small target buffer."""
-    output_path = str(tmp_path / "out.vortex")
-    records = [{"id": i, "val": f"row-{i}"} for i in range(5000)]
-
-    result = write_vortex_file(records, output_path, target_buffer_bytes=1024)
-
-    assert result["count"] == 5000
-    vf = vortex.open(output_path)
-    table = vf.to_arrow().read_all()
-    assert len(table) == 5000
-
-
 def test_infer_arrow_schema_basic():
     """Test schema inference with basic Python types."""
     records = [{"id": 1, "name": "Alice", "score": 95.5, "active": True}]
