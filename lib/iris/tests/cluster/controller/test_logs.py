@@ -253,6 +253,47 @@ def test_get_logs_by_prefix_shallow_excludes_children(log_store: LogStore):
     assert result_shallow.entries[0].data == "parent-line"
 
 
+def test_get_logs_by_prefix_tail_returns_last_n(log_store: LogStore):
+    """Tail mode with prefix returns the last N entries across all matching keys."""
+    t0 = JobName.from_wire("/job/test/task/0")
+    t1 = JobName.from_wire("/job/test/task/1")
+
+    # Insert 10 entries total: 5 per task
+    log_store.append(task_log_key(t0, 0), [_make_entry(f"t0-line-{i}", epoch_ms=i) for i in range(5)])
+    log_store.append(task_log_key(t1, 0), [_make_entry(f"t1-line-{i}", epoch_ms=10 + i) for i in range(5)])
+
+    result = log_store.get_logs_by_prefix("/job/test/", max_lines=3, tail=True)
+    assert len(result.entries) == 3
+    # Should return the last 3 entries by insertion order (autoincrement id)
+    assert [e.data for e in result.entries] == ["t1-line-2", "t1-line-3", "t1-line-4"]
+
+
+def test_get_logs_by_prefix_tail_with_substring_filter(log_store: LogStore):
+    """Tail mode with prefix + substring filter returns last N matching entries."""
+    t0 = JobName.from_wire("/job/test/task/0")
+
+    entries = [_make_entry(f"{'ERROR' if i % 3 == 0 else 'INFO'}: msg-{i}", epoch_ms=i) for i in range(12)]
+    log_store.append(task_log_key(t0, 0), entries)
+
+    result = log_store.get_logs_by_prefix("/job/test/", max_lines=2, tail=True, substring_filter="ERROR")
+    assert len(result.entries) == 2
+    assert [e.data for e in result.entries] == ["ERROR: msg-6", "ERROR: msg-9"]
+
+
+def test_get_logs_by_prefix_tail_with_shallow(log_store: LogStore):
+    """Tail mode with shallow=True excludes child jobs and returns last N."""
+    t0 = JobName.from_wire("/job/parent/0")
+    child_t0 = JobName.from_wire("/job/parent/child/0")
+
+    log_store.append(task_log_key(t0, 0), [_make_entry(f"parent-{i}", epoch_ms=i) for i in range(5)])
+    log_store.append(task_log_key(child_t0, 0), [_make_entry(f"child-{i}", epoch_ms=10 + i) for i in range(5)])
+
+    result = log_store.get_logs_by_prefix("/job/parent/", max_lines=2, tail=True, shallow=True)
+    assert len(result.entries) == 2
+    # Only parent entries, last 2
+    assert [e.data for e in result.entries] == ["parent-3", "parent-4"]
+
+
 def test_substring_filter_escapes_like_wildcards(log_store: LogStore):
     """Percent and underscore in substring_filter match literally, not as SQL wildcards."""
     log_store.append(

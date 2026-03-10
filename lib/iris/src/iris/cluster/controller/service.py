@@ -967,7 +967,7 @@ class ControllerServiceImpl:
                 cursor=cursor,
                 substring_filter=substring_filter,
                 max_lines=max_lines,
-                tail=True,
+                tail=request.tail,
                 min_level=request.min_level,
             )
             for entry in log_result.entries:
@@ -980,7 +980,7 @@ class ControllerServiceImpl:
                 since_ms=request.since_ms,
                 substring_filter=substring_filter,
                 max_lines=max_lines,
-                tail=True,
+                tail=request.tail,
                 min_level=request.min_level,
             )
         else:
@@ -993,7 +993,7 @@ class ControllerServiceImpl:
                 since_ms=request.since_ms,
                 substring_filter=substring_filter,
                 max_lines=max_lines,
-                tail=True,
+                tail=request.tail,
                 min_level=request.min_level,
                 shallow=not request.include_children,
             )
