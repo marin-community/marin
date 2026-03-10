@@ -45,7 +45,7 @@ train_standard = dna_train(
 # Repeat weight 1.0 (control - uniform weighting via DNALmDatasetFormat)
 # =============================================================================
 
-data_rw_1_0 = dna_tokenize_rw_v1("animal-promoters-repeat-weight-1.0", PROMOTERS_DATASET_V1, soft_mask_weight=1.0)
+data_rw_1_0 = dna_tokenize_rw_v1("animal-promoters-repeat-weight-1.0", PROMOTERS_DATASET_V1, lowercase_weight=1.0)
 
 train_rw_1_0 = dna_train(
     name="animal-promoters-repeat-weight-1.0-r01",

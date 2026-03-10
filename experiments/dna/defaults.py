@@ -107,13 +107,13 @@ def dna_tokenize_std_v1(name: str, dataset: str) -> ExecutorStep:
     )
 
 
-def dna_tokenize_rw_v1(name: str, dataset: str, soft_mask_weight: float = 0.01) -> ExecutorStep:
+def dna_tokenize_rw_v1(name: str, dataset: str, lowercase_weight: float = 0.01) -> ExecutorStep:
     """Repeat-weighted tokenization using V1 defaults."""
     return default_tokenize(
         name=name,
         dataset=dataset,
         tokenizer=DNA_TOKENIZER_V1,
-        format=DNALmDatasetFormat(soft_mask_weight=soft_mask_weight),
+        format=DNALmDatasetFormat(lowercase_weight=lowercase_weight),
     )
 
 
