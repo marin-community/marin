@@ -227,16 +227,24 @@ def write_vortex_file(records: Iterable, output_path: str, batch_size: int = 32_
             vortex.io.write(empty_table, temp_path)
         return {"path": output_path, "count": 0}
 
-    schema = infer_parquet_schema(first_record)
     maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
+
+    # Let PyArrow infer the schema from the first batch rather than using
+    # infer_parquet_schema, which doesn't handle nested/complex types well.
+    first_batch = [maybe_map_to_dict(first_record)]
+    for record in itertools.islice(record_iter, batch_size - 1):
+        first_batch.append(maybe_map_to_dict(record))
+    first_table = pa.Table.from_pylist(first_batch)
+    schema = first_table.schema
     dtype = vortex.DType.from_arrow(schema, non_nullable=True)
 
     count = 0
 
     def _array_batches():
         nonlocal count
-        batch = [maybe_map_to_dict(first_record)]
-        count += 1
+        count += len(first_batch)
+        yield vortex.Array.from_arrow(first_table)
+        batch = []
         for record in record_iter:
             batch.append(maybe_map_to_dict(record))
             count += 1
