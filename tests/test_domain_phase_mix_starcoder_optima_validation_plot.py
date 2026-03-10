@@ -5,7 +5,10 @@ import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.plot_starcoder_optima_validation import (
     build_validation_plot_frame,
+    _format_numeric_tuple,
     _load_rl_rollout_summary,
+    _select_actual_metric_candidates,
+    _summarize_observed_bpb_frame,
 )
 
 
@@ -112,3 +115,102 @@ def test_load_rl_rollout_summary_parses_report(tmp_path):
     assert summary["label"] == "RL rollout BPB (outcome_planner)"
     assert summary["validated_bpb"] == 0.8346716762
     assert summary["rollout_tuple"] == (0.4550000131, 0.3199999928, 0.275000006)
+
+
+def test_load_rl_rollout_summary_parses_two_phase_report(tmp_path):
+    report = tmp_path / "two_phase_rollout_report.md"
+    report.write_text(
+        "\n".join(
+            [
+                "# Two-Phase Outcome Planner Rollout Report",
+                "",
+                "The two-phase rollout schedule was:",
+                "",
+                "- `phase_0 = 0.05`",
+                "- `phase_1 = 0.23`",
+                "",
+                "Per-phase metrics:",
+                "",
+                "- final programming BPB: `0.9087211489677429`",
+            ]
+        )
+    )
+
+    summary = _load_rl_rollout_summary(report)
+
+    assert summary["label"] == "RL rollout BPB (outcome_planner)"
+    assert summary["validated_bpb"] == 0.9087211489677429
+    assert summary["rollout_tuple"] == (0.05, 0.23)
+
+
+def test_summarize_observed_bpb_frame_returns_best_tuple():
+    frame = pd.DataFrame(
+        [
+            {
+                "phase_0_starcoder": 0.10,
+                "phase_1_starcoder": 0.30,
+                "phase_0_starcoder_epochs": 0.2,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.92,
+            },
+            {
+                "phase_0_starcoder": 0.22,
+                "phase_1_starcoder": 0.25,
+                "phase_0_starcoder_epochs": 0.4,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.90,
+            },
+            {
+                "phase_0_starcoder": 0.05,
+                "phase_1_starcoder": 0.20,
+                "phase_0_starcoder_epochs": 0.1,
+                "eval/paloma/dolma_100_programing_languages/bpb": 0.94,
+            },
+        ]
+    )
+
+    summary = _summarize_observed_bpb_frame(frame)
+
+    assert summary.best_bpb == 0.90
+    assert summary.observed_count == 3
+    assert summary.best_tuple == (0.22, 0.25)
+
+
+def test_format_numeric_tuple_can_trim_trailing_zeros():
+    assert _format_numeric_tuple((0.3199999928, 0.3199999928, 0.275000006), trim_trailing_zeros=True) == (
+        "(0.32, 0.32, 0.275)"
+    )
+
+
+def test_select_actual_metric_candidates_prefers_finished_suffix_match():
+    run_name = (
+        "pinlin_calvin_xu/data_mixture/two_phase_starcoder_selector_validation/"
+        "full_20260308_rerun2/feature_bayes_linear_k004_optimum"
+    )
+
+    selected = _select_actual_metric_candidates(
+        run_names=[run_name],
+        exact_candidates={run_name: []},
+        suffix_candidates={
+            run_name: [
+                {
+                    "actual_bpb": 1.3369,
+                    "wandb_state": "crashed",
+                    "wandb_url": "https://wandb.ai/example/crashed",
+                    "wandb_run_name": (
+                        "pinlin_calvin_xu/data_mixture/two_phase_starcoder_selec_5f984bcb/"
+                        "feature_bayes_linear_k004_optimum"
+                    ),
+                    "created_at": "2026-03-08T22:51:00",
+                },
+                {
+                    "actual_bpb": 0.9716,
+                    "wandb_state": "finished",
+                    "wandb_url": "https://wandb.ai/example/finished",
+                    "wandb_run_name": "pcx/dm/t2s-5f984bcb/feature_bayes_linear_k004_optimum",
+                    "created_at": "2026-03-08T23:00:00",
+                },
+            ]
+        },
+    )
+
+    assert selected[run_name]["wandb_run_name"] == "pcx/dm/t2s-5f984bcb/feature_bayes_linear_k004_optimum"
+    assert selected[run_name]["actual_bpb"] == 0.9716

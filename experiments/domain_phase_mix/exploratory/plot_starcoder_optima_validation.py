@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,15 @@ from experiments.domain_phase_mix.starcoder_metadata import (
 OBJECTIVE_MODEL = "DS-RE-CEQ"
 OBJECTIVE_MODE = "retrospective"
 OBJECTIVE_METRIC = "eval/paloma/dolma_100_programing_languages/bpb"
+
+
+@dataclass(frozen=True)
+class ObservedBpbSummary:
+    """Best-observed BPB summary for one StarCoder reference set."""
+
+    best_bpb: float
+    observed_count: int
+    best_tuple: tuple[float, ...]
 
 
 def _display_dataset_name(dataset: str) -> str:
@@ -53,6 +63,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb-entity", type=str, default="marin-community")
     parser.add_argument("--wandb-project", type=str, default="marin")
     parser.add_argument("--rl-rollout-report", type=Path, default=None)
+    parser.add_argument("--observed-reference-csv", type=Path, default=None)
     parser.add_argument("--output-path", type=Path, default=None)
     parser.add_argument("--csv-output", type=Path, default=None)
     return parser.parse_args()
@@ -85,36 +96,88 @@ def _load_regret_curve_frame(benchmark_output_dir: Path, *, dataset: str, policy
     return frame[["subset_size", "regret@1_median"]].rename(columns={"regret@1_median": "regret_at_1"})
 
 
-def _load_observed_bpb_summary(dataset: str) -> tuple[float, int]:
+def _format_numeric_tuple(values: tuple[float, ...], *, trim_trailing_zeros: bool = False) -> str:
+    if not trim_trailing_zeros:
+        return "(" + ", ".join(f"{value:.4f}" for value in values) + ")"
+
+    def _format_value(value: float) -> str:
+        rounded = round(float(value), 4)
+        text = f"{rounded:.4f}".rstrip("0").rstrip(".")
+        return text if "." in text else f"{text}.0"
+
+    return "(" + ", ".join(_format_value(value) for value in values) + ")"
+
+
+def _infer_starcoder_phase_columns(frame: pd.DataFrame) -> list[str]:
+    phase_columns = []
+    for column in frame.columns:
+        match = re.fullmatch(r"phase_(\d+)_starcoder", column)
+        if match is None:
+            continue
+        phase_columns.append((int(match.group(1)), column))
+    if not phase_columns:
+        raise ValueError("Could not infer any StarCoder phase columns from the observed reference frame")
+    return [column for _, column in sorted(phase_columns)]
+
+
+def _summarize_observed_bpb_frame(frame: pd.DataFrame) -> ObservedBpbSummary:
+    metric_frame = frame[frame[OBJECTIVE_METRIC].notna()].copy()
+    if metric_frame.empty:
+        raise ValueError("Observed reference frame has no finite objective values")
+
+    phase_columns = _infer_starcoder_phase_columns(metric_frame)
+    best_index = metric_frame[OBJECTIVE_METRIC].astype(float).idxmin()
+    best_row = metric_frame.loc[best_index]
+    best_tuple = tuple(float(best_row[column]) for column in phase_columns)
+    return ObservedBpbSummary(
+        best_bpb=float(best_row[OBJECTIVE_METRIC]),
+        observed_count=len(metric_frame),
+        best_tuple=best_tuple,
+    )
+
+
+def _load_observed_bpb_summary(dataset: str, observed_reference_csv: Path | None = None) -> ObservedBpbSummary:
+    if observed_reference_csv is not None:
+        return _summarize_observed_bpb_frame(pd.read_csv(observed_reference_csv.resolve()))
+
     if dataset == "two_phase_starcoder":
-        spec, _ = load_two_phase_starcoder_dataset(target_col=OBJECTIVE_METRIC)
+        _, frame = load_two_phase_starcoder_dataset(target_col=OBJECTIVE_METRIC)
     elif dataset == "three_phase_starcoder":
-        spec, _ = load_three_phase_starcoder_dataset(target_col=OBJECTIVE_METRIC)
+        _, frame = load_three_phase_starcoder_dataset(target_col=OBJECTIVE_METRIC)
     else:
         raise ValueError(f"Unsupported dataset: {dataset}")
-    return float(spec.y.min()), len(spec.y)
+    return _summarize_observed_bpb_frame(frame)
 
 
 def _load_rl_rollout_summary(report_path: Path) -> dict[str, Any]:
     text = report_path.read_text()
-    schedule_section = re.search(
+    schedule_section = None
+    schedule_patterns = [
         r"The resulting executed StarCoder schedule for `r00` was:\s*(.*?)\s*The final programming BPB was:",
-        text,
-        flags=re.DOTALL,
-    )
+        r"The two-phase rollout schedule was:\s*(.*?)\s*Per-phase metrics:",
+    ]
+    for pattern in schedule_patterns:
+        schedule_section = re.search(pattern, text, flags=re.DOTALL)
+        if schedule_section is not None:
+            break
     if schedule_section is None:
         raise ValueError(f"Could not locate rollout schedule section in {report_path}")
+
     phase_matches = re.findall(r"phase_(\d+)\s*=\s*([0-9.]+)", schedule_section.group(1))
-    if len(phase_matches) != 3:
+    if len(phase_matches) < 2:
         raise ValueError(f"Could not parse rollout phase weights from {report_path}")
     ordered = sorted(((int(phase_idx), float(value)) for phase_idx, value in phase_matches), key=lambda item: item[0])
     rollout_tuple = tuple(value for _, value in ordered)
 
-    summary_match = re.search(
+    summary_match = None
+    summary_patterns = [
         r"The final programming BPB was:\s*[-*]\s*`([0-9.]+)`",
-        text,
-        flags=re.MULTILINE,
-    )
+        r"final programming BPB:\s*`([0-9.]+)`",
+    ]
+    for pattern in summary_patterns:
+        summary_match = re.search(pattern, text, flags=re.MULTILINE)
+        if summary_match is not None:
+            break
     if summary_match is None:
         raise ValueError(f"Could not parse rollout BPB from {report_path}")
 
@@ -127,6 +190,7 @@ def _load_rl_rollout_summary(report_path: Path) -> dict[str, Any]:
 
 def _fetch_actual_metric_map(
     *,
+    dataset: str,
     run_names: list[str],
     metric_key: str,
     wandb_entity: str,
@@ -137,24 +201,73 @@ def _fetch_actual_metric_map(
         f"{wandb_entity}/{wandb_project}",
         filters={"display_name": {"$regex": r"feature_bayes_linear_k.*_optimum$"}},
     )
-    selected = {}
-    target_names = set(run_names)
-    for run in runs:
-        if run.name not in target_names:
-            continue
-        selected[run.name] = {
+    target_suffixes = {name.rsplit("/", 1)[-1]: name for name in run_names}
+    exact_candidates: dict[str, list[dict[str, Any]]] = {name: [] for name in run_names}
+    suffix_candidates: dict[str, list[dict[str, Any]]] = {name: [] for name in run_names}
+
+    def _candidate_payload(run: Any) -> dict[str, Any]:
+        return {
             "actual_bpb": run.summary.get(metric_key),
             "wandb_state": run.state,
             "wandb_url": run.url,
+            "wandb_run_name": run.name,
+            "created_at": getattr(run, "created_at", "") or "",
         }
+
+    target_names = set(run_names)
+    for run in runs:
+        candidate = _candidate_payload(run)
+        if run.name in target_names:
+            exact_candidates[run.name].append(candidate)
+            continue
+
+        suffix = run.name.rsplit("/", 1)[-1]
+        target_name = target_suffixes.get(suffix)
+        if target_name is not None and _wandb_run_matches_dataset(run.name, dataset):
+            suffix_candidates[target_name].append(candidate)
+
+    return _select_actual_metric_candidates(
+        run_names=run_names,
+        exact_candidates=exact_candidates,
+        suffix_candidates=suffix_candidates,
+    )
+
+
+def _select_actual_metric_candidates(
+    *,
+    run_names: list[str],
+    exact_candidates: dict[str, list[dict[str, Any]]],
+    suffix_candidates: dict[str, list[dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    def _candidate_sort_key(candidate: dict[str, Any]) -> tuple[int, int, str]:
+        return (
+            int(candidate.get("wandb_state") == "finished"),
+            int(candidate.get("actual_bpb") is not None),
+            str(candidate.get("created_at", "")),
+        )
+
+    selected = {}
+    for target_name in run_names:
+        candidates = exact_candidates.get(target_name) or suffix_candidates.get(target_name) or []
+        if not candidates:
+            continue
+        selected[target_name] = max(candidates, key=_candidate_sort_key)
     return selected
+
+
+def _wandb_run_matches_dataset(run_name: str, dataset: str) -> bool:
+    if dataset == "two_phase_starcoder":
+        return "two_phase" in run_name or "/t2s-" in run_name
+    if dataset == "three_phase_starcoder":
+        return "three_phase" in run_name or "/t3s-" in run_name
+    return True
 
 
 def _format_starcoder_tuple(weight_config: dict[str, Any]) -> str:
     phase_weights = weight_config["phase_weights"]
     phase_names = sorted(phase_weights, key=lambda phase_name: int(phase_name.split("_")[-1]))
     weights = [float(phase_weights[phase_name]["starcoder"]) for phase_name in phase_names]
-    return "(" + ", ".join(f"{weight:.4f}" for weight in weights) + ")"
+    return _format_numeric_tuple(tuple(weights))
 
 
 def build_validation_plot_frame(
@@ -166,13 +279,9 @@ def build_validation_plot_frame(
 ) -> pd.DataFrame:
     rows = []
     predicted_map = {
-        int(row["subset_size"]): float(row["predicted_bpb"])
-        for row in predicted_optima.to_dict(orient="records")
+        int(row["subset_size"]): float(row["predicted_bpb"]) for row in predicted_optima.to_dict(orient="records")
     }
-    regret_map = {
-        int(row["subset_size"]): float(row["regret_at_1"])
-        for row in regret_curve.to_dict(orient="records")
-    }
+    regret_map = {int(row["subset_size"]): float(row["regret_at_1"]) for row in regret_curve.to_dict(orient="records")}
     name_prefix = str(launch_plan["name_prefix"])
     for run in launch_plan["runs"]:
         subset_size = int(run["subset_size"])
@@ -201,6 +310,7 @@ def _plot_validation_frame(
     dataset: str,
     best_observed_bpb: float,
     observed_count: int,
+    best_observed_tuple: tuple[float, ...],
     rl_rollout_summary: dict[str, Any] | None,
     output_path: Path,
 ) -> None:
@@ -257,6 +367,22 @@ def _plot_validation_frame(
     ax_bpb.set_title(f"{_display_dataset_name(dataset)} — predicted vs actual BPB at Feature Bayes Linear optima")
     ax_bpb.grid(True, which="major", axis="both", alpha=0.25)
     ax_bpb.set_xticks(frame["subset_size"].tolist())
+    ax_bpb.annotate(
+        "\n".join(
+            [
+                f"Best observed BPB = {best_observed_bpb:.4f}",
+                f"Observed best = {_format_numeric_tuple(best_observed_tuple)}",
+            ]
+        ),
+        xy=(frame["subset_size"].iloc[-1], best_observed_bpb),
+        xytext=(-8, 10),
+        textcoords="offset points",
+        color="#dc2626",
+        ha="right",
+        va="bottom",
+        fontsize=10,
+        bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "edgecolor": "#dc2626", "alpha": 0.9},
+    )
 
     validated = frame[frame["actual_bpb"].notna()]
     if not validated.empty:
@@ -282,7 +408,7 @@ def _plot_validation_frame(
     if rl_rollout_summary is not None:
         rl_bpb = float(rl_rollout_summary["validated_bpb"])
         rl_tuple = tuple(float(value) for value in rl_rollout_summary["rollout_tuple"])
-        tuple_text = "(" + ", ".join(f"{value:.4f}" for value in rl_tuple) + ")"
+        tuple_text = _format_numeric_tuple(rl_tuple, trim_trailing_zeros=True)
         ax_bpb.annotate(
             "\n".join(
                 [
@@ -326,6 +452,7 @@ def main() -> None:
     )
     run_names = [f"{launch_plan['name_prefix']}/{run['run_name']}" for run in launch_plan["runs"]]
     actual_metric_map = _fetch_actual_metric_map(
+        dataset=args.dataset,
         run_names=run_names,
         metric_key=args.metric_key,
         wandb_entity=args.wandb_entity,
@@ -337,9 +464,10 @@ def main() -> None:
         regret_curve=regret_curve,
         actual_metric_map=actual_metric_map,
     )
-    best_observed_bpb, observed_count = _load_observed_bpb_summary(args.dataset)
-    frame["best_observed_bpb"] = best_observed_bpb
-    frame["observed_count"] = observed_count
+    observed_summary = _load_observed_bpb_summary(args.dataset, observed_reference_csv=args.observed_reference_csv)
+    frame["best_observed_bpb"] = observed_summary.best_bpb
+    frame["observed_count"] = observed_summary.observed_count
+    frame["best_observed_tuple"] = [_format_numeric_tuple(observed_summary.best_tuple)] * len(frame)
     rl_rollout_summary = None
     if args.rl_rollout_report is not None:
         rl_rollout_summary = _load_rl_rollout_summary(args.rl_rollout_report.resolve())
@@ -357,8 +485,9 @@ def main() -> None:
     _plot_validation_frame(
         frame,
         dataset=args.dataset,
-        best_observed_bpb=best_observed_bpb,
-        observed_count=observed_count,
+        best_observed_bpb=observed_summary.best_bpb,
+        observed_count=observed_summary.observed_count,
+        best_observed_tuple=observed_summary.best_tuple,
         rl_rollout_summary=rl_rollout_summary,
         output_path=output_path,
     )

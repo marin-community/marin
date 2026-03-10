@@ -897,6 +897,47 @@ def _dataset_handles(datasets: Sequence[str]) -> list[Line2D]:
     ]
 
 
+def _metric_axes(metric: str, *, figsize: tuple[float, float]) -> tuple[plt.Figure, list[plt.Axes]]:
+    if metric != "R²":
+        fig, ax = plt.subplots(figsize=figsize)
+        return fig, [ax]
+
+    fig, axes = plt.subplots(
+        2,
+        1,
+        figsize=(figsize[0], figsize[1] + 1.6),
+        sharex=True,
+        gridspec_kw={"height_ratios": [2.2, 1.2], "hspace": 0.18},
+    )
+    return fig, list(axes)
+
+
+def _style_metric_axes(
+    axes: list[plt.Axes],
+    *,
+    metric: str,
+    subset_sizes: Sequence[int | float],
+    x_scale: str,
+) -> None:
+    main_ax = axes[0]
+    _apply_subset_size_axis(main_ax, subset_sizes, scale=x_scale)
+    main_ax.set_ylabel(metric)
+    main_ax.grid(True, alpha=0.3)
+
+    if len(axes) == 1:
+        main_ax.set_xlabel("Subset size")
+        return
+
+    zoom_ax = axes[1]
+    _apply_subset_size_axis(zoom_ax, subset_sizes, scale=x_scale)
+    zoom_ax.set_xlabel("Subset size")
+    zoom_ax.set_ylabel(f"{metric} zoom")
+    zoom_ax.set_ylim(0.0, 1.0)
+    zoom_ax.grid(True, alpha=0.3)
+    zoom_ax.set_title("Zoomed to 0-1", pad=12)
+    main_ax.tick_params(labelbottom=False)
+
+
 def _plot_dataset_metric(
     curves: pd.DataFrame,
     *,
@@ -914,7 +955,8 @@ def _plot_dataset_metric(
     if frame.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(7.5, 4.8))
+    fig, axes = _metric_axes(metric, figsize=(7.5, 4.8))
+    main_ax = axes[0]
     for policy in CURVE_POLICIES:
         policy_frame = frame[frame["policy"] == policy].sort_values("subset_size")
         if policy_frame.empty:
@@ -926,18 +968,20 @@ def _plot_dataset_metric(
         if policy == "random_observed":
             q25 = policy_frame[f"{metric}_q25"].to_numpy(dtype=float)
             q75 = policy_frame[f"{metric}_q75"].to_numpy(dtype=float)
-            ax.fill_between(x, q25, q75, color=color, alpha=0.2)
-            ax.plot(x, y, marker="o", linewidth=2.0, color=color, label=label)
+            for ax in axes:
+                ax.fill_between(x, q25, q75, color=color, alpha=0.2)
+                ax.plot(x, y, marker="o", linewidth=2.0, color=color, label=label)
         else:
-            ax.plot(x, y, marker="o", linewidth=2.0, color=color, label=label)
-    _apply_subset_size_axis(ax, frame["subset_size"].unique(), scale=x_scale)
-    ax.set_xlabel("Subset size")
-    ax.set_ylabel(metric)
+            for ax in axes:
+                ax.plot(x, y, marker="o", linewidth=2.0, color=color, label=label)
+    _style_metric_axes(axes, metric=metric, subset_sizes=frame["subset_size"].unique(), x_scale=x_scale)
     title_suffix = "log-x" if x_scale == "logx" else "linear-x"
-    ax.set_title(f"{dataset} — {metric} vs subset size ({PLOT_MODEL}, {title_suffix})")
-    ax.grid(True, alpha=0.3)
-    ax.legend(frameon=False)
-    fig.tight_layout()
+    main_ax.set_title(f"{dataset} — {metric} vs subset size ({PLOT_MODEL}, {title_suffix})")
+    main_ax.legend(frameon=False)
+    if len(axes) == 1:
+        fig.tight_layout()
+    else:
+        fig.subplots_adjust(top=0.92, bottom=0.10, hspace=0.22)
     suffix = "_logx" if x_scale == "logx" else ""
     out_path = plots_dir / f"{dataset}_{metric.lower().replace('@', 'at').replace('²', '2')}_comparison{suffix}.png"
     fig.savefig(out_path, dpi=180)
@@ -953,7 +997,8 @@ def _plot_cross_dataset_overlay(curves: pd.DataFrame, *, metric: str, plots_dir:
     if frame.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(7.8, 4.8))
+    fig, axes = _metric_axes(metric, figsize=(7.8, 4.8))
+    main_ax = axes[0]
     datasets_present: list[str] = []
     for policy in CURVE_POLICIES[1:]:
         for dataset in (TWO_PHASE_STARCODER.name, THREE_PHASE_STARCODER.name):
@@ -964,34 +1009,35 @@ def _plot_cross_dataset_overlay(curves: pd.DataFrame, *, metric: str, plots_dir:
                 datasets_present.append(dataset)
             x = policy_frame["subset_size"].to_numpy(dtype=float)
             y = policy_frame[f"{metric}_median"].to_numpy(dtype=float)
-            ax.plot(
-                x,
-                y,
-                marker="o",
-                linewidth=2.0,
-                linestyle=DATASET_LINESTYLES[dataset],
-                color=POLICY_COLORS.get(policy, "#111827"),
-            )
-    _apply_subset_size_axis(ax, frame["subset_size"].unique(), scale=x_scale)
-    ax.set_xlabel("Subset size")
-    ax.set_ylabel(metric)
+            for ax in axes:
+                ax.plot(
+                    x,
+                    y,
+                    marker="o",
+                    linewidth=2.0,
+                    linestyle=DATASET_LINESTYLES[dataset],
+                    color=POLICY_COLORS.get(policy, "#111827"),
+                )
+    _style_metric_axes(axes, metric=metric, subset_sizes=frame["subset_size"].unique(), x_scale=x_scale)
     title_suffix = "log-x" if x_scale == "logx" else "linear-x"
-    ax.set_title(f"Static selectors across 2-phase vs 3-phase ({PLOT_MODEL}, {title_suffix})")
-    ax.grid(True, alpha=0.3)
-    selector_legend = ax.legend(
+    main_ax.set_title(f"Static selectors across 2-phase vs 3-phase ({PLOT_MODEL}, {title_suffix})")
+    selector_legend = main_ax.legend(
         handles=_policy_handles(CURVE_POLICIES[1:]),
         title="Selector",
         frameon=False,
         loc="upper left",
     )
-    ax.add_artist(selector_legend)
-    ax.legend(
+    main_ax.add_artist(selector_legend)
+    main_ax.legend(
         handles=_dataset_handles(datasets_present),
         title="Dataset / line style",
         frameon=False,
         loc="upper right",
     )
-    fig.tight_layout()
+    if len(axes) == 1:
+        fig.tight_layout()
+    else:
+        fig.subplots_adjust(top=0.90, bottom=0.10, hspace=0.22)
     suffix = "_logx" if x_scale == "logx" else ""
     out_path = plots_dir / f"cross_dataset_{metric.lower().replace('@', 'at').replace('²', '2')}_overlay{suffix}.png"
     fig.savefig(out_path, dpi=180)
@@ -999,7 +1045,6 @@ def _plot_cross_dataset_overlay(curves: pd.DataFrame, *, metric: str, plots_dir:
 
 
 def _plot_dataset_panel(curves: pd.DataFrame, *, dataset: str, plots_dir: Path, x_scale: str) -> None:
-    metrics = ("R²", "regret@1", "Huber", "RMSE")
     frame = curves[
         (curves["dataset"] == dataset)
         & (curves["mode"] == "retrospective")
@@ -1009,8 +1054,16 @@ def _plot_dataset_panel(curves: pd.DataFrame, *, dataset: str, plots_dir: Path, 
     if frame.empty:
         return
 
-    fig, axes = plt.subplots(2, 2, figsize=(10.5, 7.5))
-    for ax, metric in zip(axes.flat, metrics, strict=True):
+    fig = plt.figure(figsize=(11.0, 9.2))
+    grid = fig.add_gridspec(3, 2, height_ratios=[1.15, 1.0, 0.95], hspace=0.35, wspace=0.28)
+    axes_by_metric = {
+        "R²": [fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[1, 0])],
+        "regret@1": [fig.add_subplot(grid[0, 1])],
+        "Huber": [fig.add_subplot(grid[1, 1])],
+        "RMSE": [fig.add_subplot(grid[2, :])],
+    }
+
+    for metric, metric_axes in axes_by_metric.items():
         metric_frame = frame.copy()
         for policy in CURVE_POLICIES:
             policy_frame = metric_frame[metric_frame["policy"] == policy].sort_values("subset_size")
@@ -1022,20 +1075,29 @@ def _plot_dataset_panel(curves: pd.DataFrame, *, dataset: str, plots_dir: Path, 
             if policy == "random_observed":
                 q25 = policy_frame[f"{metric}_q25"].to_numpy(dtype=float)
                 q75 = policy_frame[f"{metric}_q75"].to_numpy(dtype=float)
-                ax.fill_between(x, q25, q75, color=color, alpha=0.2)
-            ax.plot(x, y, marker="o", linewidth=2.0, color=color, label=POLICY_LABELS.get(policy, policy))
-        _apply_subset_size_axis(ax, metric_frame["subset_size"].unique(), scale=x_scale)
-        ax.set_xlabel("Subset size")
-        ax.set_ylabel(metric)
-        ax.grid(True, alpha=0.3)
-        ax.set_title(metric)
+                for ax in metric_axes:
+                    ax.fill_between(x, q25, q75, color=color, alpha=0.2)
+                    ax.plot(x, y, marker="o", linewidth=2.0, color=color, label=POLICY_LABELS.get(policy, policy))
+            else:
+                for ax in metric_axes:
+                    ax.plot(x, y, marker="o", linewidth=2.0, color=color, label=POLICY_LABELS.get(policy, policy))
 
-    handles, labels = axes.flat[0].get_legend_handles_labels()
+        _style_metric_axes(
+            metric_axes,
+            metric=metric,
+            subset_sizes=metric_frame["subset_size"].unique(),
+            x_scale=x_scale,
+        )
+        if len(metric_axes) == 1:
+            metric_axes[0].set_title(metric)
+        else:
+            metric_axes[0].set_title("R²")
+
+    handles, labels = axes_by_metric["R²"][0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
     title_suffix = "log-x" if x_scale == "logx" else "linear-x"
     fig.suptitle(f"{dataset} — random vs static selectors ({PLOT_MODEL}, {title_suffix})", y=0.98)
-    fig.tight_layout()
-    fig.subplots_adjust(bottom=0.12)
+    fig.subplots_adjust(top=0.93, bottom=0.09)
     suffix = "_logx" if x_scale == "logx" else ""
     out_path = plots_dir / f"{dataset}_panel{suffix}.png"
     fig.savefig(out_path, dpi=180)
@@ -1047,11 +1109,7 @@ def _write_predicted_optima_jsonl(predicted_optima: pd.DataFrame, output_path: P
     with output_path.open("w") as handle:
         for run_id, record in enumerate(records):
             phase_names = sorted(
-                {
-                    "_".join(key.split("_", 2)[:2])
-                    for key in record
-                    if key.startswith("phase_") and pd.notna(record[key])
-                }
+                {"_".join(key.split("_", 2)[:2]) for key in record if key.startswith("phase_") and pd.notna(record[key])}
             )
             phase_weights = {
                 phase_name: {
@@ -1076,9 +1134,9 @@ def _write_predicted_optima_jsonl(predicted_optima: pd.DataFrame, output_path: P
                 "nearest_observed_idx": (
                     None if pd.isna(record["nearest_observed_idx"]) else int(record["nearest_observed_idx"])
                 ),
-                "nearest_observed_distance": None
-                if pd.isna(record["nearest_observed_distance"])
-                else float(record["nearest_observed_distance"]),
+                "nearest_observed_distance": (
+                    None if pd.isna(record["nearest_observed_distance"]) else float(record["nearest_observed_distance"])
+                ),
             }
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
