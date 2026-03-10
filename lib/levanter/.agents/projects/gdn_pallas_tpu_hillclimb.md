@@ -6000,3 +6000,142 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - The minimal-tape replay idea is not automatically translating into step wins on this head; this exact residual-shrink arm is on cooldown unless a future variant can show direct remainder reduction.
   - With CE now fixed again at `pallas_tpu` + `pallas`, the next justified mainline attempt should pivot harder on outer train-path structure (`O` or `M`) or on a substantially different `R` decomposition that can plausibly reduce `remainder_budget_ms` instead of preserving the same step-critical-path ambiguity.
+
+### Iteration 80 - Macro Move N / BF16-pack saved `chunk_starts` on the current `M` boundary (validated, regressed, reverted)
+
+- Coverage slot: `N`
+- Why this attacks the train-path control bottleneck:
+  - The latest validated evidence still leaves the visible hot `while` inside the CE backward/custom-VJP shell, but the unresolved GDN-side critical-path ambiguity on the promoted `M` boundary is the remaining full per-chunk `chunk_starts` residual.
+  - Recent `R` replay arms made the step slower by growing `remainder_budget_ms`, so this iteration tested the cheapest residual contraction still compatible with the current deployable outer shell: compress the saved per-chunk state instead of replaying it away again.
+- Hot-path scan/cond status:
+  - No new hot-path `lax.scan`.
+  - No new hot-path `lax.cond` / runtime dispatch.
+  - The candidate preserves the existing CE `while` only and changes the backward tape contract inside the current training-only associative outer shell.
+- Change class: `outer control structure`
+
+- Codex loop iteration: `6 / 10`
+- Date: `2026-03-10T14:07:27Z`
+- Starting commit: `31fcafc1c7adcde1520d84174e1732bfb33ded8f`
+- Current train-path control bottleneck read from the latest validated evidence:
+  - The visible hot `while` remains the CE backward/custom-VJP shell in `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py:802`.
+  - On the current deployable `M` boundary, the remaining train-path control hypothesis is whether carrying FP32 `chunk_starts` through the custom-VJP residual is still contributing to the post-train-path remainder, or whether it is already off critical path.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro N (selected):** compress saved `chunk_starts` on the current training-only associative outer shell from FP32 to BF16 while keeping backward widening to FP32 (`+0.25-1.5%`, low/medium risk).
+  2. **Macro O:** reduced-Pallas diagnostic control arm to bound whether the current train-path abstraction is fundamentally wrong (`0%` deployable upside, high diagnostic risk).
+  3. **Macro R:** another replay/checkpoint arm with smaller micro-segments or chunk-pair checkpoints (`+0.5-2.0%`, high risk after repeated remainder regressions).
+
+- Selected macro-move category: **N) Backward tape-contract redesign**.
+
+- Expected effect on `while_ms`: flat to slightly down; this arm does not target the CE shell directly.
+- Expected effect on `step_duration_ms`: down if the residual bandwidth reduction is still on the critical path.
+- Expected effect on `remainder_budget_ms`: down materially if `chunk_starts` carry is still expensive on the promoted `M` boundary.
+- Reject if `while_ms` remains flat? **No.** Flat CE `while` is acceptable for this non-CE experiment if the full step gets faster.
+- Reject if `remainder_budget_ms` grows? **Yes.** This candidate is justified only if the smaller residual contract reduces the end-to-end step instead of shifting cost into the remainder again.
+
+- Change summary:
+  - Temporary candidate implementation in `lib/levanter/src/levanter/layers/gated_deltanet.py`:
+    - On the MXU-scale training-only outer-shell path, packed saved `chunk_starts` residual state from FP32 to BF16.
+    - Left forward output math unchanged and relied on the existing backward FP32 cast before gradient math, so the kernel/control surface stayed the same.
+  - Retained tree state after measurement:
+    - No source changes were kept.
+    - The speculative residual-compression change was fully reverted before this log-only commit because the profile regressed.
+
+- Correctness checks:
+  - Local focused checks:
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`
+  - Managed dev TPU validation on the candidate:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped in 227.31s`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - Managed dev TPU primary attempt (infra failure before the training run started):
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i06_N_chunkstarts_bf16_resid --no-sync`
+    - result: remote wrapper failed with `error: No virtual environment or system Python installation found for path ../../.venv/bin/python; run uv venv to create an environment`, so this iteration used the required Ray fallback path.
+  - Ray fallback profile on the candidate:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i06_N_chunkstarts_bf16_resid --no-wait`
+    - Ray job: `ray-run-calvinxu-bash-20260310-135258`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_i06_N_chunkstarts_bf16_resid_gdn_130m_ch128_seg16_2-b1da5e`
+    - profiler artifact: `run-gdn_i06_N_chunkstarts_bf16_resid_gdn_130m_ch128_seg16_2-b1da5e-profiler:v0`
+    - downloaded trace: `scratch/iter6_candidate_download/plugins/profile/2026_03_09_13_41_39/perfetto_trace.json.gz`
+    - downloaded summary: `scratch/iter6_candidate_summary.json`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+
+- Hotspot metrics (current deployable baseline vs candidate, using the same raw-trace parser on `scratch/iter5_champion_baseline/plugins/profile/2026_03_10_08_14_30/perfetto_trace.json.gz` and `scratch/iter6_candidate_download/plugins/profile/2026_03_09_13_41_39/perfetto_trace.json.gz`; CE-attributed `while` matched by the `pallas_tpu.py:802` source suffix):
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - CE-attributed while: `8.909214 ms -> 8.848776 ms`
+  - Forward closed-call: `20.663767 ms -> 20.663544 ms`
+  - Backward closed-call: `13.127356 ms -> 13.129071 ms`
+  - `while: 8.909214 ms -> 8.848776 ms`
+  - `conditional: 0.025775 ms -> 0.025526 ms`
+  - `Kernel budget: 33.791123 ms -> 33.792614 ms`
+  - `Control budget: 8.934989 ms -> 8.874302 ms`
+  - `Train-path budget: 42.726112 ms -> 42.666917 ms`
+  - `Step duration: 166.307253 ms -> 171.281520 ms`
+  - `Remainder budget: 123.581141 ms -> 128.614603 ms`
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - Current deployable baseline:
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.898`
+    - `throughput/duration=0.166307 s`
+  - Candidate:
+    - `throughput/mfu=5.913815`
+    - `throughput/tokens_per_second=191310.773`
+    - `throughput/duration=0.171282 s`
+  - Candidate vs baseline:
+    - `throughput/mfu -2.90%`
+    - `throughput/tokens_per_second -2.90%`
+    - `throughput/duration +2.99%`
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - The dominant visible `while` remains the CE backward/custom-VJP shell in `fused_cross_entropy_loss/pallas_tpu.py:802`; no new GDN `while` or `conditional` became hot.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - It preserves the existing CE shell only and does not add a new hot-path `lax.scan`.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The change only repacked saved residual state; it introduced no new XLA-visible control-flow region. The measured profile confirms the visible control hotspot is still the pre-existing CE shell.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - This arm did not add a new train-path scan shell. It was the smallest remaining nested `N` move on the promoted `M` boundary before escalating to a broader control-arm pivot.
+  - Is the residual `while` still CE-attributed in this design?
+    - Yes.
+  - What do you expect to happen to `while_ms`?
+    - Flat to slightly down was acceptable; the measured result is slightly down (`8.909214 ms -> 8.848776 ms`).
+  - What do you expect to happen to `remainder_budget_ms`?
+    - Down materially if the residual bandwidth mattered. Instead it regressed (`123.581141 ms -> 128.614603 ms`).
+  - Should this candidate be rejected if `while_ms` remains flat or `remainder_budget_ms` grows? Why?
+    - Reject if `remainder_budget_ms` grows. The move is only justified if shrinking the saved tape lowers the end-to-end step rather than shifting cost out of the tracked train path.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped in 227.31s`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: 8.909214 ms -> 8.848776 ms`
+    - Forward closed-call `20.663767 ms -> 20.663544 ms`
+    - Backward closed-call `13.127356 ms -> 13.129071 ms`
+    - `while: 8.909214 ms -> 8.848776 ms`
+    - `conditional: 0.025775 ms -> 0.025526 ms`
+    - `Kernel budget: 33.791123 ms -> 33.792614 ms`
+    - `Control budget: 8.934989 ms -> 8.874302 ms`
+    - `Train-path budget: 42.726112 ms -> 42.666917 ms`
+    - `Step duration: 166.307253 ms -> 171.281520 ms`
+    - `Remainder budget: 123.581141 ms -> 128.614603 ms`
+    - `throughput/mfu -2.90%`, `throughput/tokens_per_second -2.90%`, `throughput/duration +2.99%`
+  - Governance:
+    - CE stayed fixed at the required deployable setting: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` with `CE bwd mode: pallas`.
+    - The candidate does not trip the hard `while`, `conditional`, or `train_path_budget` gates; the visible control budget falls slightly and train-path budget improves by `-0.059195 ms`.
+    - The failure is the remainder gate: `remainder_budget_ms` grows by `+5.033462 ms`, well beyond the active `+2.000 ms` limit.
+    - The primary metric regresses by `-2.90%` vs the current champion, far past the active `1.000%` regression threshold.
+    - This is another off-critical-path / overlap-loss result: the tracked train-path budget improves slightly while the full step gets slower by `+4.974267 ms`.
+    - Because the candidate regressed, the speculative source change was fully reverted and is not retained in the tree.
+
+- Assessment: **validated, regressed, and reverted**. BF16-packing the saved `chunk_starts` residual on the current `M` boundary is not enough to produce an end-to-end win on this head. The visible CE shell gets slightly smaller and the tracked train-path budget improves slightly, but the step still slows down because the post-train-path remainder grows materially.
+- Next bold hypothesis:
+  - Stop spending mainline budget on same-boundary `chunk_starts` shrink variants that only reduce saved state size.
+  - The next justified attempt should pivot back to a broader control-arm move (`O`) or a materially different `M`/`N` boundary that attacks the post-train-path remainder directly rather than only compressing the current residual.
