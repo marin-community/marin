@@ -1506,6 +1506,9 @@ class ControllerTransitions:
         if result.action != HeartbeatAction.OK:
             return result
         # Check if the worker explicitly reported itself as unhealthy.
+        # We intentionally use force_remove=False here: a self-reported unhealthy
+        # worker still goes through the consecutive-failure threshold so that
+        # transient health-check flaps don't cause immediate eviction.
         if not response.worker_healthy:
             health_error = response.health_error or "worker reported unhealthy"
             logger.warning("Worker %s reported unhealthy: %s", snapshot.worker_id, health_error)

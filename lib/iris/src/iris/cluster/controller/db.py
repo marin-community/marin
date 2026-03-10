@@ -1017,6 +1017,15 @@ class ControllerDB:
         return _decode_row(Task, row)
 
     def apply_migrations(self) -> None:
+        """Apply pending SQL migrations from the migrations/ directory.
+
+        Migrations run outside a transaction because executescript() implicitly
+        commits. This is fine: migrations only run at startup before any
+        concurrent access. Each migration is applied then recorded; if the
+        process crashes mid-migration the partially-applied file won't be in
+        schema_migrations and the next startup will re-run it (migrations must
+        be idempotent via IF NOT EXISTS / IF EXISTS guards).
+        """
         migrations_dir = Path(__file__).with_name("migrations")
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1031,11 +1040,12 @@ class ControllerDB:
             )
             applied = {row[0] for row in cur.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()}
 
-            for path in sorted(migrations_dir.glob("*.sql")):
-                if path.name in applied:
-                    continue
-                sql = path.read_text(encoding="utf-8")
-                cur.executescript(sql)
+        for path in sorted(migrations_dir.glob("*.sql")):
+            if path.name in applied:
+                continue
+            sql = path.read_text(encoding="utf-8")
+            self._conn.executescript(sql)
+            with self.transaction() as cur:
                 cur.execute(
                     "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
                     (path.name, Timestamp.now().epoch_ms()),
@@ -1065,13 +1075,18 @@ class ControllerDB:
         """Replace current DB file with ``source`` and reopen connection.
 
         ``source`` may be a remote path (e.g. ``gs://...``) thanks to fsspec.
+        Only called at startup before concurrent access begins.
         """
         import fsspec.core
 
         with self._lock:
-            self._conn.close()
-            with fsspec.core.open(str(source), "rb") as src, open(self._db_path, "wb") as dst:
+            # Download to a temp file first so a failed copy doesn't leave
+            # the DB connection closed with no file to reopen.
+            tmp_path = self._db_path.with_suffix(".tmp")
+            with fsspec.core.open(str(source), "rb") as src, open(tmp_path, "wb") as dst:
                 dst.write(src.read())
+            self._conn.close()
+            tmp_path.rename(self._db_path)
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
@@ -1081,15 +1096,16 @@ class ControllerDB:
     # to keep relation assembly explicit in controller/service/state query flows.
 
     def delete_endpoint(self, endpoint_id: str) -> Endpoint | None:
-        row = self.fetchone(
-            "SELECT endpoint_id, name, address, job_id, metadata_json, registered_at_ms "
-            "FROM endpoints WHERE endpoint_id = ?",
-            (endpoint_id,),
-        )
-        if row is None:
-            return None
-        self.execute("DELETE FROM endpoints WHERE endpoint_id = ?", (endpoint_id,))
-        return _decode_row(Endpoint, row)
+        with self.transaction() as cur:
+            row = cur.execute(
+                "SELECT endpoint_id, name, address, job_id, metadata_json, registered_at_ms "
+                "FROM endpoints WHERE endpoint_id = ?",
+                (endpoint_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            cur.execute("DELETE FROM endpoints WHERE endpoint_id = ?", (endpoint_id,))
+            return _decode_row(Endpoint, row)
 
     def delete_endpoints(self, endpoint_ids: Sequence[str]) -> None:
         if not endpoint_ids:
