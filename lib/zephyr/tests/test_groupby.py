@@ -326,3 +326,30 @@ def test_group_by_with_none_and_filter(zephyr_ctx):
     # Should only have duplicate keys: "a" and "foo"
     assert len(results) == 2
     assert sorted(results) == ["a", "foo"]
+
+
+class _Custom:
+    """A non-Arrow-serializable object."""
+
+    def __init__(self, key, value):
+        self.key = key
+        self.value = value
+
+    def __eq__(self, other):
+        return isinstance(other, _Custom) and self.key == other.key and self.value == other.value
+
+
+def test_group_by_non_vortex_serializable(zephyr_ctx):
+    """Shuffle with items that Vortex/Arrow cannot serialize falls back to pickle."""
+    data = [_Custom("a", 1), _Custom("b", 2), _Custom("a", 3)]
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x.key,
+        reducer=lambda key, items: _Custom(key, sum(i.value for i in items)),
+    )
+
+    results = list(zephyr_ctx.execute(ds))
+    results = sorted(results, key=lambda x: x.key)
+    assert len(results) == 2
+    assert results[0] == _Custom("a", 4)
+    assert results[1] == _Custom("b", 2)

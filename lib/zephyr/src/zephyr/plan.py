@@ -593,6 +593,57 @@ def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator
         yield StageResultChunk(source_shard=shard_idx, target_shard=shard_idx, chunk=iter(chunk))
 
 
+def _group_items_by_hash(
+    items: Iterable,
+    key_fn: Callable,
+    num_output_shards: int,
+    chunk_size: int,
+    sort_fn: Callable | None = None,
+) -> dict[int, list[list[Any]]]:
+    """Group items by hash of key into num_output_shards target shards with sorted chunks.
+
+    Pickle-based fallback used when items cannot be serialized to Vortex/Arrow.
+
+    Args:
+        items: Items to group
+        key_fn: Function to extract grouping key from item
+        num_output_shards: Number of output shards to distribute across
+        chunk_size: Number of items per chunk
+        sort_fn: Optional secondary sort key. When provided, chunks are sorted by
+            (key_fn, sort_fn) so items within each group arrive in order.
+
+    Returns:
+        Dict mapping shard index to list of chunks for that shard
+    """
+    if sort_fn is not None:
+        captured_sort_fn = sort_fn
+
+        def chunk_sort_key(item):
+            return (key_fn(item), captured_sort_fn(item))
+
+    else:
+        chunk_sort_key = key_fn
+
+    output_chunks: dict[int, list[list[Any]]] = defaultdict(list)
+    output_tmp: dict[int, list] = defaultdict(list)
+
+    for item in items:
+        key = key_fn(item)
+        target_shard = deterministic_hash(key) % num_output_shards
+        output_tmp[target_shard].append(item)
+        if chunk_size > 0 and len(output_tmp[target_shard]) >= chunk_size:
+            sorted_items = sorted(output_tmp[target_shard], key=chunk_sort_key)
+            output_chunks[target_shard].append(sorted_items)
+            output_tmp[target_shard] = []
+
+    for target_shard, shard_items in output_tmp.items():
+        if shard_items:
+            sorted_items = sorted(shard_items, key=chunk_sort_key)
+            output_chunks[target_shard].append(sorted_items)
+
+    return output_chunks
+
+
 def _scatter_to_vortex(
     items: Iterable,
     key_fn: Callable,
@@ -903,16 +954,36 @@ def run_stage(
 
         elif isinstance(op, Scatter):
             num_output_shards = op.num_output_shards if op.num_output_shards > 0 else ctx.total_shards
-            vortex_path = f"{ctx.chunk_prefix}/{ctx.execution_id}/{ctx.stage_name}" f"/shard-{ctx.shard_idx:04d}.vortex"
-            yield from _scatter_to_vortex(
-                stream,
-                op.key_fn,
-                num_output_shards,
-                ctx.chunk_size,
-                sort_fn=op.sort_fn,
-                vortex_path=vortex_path,
-                source_shard=ctx.shard_idx,
-            )
+            # Consume the stream once — Vortex needs it materialized for fallback anyway
+            items_list = list(stream)
+            try:
+                vortex_path = (
+                    f"{ctx.chunk_prefix}/{ctx.execution_id}/{ctx.stage_name}" f"/shard-{ctx.shard_idx:04d}.vortex"
+                )
+                yield from _scatter_to_vortex(
+                    items_list,
+                    op.key_fn,
+                    num_output_shards,
+                    ctx.chunk_size,
+                    sort_fn=op.sort_fn,
+                    vortex_path=vortex_path,
+                    source_shard=ctx.shard_idx,
+                )
+            except Exception:
+                logger.exception(
+                    "Vortex scatter serialization failed for stage %s shard %d; "
+                    "falling back to pickle. Performance will be degraded! It is recommended to use "
+                    "Vortex-compatible data types for shuffle operations (dicts, lists, primitives).",
+                    ctx.stage_name,
+                    ctx.shard_idx,
+                )
+                output_chunks = _group_items_by_hash(
+                    items_list, op.key_fn, num_output_shards, ctx.chunk_size, sort_fn=op.sort_fn
+                )
+                for shard_idx in range(num_output_shards):
+                    if output_chunks[shard_idx]:
+                        for chunk in output_chunks[shard_idx]:
+                            yield StageResultChunk(source_shard=ctx.shard_idx, target_shard=shard_idx, chunk=chunk)
             return
 
         elif isinstance(op, Reduce):
