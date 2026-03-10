@@ -6139,3 +6139,142 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Stop spending mainline budget on same-boundary `chunk_starts` shrink variants that only reduce saved state size.
   - The next justified attempt should pivot back to a broader control-arm move (`O`) or a materially different `M`/`N` boundary that attacks the post-train-path remainder directly rather than only compressing the current residual.
+
+### Iteration 81 - Macro Move P / CE backward `w_grad` loop-carry split probe (validated, profile-blocked, reverted)
+
+- Coverage slot: `P`
+- Why this attacks the train-path control bottleneck:
+  - The latest validated head still attributes the visible hot `while` to the CE backward/custom-VJP shell, while recent GDN-local train-path wins have mostly moved cost into `remainder_budget_ms`.
+  - This attempt targeted the CE shell directly by shrinking the backward loop-carried state instead of spending another iteration on GDN-local tape work.
+- Hot-path scan/cond status:
+  - Preserves a hot-path CE backward scan/while shell, but the intent was to carry only `x_grad` and emit `w_grad` blocks as outputs rather than threading the full padded vocab gradient through every loop iteration.
+  - Adds no hot-path `lax.cond` / runtime dispatch.
+  - The bet was that a smaller CE loop carry would reduce the residual CE `while` without changing deployable CE settings.
+- Change class: `CE backend`
+
+- Codex loop iteration: `7 / 10`
+- Date: `2026-03-10T14:57:44Z`
+- Starting commit: `facd2310f02edfa64c335b3b8ce9f15683ce2ff7`
+- Current train-path control bottleneck read from the latest validated evidence:
+  - The visible hot `while` remains the CE backward/custom-VJP shell in `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py:802`.
+  - Recent GDN-local structural attempts have not translated into faster steps because `remainder_budget_ms` keeps growing, so the next justified mainline attempt stayed on the CE shell axis.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro P (selected):** keep `pallas_tpu` CE + `pallas` CE backward fixed and shrink the CE backward loop carry by removing full `w_grad` state from the hot shell (`+0.5-2.0%`, medium risk).
+  2. **Macro O:** reduced-Pallas diagnostic control arm to bound whether the current train shell is still the wrong abstraction boundary (`0%` deployable upside, high diagnostic risk).
+  3. **Macro R:** another minimal-tape GDN replay variant from the ejkernel idea set (`0-1.0%`, high risk after repeated remainder regressions).
+
+- Selected macro-move category: **P) CE backward-mode work on the real train run**.
+
+- Expected effect on `while_ms`: down materially if the CE shell is really dominated by the large loop-carry tuple.
+- Expected effect on `step_duration_ms`: down if the CE shell is still on the critical path after the `pallas_tpu` regime change.
+- Expected effect on `remainder_budget_ms`: flat to slightly down; this move should reduce CE shell/control cost, not shove cost into the untracked remainder.
+- Reject if `while_ms` remains flat? **Yes.** This is an explicit CE-shell move; flat `while_ms` would mean it missed the target bottleneck.
+- Reject if `remainder_budget_ms` grows? **Yes.** A CE-shell candidate is not promising if it repeats the same off-critical-path / overlap-loss failure mode.
+
+- Change summary:
+  - Temporary candidate implementation in `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py`:
+    - Replaced the CE backward `fori_loop` state `(x_grad, w_grad_padded)` with a `scan` carrying only `x_grad`.
+    - Emitted per-supertile `w_grad` blocks as scan outputs and packed them afterward, aiming to remove the full padded vocab gradient from the CE shell carry.
+    - Kept CE fixed at `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` with `CE bwd mode: pallas`.
+  - Retained tree state after measurement:
+    - No source changes were kept.
+    - The speculative CE-shell rewrite was fully reverted after the profile attempt failed to complete cleanly.
+
+- Correctness checks:
+  - Local focused checks:
+    - `uv run pytest -q lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py -k "pallas_tpu_backward_uses_pallas_by_default or pallas_tpu_backward_can_force_xla_streaming or infer_tpu_bwd_v_supertile_mult_bounds_delta_bytes"` -> `3 passed`
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash and not slow"` -> `1 passed`
+  - Repo lint/type entry point:
+    - `./infra/pre-commit.py --all-files --fix` -> `OK`
+  - Managed dev TPU validation on the candidate:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `87 passed, 2 skipped in 228.82s`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - Managed dev TPU primary attempt:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i07_P_ce_scan_wgrad_outputs --no-sync`
+    - result: remote wrapper failed before the training run started with `error: No virtual environment or system Python installation found for path ../../.venv/bin/python; run uv venv to create an environment`.
+  - Ray fallback candidate attempt:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i07_P_ce_scan_wgrad_outputs`
+    - Ray job: `ray-run-calvinxu-bash-20260310-143832`
+    - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_i07_P_ce_scan_wgrad_outputs_gdn_130m_ch128_seg16_20-99469c`
+    - failure mode:
+      - the job never reached trainer step logging, W&B throughput metrics, or profiler artifact upload;
+      - the Ray submission and the replicated `.executor_status` both remained `RUNNING`;
+      - the captured Ray log (`/tmp/gdn_i07_ray_logs.json`, `28,120,965` chars) shows a new CE-related `jit_scan` compile path and ends with `Waiting for pending events to become available`;
+      - the log contains no `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`, or `global_step` records.
+    - interpretation:
+      - this was a non-completing compile/control-shell failure, not a usable perf result.
+  - Control rerun on the reverted head, to recover a completed profile artifact for the session:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i07_baseline_reconfirm`
+    - Ray job: `ray-run-calvinxu-bash-20260310-145512`
+    - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_i07_baseline_reconfirm_gdn_130m_ch128_seg16_20steps-d5a85f`
+    - failure mode:
+      - the run failed on the cluster with `RuntimeError: No accelerator found. Please run on a TPU or GPU.`
+      - the replicated `.executor_status` still remained `RUNNING`, so this session ended blocked on Ray/dev-TPU profiling infra rather than on code correctness.
+
+- Hotspot metrics:
+  - `CE backend selected: pallas_tpu` (requested and fixed for all attempts)
+  - `CE bwd mode: pallas`
+  - `CE-attributed while: n/a` (no completed candidate trace)
+  - Forward closed-call: `n/a`
+  - Backward closed-call: `n/a`
+  - `while: n/a`
+  - `conditional: n/a`
+  - `Kernel budget: n/a`
+  - `Control budget: n/a`
+  - `Train-path budget: n/a`
+  - `Step duration: n/a`
+  - `Remainder budget: n/a`
+  - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`: `n/a` (candidate never reached step logging)
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - The target remained the CE backward/custom-VJP shell.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - Yes. It made the CE backward shell an explicit `scan` carrying only `x_grad`.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The intended win was smaller loop-carried state. In practice, the candidate appears to have lowered to a heavier compile-time `jit_scan` path instead of producing a faster step.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - Because the remaining visible control wall is CE-attributed, shrinking the CE shell carry was still the most defensible CE-first attempt before returning to broader train-path pivots.
+  - Is the residual `while` still CE-attributed in this design?
+    - Unconfirmed at runtime because the profile never completed.
+  - What do you expect to happen to `while_ms`?
+    - Down materially. The run failed before that could be measured.
+  - What do you expect to happen to `remainder_budget_ms`?
+    - Flat to slightly down. The run failed before that could be measured.
+  - Should this candidate be rejected if `while_ms` remains flat or `remainder_budget_ms` grows? Why?
+    - Yes to both; and this attempt should also be rejected on non-completion because it never produced a usable TPU train-step profile.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped in 228.82s`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: n/a`
+    - Forward closed-call `n/a`
+    - Backward closed-call `n/a`
+    - `while: n/a`
+    - `conditional: n/a`
+    - `Kernel budget: n/a`
+    - `Control budget: n/a`
+    - `Train-path budget: n/a`
+    - `Step duration: n/a`
+    - `Remainder budget: n/a`
+    - `throughput/mfu`: `n/a`
+    - `throughput/tokens_per_second`: `n/a`
+    - `throughput/duration`: `n/a`
+  - Governance:
+    - CE stayed fixed at the required deployable setting throughout.
+    - The candidate is rejected because it failed to produce a completed profiled run and left only a compile-heavy `jit_scan` trace with no step metrics.
+    - No speculative code remains in the tree.
+    - This session was blocked on profiling infra after the reverted-head control rerun also failed scheduling (`No accelerator found`) and left `.executor_status` stuck at `RUNNING`.
+
+- Assessment: **validated, profile-blocked, and reverted**. The CE backward loop-carry split was a high-upside CE-shell move, but on this head it never reached a measured train step. The only concrete runtime signal was a large new `jit_scan` compile path ending in TPU driver teardown with no throughput logs or profiler artifact. After reverting, the control rerun hit a separate Ray scheduling failure (`No accelerator found`), so this turn ends as an infra/profile blocker with no deployable code change retained.
+- Next bold hypothesis:
+  - Stay on the CE-shell axis, but avoid top-level CE `scan` rewrites that introduce a new heavyweight `jit_scan` compile region.
+  - Before the next structural attempt, restore a reliable completed profile path on dev TPU or Ray so CE-shell changes can be judged on `while_ms`, `step_duration_ms`, and `remainder_budget_ms` instead of on compile-side failure alone.
