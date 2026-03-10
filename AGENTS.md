@@ -137,7 +137,7 @@ Before writing any utility function, helper, or data structure:
 
 If a suitable implementation exists, use it. Do not create parallel implementations.
 
-Dependency direction: `iris` → `zephyr` → `marin` → `levanter`. Each layer may only import from layers to its right. Never introduce reverse dependencies (e.g., marin importing from iris).
+Dependency direction: `iris` → {`levanter`, `zephyr`} → `marin` → `haliax`. Each layer may only import from layers to its right. Never introduce reverse dependencies (e.g., marin importing from iris).
 
 ## Testing
 
