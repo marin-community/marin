@@ -82,7 +82,7 @@ jobs:
        github.event.issue.author_association == 'COLLABORATOR') &&
       !contains(github.event.issue.body, '@claude') &&
       !contains(github.event.issue.title, '@claude')
-    timeout-minutes: 45
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -118,26 +118,28 @@ jobs:
             Read AGENTS.md and .agents/skills/fix-issue/SKILL.md.
 
             ## Step 1: Triage Report
-            Post a comment (prefixed "🤖 Triage:") that classifies this issue:
-            - TRIVIAL: fix confined to ≤3 files, no API/interface changes, deterministic fix, no new dependencies
+            Post a comment (prefixed "Triage:") that classifies this issue:
+            - TRIVIAL: fix confined to ≤5 files, no API/interface changes, deterministic fix, no new dependencies
             - NON-TRIVIAL: design decisions needed, multiple subsystems, new abstractions required
 
             Include a brief Research section (2-3 sentences: root cause, relevant code links).
 
             ## Step 2: If TRIVIAL
-            Follow the fix-issue skill completely: create branch agent/YYYYMMDD-fix-{issue_number},
-            write test first, implement fix, run ./infra/pre-commit.py --all-files --fix,
-            run uv run pytest -m 'not slow', open PR.
+            Use the fix-issue skill: create branch agent/YYYYMMDD-fix-{issue_number},
+            If applicable, write a test-case first validate it fails.
+            Implement fix, run ./infra/pre-commit.py --all-files --fix
+            Run appropriate tests, validate your fix.
+            Open PR
 
-            To find the right reviewer: run `git log --follow -n 20 -- <changed files>` to identify
-            recent contributors. Use `cat .github/CODEOWNERS 2>/dev/null` as fallback.
+            Find the right reviewer using git log or similar to find editors of affected files.
+            Use `gh` if git log isn't working for you.
             Tag that person as reviewer via `gh pr create --reviewer <username>`.
 
             ## Step 3: If NON-TRIVIAL
             Post only the triage report. Do not attempt implementation.
           claude_args: |
             --model claude-sonnet-4-6
-            --max-turns 200
+            --max-turns 100
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*),Bash(cat:*)"
 
   autofix:
