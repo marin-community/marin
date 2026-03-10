@@ -88,7 +88,7 @@ class Write:
     # Writer-specific parameters
     levanter_metadata: dict | None = None
     schema: Any = None  # For parquet
-    batch_size: int = 1000  # For parquet and levanter_cache
+    batch_size: int = 1000  # For parquet, levanter_cache and vortex
 
 
 @dataclass
@@ -816,7 +816,7 @@ def run_stage(
             elif op.writer_type == "vortex":
                 from zephyr.writers import write_vortex_file
 
-                result = write_vortex_file(stream, output_path)["path"]
+                result = write_vortex_file(stream, output_path, op.batch_size)["path"]
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
 

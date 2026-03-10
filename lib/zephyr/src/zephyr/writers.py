@@ -200,12 +200,13 @@ def write_parquet_file(
     return {"path": output_path, "count": count}
 
 
-def write_vortex_file(records: Iterable, output_path: str) -> dict:
-    """Write records to a Vortex file.
+def write_vortex_file(records: Iterable, output_path: str, batch_size: int = 32_000) -> dict:
+    """Write records to a Vortex file using streaming writes.
 
     Args:
         records: Records to write (iterable of dicts)
         output_path: Path to output .vortex file
+        batch_size: Number of records per batch
 
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
@@ -226,16 +227,29 @@ def write_vortex_file(records: Iterable, output_path: str) -> dict:
             vortex.io.write(empty_table, temp_path)
         return {"path": output_path, "count": 0}
 
-    # Accumulate all records and write
-    all_records = [first_record]
-    for record in record_iter:
-        all_records.append(record)
+    schema = infer_parquet_schema(first_record)
+    maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
+    dtype = vortex.DType.from_arrow(schema, non_nullable=True)
 
-    count = len(all_records)
-    table = pa.Table.from_pylist(all_records)
+    count = 0
+
+    def _array_batches():
+        nonlocal count
+        batch = [maybe_map_to_dict(first_record)]
+        count += 1
+        for record in record_iter:
+            batch.append(maybe_map_to_dict(record))
+            count += 1
+            if len(batch) >= batch_size:
+                yield vortex.Array.from_arrow(pa.Table.from_pylist(batch, schema=schema))
+                batch = []
+        if batch:
+            yield vortex.Array.from_arrow(pa.Table.from_pylist(batch, schema=schema))
+
+    array_iter = vortex.ArrayIterator.from_iter(dtype, _array_batches())
 
     with atomic_rename(output_path) as temp_path:
-        vortex.io.write(table, temp_path)
+        vortex.io.write(array_iter, temp_path)
 
     return {"path": output_path, "count": count}
 
