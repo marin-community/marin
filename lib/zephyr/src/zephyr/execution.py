@@ -52,9 +52,15 @@ class Chunk(Protocol):
     def __iter__(self) -> Iterator: ...
 
 
+ZEPHYR_TARGET_SHARD_COL = "__zephyr_target_shard__"
+
+
 @dataclass(frozen=True)
-class DiskChunk:
-    """Reference to a chunk stored on disk.
+class PickleDiskChunk:
+    """Reference to a pickle chunk stored on disk.
+
+    Fallback serialization for non-Scatter inter-stage data. Scatter uses
+    VortexDiskChunk instead for columnar storage with predicate pushdown.
 
     Each write goes to a UUID-unique path to avoid collisions when multiple
     workers race on the same shard.  No coordinator-side rename is needed;
@@ -69,7 +75,7 @@ class DiskChunk:
         return iter(self.read())
 
     @classmethod
-    def write(cls, path: str, data: list) -> DiskChunk:
+    def write(cls, path: str, data: list) -> PickleDiskChunk:
         """Write *data* to a UUID-unique path derived from *path*.
 
         The UUID suffix avoids collisions when multiple workers race on
@@ -91,6 +97,38 @@ class DiskChunk:
         """Load chunk data from disk."""
         with open_url(self.path, "rb") as f:
             return pickle.load(f)
+
+
+@dataclass(frozen=True)
+class VortexDiskChunk:
+    """Slice of a shared Vortex Scatter file, filtered by target shard.
+
+    Multiple VortexDiskChunk instances share the same file path but filter
+    for different target shards. Predicate pushdown in Vortex skips
+    irrelevant row groups, so each reducer reads only its own data
+    efficiently.
+    """
+
+    path: str
+    filter_shard: int
+    count: int
+    columns: list[str]
+
+    def __iter__(self) -> Iterator:
+        return iter(self.read())
+
+    def read(self) -> list:
+        """Load filtered chunk data from a Vortex file."""
+        import pyarrow.compute as pc
+        import vortex
+
+        vf = vortex.open(self.path)
+        dataset = vf.to_dataset()
+        table = dataset.to_table(
+            columns=self.columns,
+            filter=pc.field(ZEPHYR_TARGET_SHARD_COL) == self.filter_shard,
+        )
+        return table.to_pylist()
 
 
 @dataclass
@@ -956,21 +994,28 @@ class ZephyrWorker:
             total_shards=task.total_shards,
             chunk_size=task.chunk_size,
             aux_shards=task.aux_shards,
+            chunk_prefix=self._chunk_prefix,
+            execution_id=self._execution_id,
+            stage_name=task.stage_name,
         )
 
         results: list[ResultChunk] = []
         chunk_idx = 0
 
         for stage_output in run_stage(stage_ctx, task.operations):
-            chunk_path = _chunk_path(
-                self._chunk_prefix,
-                self._execution_id,
-                task.stage_name,
-                task.shard_idx,
-                chunk_idx,
-            )
-            chunk = list(stage_output.chunk)
-            chunk_ref = DiskChunk.write(chunk_path, chunk)
+            if isinstance(stage_output.chunk, VortexDiskChunk):
+                # Scatter already wrote the Vortex file — use directly
+                chunk_ref: Chunk = stage_output.chunk
+            else:
+                chunk_path = _chunk_path(
+                    self._chunk_prefix,
+                    self._execution_id,
+                    task.stage_name,
+                    task.shard_idx,
+                    chunk_idx,
+                )
+                chunk = list(stage_output.chunk)
+                chunk_ref = PickleDiskChunk.write(chunk_path, chunk)
             results.append(
                 ResultChunk(
                     source_shard=stage_output.source_shard,
@@ -984,7 +1029,7 @@ class ZephyrWorker:
                     "[shard %d] Wrote %d chunks so far (latest: %d items)",
                     task.shard_idx,
                     chunk_idx,
-                    len(stage_output.chunk),
+                    chunk_ref.count if hasattr(chunk_ref, "count") else 0,
                 )
 
         logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, chunk_idx)

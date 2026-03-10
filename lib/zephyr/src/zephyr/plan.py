@@ -570,7 +570,7 @@ def make_windows(
 class StageResultChunk:
     source_shard: int
     target_shard: int
-    chunk: Iterator[Any]
+    chunk: Any  # Iterator[Any] for normal ops, VortexDiskChunk for Scatter
 
 
 def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator[StageResultChunk]:
@@ -587,56 +587,110 @@ def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator
         yield StageResultChunk(source_shard=shard_idx, target_shard=shard_idx, chunk=iter(chunk))
 
 
-def _group_items_by_hash(
+def _scatter_to_vortex(
     items: Iterable,
     key_fn: Callable,
     num_output_shards: int,
     chunk_size: int,
-    sort_fn: Callable | None = None,
-) -> dict[int, list[list[Any]]]:
-    """Group items by hash of key into num_output_shards target shards with sorted chunks.
+    sort_fn: Callable | None,
+    vortex_path: str,
+    source_shard: int,
+) -> Iterator[StageResultChunk]:
+    """Scatter items into a single Vortex file partitioned by target shard.
+
+    Items are hashed by key to determine their target shard, augmented with
+    a ``__zephyr_target_shard__`` column, sorted by (target_shard, key,
+    sort_key), and streamed into a Vortex file via ``ArrayIterator``.
+
+    The reducer reads from this file using predicate pushdown on the target
+    shard column, efficiently skipping irrelevant row groups.
 
     Args:
-        items: Items to group
+        items: Input items (must be dicts)
         key_fn: Function to extract grouping key from item
         num_output_shards: Number of output shards to distribute across
-        chunk_size: Number of items per chunk
-        sort_fn: Optional secondary sort key. When provided, chunks are sorted by
-            (key_fn, sort_fn) so items within each group arrive in order.
+        chunk_size: Number of items per streaming batch
+        sort_fn: Optional secondary sort key within each group
+        vortex_path: Output path for the Vortex file
+        source_shard: Index of the source (mapper) shard
 
-    Returns:
-        Dict mapping shard index to list of chunks for that shard
+    Yields:
+        One StageResultChunk per non-empty target shard, each containing
+        a VortexDiskChunk reference to the shared Vortex file.
     """
-    # When sort_fn is provided, sort by composite (group_key, sort_key).
-    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
+    import pyarrow as pa
+    import vortex as vx
+
+    from zephyr.execution import ZEPHYR_TARGET_SHARD_COL, VortexDiskChunk
+    from zephyr.writers import ensure_parent_dir
+
+    # NOTE: Python sort for correctness with arbitrary key types.
+    # Future optimization: use pyarrow.compute.sort_indices for scalar keys.
     if sort_fn is not None:
         captured_sort_fn = sort_fn
 
-        def chunk_sort_key(item):
-            return (key_fn(item), captured_sort_fn(item))
+        def _sort_key(item):
+            return (item[ZEPHYR_TARGET_SHARD_COL], key_fn(item), captured_sort_fn(item))
 
     else:
-        chunk_sort_key = key_fn
 
-    output_chunks: dict[int, list[list[Any]]] = defaultdict(list)
-    output_tmp: dict[int, list] = defaultdict(list)
+        def _sort_key(item):
+            return (item[ZEPHYR_TARGET_SHARD_COL], key_fn(item))
 
-    for item in items:
-        key = key_fn(item)
-        target_shard = deterministic_hash(key) % num_output_shards
-        output_tmp[target_shard].append(item)
-        if chunk_size > 0 and len(output_tmp[target_shard]) >= chunk_size:
-            sorted_items = sorted(output_tmp[target_shard], key=chunk_sort_key)
-            output_chunks[target_shard].append(sorted_items)
-            output_tmp[target_shard] = []
+    per_shard_counts: dict[int, int] = defaultdict(int)
+    schema: pa.Schema | None = None
+    original_columns: list[str] | None = None
 
-    # Add all remaining chunks
-    for target_shard, shard_items in output_tmp.items():
-        if shard_items:
-            sorted_items = sorted(shard_items, key=chunk_sort_key)
-            output_chunks[target_shard].append(sorted_items)
+    def _to_vx_array(buffer: list) -> Any:
+        nonlocal schema, original_columns
+        buffer.sort(key=_sort_key)
+        batch = pa.RecordBatch.from_pylist(buffer)
+        if schema is None:
+            schema = batch.schema
+            original_columns = [c for c in schema.names if c != ZEPHYR_TARGET_SHARD_COL]
+        return vx.array(batch.to_struct_array())
 
-    return output_chunks
+    def _batch_generator() -> Iterator:
+        buffer: list = []
+        for item in items:
+            key = key_fn(item)
+            target = deterministic_hash(key) % num_output_shards
+            buffer.append(item | {ZEPHYR_TARGET_SHARD_COL: target})
+            per_shard_counts[target] += 1
+            if chunk_size > 0 and len(buffer) >= chunk_size:
+                yield _to_vx_array(buffer)
+                buffer = []
+        if buffer:
+            yield _to_vx_array(buffer)
+
+    gen = _batch_generator()
+    try:
+        first_arr = next(gen)
+    except StopIteration:
+        # Empty input — nothing to scatter
+        return
+
+    def _chained() -> Iterator:
+        yield first_arr
+        yield from gen
+
+    ensure_parent_dir(vortex_path)
+    iterator = vx.ArrayIterator.from_iter(first_arr.dtype, _chained())
+    vx.io.write(iterator, vortex_path)
+
+    assert original_columns is not None
+    for target in range(num_output_shards):
+        if per_shard_counts[target] > 0:
+            yield StageResultChunk(
+                source_shard=source_shard,
+                target_shard=target,
+                chunk=VortexDiskChunk(
+                    path=vortex_path,
+                    filter_shard=target,
+                    count=per_shard_counts[target],
+                    columns=original_columns,
+                ),
+            )
 
 
 def _merge_sorted_chunks(shard, key_fn: Callable, sort_fn: Callable | None = None) -> Iterator[tuple[object, Iterator]]:
@@ -736,6 +790,9 @@ class StageContext:
         total_shards: Total number of shards
         chunk_size: Number of items per output chunk
         aux_shards: Auxiliary shards for joins, keyed by op index
+        chunk_prefix: Storage prefix for intermediate chunks
+        execution_id: Unique ID for this execution
+        stage_name: Name of the current stage
     """
 
     shard: Iterable[Any]
@@ -743,6 +800,9 @@ class StageContext:
     total_shards: int
     chunk_size: int
     aux_shards: dict[int, Iterable[Any]] = field(default_factory=dict)
+    chunk_prefix: str = ""
+    execution_id: str = ""
+    stage_name: str = ""
 
     def get_right_shard(self, op_index: int) -> Iterable[Any]:
         """Get right shard for join at given op index.
@@ -822,17 +882,17 @@ def run_stage(
             return
 
         elif isinstance(op, Scatter):
-            # Hash items to output shards
             num_output_shards = op.num_output_shards if op.num_output_shards > 0 else ctx.total_shards
-            output_chunks = _group_items_by_hash(
-                stream, op.key_fn, num_output_shards, ctx.chunk_size, sort_fn=op.sort_fn
+            vortex_path = f"{ctx.chunk_prefix}/{ctx.execution_id}/{ctx.stage_name}" f"/shard-{ctx.shard_idx:04d}.vortex"
+            yield from _scatter_to_vortex(
+                stream,
+                op.key_fn,
+                num_output_shards,
+                ctx.chunk_size,
+                sort_fn=op.sort_fn,
+                vortex_path=vortex_path,
+                source_shard=ctx.shard_idx,
             )
-
-            # Yield chunks for each output shard
-            for shard_idx in range(num_output_shards):
-                if output_chunks[shard_idx]:
-                    for chunk in output_chunks[shard_idx]:
-                        yield StageResultChunk(source_shard=ctx.shard_idx, target_shard=shard_idx, chunk=chunk)
             return
 
         elif isinstance(op, Reduce):
