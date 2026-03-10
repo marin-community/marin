@@ -22,7 +22,10 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from zephyr.execution import VortexDiskChunk
 
 import msgspec
 from iris.marin_fs import url_to_fs
@@ -573,7 +576,7 @@ def make_windows(
 class StageResultChunk:
     source_shard: int
     target_shard: int
-    chunk: Any  # Iterator[Any] for normal ops, VortexDiskChunk for Scatter
+    chunk: Iterator[Any] | VortexDiskChunk
 
 
 def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator[StageResultChunk]:
