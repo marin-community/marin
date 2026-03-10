@@ -108,43 +108,11 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     return {"path": output_path, "count": count}
 
 
-def infer_parquet_type(value):
-    """Recursively infer PyArrow type from a Python value."""
+def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
+    """Infer a PyArrow schema from a batch of record dicts"""
     import pyarrow as pa
 
-    if isinstance(value, bool):
-        # Check bool before int since bool is a subclass of int
-        return pa.bool_()
-    elif isinstance(value, str):
-        return pa.string()
-    elif isinstance(value, int):
-        return pa.int64()
-    elif isinstance(value, float):
-        return pa.float64()
-    elif isinstance(value, dict):
-        nested_fields = []
-        for k, v in value.items():
-            nested_fields.append((k, infer_parquet_type(v)))
-        return pa.struct(nested_fields)
-    elif isinstance(value, list):
-        # Simple list of strings for now
-        return pa.list_(pa.string())
-    else:
-        return pa.string()
-
-
-def infer_parquet_schema(record: dict[str, Any] | Any):
-    """Infer PyArrow schema from a dictionary record."""
-    import pyarrow as pa
-
-    if is_dataclass(record):
-        record = asdict(record)
-
-    fields = []
-    for key, value in record.items():
-        fields.append((key, infer_parquet_type(value)))
-
-    return pa.schema(fields)
+    return pa.Table.from_pylist(records).schema
 
 
 def write_parquet_file(
@@ -178,24 +146,29 @@ def write_parquet_file(
         pq.write_table(table, output_path)
         return {"path": output_path, "count": 0}
 
-    actual_schema = schema or infer_parquet_schema(first_record)
     maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
 
-    count = 1
+    # Collect first batch and infer schema from multiple records so that
+    # None/optional values are resolved from non-None values in the batch.
+    first_batch = [maybe_map_to_dict(first_record)]
+    for record in itertools.islice(record_iter, batch_size - 1):
+        first_batch.append(maybe_map_to_dict(record))
+    actual_schema = schema or infer_arrow_schema(first_batch)
+
+    count = len(first_batch)
     with atomic_rename(output_path) as temp_path:
         with pq.ParquetWriter(temp_path, actual_schema) as writer:
-            batch = [maybe_map_to_dict(first_record)]
+            writer.write_table(pa.Table.from_pylist(first_batch, schema=actual_schema))
+            batch = []
             for record in record_iter:
                 batch.append(maybe_map_to_dict(record))
                 count += 1
                 if len(batch) >= batch_size:
-                    table = pa.Table.from_pylist(batch, schema=actual_schema)
-                    writer.write_table(table)
+                    writer.write_table(pa.Table.from_pylist(batch, schema=actual_schema))
                     batch = []
 
             if batch:
-                table = pa.Table.from_pylist(batch, schema=actual_schema)
-                writer.write_table(table)
+                writer.write_table(pa.Table.from_pylist(batch, schema=actual_schema))
 
     return {"path": output_path, "count": count}
 
@@ -229,13 +202,10 @@ def write_vortex_file(records: Iterable, output_path: str, batch_size: int = 32_
 
     maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
 
-    # Let PyArrow infer the schema from the first batch rather than using
-    # infer_parquet_schema, which doesn't handle nested/complex types well.
     first_batch = [maybe_map_to_dict(first_record)]
     for record in itertools.islice(record_iter, batch_size - 1):
         first_batch.append(maybe_map_to_dict(record))
-    first_table = pa.Table.from_pylist(first_batch)
-    schema = first_table.schema
+    schema = infer_arrow_schema(first_batch)
     dtype = vortex.DType.from_arrow(schema, non_nullable=True)
 
     count = 0
@@ -243,7 +213,7 @@ def write_vortex_file(records: Iterable, output_path: str, batch_size: int = 32_
     def _array_batches():
         nonlocal count
         count += len(first_batch)
-        yield vortex.Array.from_arrow(first_table)
+        yield vortex.Array.from_arrow(pa.Table.from_pylist(first_batch, schema=schema))
         batch = []
         for record in record_iter:
             batch.append(maybe_map_to_dict(record))
