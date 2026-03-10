@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
+import pyarrow.compute as pc
+import vortex
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from iris.marin_fs import marin_temp_bucket
@@ -119,9 +121,6 @@ class VortexDiskChunk:
 
     def read(self) -> list:
         """Load filtered chunk data from a Vortex file."""
-        import pyarrow.compute as pc
-        import vortex
-
         vf = vortex.open(self.path)
         dataset = vf.to_dataset()
         table = dataset.to_table(
@@ -1029,7 +1028,7 @@ class ZephyrWorker:
                     "[shard %d] Wrote %d chunks so far (latest: %d items)",
                     task.shard_idx,
                     chunk_idx,
-                    chunk_ref.count if hasattr(chunk_ref, "count") else 0,
+                    chunk_ref.count,
                 )
 
         logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, chunk_idx)
