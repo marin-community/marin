@@ -21,6 +21,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from iris.cluster.types import TaskName
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -228,36 +229,16 @@ def is_system_target(target: str) -> bool:
     return target == SYSTEM_PROCESS_TARGET
 
 
-@dataclass(frozen=True)
-class ParsedTarget:
-    """Result of parsing a profiling target string.
-
-    For task targets like ``/user/job/0`` or ``/user/job/0:3``, ``task_id``
-    is the bare task path and ``attempt_id`` is the optional attempt qualifier
-    (``None`` when omitted, meaning "use the current/latest attempt").
-    """
-
-    task_id: str
-    attempt_id: int | None
-
-
-def parse_profile_target(target: str) -> ParsedTarget:
-    """Parse an optional ``:attempt_id`` suffix from a task target.
+def parse_profile_target(target: str) -> TaskName:
+    """Parse a task target string into a TaskName.
 
     Examples:
         >>> parse_profile_target("/alice/job/0")
-        ParsedTarget(task_id='/alice/job/0', attempt_id=None)
+        TaskName('/alice/job/0')
         >>> parse_profile_target("/alice/job/0:3")
-        ParsedTarget(task_id='/alice/job/0', attempt_id=3)
+        TaskName('/alice/job/0:3')
     """
-    if ":" in target:
-        task_part, attempt_str = target.rsplit(":", 1)
-        try:
-            attempt_id = int(attempt_str)
-        except ValueError as exc:
-            raise ValueError(f"Invalid attempt ID in target '{target}': '{attempt_str}' is not an integer") from exc
-        return ParsedTarget(task_id=task_part, attempt_id=attempt_id)
-    return ParsedTarget(task_id=target, attempt_id=None)
+    return TaskName.from_wire(target)
 
 
 def _check_tool(name: str) -> None:

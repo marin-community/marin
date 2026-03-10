@@ -19,6 +19,7 @@ from iris.cluster.constraints import (
 from iris.cluster.types import (
     Entrypoint,
     JobName,
+    TaskName,
     gpu_device,
     tpu_device,
 )
@@ -112,6 +113,71 @@ def test_job_name_depth():
     # Task depth equals parent job depth
     assert JobName.from_string("/test-user/train/0").depth == 1
     assert JobName.from_string("/test-user/train/eval/0").depth == 2
+
+
+# ---------------------------------------------------------------------------
+# TaskName: structured task_id:attempt_id
+# ---------------------------------------------------------------------------
+
+
+def test_task_name_roundtrip_without_attempt():
+    tn = TaskName.from_wire("/alice/job/0")
+    assert tn.task_id == JobName.from_string("/alice/job/0")
+    assert tn.attempt_id is None
+    assert tn.to_wire() == "/alice/job/0"
+    assert str(tn) == "/alice/job/0"
+
+
+def test_task_name_roundtrip_with_attempt():
+    tn = TaskName.from_wire("/alice/job/0:3")
+    assert tn.task_id == JobName.from_string("/alice/job/0")
+    assert tn.attempt_id == 3
+    assert tn.to_wire() == "/alice/job/0:3"
+
+
+def test_task_name_require_attempt():
+    tn = TaskName.from_wire("/alice/job/0:5")
+    assert tn.require_attempt() == 5
+
+    tn_no_attempt = TaskName.from_wire("/alice/job/0")
+    with pytest.raises(ValueError, match="no attempt_id"):
+        tn_no_attempt.require_attempt()
+
+
+def test_task_name_job_id_and_task_index():
+    tn = TaskName.from_wire("/alice/parent/child/0:2")
+    assert tn.job_id == JobName.from_string("/alice/parent/child")
+    assert tn.task_index == 0
+
+
+def test_task_name_with_and_without_attempt():
+    tn = TaskName.from_wire("/alice/job/0")
+    with_attempt = tn.with_attempt(7)
+    assert with_attempt.attempt_id == 7
+    assert with_attempt.task_id == tn.task_id
+
+    without = with_attempt.without_attempt()
+    assert without.attempt_id is None
+    assert without.task_id == tn.task_id
+
+
+def test_task_name_from_components():
+    task_id = JobName.from_string("/alice/job/0")
+    tn = TaskName(task_id=task_id, attempt_id=2)
+    assert tn.to_wire() == "/alice/job/0:2"
+
+
+@pytest.mark.parametrize("value", ["", "not-a-path", "/alice/job/0:notanint"])
+def test_task_name_rejects_invalid_inputs(value: str):
+    with pytest.raises(ValueError):
+        TaskName.from_wire(value)
+
+
+def test_task_name_attempt_zero():
+    """Attempt 0 is a valid attempt_id and must round-trip."""
+    tn = TaskName.from_wire("/alice/job/0:0")
+    assert tn.attempt_id == 0
+    assert tn.to_wire() == "/alice/job/0:0"
 
 
 # ---------------------------------------------------------------------------

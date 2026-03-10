@@ -1242,12 +1242,11 @@ class ControllerServiceImpl:
 
         # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
-            parsed = parse_profile_target(request.target)
-            task_name = JobName.from_wire(parsed.task_id)
-            task_name.require_task()
+            target = parse_profile_target(request.target)
+            target.task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
-        task = _read_task_with_attempts(self._db, task_name)
+        task = _read_task_with_attempts(self._db, target.task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 

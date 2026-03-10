@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, TaskName
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,11 @@ class JobInfo:
     """Explicit job constraints for child job inheritance."""
 
     @property
+    def task_name(self) -> TaskName:
+        """Get the structured task identity (task_id + attempt_id)."""
+        return TaskName(task_id=self.task_id, attempt_id=self.attempt_id)
+
+    @property
     def job_id(self) -> JobName:
         return self.task_id.parent or self.task_id
 
@@ -80,11 +85,19 @@ def get_job_info() -> JobInfo | None:
     if info is not None:
         return info
 
-    # Fall back to environment variables
+    # Fall back to environment variables.
+    # Prefer IRIS_TASK_NAME (canonical task_id:attempt_id), fall back to IRIS_JOB_ID.
+    raw_task_name = os.environ.get("IRIS_TASK_NAME")
     raw_task_id = os.environ.get("IRIS_JOB_ID")
-    if raw_task_id:
+    if raw_task_name or raw_task_id:
         try:
-            task_id = JobName.from_wire(raw_task_id)
+            if raw_task_name:
+                parsed = TaskName.from_wire(raw_task_name)
+                task_id = parsed.task_id
+                attempt_id = parsed.attempt_id or int(os.environ.get("IRIS_ATTEMPT_ID", "0"))
+            else:
+                task_id = JobName.from_wire(raw_task_id)  # type: ignore[arg-type]
+                attempt_id = int(os.environ.get("IRIS_ATTEMPT_ID", "0"))
             task_id.require_task()
         except ValueError:
             return None
@@ -99,7 +112,7 @@ def get_job_info() -> JobInfo | None:
         info = JobInfo(
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
-            attempt_id=int(os.environ.get("IRIS_ATTEMPT_ID", "0")),
+            attempt_id=attempt_id,
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),

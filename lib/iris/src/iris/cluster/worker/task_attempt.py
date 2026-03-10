@@ -32,6 +32,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.types import (
     JobName,
+    TaskName,
     is_task_finished,
 )
 from iris.cluster.bundle import BundleStore
@@ -119,12 +120,19 @@ class TaskCancelled(Exception):
 class TaskAttemptConfig:
     """Immutable configuration for a task attempt, derived from the RPC request."""
 
-    task_id: JobName
+    task_name: TaskName
     num_tasks: int
-    attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
     cache_dir: Path
     storage_prefix: str = ""
+
+    @property
+    def task_id(self) -> JobName:
+        return self.task_name.task_id
+
+    @property
+    def attempt_id(self) -> int:
+        return self.task_name.require_attempt()
 
 
 def _get_host_ip() -> str:
@@ -169,6 +177,8 @@ def build_iris_env(
     env["IRIS_JOB_ID"] = task.task_id.to_wire()
     env["IRIS_NUM_TASKS"] = str(task.num_tasks)
     env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
+    # Canonical task identity encoding task_id:attempt_id
+    env["IRIS_TASK_NAME"] = task.task_name.to_wire()
     env["IRIS_BUNDLE_ID"] = task.request.bundle_id
 
     if worker_id:
@@ -283,9 +293,10 @@ class TaskAttempt:
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
         self._log_store = log_store
-        self._log_key = task_log_key(config.task_id, config.attempt_id)
+        self._log_key = task_log_key(config.task_name)
 
         # Task identity (from config)
+        self.task_name: TaskName = config.task_name
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id

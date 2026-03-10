@@ -198,6 +198,82 @@ class JobName:
         return cls.from_string(s)
 
 
+@dataclass(frozen=True, slots=True)
+class TaskName:
+    """A task identity combining a task-level JobName with an optional attempt qualifier.
+
+    Canonical wire format: /user/job/0:attempt_id
+    When attempt_id is None, the wire format omits the suffix: /user/job/0
+
+    The task_id must be a task-level JobName (last component numeric).
+    attempt_id is optional — when absent, semantics are per-operation but
+    typically "use the latest active attempt" is implied.
+
+    Examples:
+        TaskName.from_wire("/alice/job/0")     -> TaskName(task_id=/alice/job/0, attempt_id=None)
+        TaskName.from_wire("/alice/job/0:3")   -> TaskName(task_id=/alice/job/0, attempt_id=3)
+    """
+
+    task_id: JobName
+    attempt_id: int | None = None
+
+    @classmethod
+    def from_wire(cls, s: str) -> "TaskName":
+        """Parse a wire-format string like '/user/job/0' or '/user/job/0:3'."""
+        if not s:
+            raise ValueError("TaskName wire format must not be empty")
+        colon = s.rfind(":")
+        if colon >= 0:
+            task_part = s[:colon]
+            attempt_str = s[colon + 1 :]
+            try:
+                attempt_id = int(attempt_str)
+            except ValueError as exc:
+                raise ValueError(f"Invalid attempt ID in TaskName '{s}': '{attempt_str}' is not an integer") from exc
+            return cls(task_id=JobName.from_wire(task_part), attempt_id=attempt_id)
+        return cls(task_id=JobName.from_wire(s))
+
+    def to_wire(self) -> str:
+        """Serialize to wire format: '/user/job/0' or '/user/job/0:3'."""
+        base = self.task_id.to_wire()
+        if self.attempt_id is not None:
+            return f"{base}:{self.attempt_id}"
+        return base
+
+    def require_attempt(self) -> int:
+        """Return attempt_id or raise if absent."""
+        if self.attempt_id is None:
+            raise ValueError(f"TaskName has no attempt_id: {self}")
+        return self.attempt_id
+
+    @property
+    def job_id(self) -> JobName:
+        """Get the parent job name (task_id without the task index)."""
+        parent = self.task_id.parent
+        if parent is None:
+            raise ValueError(f"TaskName task_id has no parent job: {self.task_id}")
+        return parent
+
+    @property
+    def task_index(self) -> int:
+        """Get the task index from the task_id."""
+        return self.task_id.require_task()[1]
+
+    def with_attempt(self, attempt_id: int) -> "TaskName":
+        """Return a new TaskName with the given attempt_id."""
+        return TaskName(task_id=self.task_id, attempt_id=attempt_id)
+
+    def without_attempt(self) -> "TaskName":
+        """Return a new TaskName with attempt_id=None."""
+        return TaskName(task_id=self.task_id)
+
+    def __str__(self) -> str:
+        return self.to_wire()
+
+    def __repr__(self) -> str:
+        return f"TaskName({self.to_wire()!r})"
+
+
 def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
     """Extract GPU count from DeviceConfig."""
     if device.HasField("gpu"):
