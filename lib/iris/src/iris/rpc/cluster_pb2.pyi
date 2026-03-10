@@ -769,11 +769,6 @@ class Controller(_message.Message):
         worker_id: str
         accepted: bool
         def __init__(self, worker_id: _Optional[str] = ..., accepted: _Optional[bool] = ...) -> None: ...
-    class NotifyTaskUpdateRequest(_message.Message):
-        __slots__ = ("worker_id",)
-        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
-        worker_id: str
-        def __init__(self, worker_id: _Optional[str] = ...) -> None: ...
     class Endpoint(_message.Message):
         __slots__ = ("endpoint_id", "name", "address", "task_id", "metadata")
         class MetadataEntry(_message.Message):

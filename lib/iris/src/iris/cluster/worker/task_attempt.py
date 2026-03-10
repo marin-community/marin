@@ -248,7 +248,6 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
-        report_state: Callable[[], None],
         log_store: LogStore,
         poll_interval_seconds: float = 5.0,
     ):
@@ -270,7 +269,6 @@ class TaskAttempt:
             resolve_image: Resolves image tags for the current platform
                 (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
             port_allocator: Port allocator for releasing ports on cleanup
-            report_state: Callback to report task state changes to Worker
             log_store: Shared LogStore for appending and querying task logs.
             poll_interval_seconds: How often to poll container status
         """
@@ -283,7 +281,6 @@ class TaskAttempt:
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
-        self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
         self._log_store = log_store
         self._log_key = task_log_key(config.task_id, config.attempt_id)
@@ -515,8 +512,6 @@ class TaskAttempt:
             self._append_log(source="error", data=f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
-            if is_task_finished(self.status):
-                self._report_state()
             self._cleanup()
             logger.info(
                 "TaskAttempt finished: task_id=%s attempt=%s state=%s exit_code=%s",
@@ -535,7 +530,6 @@ class TaskAttempt:
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
         self._building_start_monotonic = time.monotonic()
-        self._report_state()  # Report BUILDING state to controller
 
         download_start = time.monotonic()
 
@@ -653,7 +647,6 @@ class TaskAttempt:
         if self.request.entrypoint.setup_commands:
             self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
             self.build_started = Timestamp.now()
-            self._report_state()
 
         build_logs = self._container_handle.build()
 
@@ -747,7 +740,6 @@ class TaskAttempt:
                 building_duration = time.monotonic() - self._building_start_monotonic
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
                 self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-                self._report_state()
 
             if status.phase == ContainerPhase.STOPPED:
                 logger.info(

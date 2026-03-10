@@ -662,10 +662,6 @@ message Controller {
     bool accepted = 2;
   }
 
-  message NotifyTaskUpdateRequest {
-    string worker_id = 1;
-  }
-
   // --- Endpoint Registry ---
   // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
   message Endpoint {
@@ -906,8 +902,6 @@ service ControllerService {
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  rpc NotifyTaskUpdate(Controller.NotifyTaskUpdateRequest) returns (Empty);
-
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
