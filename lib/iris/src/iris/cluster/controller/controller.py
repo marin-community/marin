@@ -919,12 +919,7 @@ class Controller:
     def _atexit_checkpoint(self) -> None:
         """Best-effort checkpoint at interpreter shutdown for post-mortem analysis."""
         try:
-            created_at = Timestamp.now()
-            self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
-            self._transitions.backup_to(path)
-            _fsspec_copy(str(path), str(self._latest_checkpoint_path))
-            self._upload_checkpoint_to_remote(path, created_at)
+            path, _result = self._write_checkpoint()
             logger.info("atexit checkpoint written: %s", path)
         except Exception:
             logger.exception("atexit checkpoint failed")
@@ -1512,17 +1507,29 @@ class Controller:
         except Exception:
             logger.exception("Failed to upload checkpoint to remote storage")
 
-    def _collect_checkpoint_result(self, created_at: Timestamp) -> CheckpointResult:
+    def _write_checkpoint(self) -> tuple[Path, CheckpointResult]:
+        """Write a timestamped SQLite checkpoint copy with local + remote upload.
+
+        Returns the local path and a summary of the checkpoint contents.
+        All checkpoint callers funnel through this single method.
+        """
+        created_at = Timestamp.now()
+        self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
+        self._transitions.backup_to(path)
+        _fsspec_copy(str(path), str(self._latest_checkpoint_path))
+        self._upload_checkpoint_to_remote(path, created_at)
         with self._db.snapshot() as snapshot:
             job_count = snapshot.count(JOBS)
             task_count = snapshot.count(TASKS)
             worker_count = snapshot.count(WORKERS)
-        return CheckpointResult(
+        result = CheckpointResult(
             created_at=created_at,
             job_count=job_count,
             task_count=task_count,
             worker_count=worker_count,
         )
+        return path, result
 
     def _maybe_periodic_checkpoint(self) -> None:
         """Write a best-effort periodic checkpoint DB copy."""
@@ -1533,13 +1540,7 @@ class Controller:
         if not self._periodic_checkpoint_limiter.should_run():
             return
         try:
-            created_at = Timestamp.now()
-            self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
-            self._transitions.backup_to(path)
-            _fsspec_copy(str(path), str(self._latest_checkpoint_path))
-            self._upload_checkpoint_to_remote(path, created_at)
-            result = self._collect_checkpoint_result(created_at)
+            path, result = self._write_checkpoint()
             logger.info(
                 "Periodic checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,
@@ -1556,13 +1557,7 @@ class Controller:
         try:
             # Wait for any in-flight heartbeat round to complete.
             with self._heartbeat_lock:
-                created_at = Timestamp.now()
-                self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
-                path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
-                self._transitions.backup_to(path)
-                _fsspec_copy(str(path), str(self._latest_checkpoint_path))
-                self._upload_checkpoint_to_remote(path, created_at)
-                result = self._collect_checkpoint_result(created_at)
+                path, result = self._write_checkpoint()
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,

@@ -63,7 +63,6 @@ def test_periodic_checkpoint_writes_local_and_uploads(tmp_path):
     controller._periodic_checkpoint_limiter._last_run = 0
 
     uploaded = []
-    original_upload = controller._upload_checkpoint_to_remote
 
     def track_upload(local_path, created_at):
         uploaded.append((str(local_path), created_at))
@@ -101,7 +100,7 @@ def test_begin_checkpoint_uploads_to_remote(tmp_path):
 
     controller._upload_checkpoint_to_remote = track_upload
 
-    path, result = controller.begin_checkpoint()
+    path, _result = controller.begin_checkpoint()
 
     # Local checkpoint should exist
     assert Path(path).exists()
