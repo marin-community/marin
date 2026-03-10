@@ -15,6 +15,7 @@ import enum
 import logging
 import os
 import pickle
+import re
 import threading
 import time
 import uuid
@@ -1403,7 +1404,9 @@ def _compute_tasks_from_shards(
     """Convert shard references into ShardTasks for the coordinator."""
     total = len(shard_refs)
     tasks = []
-    output_stage_name = stage_name or stage.stage_name(max_length=60)
+    # Sanitize for use as a path component: replace non-alphanumeric runs with '-'
+    raw_name = stage_name or stage.stage_name(max_length=60)
+    output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw_name).strip("-")
 
     for i, shard in enumerate(shard_refs):
         aux_shards = None
