@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -165,11 +165,22 @@ def scale_with_muonh(
 
         def transform_linear_layer(layer):
             array = linear_like_weight_array(layer)
-            assert array.ndim == 2
-            # steps is now a concrete int
-            updated_weight_array = zeropower_via_newtonschulz5(
-                array, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
-            )
+            if array.ndim < 2:
+                raise ValueError(f"Expected linear-like weight with rank >= 2, got {array.ndim}")
+
+            out_dim, in_dim = array.shape[-2], array.shape[-1]
+            if array.ndim == 2:
+                updated_weight_array = zeropower_via_newtonschulz5(
+                    array, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
+                )
+            else:
+                flat = array.reshape((-1, out_dim, in_dim))
+                flat_updated = jax.vmap(
+                    lambda mat: zeropower_via_newtonschulz5(
+                        mat, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
+                    )
+                )(flat)
+                updated_weight_array = flat_updated.reshape(array.shape)
             return replace_linear_like_weight_array(layer, updated_weight_array)
 
         muon_updates = map_flattened_linear_layers(transform_linear_layer, updates)

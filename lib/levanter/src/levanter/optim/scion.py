@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -123,7 +123,7 @@ def scale_by_signum(momentum=0.95):
             is_leaf=lambda x: x is None,
         )
 
-        updates = jax.tree_map(lambda u: None if u is None else jnp.sign(u), buf, is_leaf=lambda x: x is None)
+        updates = jax.tree.map(lambda u: None if u is None else jnp.sign(u), buf, is_leaf=lambda x: x is None)
 
         return updates, ScaleByScionState(momentum_buffer=buf)
 
@@ -147,13 +147,24 @@ def scale_with_scion(momentum=0.95, steps=5, scion_eps=1e-8, coefficient_type="q
 
         def transform_linear_layer(layer):
             weight = linear_like_weight_array(layer)
-            assert weight.ndim == 2
+            if weight.ndim < 2:
+                raise ValueError(f"Expected linear-like weight with rank >= 2, got {weight.ndim}")
 
-            updated_weight_array = zeropower_via_newtonschulz5(
-                weight, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
-            )
+            out_dim, in_dim = weight.shape[-2], weight.shape[-1]
+            if weight.ndim == 2:
+                updated_weight_array = zeropower_via_newtonschulz5(
+                    weight, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
+                )
+            else:
+                flat = weight.reshape((-1, out_dim, in_dim))
+                flat_updated = jax.vmap(
+                    lambda mat: zeropower_via_newtonschulz5(
+                        mat, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
+                    )
+                )(flat)
+                updated_weight_array = flat_updated.reshape(weight.shape)
 
-            scale = jnp.sqrt(jnp.maximum(1, updated_weight_array.shape[0] / updated_weight_array.shape[1]))
+            scale = jnp.sqrt(jnp.maximum(1, out_dim / in_dim))
             updated_weight_array *= scale
 
             return replace_linear_like_weight_array(layer, updated_weight_array)

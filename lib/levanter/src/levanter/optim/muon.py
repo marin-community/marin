@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -112,13 +112,11 @@ class MuonConfig(OptimizerConfig):
             if "Embedding" in path_str or "lm_head" in path_str:
                 return "adamw"
             elif is_linear_like_module(param):
-                # Muon transform currently only supports Haliax linear modules.
-                # eqx/marker linears remain on adamw fallback until a transform path exists.
-                if not isinstance(param, haliax.nn.Linear):
-                    return label_linear_like_module(param, weight_label="adamw", bias_label="adamw")
-                assert (
-                    param._out_first or use_kimi_scaling
-                )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
+                # muon for linear layers
+                if isinstance(param, haliax.nn.Linear):
+                    assert (
+                        param._out_first or use_kimi_scaling
+                    )  # if we don't use kimi's version of scaling, then we need to assume out_first to ensure we are scaling like Out/In
                 return label_linear_like_module(param, weight_label="muon", bias_label="adamw")
             else:
                 return "adamw"
@@ -162,18 +160,27 @@ def scale_with_muon(
 
         def transform_linear_layer(layer):
             array = linear_like_weight_array(layer)
-            assert array.ndim == 2
-            # steps is now a concrete int
-            updated_weight_array = zeropower_via_newtonschulz5(
-                array, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
-            )
+            if array.ndim < 2:
+                raise ValueError(f"Expected linear-like weight with rank >= 2, got {array.ndim}")
+
+            out_dim, in_dim = array.shape[-2], array.shape[-1]
+            if array.ndim == 2:
+                updated_weight_array = zeropower_via_newtonschulz5(
+                    array, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
+                )
+            else:
+                flat = array.reshape((-1, out_dim, in_dim))
+                flat_updated = jax.vmap(
+                    lambda mat: zeropower_via_newtonschulz5(
+                        mat, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
+                    )
+                )(flat)
+                updated_weight_array = flat_updated.reshape(array.shape)
 
             if not use_kimi_scaling:
-                scale = jnp.sqrt(
-                    jnp.maximum(1, updated_weight_array.shape[0] / updated_weight_array.shape[1])
-                )  # sqrt(Out/In)
+                scale = jnp.sqrt(jnp.maximum(1, out_dim / in_dim))  # sqrt(Out/In)
             else:
-                scale = 0.2 * jnp.sqrt(jnp.maximum(updated_weight_array.shape[0], updated_weight_array.shape[1]))
+                scale = 0.2 * jnp.sqrt(jnp.maximum(out_dim, in_dim))
             updated_weight_array *= scale
 
             return replace_linear_like_weight_array(layer, updated_weight_array)
