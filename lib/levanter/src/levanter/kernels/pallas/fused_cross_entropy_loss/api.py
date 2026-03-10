@@ -56,6 +56,7 @@ _AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
 _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 logger = logging.getLogger(__name__)
+_CANONICAL_PALLAS_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
 
 try:
     from .pallas_tpu import (
@@ -64,6 +65,7 @@ try:
     )
 
     IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
+    _CANONICAL_PALLAS_IMPLEMENTATIONS["pallas_tpu"] = linear_softmax_cross_entropy_loss_pallas
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
 
@@ -71,6 +73,7 @@ try:
     from .pallas_gpu import PallasUnsupportedError, linear_softmax_cross_entropy_loss_pallas_gpu
 
     IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
+    _CANONICAL_PALLAS_IMPLEMENTATIONS["pallas_gpu"] = linear_softmax_cross_entropy_loss_pallas_gpu
 except ImportError:
     pass
 
@@ -123,7 +126,15 @@ def _warn_vmem_compile_fallback_once(exc: Exception, *, impl_name: str) -> None:
     )
 
 
-def _pallas_impl_matches_current_backend(impl_name: str) -> bool:
+def _pallas_impl_matches_current_backend(impl_name: str, *, fn: ArrayImpl | None = None) -> bool:
+    canonical_impl = _CANONICAL_PALLAS_IMPLEMENTATIONS.get(impl_name)
+    if canonical_impl is None:
+        return True
+    if fn is None:
+        fn = IMPLEMENTATIONS.get(impl_name)
+    if fn is not canonical_impl:
+        return True
+
     backend = jax.default_backend()
     return (impl_name == "pallas_tpu" and backend == "tpu") or (impl_name == "pallas_gpu" and backend == "gpu")
 
@@ -601,36 +612,32 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         elif impl_for_call in ("xla", "reference"):
             block_sizes_for_impl = None
         elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "pallas_gpu"):
-            if not _pallas_impl_matches_current_backend(impl_for_call):
-                block_sizes_for_impl = None
+            inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
+                x.shape[0],
+                x.shape[1],
+                w.shape[1],
+                dtype=dtype,
+                x_dtype=x.dtype,
+                w_dtype=w.dtype,
+            )
+            fn = IMPLEMENTATIONS.get(impl_for_call)
+            if fn is None or not _pallas_impl_matches_current_backend(impl_for_call, fn=fn):
+                block_sizes_for_impl = inferred
+            elif has_tuned_match:
+                block_sizes_for_impl = inferred
             else:
-                inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
-                    x.shape[0],
-                    x.shape[1],
-                    w.shape[1],
+                block_sizes_for_impl = _autotune_block_sizes_on_miss(
+                    impl_name=impl_for_call,
+                    fn=fn,
+                    x=x,
+                    labels=labels,
+                    w=w,
+                    inferred=inferred,
                     dtype=dtype,
-                    x_dtype=x.dtype,
-                    w_dtype=w.dtype,
+                    logit_soft_cap=logit_soft_cap,
+                    precision=precision,
+                    return_argmax=return_argmax,
                 )
-                if has_tuned_match:
-                    block_sizes_for_impl = inferred
-                else:
-                    fn = IMPLEMENTATIONS.get(impl_for_call)
-                    if fn is None:
-                        block_sizes_for_impl = inferred
-                    else:
-                        block_sizes_for_impl = _autotune_block_sizes_on_miss(
-                            impl_name=impl_for_call,
-                            fn=fn,
-                            x=x,
-                            labels=labels,
-                            w=w,
-                            inferred=inferred,
-                            dtype=dtype,
-                            logit_soft_cap=logit_soft_cap,
-                            precision=precision,
-                            return_argmax=return_argmax,
-                        )
         else:
             block_sizes_for_impl = infer_block_sizes(
                 x.shape[0],
