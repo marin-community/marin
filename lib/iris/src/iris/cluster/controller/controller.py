@@ -1254,9 +1254,7 @@ class Controller:
 
         # Phase 2: stream heartbeats through a bounded worker queue.
         work_queue: queue.Queue[DispatchBatch] = queue.Queue()
-        result_queue: queue.Queue[tuple[DispatchBatch, cluster_pb2.HeartbeatResponse | None, str | None]] = (
-            queue.Queue()
-        )
+        result_queue: queue.Queue[tuple[DispatchBatch, cluster_pb2.HeartbeatResponse | None, str | None]] = queue.Queue()
         for snapshot in snapshots:
             work_queue.put(snapshot)
 

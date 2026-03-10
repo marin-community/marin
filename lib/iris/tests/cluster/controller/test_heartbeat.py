@@ -12,7 +12,7 @@ from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatAction,
     HeartbeatApplyRequest,
-    HeartbeatSnapshot,
+    DispatchBatch,
     RunningTaskEntry,
     TaskUpdate,
 )
@@ -47,7 +47,7 @@ def _register_worker(state, worker_id, worker_metadata, address="host:8080"):
 
 
 def _make_snapshot(worker_id, address="host:8080", running_tasks=None):
-    return HeartbeatSnapshot(
+    return DispatchBatch(
         worker_id=WorkerId(worker_id),
         worker_address=address,
         vm_address="192.168.1.1",
@@ -127,8 +127,8 @@ def test_fail_heartbeat_at_threshold(worker_metadata):
         assert not q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
 
 
-def test_complete_heartbeat_unhealthy_worker(state, worker_metadata):
-    """Worker reporting unhealthy immediately returns WORKER_FAILED."""
+def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_metadata):
+    """Worker reporting unhealthy increments failure count (not immediate removal)."""
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
@@ -138,13 +138,25 @@ def test_complete_heartbeat_unhealthy_worker(state, worker_metadata):
     )
     result = state.complete_heartbeat(snapshot, response)
 
-    assert result.action == HeartbeatAction.WORKER_FAILED
+    assert result.action == HeartbeatAction.TRANSIENT_FAILURE
     with state._db.snapshot() as q:
-        assert not q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
+        assert q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
 
 
-def test_unhealthy_worker_cascades_to_tasks(state, worker_metadata):
-    """An unhealthy worker's running tasks are marked WORKER_FAILED."""
+def test_unhealthy_worker_cascades_to_tasks():
+    """An unhealthy worker's running tasks are marked WORKER_FAILED after threshold.
+
+    complete_heartbeat resets consecutive_failures before checking health, so we
+    use heartbeat_failure_threshold=1 to trigger removal on the first unhealthy report.
+    """
+    state = ControllerTransitions(heartbeat_failure_threshold=1)
+    worker_metadata = cluster_pb2.WorkerMetadata(
+        hostname="test-host",
+        ip_address="192.168.1.1",
+        cpu_count=8,
+        memory_bytes=16 * 1024**3,
+        disk_bytes=100 * 1024**3,
+    )
     _register_worker(state, "worker1", worker_metadata)
 
     job_id = JobName.from_wire("/user/test-job")

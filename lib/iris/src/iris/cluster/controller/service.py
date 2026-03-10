@@ -577,12 +577,12 @@ class ControllerServiceImpl:
                     f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
                 )
 
-            bundle_path = self._bundle_store.write_bundle(job_id.to_wire(), request.bundle_blob)
+            bundle_id = self._bundle_store.write_zip(request.bundle_blob)
 
             new_request = cluster_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             new_request.ClearField("bundle_blob")
-            new_request.bundle_gcs_path = bundle_path
+            new_request.bundle_id = bundle_id
             request = new_request
 
         # Auto-inject device constraints from the resource spec.

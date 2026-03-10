@@ -177,26 +177,6 @@ class RunningTaskEntry(NamedTuple):
     attempt_id: int
 
 
-@dataclass
-class HeartbeatSnapshot:
-    """Immutable snapshot of worker state for heartbeat dispatch.
-
-    Captures all data needed to send a heartbeat RPC without holding locks:
-    - Worker identity and address for RPC routing
-    - Running tasks with attempt IDs for reconciliation
-    - Buffered dispatches/kills to deliver
-
-    Taken atomically under state lock to prevent iteration races.
-    """
-
-    worker_id: WorkerId
-    worker_address: str
-    vm_address: str
-    running_tasks: list[RunningTaskEntry]
-    tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest]
-    tasks_to_kill: list[str]
-
-
 @dataclass(frozen=True)
 class DispatchBatch:
     """Drained worker dispatch plus running-task snapshot."""
@@ -745,7 +725,7 @@ class ControllerTransitions:
                         num_tasks=job.num_tasks,
                         entrypoint=job.request.entrypoint,
                         environment=job.request.environment,
-                        bundle_gcs_path=job.request.bundle_gcs_path,
+                        bundle_id=job.request.bundle_id,
                         resources=resources,
                         ports=list(job.request.ports),
                         attempt_id=attempt_id,
@@ -1508,23 +1488,13 @@ class ControllerTransitions:
                 (str(worker_id), task_id, Timestamp.now().epoch_ms()),
             )
 
-    def begin_heartbeat(self, worker_id: WorkerId) -> HeartbeatSnapshot | None:
+    def begin_heartbeat(self, worker_id: WorkerId) -> DispatchBatch | None:
         """Drain dispatch for a worker and snapshot expected running attempts."""
-        batch = self.drain_dispatch(worker_id)
-        if batch is None:
-            return None
-        return HeartbeatSnapshot(
-            worker_id=batch.worker_id,
-            worker_address=batch.worker_address,
-            vm_address=batch.vm_address,
-            running_tasks=batch.running_tasks,
-            tasks_to_run=batch.tasks_to_run,
-            tasks_to_kill=batch.tasks_to_kill,
-        )
+        return self.drain_dispatch(worker_id)
 
     def complete_heartbeat(
         self,
-        snapshot: HeartbeatSnapshot,
+        snapshot: DispatchBatch,
         response: cluster_pb2.HeartbeatResponse,
     ) -> HeartbeatApplyResult:
         """Process successful heartbeat response (phase 3, success path).
@@ -1574,6 +1544,7 @@ class ControllerTransitions:
         # Check if the worker explicitly reported itself as unhealthy.
         if not response.worker_healthy:
             health_error = response.health_error or "worker reported unhealthy"
+            logger.warning("Worker %s reported unhealthy: %s", snapshot.worker_id, health_error)
             failure = self.fail_heartbeat_for_worker(
                 worker_id=snapshot.worker_id,
                 error=health_error,
@@ -1583,12 +1554,12 @@ class ControllerTransitions:
                     vm_address=snapshot.vm_address,
                     running_tasks=snapshot.running_tasks,
                 ),
-                force_remove=True,
+                force_remove=False,
             )
             return HeartbeatApplyResult(tasks_to_kill=failure.tasks_to_kill, action=failure.action)
         return result
 
-    def fail_heartbeat(self, snapshot: HeartbeatSnapshot, error: str) -> HeartbeatAction:
+    def fail_heartbeat(self, snapshot: DispatchBatch, error: str) -> HeartbeatAction:
         """Handle heartbeat RPC failure (phase 3, failure path).
 
         Preconditions:
@@ -1610,18 +1581,7 @@ class ControllerTransitions:
         next heartbeat would then carry a higher attempt_id, causing the worker to
         kill the running task and restart it unnecessarily.
         """
-        result = self.fail_heartbeat_for_worker(
-            snapshot.worker_id,
-            error,
-            DispatchBatch(
-                worker_id=snapshot.worker_id,
-                worker_address=snapshot.worker_address,
-                vm_address=snapshot.vm_address,
-                running_tasks=snapshot.running_tasks,
-                tasks_to_run=snapshot.tasks_to_run,
-                tasks_to_kill=snapshot.tasks_to_kill,
-            ),
-        )
+        result = self.fail_heartbeat_for_worker(snapshot.worker_id, error, snapshot)
         return result.action
 
     def fail_workers_by_vm_addresses(
