@@ -541,7 +541,11 @@ class Trainer:
                 logger.info("First train step completed in %.1fs (step %d)", info.step_duration, info.step)
                 is_first_step = False
 
-            levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
+            loading_metrics: dict[str, float] = {"throughput/loading_time": loading_time()}
+            queue_size = getattr(iter_data, "last_queue_size", None)
+            if queue_size is not None:
+                loading_metrics["throughput/prefetch_queue_size"] = queue_size
+            levanter.tracker.log(loading_metrics, step=info.step)
 
             yield info
 

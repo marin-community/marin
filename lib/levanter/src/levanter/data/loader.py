@@ -258,10 +258,15 @@ class DataLoaderIterator(Iterator[Ex]):
         batch = next(self._batches)
         time_mid = time.time()
 
+        # Expose queue depth for per-step telemetry (e.g. throughput/prefetch_queue_size).
+        self.last_queue_size: int | None = (
+            self._batches.qsize() if isinstance(self._batches, BackgroundIterator) else None
+        )
+
         time_end = time.time()
         time_batch = time_end - time_mid
         if (time_end - time_start) > 0.5:
-            qsize = self._batches.qsize() if isinstance(self._batches, BackgroundIterator) else "N/A"
+            qsize = self.last_queue_size if self.last_queue_size is not None else "N/A"
             if time_batch > 0.1:
                 logger.warning(
                     "Data loader stalled %.3fs (%.3fs in batchify). queue_size=%s prefetch_size=%d max_buffered=%s",
