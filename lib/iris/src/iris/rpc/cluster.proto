@@ -682,6 +682,7 @@ message Controller {
     string task_id = 3;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 4;
     int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
+    string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
   }
 
   message RegisterEndpointResponse {
@@ -756,6 +757,7 @@ message Controller {
     int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
     string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
     int64 cursor = 8;               // Autoincrement id cursor for incremental polling
+    bool tail = 9;                  // If true, return the last N lines instead of the first N
   }
 
   message TaskLogBatch {

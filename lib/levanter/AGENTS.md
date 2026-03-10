@@ -5,7 +5,7 @@ JAX-based language model training library using Haliax named tensors and Equinox
 ## Key Docs
 
 - `docs/` — full documentation site (update `mkdocs.yml` when adding sections)
-- `docs/recipes/port-models.md` — porting model architectures to Levanter
+- `docs/` — model porting guides (see `docs/` for architecture-specific guides)
 - `docs/design/jit-safety.md` — JIT safety rules (must-read before writing jitted code)
 
 ## Development

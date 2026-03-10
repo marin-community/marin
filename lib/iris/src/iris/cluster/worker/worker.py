@@ -59,6 +59,7 @@ class WorkerConfig:
     accelerator_variant: str = ""
     gpu_count: int = 0
     preemptible: bool = False
+    storage_prefix: str = ""
 
 
 def worker_config_from_proto(
@@ -103,6 +104,7 @@ def worker_config_from_proto(
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,
         preemptible=proto.preemptible,
+        storage_prefix=proto.storage_prefix,
     )
 
 
@@ -459,6 +461,7 @@ class Worker:
             attempt_id=attempt_id,
             request=request,
             cache_dir=self._cache_dir,
+            storage_prefix=self._config.storage_prefix,
         )
 
         attempt = TaskAttempt(

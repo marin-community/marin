@@ -795,7 +795,7 @@ class Controller(_message.Message):
         metadata: _containers.ScalarMap[str, str]
         def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
     class RegisterEndpointRequest(_message.Message):
-        __slots__ = ("name", "address", "task_id", "metadata", "attempt_id")
+        __slots__ = ("name", "address", "task_id", "metadata", "attempt_id", "endpoint_id")
         class MetadataEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -808,12 +808,14 @@ class Controller(_message.Message):
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+        ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
         name: str
         address: str
         task_id: str
         metadata: _containers.ScalarMap[str, str]
         attempt_id: int
-        def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
+        endpoint_id: str
+        def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., attempt_id: _Optional[int] = ..., endpoint_id: _Optional[str] = ...) -> None: ...
     class RegisterEndpointResponse(_message.Message):
         __slots__ = ("endpoint_id",)
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
@@ -913,7 +915,7 @@ class Controller(_message.Message):
         users: _containers.RepeatedCompositeFieldContainer[Controller.UserSummary]
         def __init__(self, users: _Optional[_Iterable[_Union[Controller.UserSummary, _Mapping]]] = ...) -> None: ...
     class GetTaskLogsRequest(_message.Message):
-        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "substring", "attempt_id", "min_level", "cursor")
+        __slots__ = ("id", "include_children", "since_ms", "max_total_lines", "substring", "attempt_id", "min_level", "cursor", "tail")
         ID_FIELD_NUMBER: _ClassVar[int]
         INCLUDE_CHILDREN_FIELD_NUMBER: _ClassVar[int]
         SINCE_MS_FIELD_NUMBER: _ClassVar[int]
@@ -922,6 +924,7 @@ class Controller(_message.Message):
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
         CURSOR_FIELD_NUMBER: _ClassVar[int]
+        TAIL_FIELD_NUMBER: _ClassVar[int]
         id: str
         include_children: bool
         since_ms: int
@@ -930,7 +933,8 @@ class Controller(_message.Message):
         attempt_id: int
         min_level: str
         cursor: int
-        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., substring: _Optional[str] = ..., attempt_id: _Optional[int] = ..., min_level: _Optional[str] = ..., cursor: _Optional[int] = ...) -> None: ...
+        tail: bool
+        def __init__(self, id: _Optional[str] = ..., include_children: _Optional[bool] = ..., since_ms: _Optional[int] = ..., max_total_lines: _Optional[int] = ..., substring: _Optional[str] = ..., attempt_id: _Optional[int] = ..., min_level: _Optional[str] = ..., cursor: _Optional[int] = ..., tail: _Optional[bool] = ...) -> None: ...
     class TaskLogBatch(_message.Message):
         __slots__ = ("task_id", "logs", "error", "worker_id")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]

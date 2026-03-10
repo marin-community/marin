@@ -14,7 +14,7 @@ Batching convention:
 - The public API should accept either batched inputs or a single unbatched example and will add/remove a trivial
   batch dimension as needed.
 
-See `docs/recipes/add_pallas_kernel.md` for the workflow.
+See `.agents/skills/add-pallas-kernel/` for the workflow.
 """
 
 from __future__ import annotations
