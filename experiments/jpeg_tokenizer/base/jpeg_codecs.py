@@ -93,6 +93,7 @@ class SymbolTokenizerConfig:
     dc_bound: int = 2047
     ac_bound: int = 1023
     quality: int = 95
+    source: CoefficientTokenSource = CoefficientTokenSource.REFERENCE
     version: str = "v0"
 
 
@@ -353,7 +354,13 @@ def encode_jpeg_symbols(
     eob_token = 0
     zrl_token = 1
 
-    blocks = _quantized_luma_blocks(canonical_jpeg.luma_plane, quality=config.quality)
+    blocks = quantized_luma_blocks(
+        canonical_jpeg,
+        config=CoefficientTokenizerConfig(
+            quality=config.quality,
+            source=config.source,
+        ),
+    )
     zigzag = blocks.reshape(-1, 64)[:, _ZIGZAG_ORDER]
     tokens: list[int] = []
     previous_dc = 0
@@ -394,6 +401,58 @@ def encode_jpeg_symbols(
             tokens.append(eob_token)
 
     return np.asarray(tokens, dtype=np.int32)
+
+
+def whole_image_symbol_vocab_size(
+    config: SymbolTokenizerConfig = V0_SYMBOL_CONFIG,
+    *,
+    append_eos: bool = True,
+) -> int:
+    """Return the whole-image symbol vocabulary size including reserved EOS/PAD ids."""
+
+    base_vocab = symbol_vocab_size(config)
+    if not append_eos:
+        return base_vocab + 1
+    return base_vocab + 2
+
+
+def whole_image_symbol_length(
+    symbol_tokens: np.ndarray,
+    *,
+    append_eos: bool = True,
+) -> int:
+    """Return the whole-image symbol length including EOS if configured."""
+
+    return len(symbol_tokens) + (1 if append_eos else 0)
+
+
+def pad_whole_image_symbol_tokens(
+    symbol_tokens: np.ndarray,
+    *,
+    seq_len: int,
+    config: SymbolTokenizerConfig = V0_SYMBOL_CONFIG,
+    eos_token_id: int | None = None,
+    pad_token_id: int | None = None,
+    append_eos: bool = True,
+) -> np.ndarray:
+    """Right-pad one whole-image symbol stream to a fixed sequence length."""
+
+    base_vocab = symbol_vocab_size(config)
+    eos_token_id = base_vocab if eos_token_id is None else eos_token_id
+    pad_token_id = base_vocab + 1 if pad_token_id is None else pad_token_id
+    if eos_token_id < base_vocab:
+        raise ValueError(f"eos_token_id must reserve a non-symbol id, got {eos_token_id}")
+    if pad_token_id <= eos_token_id:
+        raise ValueError(f"pad_token_id must be greater than eos_token_id, got {pad_token_id} <= {eos_token_id}")
+
+    payload = np.asarray(symbol_tokens, dtype=np.int32)
+    if append_eos:
+        payload = np.concatenate([payload, np.asarray([eos_token_id], dtype=np.int32)])
+    if len(payload) > seq_len:
+        raise ValueError(f"Symbol payload length {len(payload)} exceeds seq_len {seq_len}")
+    padded = np.full(seq_len, pad_token_id, dtype=np.int32)
+    padded[: len(payload)] = payload
+    return padded
 
 
 def encode_dct_coeffs(
@@ -558,12 +617,15 @@ __all__ = sorted(
         "encode_jpeg_bytes",
         "encode_jpeg_symbols",
         "pad_whole_image_byte_tokens",
+        "pad_whole_image_symbol_tokens",
         "quantized_luma_blocks",
         "reconstruct_luma_from_coeff_tokens",
         "stable_byte_checksum",
         "symbol_vocab_size",
         "whole_image_byte_length",
         "whole_image_byte_vocab_size",
+        "whole_image_symbol_length",
+        "whole_image_symbol_vocab_size",
         "window_byte_tokens",
     ]
 )

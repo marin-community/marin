@@ -6,6 +6,7 @@ import cloudpickle
 import json
 import logging
 import uuid
+from dataclasses import replace
 from io import StringIO
 
 import numpy as np
@@ -37,17 +38,22 @@ from experiments.jpeg_tokenizer.base.jpeg_codecs import (
     CoefficientTokenSource,
     CoefficientTokenizerConfig,
     WholeImageByteTokenizerConfig,
+    V0_SYMBOL_CONFIG,
     byte_window_vocab_size,
     canonicalize_image,
     encode_dct_coeffs,
     encode_jpeg_bytes,
     encode_jpeg_symbols,
+    pad_whole_image_symbol_tokens,
     whole_image_byte_vocab_size,
     whole_image_byte_length,
+    whole_image_symbol_length,
+    whole_image_symbol_vocab_size,
     pad_whole_image_byte_tokens,
     quantized_luma_blocks,
     reconstruct_luma_from_coeff_tokens,
     stable_byte_checksum,
+    symbol_vocab_size,
     window_byte_tokens,
 )
 from levanter.checkpoint import CheckpointerConfig
@@ -119,6 +125,14 @@ def test_whole_image_byte_tokenizer_appends_eos_and_masks_pad_tail():
     assert whole_image_byte_vocab_size(config) == 258
 
 
+def test_whole_image_symbol_tokenizer_appends_eos_and_masks_pad_tail():
+    padded = pad_whole_image_symbol_tokens(np.asarray([1, 2, 3], dtype=np.int32), seq_len=6)
+
+    assert padded.tolist() == [1, 2, 3, 36833, 36834, 36834]
+    assert whole_image_symbol_length(np.asarray([1, 2, 3], dtype=np.int32)) == 4
+    assert whole_image_symbol_vocab_size() == 36835
+
+
 def test_canonicalization_and_reference_tokenizers_are_deterministic():
     pixels = np.arange(16 * 16, dtype=np.uint8).reshape(16, 16)
     image = Image.fromarray(pixels, mode="L").convert("RGB")
@@ -137,6 +151,20 @@ def test_canonicalization_and_reference_tokenizers_are_deterministic():
     assert symbol_tokens.ndim == 1
     assert coeff_tokens.min() >= 0
     assert symbol_tokens.min() >= 0
+
+
+def test_libjpeg_symbol_tokens_are_deterministic_and_within_vocab():
+    pixels = np.arange(32 * 32, dtype=np.uint8).reshape(32, 32)
+    image = Image.fromarray(pixels, mode="L").convert("RGB")
+    canonical = canonicalize_image(image)
+    symbol_config = replace(V0_SYMBOL_CONFIG, source=CoefficientTokenSource.LIBJPEG)
+    first_tokens = encode_jpeg_symbols(canonical, config=symbol_config)
+    second_tokens = encode_jpeg_symbols(canonical, config=symbol_config)
+
+    assert first_tokens.ndim == 1
+    assert np.array_equal(first_tokens, second_tokens)
+    assert first_tokens.min() >= 0
+    assert first_tokens.max() < symbol_vocab_size(symbol_config)
 
 
 def test_libjpeg_quantized_blocks_are_deterministic_and_match_expected_token_count():

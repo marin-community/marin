@@ -650,3 +650,42 @@
     across both representations, rather than just swapping the token store
 - Next action: keep the whole-image byte store path ready, but do not launch it until the attention regime for the
   comparison is made explicit.
+
+### 2026-03-09 22:13 - Exact whole-image JPEG symbol baseline staged
+
+- Hypothesis: the right follow-on to exact libjpeg coefficients is an exact JPEG symbol-stream baseline that keeps the
+  same whole-image SWA setup while moving one level closer to the codec syntax.
+- Command:
+  - added `scripts/jpeg_tokenizer/build_whole_image_symbol_token_store.py`
+  - built the local store with:
+    `uv run python scripts/jpeg_tokenizer/build_whole_image_symbol_token_store.py --pad-to-multiple 128 --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0 --log-every 2000`
+  - mirrored it with:
+    `gsutil -m rsync -r artifacts/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0 gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0`
+  - submitted the smoke through a direct `JobSubmissionClient` on the forwarded dashboard:
+    `raysubmit_XNjfpJ91vCFmCTs5`
+- Result:
+  - the symbol tokenizer now derives its run-length/category/value events from exact libjpeg quantized luma blocks via
+    `CoefficientTokenSource.LIBJPEG`
+  - whole-image symbol-store metadata:
+    - `seq_len=58240`
+    - `vocab_size=36835`
+    - `eos_token_id=36833`
+    - `pad_token_id=36834`
+    - `loss_mask_ignore_id=36834`
+  - observed maximum pre-pad symbol length on Imagenette: `58126`
+  - mirrored store path:
+    `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0`
+  - smoke launch surface added:
+    - `tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke`
+    - `tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial`
+  - live smoke status at log time:
+    - Ray submit id: `raysubmit_XNjfpJ91vCFmCTs5`
+    - controller state: `RUNNING`
+    - executor and Fray dispatch completed cleanly to
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke-ee1834`
+- Interpretation:
+  - the exact symbol-stream baseline is now staged end-to-end with the same whole-image SWA regime as the byte run
+  - this is the right comparison to answer whether codec-structured syntax tokens still beat raw canonical JPEG bytes
+    when both are modeled as whole-image sequences
+  - the open question is now purely runtime/training behavior, not data preparation or representation plumbing
+- Next action: monitor the symbol smoke through trainer startup; if it clears, submit the full exact-symbol SWA trial.
