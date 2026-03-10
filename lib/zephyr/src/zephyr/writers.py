@@ -116,7 +116,7 @@ def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
 
 
 def write_parquet_file(
-    records: Iterable, output_path: str, schema: object | None = None, batch_size: int = 1000
+    records: Iterable, output_path: str, *, schema: object | None = None, batch_size: int = 1000
 ) -> dict:
     """Write records to a Parquet file.
 
@@ -174,7 +174,7 @@ def write_parquet_file(
 
 
 def write_vortex_file(
-    records: Iterable, output_path: str, schema: object | None = None, batch_size: int = 32_000
+    records: Iterable, output_path: str, *, schema: object | None = None, batch_size: int = 32_000
 ) -> dict:
     """Write records to a Vortex file using streaming writes.
 
@@ -322,7 +322,7 @@ class ThreadedBatchWriter:
 
 
 def write_levanter_cache(
-    records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any], batch_size: int = 1024
+    records: Iterable[dict[str, Any]], output_path: str, *, metadata: dict[str, Any], batch_size: int = 1024
 ) -> dict:
     """Write tokenized records to Levanter cache format."""
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
