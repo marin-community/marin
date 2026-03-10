@@ -96,28 +96,37 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
 @LmDatasetFormatBase.register_subclass("dna")
 @dataclass(frozen=True)
 class DNALmDatasetFormat(LmDatasetFormatBase):
-    """Dataset configuration for DNA sequences with soft-masking support.
+    """Dataset configuration for DNA sequences with case-based loss weighting.
 
     Supports position-wise loss weighting based on character case:
-    - Uppercase nucleotides (ACGT): full loss weight (1.0)
-    - Lowercase nucleotides (acgt): reduced loss weight (soft_mask_weight)
+    - Uppercase nucleotides (ACGT): weight = uppercase_weight
+    - Lowercase nucleotides (acgt): weight = lowercase_weight
 
-    This is useful for down-weighting repetitive elements in genomic data,
-    as pioneered by GPN and adopted by PlantCaduceus and Evo 2.
+    Common use cases:
+    - Repeat masking: lowercase_weight=0.01 (down-weight repetitive elements)
+    - Functional positions only: uppercase_weight=1.0, lowercase_weight=0.0
+    - Nonfunctional positions only: uppercase_weight=0.0, lowercase_weight=1.0
 
     Attributes:
         text_key: Field name containing the DNA sequence.
-        soft_mask_weight: Loss weight for lowercase (soft-masked) positions.
+        uppercase_weight: Loss weight for uppercase positions.
+        lowercase_weight: Loss weight for lowercase positions.
     """
 
     text_key: str = "seq"
-    soft_mask_weight: float = 1.0
+    uppercase_weight: float = 1.0
+    lowercase_weight: float = 1.0
 
     def build_preprocessor(
         self, tokenizer: HfTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
         del enforce_eos, enforce_bos
-        return DNABatchTokenizer(tokenizer, text_field=self.text_key, soft_mask_weight=self.soft_mask_weight)
+        return DNABatchTokenizer(
+            tokenizer,
+            text_field=self.text_key,
+            uppercase_weight=self.uppercase_weight,
+            lowercase_weight=self.lowercase_weight,
+        )
 
 
 class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
