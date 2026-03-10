@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
 
-LOG_FORMAT = "%(levelprefix)s%(asctime)s %(thread)d %(name)s %(message)s"
+LOG_FORMAT = "%(levelprefix)s%(asctime)s %(thread)s %(name)s %(message)s"
 LOG_DATEFMT = "%Y%m%d %H:%M:%S"
 
 # Map log level names to single-character prefixes for compact log output.
