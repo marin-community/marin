@@ -13,7 +13,6 @@ import tempfile
 from pathlib import Path
 
 from dataclasses import dataclass, field
-from threading import RLock
 from typing import Any, NamedTuple
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -27,6 +26,7 @@ from iris.cluster.controller.db import (
     Endpoint,
     EndpointQuery,
     Join,
+    TransactionCursor,
     Worker,
     ENDPOINT_TASKS,
     endpoint_query_predicate,
@@ -189,6 +189,27 @@ class DispatchBatch:
     tasks_to_kill: list[str] = field(default_factory=list)
 
 
+def _decommit_worker_resources(
+    cur: TransactionCursor,
+    worker_id: str,
+    resources: "cluster_pb2.ResourceSpecProto",
+) -> None:
+    """Subtract a task's resource reservation from a worker, flooring at zero."""
+    cur.execute(
+        "UPDATE workers SET committed_cpu_millicores = MAX(0, committed_cpu_millicores - ?), "
+        "committed_mem_bytes = MAX(0, committed_mem_bytes - ?), "
+        "committed_gpu = MAX(0, committed_gpu - ?), committed_tpu = MAX(0, committed_tpu - ?) "
+        "WHERE worker_id = ?",
+        (
+            int(resources.cpu_millicores),
+            int(resources.memory_bytes),
+            int(get_gpu_count(resources.device)),
+            int(get_tpu_count(resources.device)),
+            worker_id,
+        ),
+    )
+
+
 # =============================================================================
 # Controller Transitions
 # =============================================================================
@@ -212,7 +233,6 @@ class ControllerTransitions:
         db_path: Path | None = None,
         db: ControllerDB | None = None,
     ):
-        self._lock = RLock()
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
         if db is not None:
             self._db = db
@@ -243,12 +263,10 @@ class ControllerTransitions:
         self._db.close()
 
     def backup_to(self, destination: Path) -> None:
-        with self._lock:
-            self._db.backup_to(destination)
+        self._db.backup_to(destination)
 
-    def restore_from(self, source: Path) -> None:
-        with self._lock:
-            self._db.replace_from(source)
+    def restore_from(self, source: str | Path) -> None:
+        self._db.replace_from(source)
 
     def _record_transaction(
         self,
@@ -341,14 +359,13 @@ class ControllerTransitions:
 
     def replace_reservation_claims(self, claims: dict[WorkerId, ReservationClaim]) -> None:
         """Replace all reservation claims atomically."""
-        with self._lock:
-            with self._db.transaction() as cur:
-                cur.execute("DELETE FROM reservation_claims")
-                for worker_id, claim in claims.items():
-                    cur.execute(
-                        "INSERT INTO reservation_claims(worker_id, job_id, entry_idx) VALUES (?, ?, ?)",
-                        (str(worker_id), claim.job_id, claim.entry_idx),
-                    )
+        with self._db.transaction() as cur:
+            cur.execute("DELETE FROM reservation_claims")
+            for worker_id, claim in claims.items():
+                cur.execute(
+                    "INSERT INTO reservation_claims(worker_id, job_id, entry_idx) VALUES (?, ?, ?)",
+                    (str(worker_id), claim.job_id, claim.entry_idx),
+                )
 
     def persist_checkpoint_state(
         self,
@@ -356,26 +373,25 @@ class ControllerTransitions:
         tracked_workers: list[snapshot_pb2.TrackedWorkerSnapshot],
     ) -> None:
         """Persist checkpoint metadata rows into the controller DB."""
-        with self._lock:
-            with self._db.transaction() as cur:
-                cur.execute("DELETE FROM scaling_groups")
-                for group in scaling_groups:
-                    cur.execute(
-                        "INSERT INTO scaling_groups(name, snapshot_proto, updated_at_ms) VALUES (?, ?, ?)",
-                        (
-                            group.name,
-                            group.SerializeToString(),
-                            Timestamp.now().epoch_ms(),
-                        ),
-                    )
+        with self._db.transaction() as cur:
+            cur.execute("DELETE FROM scaling_groups")
+            for group in scaling_groups:
+                cur.execute(
+                    "INSERT INTO scaling_groups(name, snapshot_proto, updated_at_ms) VALUES (?, ?, ?)",
+                    (
+                        group.name,
+                        group.SerializeToString(),
+                        Timestamp.now().epoch_ms(),
+                    ),
+                )
 
-                cur.execute("DELETE FROM tracked_workers")
-                for worker in tracked_workers:
-                    cur.execute(
-                        "INSERT INTO tracked_workers(worker_id, slice_id, scale_group, internal_address) "
-                        "VALUES (?, ?, ?, ?)",
-                        (worker.worker_id, worker.slice_id, worker.scale_group, worker.internal_address),
-                    )
+            cur.execute("DELETE FROM tracked_workers")
+            for worker in tracked_workers:
+                cur.execute(
+                    "INSERT INTO tracked_workers(worker_id, slice_id, scale_group, internal_address) "
+                    "VALUES (?, ?, ?, ?)",
+                    (worker.worker_id, worker.slice_id, worker.scale_group, worker.internal_address),
+                )
 
     # =========================================================================
     # Command API
@@ -392,7 +408,7 @@ class ControllerTransitions:
         actions: list[tuple[str, str, dict[str, object]]] = []
         created_task_ids: list[JobName] = []
 
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             row = cur.execute("SELECT value FROM meta WHERE key = 'last_submission_ms'").fetchone()
             last_submission_ms = int(row["value"]) if row is not None else 0
             effective_submission_ms = max(submitted_ms, last_submission_ms + 1)
@@ -554,7 +570,7 @@ class ControllerTransitions:
 
     def cancel_job(self, job_id: JobName, reason: str) -> TxResult:
         """Cancel a job tree and return tasks that need kill RPCs."""
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             subtree = cur.execute(
                 "WITH RECURSIVE subtree(job_id) AS ("
                 "  SELECT job_id FROM jobs WHERE job_id = ? "
@@ -630,7 +646,7 @@ class ControllerTransitions:
             else:
                 attrs.append((key, "str", str(value), None, None))
         now_ms = ts.epoch_ms()
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             cur.execute(
                 "INSERT INTO workers("
                 "worker_id, address, metadata_proto, healthy, active, consecutive_failures, last_heartbeat_ms, "
@@ -668,7 +684,7 @@ class ControllerTransitions:
         accepted: list[Assignment] = []
         rejected: list[Assignment] = []
         has_real_dispatch = False
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             for assignment in assignments:
                 task_row = cur.execute(
                     "SELECT * FROM tasks WHERE task_id = ?", (assignment.task_id.to_wire(),)
@@ -776,7 +792,7 @@ class ControllerTransitions:
         pending_logs: list[tuple[str, list[logging_pb2.LogEntry]]] = []
         tasks_to_kill: set[JobName] = set()
 
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             worker = cur.execute("SELECT * FROM workers WHERE worker_id = ?", (str(req.worker_id),)).fetchone()
             if worker is None:
                 return TxResult()
@@ -945,20 +961,7 @@ class ControllerTransitions:
                     if job_row is not None:
                         job_req = cluster_pb2.Controller.LaunchJobRequest()
                         job_req.ParseFromString(job_row["request_proto"])
-                        resources = job_req.resources
-                        cur.execute(
-                            "UPDATE workers SET committed_cpu_millicores = MAX(0, committed_cpu_millicores - ?), "
-                            "committed_mem_bytes = MAX(0, committed_mem_bytes - ?), "
-                            "committed_gpu = MAX(0, committed_gpu - ?), committed_tpu = MAX(0, committed_tpu - ?) "
-                            "WHERE worker_id = ?",
-                            (
-                                int(resources.cpu_millicores),
-                                int(resources.memory_bytes),
-                                int(get_gpu_count(resources.device)),
-                                int(get_tpu_count(resources.device)),
-                                str(worker_id),
-                            ),
-                        )
+                        _decommit_worker_resources(cur, str(worker_id), job_req.resources)
                     cur.execute("DELETE FROM endpoints WHERE task_id = ?", (update.task_id.to_wire(),))
 
                 job_row_full = cur.execute(
@@ -1016,19 +1019,7 @@ class ControllerTransitions:
                             ),
                         )
                         if sibling_worker_id is not None:
-                            cur.execute(
-                                "UPDATE workers SET committed_cpu_millicores = MAX(0, committed_cpu_millicores - ?), "
-                                "committed_mem_bytes = MAX(0, committed_mem_bytes - ?), "
-                                "committed_gpu = MAX(0, committed_gpu - ?), committed_tpu = MAX(0, committed_tpu - ?) "
-                                "WHERE worker_id = ?",
-                                (
-                                    int(job_req.resources.cpu_millicores),
-                                    int(job_req.resources.memory_bytes),
-                                    int(get_gpu_count(job_req.resources.device)),
-                                    int(get_tpu_count(job_req.resources.device)),
-                                    str(sibling_worker_id),
-                                ),
-                            )
+                            _decommit_worker_resources(cur, str(sibling_worker_id), job_req.resources)
                         cur.execute("DELETE FROM endpoints WHERE task_id = ?", (sibling_task_id,))
                         tasks_to_kill.add(JobName.from_wire(sibling_task_id))
 
@@ -1085,19 +1076,7 @@ class ControllerTransitions:
                         if rem_worker is not None:
                             rem_job_req = cluster_pb2.Controller.LaunchJobRequest()
                             rem_job_req.ParseFromString(rem["request_proto"])
-                            cur.execute(
-                                "UPDATE workers SET committed_cpu_millicores = MAX(0, committed_cpu_millicores - ?), "
-                                "committed_mem_bytes = MAX(0, committed_mem_bytes - ?), "
-                                "committed_gpu = MAX(0, committed_gpu - ?), committed_tpu = MAX(0, committed_tpu - ?) "
-                                "WHERE worker_id = ?",
-                                (
-                                    int(rem_job_req.resources.cpu_millicores),
-                                    int(rem_job_req.resources.memory_bytes),
-                                    int(get_gpu_count(rem_job_req.resources.device)),
-                                    int(get_tpu_count(rem_job_req.resources.device)),
-                                    str(rem_worker),
-                                ),
-                            )
+                            _decommit_worker_resources(cur, str(rem_worker), rem_job_req.resources)
                             tasks_to_kill.add(JobName.from_wire(rem_task_id))
                         cur.execute("DELETE FROM endpoints WHERE task_id = ?", (rem_task_id,))
 
@@ -1151,21 +1130,7 @@ class ControllerTransitions:
                             if child_worker is not None:
                                 child_req = cluster_pb2.Controller.LaunchJobRequest()
                                 child_req.ParseFromString(child_task["request_proto"])
-                                cur.execute(
-                                    "UPDATE workers SET committed_cpu_millicores = "
-                                    "MAX(0, committed_cpu_millicores - ?), "
-                                    "committed_mem_bytes = MAX(0, committed_mem_bytes - ?), "
-                                    "committed_gpu = MAX(0, committed_gpu - ?), "
-                                    "committed_tpu = MAX(0, committed_tpu - ?) "
-                                    "WHERE worker_id = ?",
-                                    (
-                                        int(child_req.resources.cpu_millicores),
-                                        int(child_req.resources.memory_bytes),
-                                        int(get_gpu_count(child_req.resources.device)),
-                                        int(get_tpu_count(child_req.resources.device)),
-                                        str(child_worker),
-                                    ),
-                                )
+                                _decommit_worker_resources(cur, str(child_worker), child_req.resources)
                                 tasks_to_kill.add(JobName.from_wire(child_task_id))
                             cur.execute("DELETE FROM endpoints WHERE task_id = ?", (child_task_id,))
                         cur.execute(
@@ -1209,7 +1174,7 @@ class ControllerTransitions:
                 as unhealthy.
         """
         tasks_to_kill: set[JobName] = set()
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             row = cur.execute(
                 "SELECT consecutive_failures FROM workers WHERE worker_id = ? AND active = 1",
                 (str(worker_id),),
@@ -1338,7 +1303,7 @@ class ControllerTransitions:
 
     def mark_task_unschedulable(self, task_id: JobName, reason: str) -> TxResult:
         """Mark a task as unschedulable using the task transition engine."""
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             row = cur.execute("SELECT job_id FROM tasks WHERE task_id = ?", (task_id.to_wire(),)).fetchone()
             if row is None:
                 return TxResult()
@@ -1356,7 +1321,7 @@ class ControllerTransitions:
 
     def drain_dispatch(self, worker_id: WorkerId) -> DispatchBatch | None:
         """Drain buffered dispatches and snapshot worker running tasks."""
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             worker_row = cur.execute(
                 "SELECT worker_id, address, metadata_proto FROM workers "
                 "WHERE worker_id = ? AND active = 1 AND healthy = 1",
@@ -1407,7 +1372,7 @@ class ControllerTransitions:
 
     def requeue_dispatch(self, batch: DispatchBatch) -> None:
         """Re-queue drained dispatch payloads for later delivery."""
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             now_ms = Timestamp.now().epoch_ms()
             for req in batch.tasks_to_run:
                 cur.execute(
@@ -1434,7 +1399,7 @@ class ControllerTransitions:
         Returns:
             True if the job was removed, False if it doesn't exist or is not finished
         """
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             row = cur.execute("SELECT state FROM jobs WHERE job_id = ?", (job_id.to_wire(),)).fetchone()
             if row is None:
                 return False
@@ -1451,7 +1416,7 @@ class ControllerTransitions:
             return True
 
     def remove_worker(self, worker_id: WorkerId) -> Worker | None:
-        with self._lock, self._db.transaction() as cur:
+        with self._db.transaction() as cur:
             row = cur.execute("SELECT * FROM workers WHERE worker_id = ?", (str(worker_id),)).fetchone()
             if row is None:
                 return None
@@ -1469,12 +1434,11 @@ class ControllerTransitions:
         Called by the scheduling thread after committing resources via TaskAssignedEvent.
         The dispatch will be delivered when begin_heartbeat() drains the buffer.
         """
-        with self._lock:
-            self._db.execute(
-                "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-                "VALUES (?, 'run', ?, NULL, ?)",
-                (str(worker_id), task_request.SerializeToString(), Timestamp.now().epoch_ms()),
-            )
+        self._db.execute(
+            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
+            "VALUES (?, 'run', ?, NULL, ?)",
+            (str(worker_id), task_request.SerializeToString(), Timestamp.now().epoch_ms()),
+        )
 
     def buffer_kill(self, worker_id: WorkerId, task_id: str) -> None:
         """Buffer a task kill for the next heartbeat.
@@ -1482,12 +1446,11 @@ class ControllerTransitions:
         Called when a task needs to be terminated on a worker. The kill will be
         delivered when begin_heartbeat() drains the buffer.
         """
-        with self._lock:
-            self._db.execute(
-                "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-                "VALUES (?, 'kill', NULL, ?, ?)",
-                (str(worker_id), task_id, Timestamp.now().epoch_ms()),
-            )
+        self._db.execute(
+            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
+            "VALUES (?, 'kill', NULL, ?, ?)",
+            (str(worker_id), task_id, Timestamp.now().epoch_ms()),
+        )
 
     def begin_heartbeat(self, worker_id: WorkerId) -> DispatchBatch | None:
         """Drain dispatch for a worker and snapshot expected running attempts."""
@@ -1639,21 +1602,20 @@ class ControllerTransitions:
 
     def add_endpoint(self, endpoint: Endpoint, task_id: JobName | None = None) -> None:
         """Add an endpoint row to the DB, optionally associated with a task."""
-        with self._lock:
-            self._db.execute(
-                "INSERT OR REPLACE INTO endpoints("
-                "endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    endpoint.endpoint_id,
-                    endpoint.name,
-                    endpoint.address,
-                    endpoint.job_id.to_wire(),
-                    task_id.to_wire() if task_id else None,
-                    json.dumps(endpoint.metadata),
-                    endpoint.registered_at.epoch_ms(),
-                ),
-            )
+        self._db.execute(
+            "INSERT OR REPLACE INTO endpoints("
+            "endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                endpoint.endpoint_id,
+                endpoint.name,
+                endpoint.address,
+                endpoint.job_id.to_wire(),
+                task_id.to_wire() if task_id else None,
+                json.dumps(endpoint.metadata),
+                endpoint.registered_at.epoch_ms(),
+            ),
+        )
 
     def remove_endpoint(self, endpoint_id: str) -> Endpoint | None:
         return self._db.delete_endpoint(endpoint_id)
@@ -1684,44 +1646,41 @@ class ControllerTransitions:
 
     def set_worker_health_for_test(self, worker_id: WorkerId, healthy: bool) -> None:
         """Test helper: set worker health in DB."""
-        with self._lock:
-            self._db.execute(
-                "UPDATE workers SET healthy = ?, consecutive_failures = ? WHERE worker_id = ?",
-                (1 if healthy else 0, 0 if healthy else 1, str(worker_id)),
-            )
+        self._db.execute(
+            "UPDATE workers SET healthy = ?, consecutive_failures = ? WHERE worker_id = ?",
+            (1 if healthy else 0, 0 if healthy else 1, str(worker_id)),
+        )
 
     def set_worker_attribute_for_test(self, worker_id: WorkerId, key: str, value: AttributeValue) -> None:
         """Test helper: upsert one worker attribute in DB."""
-        with self._lock:
-            str_value = int_value = float_value = None
-            value_type = "str"
-            if isinstance(value.value, int):
-                value_type = "int"
-                int_value = int(value.value)
-            elif isinstance(value.value, float):
-                value_type = "float"
-                float_value = float(value.value)
-            else:
-                str_value = str(value.value)
+        str_value = int_value = float_value = None
+        value_type = "str"
+        if isinstance(value.value, int):
+            value_type = "int"
+            int_value = int(value.value)
+        elif isinstance(value.value, float):
+            value_type = "float"
+            float_value = float(value.value)
+        else:
+            str_value = str(value.value)
 
-            self._db.execute(
-                "INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(worker_id, key) DO UPDATE SET "
-                "value_type=excluded.value_type, "
-                "str_value=excluded.str_value, "
-                "int_value=excluded.int_value, "
-                "float_value=excluded.float_value",
-                (str(worker_id), key, value_type, str_value, int_value, float_value),
-            )
+        self._db.execute(
+            "INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(worker_id, key) DO UPDATE SET "
+            "value_type=excluded.value_type, "
+            "str_value=excluded.str_value, "
+            "int_value=excluded.int_value, "
+            "float_value=excluded.float_value",
+            (str(worker_id), key, value_type, str_value, int_value, float_value),
+        )
 
     def set_worker_consecutive_failures_for_test(self, worker_id: WorkerId, consecutive_failures: int) -> None:
         """Test helper: set worker consecutive failure count in DB."""
-        with self._lock:
-            self._db.execute(
-                "UPDATE workers SET consecutive_failures = ? WHERE worker_id = ?",
-                (consecutive_failures, str(worker_id)),
-            )
+        self._db.execute(
+            "UPDATE workers SET consecutive_failures = ? WHERE worker_id = ?",
+            (consecutive_failures, str(worker_id)),
+        )
 
     def set_task_state_for_test(
         self,
@@ -1732,32 +1691,30 @@ class ControllerTransitions:
         exit_code: int | None = None,
     ) -> None:
         """Test helper: set task state directly in DB."""
-        with self._lock:
-            self._db.execute(
-                "UPDATE tasks SET state = ?, error = ?, exit_code = ? WHERE task_id = ?",
-                (state, error, exit_code, task_id.to_wire()),
-            )
+        self._db.execute(
+            "UPDATE tasks SET state = ?, error = ?, exit_code = ? WHERE task_id = ?",
+            (state, error, exit_code, task_id.to_wire()),
+        )
 
     def create_attempt_for_test(self, task_id: JobName, worker_id: WorkerId) -> int:
         """Test helper: append a new task_attempt without finalizing prior attempt."""
-        with self._lock:
-            task = self._db.fetchone("SELECT current_attempt_id FROM tasks WHERE task_id = ?", (task_id.to_wire(),))
-            if task is None:
-                raise ValueError(f"unknown task: {task_id}")
-            next_attempt_id = int(task["current_attempt_id"]) + 1
-            now_ms = Timestamp.now().epoch_ms()
-            self._db.execute(
-                "INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) VALUES (?, ?, ?, ?, ?)",
-                (
-                    task_id.to_wire(),
-                    next_attempt_id,
-                    str(worker_id),
-                    cluster_pb2.TASK_STATE_ASSIGNED,
-                    now_ms,
-                ),
-            )
-            self._db.execute(
-                "UPDATE tasks SET current_attempt_id = ?, state = ? WHERE task_id = ?",
-                (next_attempt_id, cluster_pb2.TASK_STATE_ASSIGNED, task_id.to_wire()),
-            )
-            return next_attempt_id
+        task = self._db.fetchone("SELECT current_attempt_id FROM tasks WHERE task_id = ?", (task_id.to_wire(),))
+        if task is None:
+            raise ValueError(f"unknown task: {task_id}")
+        next_attempt_id = int(task["current_attempt_id"]) + 1
+        now_ms = Timestamp.now().epoch_ms()
+        self._db.execute(
+            "INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) VALUES (?, ?, ?, ?, ?)",
+            (
+                task_id.to_wire(),
+                next_attempt_id,
+                str(worker_id),
+                cluster_pb2.TASK_STATE_ASSIGNED,
+                now_ms,
+            ),
+        )
+        self._db.execute(
+            "UPDATE tasks SET current_attempt_id = ?, state = ? WHERE task_id = ?",
+            (next_attempt_id, cluster_pb2.TASK_STATE_ASSIGNED, task_id.to_wire()),
+        )
+        return next_attempt_id

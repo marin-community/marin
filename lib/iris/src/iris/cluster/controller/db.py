@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager
@@ -1062,11 +1061,17 @@ class ControllerDB:
             finally:
                 dest.close()
 
-    def replace_from(self, source: Path) -> None:
-        """Replace current DB file with ``source`` and reopen connection."""
+    def replace_from(self, source: str | Path) -> None:
+        """Replace current DB file with ``source`` and reopen connection.
+
+        ``source`` may be a remote path (e.g. ``gs://...``) thanks to fsspec.
+        """
+        import fsspec.core
+
         with self._lock:
             self._conn.close()
-            shutil.copy2(source, self._db_path)
+            with fsspec.core.open(str(source), "rb") as src, open(self._db_path, "wb") as dst:
+                dst.write(src.read())
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)

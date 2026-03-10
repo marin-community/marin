@@ -5,7 +5,6 @@
 
 import logging
 import queue
-import shutil
 import sys
 import tempfile
 import threading
@@ -16,6 +15,7 @@ from pathlib import Path
 from time import sleep
 from typing import Protocol
 
+import fsspec.core
 import uvicorn
 
 from iris.chaos import chaos
@@ -87,6 +87,14 @@ logger = logging.getLogger(__name__)
 _UNLIMITED = sys.maxsize
 
 _SLOW_HEARTBEAT_MS = 5000
+
+
+def _fsspec_copy(src: str, dst: str) -> None:
+    """Copy a file using fsspec so either path can be remote (e.g. GCS)."""
+    with fsspec.core.open(src, "rb") as f_src, fsspec.core.open(dst, "wb") as f_dst:
+        f_dst.write(f_src.read())
+
+
 _HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
@@ -1065,8 +1073,14 @@ class Controller:
         are visible across passes.
 
         No lock is needed since only one scheduling thread exists. All state
-        reads and writes go through ControllerTransitions which has its own lock.
+        reads and writes go through ControllerTransitions, and every DB access
+        is serialized by ControllerDB._lock with multi-statement mutations
+        wrapped in BEGIN IMMEDIATE transactions.
         """
+        # Reservation claims are read and updated outside the scheduling transaction.
+        # This creates a narrow race window where a worker could be removed between
+        # claim reads and scheduling, but it's benign: queue_assignments() re-validates
+        # all assignments transactionally, and stale claims are cleaned up next cycle.
         claims = _read_reservation_claims(self._db)
         claims_changed = self._cleanup_stale_claims(claims)
         claims_changed = self._claim_workers_for_reservations(claims) or claims_changed
@@ -1473,7 +1487,7 @@ class Controller:
             self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
             path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
             self._transitions.backup_to(path)
-            shutil.copy2(path, self._latest_checkpoint_path)
+            _fsspec_copy(str(path), str(self._latest_checkpoint_path))
             result = self._collect_checkpoint_result(created_at)
             logger.info(
                 "Periodic checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
@@ -1495,7 +1509,7 @@ class Controller:
                 self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
                 path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
                 self._transitions.backup_to(path)
-                shutil.copy2(path, self._latest_checkpoint_path)
+                _fsspec_copy(str(path), str(self._latest_checkpoint_path))
                 result = self._collect_checkpoint_result(created_at)
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
@@ -1510,8 +1524,9 @@ class Controller:
 
     def restore_from_checkpoint(self, checkpoint_path: str | None = None) -> bool:
         """Restore full controller state from a checkpoint SQLite copy."""
-        source = Path(checkpoint_path) if checkpoint_path else self._latest_checkpoint_path
-        if not source.exists():
+        source = str(Path(checkpoint_path)) if checkpoint_path else str(self._latest_checkpoint_path)
+        fs, fs_path = fsspec.core.url_to_fs(source)
+        if not fs.exists(fs_path):
             logger.info("No checkpoint DB found at %s, starting fresh", source)
             return False
 
