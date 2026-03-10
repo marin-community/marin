@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory, _is_remote_path
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
@@ -137,6 +137,13 @@ def serve(
     if base_worker_config is not None:
         base_worker_config.storage_prefix = bundle_prefix
 
+    # Default to hourly checkpointing when bundle_prefix is remote (GCS/S3)
+    # so controller state is periodically uploaded for post-mortem analysis.
+    _HOURLY_CHECKPOINT_SECONDS = 3600.0
+    if checkpoint_interval is None and _is_remote_path(bundle_prefix):
+        checkpoint_interval = _HOURLY_CHECKPOINT_SECONDS
+        logger.info("Defaulting to hourly checkpointing (remote bundle_prefix detected)")
+
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
@@ -187,7 +194,19 @@ def serve(
     stop_event = threading.Event()
 
     def handle_shutdown(_signum, _frame):
-        logger.info("Shutdown signal received, stopping controller...")
+        logger.info("Shutdown signal received, writing final checkpoint...")
+        try:
+            path, result = controller.begin_checkpoint()
+            logger.info(
+                "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                path,
+                result.job_count,
+                result.task_count,
+                result.worker_count,
+            )
+        except Exception:
+            logger.exception("Final checkpoint on shutdown failed")
+        logger.info("Stopping controller...")
         controller.stop()
         logger.info("Controller stopped")
         stop_event.set()

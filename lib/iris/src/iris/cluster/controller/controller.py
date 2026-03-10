@@ -3,6 +3,7 @@
 
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
+import atexit
 import logging
 import queue
 import sys
@@ -93,6 +94,11 @@ def _fsspec_copy(src: str, dst: str) -> None:
     """Copy a file using fsspec so either path can be remote (e.g. GCS)."""
     with fsspec.core.open(src, "rb") as f_src, fsspec.core.open(dst, "wb") as f_dst:
         f_dst.write(f_src.read())
+
+
+def _is_remote_path(path: str) -> bool:
+    """Return True if *path* uses a remote fsspec scheme (e.g. ``gs://``, ``s3://``)."""
+    return "://" in path and not path.startswith("file://")
 
 
 _HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
@@ -867,6 +873,9 @@ class Controller:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
+        # Register atexit hook to capture final state for post-mortem analysis.
+        atexit.register(self._atexit_checkpoint)
+
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server is not None and self._server.started,
@@ -907,6 +916,19 @@ class Controller:
         self._transitions.close()
         self._bundle_store.close()
 
+    def _atexit_checkpoint(self) -> None:
+        """Best-effort checkpoint at interpreter shutdown for post-mortem analysis."""
+        try:
+            created_at = Timestamp.now()
+            self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
+            self._transitions.backup_to(path)
+            _fsspec_copy(str(path), str(self._latest_checkpoint_path))
+            self._upload_checkpoint_to_remote(path, created_at)
+            logger.info("atexit checkpoint written: %s", path)
+        except Exception:
+            logger.exception("atexit checkpoint failed")
+
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""
         limiter = RateLimiter(interval_seconds=self._config.scheduler_interval.to_seconds())
@@ -922,6 +944,12 @@ class Controller:
                 continue
 
             self._run_scheduling()
+
+            # Run periodic checkpoints here when autoscaler is not configured,
+            # since _run_autoscaler_loop (which normally drives checkpoints)
+            # is only started when an autoscaler is present.
+            if self._autoscaler is None:
+                self._maybe_periodic_checkpoint()
 
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
@@ -1462,6 +1490,28 @@ class Controller:
     def _latest_checkpoint_path(self) -> Path:
         return self._checkpoint_dir / "latest.sqlite3"
 
+    @property
+    def _remote_checkpoint_prefix(self) -> str | None:
+        """Remote fsspec path for checkpoint uploads, or None for local-only."""
+        bp = self._config.bundle_prefix
+        if bp and _is_remote_path(bp):
+            return bp.rstrip("/") + "/controller-state"
+        return None
+
+    def _upload_checkpoint_to_remote(self, local_path: Path, created_at: Timestamp) -> None:
+        """Upload a local checkpoint file to remote storage via fsspec."""
+        remote_prefix = self._remote_checkpoint_prefix
+        if remote_prefix is None:
+            return
+        try:
+            remote_timestamped = f"{remote_prefix}/checkpoint-{created_at.epoch_ms()}.sqlite3"
+            remote_latest = f"{remote_prefix}/latest.sqlite3"
+            _fsspec_copy(str(local_path), remote_timestamped)
+            _fsspec_copy(str(local_path), remote_latest)
+            logger.info("Checkpoint uploaded to %s", remote_timestamped)
+        except Exception:
+            logger.exception("Failed to upload checkpoint to remote storage")
+
     def _collect_checkpoint_result(self, created_at: Timestamp) -> CheckpointResult:
         with self._db.snapshot() as snapshot:
             job_count = snapshot.count(JOBS)
@@ -1488,6 +1538,7 @@ class Controller:
             path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
             self._transitions.backup_to(path)
             _fsspec_copy(str(path), str(self._latest_checkpoint_path))
+            self._upload_checkpoint_to_remote(path, created_at)
             result = self._collect_checkpoint_result(created_at)
             logger.info(
                 "Periodic checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
@@ -1510,6 +1561,7 @@ class Controller:
                 path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
                 self._transitions.backup_to(path)
                 _fsspec_copy(str(path), str(self._latest_checkpoint_path))
+                self._upload_checkpoint_to_remote(path, created_at)
                 result = self._collect_checkpoint_result(created_at)
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
