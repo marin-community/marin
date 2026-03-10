@@ -114,11 +114,6 @@ uv run pyrefly
 - Delete stale comments immediately on discovery.
 - Inline comments to clarify non-obvious boolean arguments.
 
-## File I/O
-
-- Assert absolute paths at boundaries.
-- Atomic writes: write to a temp file, then rename.
-
 ## LLM-Generated Code Pitfalls
 
 Watch for and eliminate these patterns in generated code:
