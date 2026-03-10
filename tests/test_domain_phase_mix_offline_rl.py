@@ -3,6 +3,7 @@
 
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -900,14 +901,292 @@ def test_cql_smoke_with_fake_backend(tmp_path):
 def test_online_phase_planning_handoffs():
     from experiments.domain_phase_mix.offline_rl.evaluate_policy_three_phase_starcoder import build_phase_train_plan
 
-    p0 = build_phase_train_plan(0, checkpoint_path=None)
-    p1 = build_phase_train_plan(1, checkpoint_path="gs://x/checkpoint-1")
-    p2 = build_phase_train_plan(2, checkpoint_path="gs://x/checkpoint-2")
+    p0 = build_phase_train_plan(0, checkpoint_path=None, phase_end_steps=(1888, 3824), total_steps=5722)
+    p1 = build_phase_train_plan(1, checkpoint_path="gs://x/checkpoint-1", phase_end_steps=(1888, 3824), total_steps=5722)
+    p2 = build_phase_train_plan(2, checkpoint_path="gs://x/checkpoint-2", phase_end_steps=(1888, 3824), total_steps=5722)
     assert p0.initialize_from_checkpoint_path is None
     assert p1.initialize_from_checkpoint_path is not None
     assert p2.initialize_from_checkpoint_path is not None
     assert p1.reset_data_loader_on_init is False
     assert p2.reset_data_loader_on_init is False
+    assert p1.cumulative_steps == 3824
+    assert p2.cumulative_steps == 5722
+
+
+def test_rollout_defaults_match_native_aligned_boundaries():
+    three_cfg = eval_runner.EvaluateConfig(
+        policy_artifact_path="x/policy_artifact.json",
+        output_dir="tmp",
+        n_replicates=1,
+    )
+    two_cfg = two_phase_eval.EvaluateTwoPhaseConfig(
+        policy_artifact_path="x/policy_artifact.json",
+        output_dir="tmp",
+        n_replicates=1,
+    )
+
+    assert three_cfg.phase_end_steps == (1888, 3824)
+    assert two_cfg.phase_end_steps == (1904,)
+
+
+def test_simulated_epoching_train_respects_experiment_budget_override(monkeypatch):
+    from experiments import defaults as defaults_module
+
+    @dataclass(frozen=True)
+    class _FakeDataConfig:
+        target_budget: int | None = None
+        experiment_budget: int | None = None
+
+    class _FakeTrainConfig:
+        train_batch_size = 4
+        num_train_steps = 10
+        train_seq_len = 16
+
+    captured = {}
+
+    monkeypatch.setattr(
+        defaults_module,
+        "_prepare_data_config",
+        lambda tokenized, use_default_validation: _FakeDataConfig(),
+    )
+    monkeypatch.setattr(defaults_module, "_validate_train_length", lambda train_seq_len, model_config: 32)
+
+    def _fake_default_train(
+        name,
+        tokenized,
+        model_config,
+        train_config,
+        tags,
+        use_default_validation,
+        eval_harness_tasks,
+        wandb_name=None,
+        eval_datasets_cache_path=None,
+    ):
+        captured["experiment_budget"] = tokenized.experiment_budget
+        captured["target_budget"] = tokenized.target_budget
+        return tokenized
+
+    monkeypatch.setattr(defaults_module, "default_train", _fake_default_train)
+
+    defaults_module.simulated_epoching_train(
+        name="x",
+        tokenized="unused",
+        model_config=object(),
+        train_config=_FakeTrainConfig(),
+        target_budget=999,
+        experiment_budget_override=123456,
+    )
+
+    assert captured["experiment_budget"] == 123456
+    assert captured["target_budget"] == 999
+
+
+def test_three_phase_rollout_builder_keeps_native_budget_and_schedule(monkeypatch):
+    from experiments.domain_phase_mix.config import PhaseSchedule
+
+    @dataclass(frozen=True)
+    class _FakeOptimizerConfig:
+        lr_schedule: object | None = None
+
+    class _FakeStep:
+        def __init__(self):
+            self.output_path: str | None = None
+
+        def with_output_path(self, output_path: str):
+            self.output_path = output_path
+            return self
+
+    class _FakeExperiment:
+        def __init__(self):
+            self.phase_schedule = PhaseSchedule.from_boundaries([0.33, 0.67], names=["phase_0", "phase_1", "phase_2"])
+            self.batch_size = 128
+            self.mixture_block_size = 2048
+            self.num_train_steps = 5722
+            self.experiment_budget = 1499987968
+            self.steps_per_eval = 1000
+            self.optimizer_config = _FakeOptimizerConfig()
+            self.resources = None
+            self.eval_datasets_cache_path = None
+            self.calls = []
+
+        def create_training_step(self, **kwargs):
+            self.calls.append(kwargs)
+            return _FakeStep()
+
+    fake_experiment = _FakeExperiment()
+    monkeypatch.setattr(
+        eval_runner,
+        "create_three_phase_experiment",
+        lambda name, eval_datasets_cache_path: fake_experiment,
+    )
+
+    step = eval_runner._build_training_step(
+        run_namespace="ns",
+        phase_plan=eval_runner.PhaseTrainPlan(
+            phase_index=1,
+            cumulative_steps=3824,
+            initialize_from_checkpoint_path="gs://x/ckpt",
+            reset_data_loader_on_init=False,
+        ),
+        actions_so_far=[0.455, 0.32],
+        override_output_path="out/path",
+        run_id=7,
+        data_seed=11,
+        global_total_steps=5722,
+        tpu_type="v5p-8",
+        eval_datasets_cache_path="gs://eval-cache",
+    )
+
+    call = fake_experiment.calls[0]
+    assert step.output_path == "out/path"
+    assert call["num_train_steps"] == 3824
+    assert call["experiment_budget_override"] == 1499987968
+    assert call["steps_per_eval"] == 1000
+    assert call["initialize_from_checkpoint_path"] == "gs://x/ckpt"
+    assert call["reset_data_loader_on_init"] is False
+    assert call["data_seed"] == 11
+    assert call["weight_config"].phase_weights["phase_0"]["starcoder"] == 0.455
+    assert call["weight_config"].phase_weights["phase_1"]["starcoder"] == 0.32
+    assert call["weight_config"].phase_weights["phase_2"]["starcoder"] == 0.32
+
+
+def test_two_phase_rollout_builder_keeps_native_budget_and_schedule(monkeypatch):
+    from experiments.domain_phase_mix.config import PhaseSchedule
+
+    @dataclass(frozen=True)
+    class _FakeOptimizerConfig:
+        lr_schedule: object | None = None
+
+    class _FakeStep:
+        def __init__(self):
+            self.output_path: str | None = None
+
+        def with_output_path(self, output_path: str):
+            self.output_path = output_path
+            return self
+
+    class _FakeExperiment:
+        def __init__(self):
+            self.phase_schedule = PhaseSchedule.from_boundaries([0.5], names=["phase_0", "phase_1"])
+            self.batch_size = 128
+            self.mixture_block_size = 2048
+            self.num_train_steps = 3814
+            self.experiment_budget = 999817216
+            self.steps_per_eval = 1000
+            self.optimizer_config = _FakeOptimizerConfig()
+            self.resources = None
+            self.eval_datasets_cache_path = None
+            self.calls = []
+
+        def create_training_step(self, **kwargs):
+            self.calls.append(kwargs)
+            return _FakeStep()
+
+    fake_experiment = _FakeExperiment()
+    monkeypatch.setattr(two_phase_eval, "create_two_phase_experiment", lambda name: fake_experiment)
+
+    step = two_phase_eval._build_training_step(
+        run_namespace="ns",
+        phase_plan=eval_runner.PhaseTrainPlan(
+            phase_index=0,
+            cumulative_steps=1904,
+            initialize_from_checkpoint_path=None,
+            reset_data_loader_on_init=True,
+        ),
+        actions_so_far=[0.05],
+        override_output_path="out/path",
+        run_id=3,
+        data_seed=17,
+        global_total_steps=3814,
+        tpu_type="v5p-8",
+        eval_datasets_cache_path="gs://eval-cache",
+    )
+
+    call = fake_experiment.calls[0]
+    assert step.output_path == "out/path"
+    assert call["num_train_steps"] == 1904
+    assert call["experiment_budget_override"] == 999817216
+    assert call["steps_per_eval"] == 1000
+    assert call["data_seed"] == 17
+    assert call["weight_config"].phase_weights["phase_0"]["starcoder"] == 0.05
+    assert call["weight_config"].phase_weights["phase_1"]["starcoder"] == 0.05
+
+
+def test_three_phase_rollout_reuses_one_data_seed_per_replicate(monkeypatch, tmp_path):
+    captured_calls: list[dict[str, int]] = []
+
+    @dataclass(frozen=True)
+    class _FakeArtifact:
+        state_keys: tuple[str, ...] = ()
+
+    def _fake_build_training_step(**kwargs):
+        captured_calls.append(
+            {
+                "run_id": kwargs["run_id"],
+                "data_seed": kwargs["data_seed"],
+                "phase_index": kwargs["phase_plan"].phase_index,
+            }
+        )
+        return object()
+
+    monkeypatch.setattr(eval_runner, "_resolve_prefix", lambda prefix: prefix or str(tmp_path / "prefix"))
+    monkeypatch.setattr(eval_runner, "_load_policy_artifact_cached", lambda _: _FakeArtifact())
+    monkeypatch.setattr(eval_runner, "_initial_policy_state", lambda *args, **kwargs: {})
+    monkeypatch.setattr(eval_runner, "_policy_predict_action", lambda *args, **kwargs: 0.32)
+    monkeypatch.setattr(eval_runner, "_build_training_step", _fake_build_training_step)
+    monkeypatch.setattr(eval_runner, "_artifact_state_defaults", lambda artifact: {})
+
+    results = eval_runner.evaluate_policy(
+        eval_runner.EvaluateConfig(
+            policy_artifact_path="x/policy_artifact.json",
+            output_dir=str(tmp_path / "out"),
+            n_replicates=1,
+            dry_run=True,
+        )
+    )
+
+    assert results["phase_0_starcoder"].tolist() == [0.32]
+    assert [call["phase_index"] for call in captured_calls] == [0, 1, 2]
+    assert [call["run_id"] for call in captured_calls] == [0, 1, 2]
+    assert [call["data_seed"] for call in captured_calls] == [0, 0, 0]
+
+
+def test_two_phase_rollout_reuses_one_data_seed_per_replicate(monkeypatch, tmp_path):
+    captured_calls: list[dict[str, int]] = []
+
+    def _fake_build_training_step(**kwargs):
+        captured_calls.append(
+            {
+                "run_id": kwargs["run_id"],
+                "data_seed": kwargs["data_seed"],
+                "phase_index": kwargs["phase_plan"].phase_index,
+            }
+        )
+        return object()
+
+    monkeypatch.setattr(two_phase_eval.shared, "_resolve_prefix", lambda prefix: prefix or str(tmp_path / "prefix"))
+    monkeypatch.setattr(two_phase_eval.shared, "_initial_policy_state", lambda *args, **kwargs: {})
+    monkeypatch.setattr(two_phase_eval.shared, "_policy_predict_action", lambda *args, **kwargs: 0.05)
+    monkeypatch.setattr(two_phase_eval, "_build_training_step", _fake_build_training_step)
+    monkeypatch.setattr(
+        two_phase_eval,
+        "_hypothetical_state_for_decision",
+        lambda **kwargs: {},
+    )
+
+    results = two_phase_eval.evaluate_policy(
+        two_phase_eval.EvaluateTwoPhaseConfig(
+            policy_artifact_path="x/policy_artifact.json",
+            output_dir=str(tmp_path / "out"),
+            n_replicates=1,
+            dry_run=True,
+        )
+    )
+
+    assert results["phase_0_starcoder"].tolist() == [0.05]
+    assert [call["phase_index"] for call in captured_calls] == [0, 1]
+    assert [call["run_id"] for call in captured_calls] == [0, 1]
+    assert [call["data_seed"] for call in captured_calls] == [0, 0]
 
 
 def test_local_fallback_preflight(monkeypatch):

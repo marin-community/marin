@@ -12,7 +12,7 @@ import os
 import re
 import sys
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -31,8 +31,7 @@ from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.utils import create_cache_tokenizer_step
 
-from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
-from experiments.domain_phase_mix.experiment import MixtureExperiment
+from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.offline_rl.build_transitions import _feature_defaults, extract_decision_state
 from experiments.domain_phase_mix.offline_rl.collect_pooled_starcoder_dataset import collect_history_long_rows_batched
 from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dataset import (
@@ -53,16 +52,12 @@ from experiments.domain_phase_mix.offline_rl.policy_artifact import (
     normalize_state,
 )
 from experiments.domain_phase_mix.three_phase_starcoder_experiment import (
-    BATCH_SIZE,
     EVAL_DATASETS_CACHE_PATH,
     EVAL_TASKS,
-    SEQ_LEN,
-    TARGET_BUDGET,
     TOKENIZER_CACHE_BASE,
     TOKENIZER_NAME,
-    get_nemotron_starcoder_domains,
+    create_three_phase_experiment,
 )
-from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +124,7 @@ class EvaluateConfig:
     wandb_project: str = "marin"
     objective_metric: str = DEFAULT_OBJECTIVE_METRIC
     run_name_prefix: str = "pinlin_calvin_xu/data_mixture/three_phase_starcoder_policy_eval"
-    phase_end_steps: tuple[int, int] = DEFAULT_PHASE_END_STEPS
+    phase_end_steps: tuple[int, int] = field(default_factory=lambda: _default_three_phase_phase_end_steps())
     total_steps: int = DEFAULT_TOTAL_STEPS
     dry_run: bool = False
     marin_prefix: str | None = None
@@ -139,9 +134,15 @@ class EvaluateConfig:
     tpu_type: str = "v5p-8"
 
 
-def build_phase_train_plan(phase_index: int, checkpoint_path: str | None = None) -> PhaseTrainPlan:
+def build_phase_train_plan(
+    phase_index: int,
+    checkpoint_path: str | None = None,
+    *,
+    phase_end_steps: tuple[int, int] = DEFAULT_PHASE_END_STEPS,
+    total_steps: int = DEFAULT_TOTAL_STEPS,
+) -> PhaseTrainPlan:
     """Build phase plan using cumulative step counts and optional resume checkpoint."""
-    cumulative_steps = [DEFAULT_PHASE_END_STEPS[0], DEFAULT_PHASE_END_STEPS[1], DEFAULT_TOTAL_STEPS][phase_index]
+    cumulative_steps = [phase_end_steps[0], phase_end_steps[1], total_steps][phase_index]
     return PhaseTrainPlan(
         phase_index=phase_index,
         cumulative_steps=cumulative_steps,
@@ -193,42 +194,76 @@ def _discover_latest_checkpoint(training_output_path: str) -> str:
     return f"{protocol}://{latest}" if protocol else latest
 
 
-def _build_single_phase_experiment(
+def _default_three_phase_phase_end_steps() -> tuple[int, int]:
+    experiment = create_three_phase_experiment(name="offline_rl_phase_bounds")
+    phase_end_steps = _aligned_phase_end_steps(experiment)
+    if len(phase_end_steps) != 2:
+        raise ValueError(f"Expected 2 three-phase boundaries, found {phase_end_steps}.")
+    return (phase_end_steps[0], phase_end_steps[1])
+
+
+def _aligned_phase_end_steps(experiment) -> tuple[int, ...]:
+    """Return native aligned phase boundaries for a mixture experiment."""
+    return tuple(
+        phase.get_start_step_aligned(experiment.num_train_steps, experiment.batch_size, experiment.mixture_block_size)
+        for phase in experiment.phase_schedule.phases[1:]
+    )
+
+
+def _build_rollout_weight_config(
+    *,
+    run_id: int,
+    actions_so_far: list[float],
+    total_phases: int,
+) -> WeightConfig:
+    """Build a full native phase schedule using known actions and safe placeholders.
+
+    Future phases are filled with the most recent chosen action. The rollout
+    stops before those future phases are reached, so they only serve to keep
+    the native multi-phase schedule structurally valid.
+    """
+    if not actions_so_far:
+        raise ValueError("Need at least one chosen action to build rollout weights.")
+    padded_actions = list(actions_so_far) + [actions_so_far[-1]] * (total_phases - len(actions_so_far))
+    phase_weights = {
+        f"phase_{phase_idx}": {
+            "nemotron_full": 1.0 - padded_actions[phase_idx],
+            "starcoder": padded_actions[phase_idx],
+        }
+        for phase_idx in range(total_phases)
+    }
+    return WeightConfig(run_id=run_id, phase_weights=phase_weights)
+
+
+def _build_native_rollout_experiment(
+    *,
     name: str,
-    num_train_steps: int,
     tpu_type: str,
     eval_datasets_cache_path: str,
-) -> MixtureExperiment:
-    phase_schedule = PhaseSchedule.from_boundaries([], names=["phase_0"])
-    return MixtureExperiment(
+):
+    experiment = create_three_phase_experiment(
         name=name,
-        domains=get_nemotron_starcoder_domains(),
-        phase_schedule=phase_schedule,
-        model_config=regmix_60m_proxy,
-        batch_size=BATCH_SIZE,
-        seq_len=SEQ_LEN,
-        num_train_steps=num_train_steps,
-        target_budget=TARGET_BUDGET,
-        eval_harness_tasks=EVAL_TASKS,
         eval_datasets_cache_path=eval_datasets_cache_path,
-        resources=ResourceConfig.with_tpu(tpu_type),
     )
+    experiment.resources = ResourceConfig.with_tpu(tpu_type)
+    experiment.eval_datasets_cache_path = eval_datasets_cache_path
+    return experiment
 
 
 def _build_training_step(
     *,
     run_namespace: str,
     phase_plan: PhaseTrainPlan,
-    action_starcoder: float,
+    actions_so_far: list[float],
     override_output_path: str,
-    seed: int,
+    run_id: int,
+    data_seed: int,
     global_total_steps: int,
     tpu_type: str,
     eval_datasets_cache_path: str,
 ):
-    experiment = _build_single_phase_experiment(
+    experiment = _build_native_rollout_experiment(
         name=run_namespace,
-        num_train_steps=phase_plan.cumulative_steps,
         tpu_type=tpu_type,
         eval_datasets_cache_path=eval_datasets_cache_path,
     )
@@ -236,25 +271,34 @@ def _build_training_step(
         experiment.optimizer_config,
         lr_schedule=GlobalCosineLrSchedule(total_steps=global_total_steps),
     )
-    phase_weights = {
-        "phase_0": {
-            "nemotron_full": 1.0 - action_starcoder,
-            "starcoder": action_starcoder,
-        }
-    }
-    weight_config = WeightConfig(run_id=seed, phase_weights=phase_weights)
+    weight_config = _build_rollout_weight_config(
+        run_id=run_id,
+        actions_so_far=actions_so_far,
+        total_phases=experiment.phase_schedule.n_phases,
+    )
     return experiment.create_training_step(
         weight_config=weight_config,
         name_prefix=run_namespace,
         run_name=f"phase_{phase_plan.phase_index}",
         num_train_steps=phase_plan.cumulative_steps,
         steps_per_export=phase_plan.cumulative_steps,
-        steps_per_eval=200,
-        data_seed=seed,
+        steps_per_eval=experiment.steps_per_eval,
+        data_seed=data_seed,
         optimizer_config=optimizer_config,
+        experiment_budget_override=experiment.experiment_budget,
         initialize_from_checkpoint_path=phase_plan.initialize_from_checkpoint_path,
         reset_data_loader_on_init=phase_plan.reset_data_loader_on_init,
     ).with_output_path(override_output_path)
+
+
+def _replicate_data_seed(replicate_idx: int) -> int:
+    """Return the rollout data seed shared across all phases of one replicate."""
+    return replicate_idx
+
+
+def _phase_run_id(replicate_idx: int, phase_idx: int) -> int:
+    """Return a phase-local metadata id without perturbing data ordering."""
+    return replicate_idx * 10 + phase_idx
 
 
 def _fetch_wandb_run_by_display_name(entity: str, project: str, display_name: str):
@@ -273,10 +317,7 @@ def _load_policy_artifact_cached(artifact_path: str) -> AnyPolicyArtifact:
 
 
 def _artifact_state_defaults(artifact: PolicyArtifactV1 | PolicyArtifactV2) -> dict[str, float]:
-    return {
-        key: float(value)
-        for key, value in zip(artifact.state_keys, artifact.state_mean, strict=True)
-    }
+    return {key: float(value) for key, value in zip(artifact.state_keys, artifact.state_mean, strict=True)}
 
 
 def _state_from_defaults(
@@ -623,12 +664,12 @@ def _state_from_completed_run(
                 "remaining_decisions": float(max(0, num_phases_total - phase_index - 1)),
                 "budget_frac_consumed": float(decision_step) / float(total_steps),
                 "budget_frac_remaining": 1.0 - (float(decision_step) / float(total_steps)),
-                "last_train_loss": defaults.get("last_train_loss", 0.0)
-                if last_train_loss is None
-                else float(last_train_loss),
-                "last_eval_loss": defaults.get("last_eval_loss", 0.0)
-                if last_eval_loss is None
-                else float(last_eval_loss),
+                "last_train_loss": (
+                    defaults.get("last_train_loss", 0.0) if last_train_loss is None else float(last_train_loss)
+                ),
+                "last_eval_loss": (
+                    defaults.get("last_eval_loss", 0.0) if last_eval_loss is None else float(last_eval_loss)
+                ),
                 "last_obj_bpb": defaults.get("last_obj_bpb", 0.0) if last_obj_bpb is None else float(last_obj_bpb),
                 "train_eval_gap": (
                     defaults.get("train_eval_gap", 0.0)
@@ -639,15 +680,17 @@ def _state_from_completed_run(
                 "steps_since_last_eval_frac": float(steps_since_last_eval_frac),
                 "optim/learning_rate": defaults.get("optim/learning_rate", 0.0) if last_lr is None else float(last_lr),
                 "optim/adam_lr": defaults.get("optim/adam_lr", 0.0) if last_adam_lr is None else float(last_adam_lr),
-                "avg_lr_to_next_boundary": defaults.get("avg_lr_to_next_boundary", 0.0)
-                if avg_lr_to_next_boundary is None
-                else float(avg_lr_to_next_boundary),
-                "avg_lr_remaining": defaults.get("avg_lr_remaining", 0.0)
-                if avg_lr_remaining is None
-                else float(avg_lr_remaining),
-                "grad/norm/total": defaults.get("grad/norm/total", 0.0)
-                if last_grad_norm is None
-                else float(last_grad_norm),
+                "avg_lr_to_next_boundary": (
+                    defaults.get("avg_lr_to_next_boundary", 0.0)
+                    if avg_lr_to_next_boundary is None
+                    else float(avg_lr_to_next_boundary)
+                ),
+                "avg_lr_remaining": (
+                    defaults.get("avg_lr_remaining", 0.0) if avg_lr_remaining is None else float(avg_lr_remaining)
+                ),
+                "grad/norm/total": (
+                    defaults.get("grad/norm/total", 0.0) if last_grad_norm is None else float(last_grad_norm)
+                ),
                 "prev_action_starcoder": float(prev_action_value),
                 "cumulative_starcoder_exposure": float(cumulative_exposure),
                 "delta_prev_action": float(delta_prev_action),
@@ -811,6 +854,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
         base_slug = re.sub(r"[^a-zA-Z0-9]+", "", config.run_name_prefix.rsplit("/", maxsplit=1)[-1].lower())
         base_slug = (base_slug[:12] or "tsceval").strip("_")
         run_namespace = f"pinlin_calvin_xu/data_mixture/{base_slug}_{job_token}_r{replicate_idx:02d}"
+        replicate_data_seed = _replicate_data_seed(replicate_idx)
         actions = []
         run_ids = []
 
@@ -830,20 +874,25 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
             action = _policy_predict_action(config.policy_artifact_path, state)
             actions.append(action)
 
-            phase_plan = build_phase_train_plan(phase_idx, checkpoint_path=checkpoint_path)
+            phase_plan = build_phase_train_plan(
+                phase_idx,
+                checkpoint_path=checkpoint_path,
+                phase_end_steps=config.phase_end_steps,
+                total_steps=config.total_steps,
+            )
             # Marin infers trainer.id (and therefore WandB run id) from the output path basename.
             # Using a static basename like "phase_0" causes run-id collisions and hidden logging.
             phase_output_basename = f"phase_{phase_idx}_{job_token}_r{replicate_idx:02d}"
             relative_output_path = (
-                "domain_phase_mix/offline_rl/policy_eval/"
-                f"{job_token}/rep_{replicate_idx:02d}/{phase_output_basename}"
+                "domain_phase_mix/offline_rl/policy_eval/" f"{job_token}/rep_{replicate_idx:02d}/{phase_output_basename}"
             )
             training_step = _build_training_step(
                 run_namespace=run_namespace,
                 phase_plan=phase_plan,
-                action_starcoder=action,
+                actions_so_far=actions,
                 override_output_path=relative_output_path,
-                seed=replicate_idx * 10 + phase_idx,
+                run_id=_phase_run_id(replicate_idx, phase_idx),
+                data_seed=replicate_data_seed,
                 global_total_steps=config.total_steps,
                 tpu_type=config.tpu_type,
                 eval_datasets_cache_path=eval_datasets_cache_path,
@@ -922,9 +971,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
                     decision_index = float(min(phase_idx + 1, 2))
                     budget_frac_consumed = (phase_idx + 1) / 3.0
                     global_step = (
-                        float(config.phase_end_steps[min(phase_idx, 1)])
-                        if phase_idx < 2
-                        else float(config.total_steps)
+                        float(config.phase_end_steps[min(phase_idx, 1)]) if phase_idx < 2 else float(config.total_steps)
                     )
                     state.update(
                         {

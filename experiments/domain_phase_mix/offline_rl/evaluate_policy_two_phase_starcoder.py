@@ -12,34 +12,27 @@ import os
 import re
 import sys
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pandas as pd
-from fray.cluster import ResourceConfig
 
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.utils import create_cache_tokenizer_step
 
-from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
-from experiments.domain_phase_mix.experiment import MixtureExperiment
 from experiments.domain_phase_mix.offline_rl import evaluate_policy_three_phase_starcoder as shared
 from experiments.domain_phase_mix.offline_rl.contracts import (
     DEFAULT_OBJECTIVE_METRIC,
     DEFAULT_TWO_PHASE_STARCODER_FAMILY,
 )
 from experiments.domain_phase_mix.offline_rl.policy_artifact import PolicyArtifactV2
-from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.two_phase_starcoder_experiment import (
-    BATCH_SIZE,
     EVAL_DATASETS_CACHE_PATH,
     EVAL_TASKS,
-    SEQ_LEN,
-    TARGET_BUDGET,
     TOKENIZER_CACHE_BASE,
     TOKENIZER_NAME,
-    get_nemotron_starcoder_domains,
+    create_two_phase_experiment,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +50,7 @@ class EvaluateTwoPhaseConfig:
     wandb_project: str = "marin"
     objective_metric: str = DEFAULT_OBJECTIVE_METRIC
     run_name_prefix: str = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_policy_eval"
-    phase_end_steps: tuple[int, ...] = DEFAULT_TWO_PHASE_STARCODER_FAMILY.phase_boundaries
+    phase_end_steps: tuple[int, ...] = field(default_factory=lambda: _default_two_phase_phase_end_steps())
     total_steps: int = DEFAULT_TWO_PHASE_STARCODER_FAMILY.total_steps
     dry_run: bool = False
     marin_prefix: str | None = None
@@ -82,43 +75,37 @@ def build_phase_train_plan(
     )
 
 
-def _build_single_phase_experiment(
+def _default_two_phase_phase_end_steps() -> tuple[int, ...]:
+    experiment = create_two_phase_experiment(name="offline_rl_two_phase_bounds")
+    return shared._aligned_phase_end_steps(experiment)
+
+
+def _build_native_rollout_experiment(
     *,
     name: str,
-    num_train_steps: int,
     tpu_type: str,
     eval_datasets_cache_path: str,
-) -> MixtureExperiment:
-    phase_schedule = PhaseSchedule.from_boundaries([], names=["phase_0"])
-    return MixtureExperiment(
-        name=name,
-        domains=get_nemotron_starcoder_domains(),
-        phase_schedule=phase_schedule,
-        model_config=regmix_60m_proxy,
-        batch_size=BATCH_SIZE,
-        seq_len=SEQ_LEN,
-        num_train_steps=num_train_steps,
-        target_budget=TARGET_BUDGET,
-        eval_harness_tasks=EVAL_TASKS,
-        eval_datasets_cache_path=eval_datasets_cache_path,
-        resources=ResourceConfig.with_tpu(tpu_type),
-    )
+):
+    experiment = create_two_phase_experiment(name=name)
+    experiment.resources = shared.ResourceConfig.with_tpu(tpu_type)
+    experiment.eval_datasets_cache_path = eval_datasets_cache_path
+    return experiment
 
 
 def _build_training_step(
     *,
     run_namespace: str,
     phase_plan: shared.PhaseTrainPlan,
-    action_starcoder: float,
+    actions_so_far: list[float],
     override_output_path: str,
-    seed: int,
+    run_id: int,
+    data_seed: int,
     global_total_steps: int,
     tpu_type: str,
     eval_datasets_cache_path: str,
 ):
-    experiment = _build_single_phase_experiment(
+    experiment = _build_native_rollout_experiment(
         name=run_namespace,
-        num_train_steps=phase_plan.cumulative_steps,
         tpu_type=tpu_type,
         eval_datasets_cache_path=eval_datasets_cache_path,
     )
@@ -126,22 +113,21 @@ def _build_training_step(
         experiment.optimizer_config,
         lr_schedule=shared.GlobalCosineLrSchedule(total_steps=global_total_steps),
     )
-    phase_weights = {
-        "phase_0": {
-            "nemotron_full": 1.0 - action_starcoder,
-            "starcoder": action_starcoder,
-        }
-    }
-    weight_config = WeightConfig(run_id=seed, phase_weights=phase_weights)
+    weight_config = shared._build_rollout_weight_config(
+        run_id=run_id,
+        actions_so_far=actions_so_far,
+        total_phases=experiment.phase_schedule.n_phases,
+    )
     return experiment.create_training_step(
         weight_config=weight_config,
         name_prefix=run_namespace,
         run_name=f"phase_{phase_plan.phase_index}",
         num_train_steps=phase_plan.cumulative_steps,
         steps_per_export=phase_plan.cumulative_steps,
-        steps_per_eval=200,
-        data_seed=seed,
+        steps_per_eval=experiment.steps_per_eval,
+        data_seed=data_seed,
         optimizer_config=optimizer_config,
+        experiment_budget_override=experiment.experiment_budget,
         initialize_from_checkpoint_path=phase_plan.initialize_from_checkpoint_path,
         reset_data_loader_on_init=phase_plan.reset_data_loader_on_init,
     ).with_output_path(override_output_path)
@@ -252,6 +238,7 @@ def evaluate_policy(config: EvaluateTwoPhaseConfig) -> pd.DataFrame:
         base_slug = re.sub(r"[^a-zA-Z0-9]+", "", config.run_name_prefix.rsplit("/", maxsplit=1)[-1].lower())
         base_slug = (base_slug[:12] or "tpseval").strip("_")
         run_namespace = f"pinlin_calvin_xu/data_mixture/{base_slug}_{job_token}_r{replicate_idx:02d}"
+        replicate_data_seed = shared._replicate_data_seed(replicate_idx)
         state = shared._initial_policy_state(
             config.policy_artifact_path,
             num_phases_total=2,
@@ -278,9 +265,10 @@ def evaluate_policy(config: EvaluateTwoPhaseConfig) -> pd.DataFrame:
             training_step = _build_training_step(
                 run_namespace=run_namespace,
                 phase_plan=phase_plan,
-                action_starcoder=action,
+                actions_so_far=actions,
                 override_output_path=relative_output_path,
-                seed=replicate_idx * 10 + phase_idx,
+                run_id=shared._phase_run_id(replicate_idx, phase_idx),
+                data_seed=replicate_data_seed,
                 global_total_steps=config.total_steps,
                 tpu_type=config.tpu_type,
                 eval_datasets_cache_path=eval_datasets_cache_path,

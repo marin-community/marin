@@ -14,6 +14,12 @@ This asset is the pooled `sklearn_outcome_planner_v2` selected from the offline 
 1. phase-boundary history is now collected with `scan_history`,
 2. `build_wide_history` no longer drops rollout rows when `local_run_id` is missing,
 3. phase 0 uses decision-specific defaults instead of all-decision artifact means.
+4. chained rollout stages now preserve the native multi-phase data schedule and full simulated-epoching budget instead of
+   rebuilding each phase as a one-phase cumulative-budget experiment.
+
+The fourth fix matters for result interpretation. Before March 8, 2026, chained rollout jobs were not directly comparable
+to native static schedule runs because the rollout evaluator changed the dataset slicing semantics in early phases.
+Regression coverage for this now lives in [test_domain_phase_mix_offline_rl.py](/Users/calvinxu/Projects/Work/Marin/marin/tests/test_domain_phase_mix_offline_rl.py).
 
 ## Key Entry Points
 
@@ -72,6 +78,7 @@ If resuming this thread in a later session, the most useful sequence is:
 
 ## Known Open Questions
 
-1. The corrected closed-loop result is strong, but it is still a single successful run.
-2. The fixed-schedule replay is needed to separate schedule quality from rollout-path effects more cleanly.
-3. The pooled planner is empirically strong online, but it is still a surrogate planner rather than a learned policy with a clean finite-horizon value interpretation.
+1. The March 7 rollout results should be treated as provisional because they predate the chained-rollout budget fix.
+2. Corrected reruns on March 8 are the right apples-to-apples comparison point for both two-phase and three-phase.
+3. Native static replays of the corrected executed schedules are still needed to separate schedule quality from boundary-conditioned adaptivity.
+4. The pooled planner is empirically strong online, but it is still a surrogate planner rather than a learned policy with a clean finite-horizon value interpretation.

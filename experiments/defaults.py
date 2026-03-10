@@ -239,6 +239,7 @@ def simulated_epoching_train(
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     target_budget: int,
+    experiment_budget_override: int | None = None,
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
@@ -255,6 +256,10 @@ def simulated_epoching_train(
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         target_budget: Target token budget to simulate.
+        experiment_budget_override: Optional explicit experiment token budget for
+            simulated epoching. Use this when the trainer should stop at an
+            intermediate step count but the dataset slicing must match a larger
+            native experiment.
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
@@ -267,7 +272,9 @@ def simulated_epoching_train(
     train_length = _validate_train_length(train_config.train_seq_len, model_config)
 
     # Calculate the experiment token budget
-    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
+    experiment_budget = experiment_budget_override
+    if experiment_budget is None:
+        experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
 
     simulated_pretraining_data = dataclasses.replace(
         pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
