@@ -55,6 +55,7 @@ class Chunk(Protocol):
 
 
 ZEPHYR_TARGET_SHARD_COL = "__zephyr_target_shard__"
+ZEPHYR_CHUNK_IDX_COL = "__zephyr_chunk_idx__"
 
 
 @dataclass(frozen=True)
@@ -103,16 +104,19 @@ class PickleDiskChunk:
 
 @dataclass(frozen=True)
 class VortexDiskChunk:
-    """Slice of a shared Vortex Scatter file, filtered by target shard.
+    """Slice of a shared Vortex Scatter file, filtered by target shard and chunk.
 
     Multiple VortexDiskChunk instances share the same file path but filter
-    for different target shards. Predicate pushdown in Vortex skips
-    irrelevant row groups, so each reducer reads only its own data
-    efficiently.
+    for different (target_shard, chunk_idx) pairs. Each chunk is pre-sorted
+    by key, preserving the invariant needed for k-way merge in Reduce.
+
+    Predicate pushdown in Vortex skips irrelevant row groups, so each
+    reducer reads only its own data efficiently.
     """
 
     path: str
     filter_shard: int
+    filter_chunk: int
     count: int
     columns: list[str]
 
@@ -125,7 +129,8 @@ class VortexDiskChunk:
         dataset = vf.to_dataset()
         table = dataset.to_table(
             columns=self.columns,
-            filter=pc.field(ZEPHYR_TARGET_SHARD_COL) == self.filter_shard,
+            filter=(pc.field(ZEPHYR_TARGET_SHARD_COL) == self.filter_shard)
+            & (pc.field(ZEPHYR_CHUNK_IDX_COL) == self.filter_chunk),
         )
         return table.to_pylist()
 
