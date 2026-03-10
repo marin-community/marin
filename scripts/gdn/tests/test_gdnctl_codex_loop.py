@@ -96,3 +96,13 @@ def test_build_remote_test_command_installs_torch_and_transformers() -> None:
     assert cmd.index('uv pip install --python "$VIRTUAL_ENV/bin/python" --index-url') < cmd.index(
         'uv pip install --python "$VIRTUAL_ENV/bin/python" transformers'
     )
+
+
+def test_profile_command_lines_use_venv_python_not_uv_run() -> None:
+    lines = gdnctl._profile_command_lines(include_tpu_sync=False, profile_args=["--force_run_failed", "true"])
+    joined = "\n".join(lines)
+
+    assert '"$VIRTUAL_ENV/bin/python" -m experiments.speedrun.hackable_transformer_gdn.tiny_profile' in joined
+    assert "../../.venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile" in joined
+    assert "uv run --active python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile" not in joined
+    assert "uv run python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile" not in joined

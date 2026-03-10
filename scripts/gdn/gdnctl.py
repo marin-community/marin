@@ -2178,14 +2178,15 @@ def _profile_command_lines(
         f'uv pip install --python "$VIRTUAL_ENV/bin/python" --index-url {shlex.quote(TORCH_CPU_INDEX)} '
         f"--force-reinstall {shlex.quote(TORCH_CPU_REQUIREMENT)} && "
         '(uv pip uninstall --python "$VIRTUAL_ENV/bin/python" torchvision || true) && '
-        "uv run --active python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile "
+        '"$VIRTUAL_ENV/bin/python" -m experiments.speedrun.hackable_transformer_gdn.tiny_profile '
         f"{shlex.join(profile_args)}; "
         "else "
         f"{sync_cmd} && "
         f"uv pip install --python ../../.venv/bin/python --index-url {shlex.quote(TORCH_CPU_INDEX)} "
         f"--force-reinstall {shlex.quote(TORCH_CPU_REQUIREMENT)} && "
         "(uv pip uninstall --python ../../.venv/bin/python torchvision || true) && "
-        f"uv run python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile {shlex.join(profile_args)}; "
+        "../../.venv/bin/python -m experiments.speedrun.hackable_transformer_gdn.tiny_profile "
+        f"{shlex.join(profile_args)}; "
         "fi"
     )
     return lines
