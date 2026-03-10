@@ -47,13 +47,17 @@ def unwrap_actor_response(resp: actor_pb2.ActorResponse) -> Any:
 
 
 class ActorClient:
-    """Actor client with resolver-based discovery."""
+    """Actor client with resolver-based discovery.
+
+    By default the client waits forever, i.e. there's no timeout in httpx.
+    Specify ``call_timeout`` to apply a timeout to individual RPC calls.
+    """
 
     def __init__(
         self,
         resolver: Resolver,
         name: str,
-        call_timeout: float = 3600.0,
+        call_timeout: float | None = None,
         max_call_attempts: int = 5,
         backoff: ExponentialBackoff = ExponentialBackoff(initial=0.1, maximum=10.0, factor=2.0, jitter=0.25),
     ):
@@ -63,6 +67,7 @@ class ActorClient:
             resolver: Resolver instance for endpoint discovery
             name: Name of the actor to invoke
             call_timeout: Timeout in seconds for individual RPC calls.
+                None (default) means no timeout.
             max_call_attempts: Maximum number of RPC call attempts (including
                 resolution failures) before giving up.
             backoff: Exponential backoff configuration for retries between attempts.
