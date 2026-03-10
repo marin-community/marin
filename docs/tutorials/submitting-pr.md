@@ -11,6 +11,14 @@ We assume you have already followed the [installation guide](installation.md) to
 
 Assume that you have made your code changes in a branch called `<my-branch>`.
 
+Before you open a pull request, run the same checks Marin contributors are
+expected to run locally:
+
+```bash
+./infra/pre-commit.py --all-files --fix
+make test
+```
+
 ## Submitting a pull request
 
 If you are a Marin maintainer, you have write access to the Marin repository and
@@ -31,13 +39,22 @@ git remote add origin https://github.com/<your-username>/marin.git
 git remote -v  # Check that the remotes are set up correctly
 ```
 
-Then pull changes from the upstream repository to your local repository and push your changes to your fork:
+Then update your local branch from `upstream/main` and push your changes to your
+fork:
 
 ```bash
-git pull upstream main
+git fetch upstream
+git rebase upstream/main
 git push origin <my-branch>
 ```
 
-Finally, go to
+Finally, open the pull request. The GitHub CLI keeps the base/head branches
+explicit and avoids the extra web UI round-trip:
+
+```bash
+gh pr create --base main --head <your-username>:<my-branch>
+```
+
+If you prefer the browser flow, go to
 [https://github.com/<your-username>/marin/pulls](https://github.com/<your-username>/marin/pulls)
-and click on the "New pull request" button to make the actual pull request.
+and click "New pull request".
