@@ -5694,3 +5694,158 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Do not spend another mainline iteration on chunk-start/tape replay at this boundary.
   - The retained `gdnctl` launcher fix removes the Ray `uv run` blocker, so the next serious attempt can go straight to TPU profile evidence.
   - Given the repeated `R` failures and the still-large remainder, the next useful control arm should be a clearer diagnostic pivot (`O`) or another non-replay outer-structure move rather than more same-family tape shrinkage.
+
+### Iteration 78 - Macro Move P / CE backward-mode refresh on the current head (validated, rejected compare)
+
+- Coverage slot: `P`
+- Why this attacks the train-path control bottleneck:
+  - The latest validated entries still point at the residual CE backward/custom-VJP shell as the visible hot control region, while repeated `R` attempts kept turning into remainder-budget regressions.
+  - This starting commit predates the later CE backward shell win, so the first useful move on this head was to refresh the real-run CE A/B under forced `pallas_tpu` before spending more budget on GDN-local retuning.
+- Hot-path scan/cond status:
+  - No new hot-path `lax.scan`.
+  - No new hot-path `lax.cond` / runtime dispatch.
+  - The compare only swaps the CE backward shell implementation under the existing `pallas_tpu` CE surface.
+- Change class: `CE backend`
+
+- Codex loop iteration: `4 / 10`
+- Date: `2026-03-10T08:03:58Z`
+- Starting commit: `63298609d4299263fd684b767b56a8a4a62ce4d5`
+- Dominant bottleneck carried in (latest validated evidence from Iteration 77):
+  - Forward closed-call: `20.664 ms`
+  - Backward closed-call: `13.129 ms`
+  - while: `8.874 ms`
+  - conditional: `0.026 ms`
+  - CE-attributed while: `8.874 ms`
+  - Kernel budget: `33.793 ms`
+  - Control budget: `8.900 ms`
+  - Train-path budget: `42.693 ms`
+  - Step duration: `165.151 ms`
+  - Remainder budget: `122.458 ms`
+
+- Current train-path control bottleneck read from the latest validated evidence:
+  - The visible hot `while` is still the CE backward/custom-VJP shell in `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py:802`.
+  - Before spending another iteration on the chunked flash/train path, this head needed the CE backward matrix refreshed under the required fixed backend.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro P (selected):** rerun the real-train CE backward A/B on this starting commit with `pallas_tpu` fixed and compare `pallas` vs `xla_streaming` (`+0.5-2.0%`, low/medium risk).
+  2. **Macro R:** retry the ejkernel-style minimal-tape backward arm only after the CE backward choice is refreshed on this head (`+0.5-1.5%`, medium/high risk).
+  3. **Macro M:** shift more of the outer train path back to XLA with Pallas only as leaf chunk kernels if CE evidence stops moving (`0-1.0%`, high diagnostic risk).
+
+- Selected macro-move category: **P) CE backward-mode A/B on the real train run**.
+
+- Expected effect on `while_ms`: down materially if `xla_streaming` is still a better fit for the residual CE shell on this head; otherwise reject and keep `pallas`.
+- Expected effect on `step_duration_ms`: down if the alternate CE backward shell improves the critical path.
+- Expected effect on `remainder_budget_ms`: flat to slightly down; this compare should not be another GDN-local overlap-loss story.
+- Reject if `while_ms` remains flat? **Yes.** This move is only justified if the CE shell itself improves.
+- Reject if `remainder_budget_ms` grows? **Yes.** A larger remainder would mean the compare only displaced cost instead of improving the step.
+
+- Change summary:
+  - No source changes were retained.
+  - The concrete candidate for this iteration was the explicit CE backward-mode A/B on the real train run with CE held fixed at:
+    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`
+    - `--ce-bwd-mode pallas`
+    - `--ce-bwd-mode xla_streaming`
+  - Because `xla_streaming` regressed decisively, the tree intentionally remains on the starting commit and this iteration only records the validated rejection.
+
+- Correctness checks:
+  - Managed dev TPU attempt:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `1 failed, 86 passed, 2 skipped`; the single failure was `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[False]` with max abs diff `3.3795834e-05`, so this was not a full-parity acceptance result.
+  - Accepted TPU validation (Ray fallback, full parity):
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - result: `87 passed, 2 skipped in 235.76s`
+
+- Profile runs:
+  - Managed dev TPU primary attempt (infra failure before training):
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i04_P_ce_bwd_pallas --no-sync`
+    - result: remote fallback tried `../../.venv/bin/python` under the job temp dir and `uv` failed because no venv existed there.
+  - Ray fallback primary (`pallas` backward):
+    - command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_i04_P_ce_bwd_pallas`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_i04_P_ce_bwd_pallas_gdn_130m_ch128_seg16_20steps-924ff5`
+    - profiler artifact: `run-gdn_i04_P_ce_bwd_pallas_gdn_130m_ch128_seg16_20steps-924ff5-profiler:v0`
+    - downloaded trace: `scratch/iter4_ce_pallas_download/plugins/profile/2026_03_10_00_47_20/perfetto_trace.json.gz`
+    - profile summary: `scratch/iter4_ce_pallas_summary/profile_summary.json`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+  - Ray fallback CE compare (`xla_streaming` backward):
+    - command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode xla_streaming --run-name-prefix gdn_i04_P_ce_bwd_xla_streaming`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_i04_P_ce_bwd_xla_streaming_gdn_130m_ch128_seg16_20s-9ca514`
+    - profiler artifact: `run-gdn_i04_P_ce_bwd_xla_streaming_gdn_130m_ch128_seg16_20s-9ca514-profiler:v0`
+    - downloaded trace: `scratch/iter4_ce_xla_streaming_download/plugins/profile/2026_03_10_00_52_01/perfetto_trace.json.gz`
+    - profile summary: `scratch/iter4_ce_xla_streaming_summary/profile_summary.json`
+    - logged CE selection: `Fused cross-entropy selected implementation: pallas_tpu`
+
+- Hotspot metrics (`pallas` control vs `xla_streaming` compare on the same starting commit):
+  - CE backend selected: `pallas_tpu` in both runs
+  - CE bwd mode: `pallas -> xla_streaming`
+  - CE-attributed while: `8.828 ms -> 23.228 ms`
+  - Forward closed-call: `20.664 ms -> 20.664 ms`
+  - Backward closed-call: `13.128 ms -> 13.128 ms`
+  - `while: 8.828 ms -> 23.532 ms`
+  - `conditional: 0.001 ms -> 0.001 ms`
+  - `Kernel budget: 33.792 ms -> 33.792 ms`
+  - `Control budget: 8.829 ms -> 23.533 ms`
+  - `Train-path budget: 42.621 ms -> 57.325 ms`
+  - `Step duration: 175.179 ms -> 185.666 ms`
+  - `Remainder budget: 132.558 ms -> 128.340 ms`
+  - Note: this was a CE-only axis and the fresh truncated profile summaries did not expose a new GDN forward/backward split beyond the unchanged kernel path, so the forward/backward closed-call values are held baseline-equivalent while the measured deltas come from the CE shell and end-to-end step metrics.
+
+- Throughput deltas (history-window median, `global_step in [10,18]`):
+  - `pallas` backward baseline:
+    - `throughput/mfu=5.782228`
+    - `throughput/tokens_per_second=187053.976`
+    - `throughput/duration=0.175179 s`
+  - `xla_streaming` backward compare:
+    - `throughput/mfu=5.455654`
+    - `throughput/tokens_per_second=176489.376`
+    - `throughput/duration=0.185666 s`
+  - `xla_streaming` vs `pallas`:
+    - `throughput/mfu -5.65%`
+    - `throughput/tokens_per_second -5.65%`
+    - `throughput/duration +5.99%`
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - The hot `while` is the CE backward/custom-VJP shell in `pallas_tpu.py:802`; no new GDN shell became dominant.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - It preserves the existing CE shell and adds no new `lax.scan`.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The whole point of this iteration was to A/B the existing CE shell directly; the compare shows `xla_streaming` does in fact recreate the losing `WhileOp` pattern on this head.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - Because the active directives required refreshing the CE backward evidence on the current head before resuming mainline GDN structural work.
+  - Is the residual `while` still CE-attributed in this design?
+    - Yes.
+  - What do you expect to happen to `while_ms`?
+    - Down materially if `xla_streaming` were promising; instead it regresses to `23.532 ms`.
+  - What do you expect to happen to `remainder_budget_ms`?
+    - Flat to slightly down; the measured result is slightly down (`132.558 ms -> 128.340 ms`), so this is a direct CE-shell regression rather than another remainder explosion.
+  - Should this candidate be rejected if `while_ms` remains flat or `remainder_budget_ms` grows? Why?
+    - Yes on both criteria. In practice it should also be rejected immediately when `while_ms` grows this much, because the CE shell is the explicit axis under test.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both` -> `87 passed, 2 skipped in 235.76s`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas | xla_streaming`
+    - `CE-attributed while: 8.828 ms -> 23.228 ms`
+    - Forward closed-call `20.664 ms -> 20.664 ms`
+    - Backward closed-call `13.128 ms -> 13.128 ms`
+    - `while: 8.828 ms -> 23.532 ms`
+    - `conditional: 0.001 ms -> 0.001 ms`
+    - `Kernel budget: 33.792 ms -> 33.792 ms`
+    - `Control budget: 8.829 ms -> 23.533 ms`
+    - `Train-path budget: 42.621 ms -> 57.325 ms`
+    - `Step duration: 175.179 ms -> 185.666 ms`
+    - `Remainder budget: 132.558 ms -> 128.340 ms`
+    - `throughput/mfu -5.65%`, `throughput/tokens_per_second -5.65%`, `throughput/duration +5.99%`
+  - Governance:
+    - Hard control-flow gate fails immediately: `while_ms` grows by `+14.704 ms`, far beyond the active `+5.000 ms` limit, while the primary metric regresses by `-5.65%`.
+    - This is not another “train-path budget down, step not faster” ambiguity. It is a direct CE-shell regression: `xla_streaming` makes the visible control region larger and makes the step slower.
+    - Keep CE fixed for subsequent GDN work at `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu` with `CE bwd mode: pallas`.
+    - Because the candidate regressed, no runtime or kernel change is retained.
+
+- Assessment: **validated, regressed, and rejected**. Refreshing the CE backward A/B on this starting commit re-confirms that `xla_streaming` is the wrong direction under forced `pallas_tpu` CE. The regression is dominated by CE control flow, not by a hidden GDN remainder wall, so the deployable setting on this head remains `pallas_tpu` CE with `pallas` backward.
+- Next bold hypothesis:
+  - CE backward evidence is refreshed and closed again on this head. The next justified mainline attempt should return to **Macro R** on the chunked flash/train path, but only with a real minimal-tape / recompute-heavy backward arm rather than another kernel-local retune.
