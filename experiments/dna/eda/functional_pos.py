@@ -78,11 +78,13 @@ qwen3_60m = Qwen3Config(
 
 qwen3_600m = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=MODEL_SEQ_LEN)
 
+RESOURCES = ResourceConfig.with_tpu("v5p-8")
+LEARNING_RATE = 1e-3
+
 MODEL_CONFIGS = {
-    # (model_config, learning_rate, resources)
-    "6m": (qwen3_6m, 1e-3, ResourceConfig.with_tpu("v5p-8")),
-    "60m": (qwen3_60m, 1e-3, ResourceConfig.with_tpu("v5p-8")),
-    "600m": (qwen3_600m, 1e-3, ResourceConfig.with_tpu("v5p-8")),
+    "6m": qwen3_6m,
+    "60m": qwen3_60m,
+    "600m": qwen3_600m,
 }
 
 # =============================================================================
@@ -121,11 +123,11 @@ val_nonfunctional = default_tokenize(
 # Train: 10K steps, cosine decay, TraitGym eval every 1K steps
 # =============================================================================
 
-BASE_TRAIN_CONFIG = SimpleTrainConfig(
-    resources=ResourceConfig.with_tpu("v5p-8"),  # overridden per model
+TRAIN_CONFIG = SimpleTrainConfig(
+    resources=RESOURCES,
     train_batch_size=4096,
     num_train_steps=10_000,
-    learning_rate=1e-3,  # overridden per model
+    learning_rate=LEARNING_RATE,
     lr_schedule="cosine",
     warmup=0.2,
     decay=0.1,
@@ -137,12 +139,7 @@ BASE_TRAIN_CONFIG = SimpleTrainConfig(
 
 training_steps = []
 for ts in TIMESCALES:
-    for model_name, (model_config, lr, resources) in MODEL_CONFIGS.items():
-        train_config = dataclasses.replace(
-            BASE_TRAIN_CONFIG,
-            resources=resources,
-            learning_rate=lr,
-        )
+    for model_name, model_config in MODEL_CONFIGS.items():
 
         # Wire up training data with two validation sets
         data_config = lm_data_config(
@@ -157,7 +154,7 @@ for ts in TIMESCALES:
             name=f"eda-functional-pos-{ts}-{model_name}",
             tokenized=data_config,
             model_config=model_config,
-            train_config=train_config,
+            train_config=TRAIN_CONFIG,
             tags=["dna", "eda", "functional_pos", ts, model_name],
             eval_harness_tasks=[TRAITGYM_MENDELIAN_V2_255],
             eval_harness_max_packed_segments=1,
