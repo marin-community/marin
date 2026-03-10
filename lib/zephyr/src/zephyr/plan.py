@@ -816,7 +816,7 @@ def run_stage(
             elif op.writer_type == "vortex":
                 from zephyr.writers import write_vortex_file
 
-                result = write_vortex_file(stream, output_path, op.batch_size)["path"]
+                result = write_vortex_file(stream, output_path, op.schema, op.batch_size)["path"]
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
 

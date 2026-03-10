@@ -173,12 +173,15 @@ def write_parquet_file(
     return {"path": output_path, "count": count}
 
 
-def write_vortex_file(records: Iterable, output_path: str, batch_size: int = 32_000) -> dict:
+def write_vortex_file(
+    records: Iterable, output_path: str, schema: object | None = None, batch_size: int = 32_000
+) -> dict:
     """Write records to a Vortex file using streaming writes.
 
     Args:
         records: Records to write (iterable of dicts)
         output_path: Path to output .vortex file
+        schema: PyArrow schema (optional, will be inferred from first batch if None)
         batch_size: Number of records per batch
 
     Returns:
@@ -195,7 +198,8 @@ def write_vortex_file(records: Iterable, output_path: str, batch_size: int = 32_
         first_record = next(record_iter)
     except StopIteration:
         # Empty case - write empty vortex file
-        empty_table = pa.Table.from_pylist([])
+        actual_schema = schema or pa.schema([])
+        empty_table = pa.Table.from_pylist([], schema=actual_schema)
         with atomic_rename(output_path) as temp_path:
             vortex.io.write(empty_table, temp_path)
         return {"path": output_path, "count": 0}
@@ -205,24 +209,24 @@ def write_vortex_file(records: Iterable, output_path: str, batch_size: int = 32_
     first_batch = [maybe_map_to_dict(first_record)]
     for record in itertools.islice(record_iter, batch_size - 1):
         first_batch.append(maybe_map_to_dict(record))
-    schema = infer_arrow_schema(first_batch)
-    dtype = vortex.DType.from_arrow(schema, non_nullable=True)
+    actual_schema = schema or infer_arrow_schema(first_batch)
+    dtype = vortex.DType.from_arrow(actual_schema, non_nullable=True)
 
     count = 0
 
     def _array_batches():
         nonlocal count
         count += len(first_batch)
-        yield vortex.Array.from_arrow(pa.Table.from_pylist(first_batch, schema=schema))
+        yield vortex.Array.from_arrow(pa.Table.from_pylist(first_batch, schema=actual_schema))
         batch = []
         for record in record_iter:
             batch.append(maybe_map_to_dict(record))
             count += 1
             if len(batch) >= batch_size:
-                yield vortex.Array.from_arrow(pa.Table.from_pylist(batch, schema=schema))
+                yield vortex.Array.from_arrow(pa.Table.from_pylist(batch, schema=actual_schema))
                 batch = []
         if batch:
-            yield vortex.Array.from_arrow(pa.Table.from_pylist(batch, schema=schema))
+            yield vortex.Array.from_arrow(pa.Table.from_pylist(batch, schema=actual_schema))
 
     array_iter = vortex.ArrayIterator.from_iter(dtype, _array_batches())
 
