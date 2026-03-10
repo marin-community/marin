@@ -205,6 +205,7 @@ class LogStore:
         since_ms: int = 0,
         substring_filter: str = "",
         max_lines: int = 0,
+        tail: bool = False,
         min_level: str = "",
         shallow: bool = False,
     ) -> LogReadResult:
@@ -213,6 +214,8 @@ class LogStore:
         All filtering is pushed into SQL so LIMIT works correctly.
 
         Args:
+            tail: If True and max_lines > 0, return the *last* N entries instead
+                  of the first N (uses DESC ordering then reverses).
             shallow: If True, only match keys one level deep (no nested '/' after prefix).
                      This excludes child job logs when fetching by job prefix.
         """
@@ -233,16 +236,25 @@ class LogStore:
             where += " AND (level = 0 OR level >= ?)"
             params.append(min_level_enum)
 
-        limit_clause = ""
-        if max_lines > 0:
-            limit_clause = " LIMIT ?"
+        if tail and max_lines > 0:
             params.append(max_lines)
+            with self._read_lock:
+                rows = self._read_conn.execute(
+                    f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id DESC LIMIT ?",
+                    params,
+                ).fetchall()
+            rows.reverse()
+        else:
+            limit_clause = ""
+            if max_lines > 0:
+                limit_clause = " LIMIT ?"
+                params.append(max_lines)
 
-        with self._read_lock:
-            rows = self._read_conn.execute(
-                f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
-                params,
-            ).fetchall()
+            with self._read_lock:
+                rows = self._read_conn.execute(
+                    f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
+                    params,
+                ).fetchall()
 
         max_id = max((r[0] for r in rows), default=cursor)
         entries = []
