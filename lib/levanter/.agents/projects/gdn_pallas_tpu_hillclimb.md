@@ -6441,3 +6441,164 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - The minimal-tape idea does not seem to help on this head unless it also changes the outer step-critical-path structure. Another `R` attempt that preserves the same CE shell and the same overlap pattern is unlikely to promote.
   - The next mainline attempt should pivot to a stronger outer-structure diagnostic (`O` or `M`) or return to CE-shell work only if it can produce a completed profile without introducing another compile-heavy failure mode.
+
+### Iteration 83 - Macro Move M / backward chunk-start recompute via associative XLA summaries (validated, profile-blocked, reverted)
+
+- Coverage slot: `M`
+- Why this attacks the train-path control bottleneck:
+  - The latest validated head already refreshed CE backward mode and still shows a large untracked `remainder_budget_ms` (`123.602870 ms`) beside the residual CE-attributed `while`.
+  - This arm tried to move more of the training shell toward XLA by removing the saved `(B,H,Nc,K,V)` `chunk_starts` residual and rebuilding chunk-start state in backward with the existing associative XLA chunk-summary path, so the train path would carry less tape instead of only making the same Pallas shell cheaper.
+- Hot-path scan/cond status:
+  - No new hot-path `lax.scan`.
+  - No new hot-path `lax.cond` / runtime dispatch.
+  - The intended replay path used `lax.associative_scan` over chunk summaries in backward and preserved the existing CE shell.
+- Change class: `outer control structure`
+
+- Codex loop iteration: `9 / 10`
+- Date: `2026-03-10T17:28:00Z`
+- Starting commit: `7997d8758a3e7086a1436b1de718a8f75a9bee9b`
+- Commit: `none (profile infra blocker; candidate reverted after validation)`
+
+- Dominant bottleneck carried in (current deployable baseline trace; code-identical to the starting head aside from log-only commits):
+  - Forward closed-call: `20.663769 ms`
+  - Backward closed-call: `13.128108 ms`
+  - while: `8.886552 ms`
+  - conditional: `0.025954 ms`
+  - CE-attributed while: `8.886552 ms`
+  - Kernel budget: `33.791877 ms`
+  - Control budget: `8.912506 ms`
+  - Train-path budget: `42.704383 ms`
+  - Step duration: `166.307253 ms`
+  - Remainder budget: `123.602870 ms`
+
+- Current train-path control bottleneck read from the latest validated evidence:
+  - The visible hot `while` is still the CE backward/custom-VJP shell in `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/pallas_tpu.py:802`.
+  - The larger unresolved wall is the post-train-path remainder: repeated GDN-local changes have not explained the remaining `123.6 ms` of step time outside the tracked GDN kernel/control buckets.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Macro M (selected):** rebuild `chunk_starts` in backward with associative XLA summaries and drop the full chunk-start residual from the TPU train path (`+0.5-2.0%`, high risk).
+  2. **Macro O:** refresh the reduced-Pallas / full-XLA control arm to bound whether any remaining Pallas train-shell boundary is still off-critical-path (`0%` deployable upside, medium/high diagnostic risk).
+  3. **Macro P:** refresh the CE backward A/B matrix on this head only if CE attribution became unclear again (`0-0.5%`, low implementation risk, but low information value because the current head is code-identical to the latest validated CE refresh).
+
+- Selected macro-move category: **M) XLA-first outer train path with Pallas only as leaf chunk kernels**.
+
+- CE hygiene:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - Why CE stayed fixed:
+    - The current source head is code-identical to the latest validated `pallas_tpu` + `pallas` CE refresh in the deployable path, so another CE-only rerun would not resolve the larger unexplained remainder wall. This iteration spent budget on the next outer-structure coverage slot instead.
+
+- Expected effect on `while_ms`: flat to slightly down; this arm does not touch the CE shell directly.
+- Expected effect on `step_duration_ms`: down if the smaller residual contract removes enough HBM traffic / overlap loss to shorten the full step.
+- Expected effect on `remainder_budget_ms`: down materially; removing the full saved `chunk_starts` tape was the whole point of the attempt.
+- Reject if `while_ms` remains flat? **No.** A non-CE outer-structure move can still be useful if the full step gets faster.
+- Reject if `remainder_budget_ms` grows? **Yes.** This candidate only makes sense if tape shrink turns into end-to-end step improvement instead of another overlap-loss regression.
+
+- Change summary:
+  - Temporary candidate implementation in `lib/levanter/src/levanter/layers/gated_deltanet.py`:
+    - extracted the associative XLA chunk-summary logic into a helper that could rebuild full chunk-start states from raw chunk inputs plus `initial_state`,
+    - stopped saving `chunk_starts` in the custom-VJP residual on the full-sequence TPU training path,
+    - recomputed `chunk_starts` in backward once the prepare tapes had already been recomputed from raw inputs.
+  - Retained tree state after validation:
+    - no source changes were kept,
+    - the speculative chunk-start recompute implementation was fully reverted after profiling blocked on infra and never produced a usable TPU train-step trace.
+
+- Correctness checks:
+  - Local focused checks:
+    - `uv run python -m py_compile lib/levanter/src/levanter/layers/gated_deltanet.py` -> `OK`
+    - `uv run pytest -q lib/levanter/tests/test_gdn_kernels.py -k "flash_chunk_backward_chunk_size_invariance_kernel_level or chunk_backward_matches_hf or chunk_continuation_two_pass_equals_one_pass"` -> `3 passed, 35 deselected`
+    - `uv run pytest -q lib/levanter/tests/test_gdn_layer.py -k "gdn and not slow"` -> `13 passed`
+  - Managed dev TPU validation on the candidate:
+    - first full run:
+      - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - result: one transient TPU-only miss in `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]` (`1 failed, 86 passed, 2 skipped`)
+    - isolated rerun of the failing test:
+      - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run scripts/ray/dev_tpu.py --cluster us-east5-a --tpu-name calvinxu-gdn execute -e EQX_ON_ERROR=nan -e WANDB_MODE=offline -- 'cd lib/levanter && if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then uv sync --active --extra=tpu --group test && uv pip install --python "$VIRTUAL_ENV/bin/python" --index-url https://download.pytorch.org/whl/cpu --force-reinstall torch==2.9.0+cpu && uv pip install --python "$VIRTUAL_ENV/bin/python" transformers && EQX_ON_ERROR=nan WANDB_MODE=offline uv run --active pytest "tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]" -v; else uv sync --extra=tpu --group test && uv pip install --python ../../.venv/bin/python --index-url https://download.pytorch.org/whl/cpu --force-reinstall torch==2.9.0+cpu && uv pip install --python ../../.venv/bin/python transformers && EQX_ON_ERROR=nan WANDB_MODE=offline uv run pytest "tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]" -v; fi'`
+      - result: `1 passed in 16.08s`
+    - required full-slice rerun:
+      - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+      - result: `87 passed, 2 skipped in 225.97s`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - Managed dev TPU primary attempt:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --marin-prefix gs://marin-us-east5 --run-name-prefix gdn_i09_M_recompute_chunk_starts`
+    - result: remote wrapper failed before the training run started with `error: No virtual environment or system Python installation found for path ../../.venv/bin/python; run uv venv to create an environment`
+  - Ray fallback profile:
+    - command: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --profile-env MARIN_PREFIX=gs://marin-us-east5 --run-name-prefix gdn_i09_M_recompute_chunk_starts`
+    - Ray job: `ray-run-calvinxu-bash-20260310-172351`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_i09_M_recompute_chunk_starts_gdn_130m_ch128_seg16_2-5c5616`
+    - failure mode:
+      - Ray repeatedly scheduled CPU-only workers instead of a TPU-enabled environment,
+      - worker logs reported `A Google TPU may be present on this machine, but either a TPU-enabled jaxlib or libtpu is not installed. Falling back to cpu.`,
+      - training then failed with `RuntimeError: No accelerator found. Please run on a TPU or GPU.`,
+      - autoscaler logs simultaneously reported unsatisfied TPU head resources: `No available node types can fulfill resource requests {'TPU-v6e-32-head': 1.0, 'CPU': 1.0}*1.`,
+      - the stuck Ray job was explicitly stopped with `uv run scripts/ray/cluster.py --cluster us-east5-a stop-job ray-run-calvinxu-bash-20260310-172351`.
+    - interpretation:
+      - this was an infra scheduling/bootstrap failure, not a usable performance run and not a candidate-runtime measurement.
+
+- Hotspot metrics:
+  - `CE backend selected: pallas_tpu` (requested and fixed for all attempts)
+  - `CE bwd mode: pallas`
+  - `CE-attributed while: n/a` (no completed candidate trace)
+  - Forward closed-call: `n/a`
+  - Backward closed-call: `n/a`
+  - `while: n/a`
+  - `conditional: n/a`
+  - `Kernel budget: n/a`
+  - `Control budget: n/a`
+  - `Train-path budget: n/a`
+  - `Step duration: n/a`
+  - `Remainder budget: n/a`
+  - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`: `n/a` (candidate never reached a valid TPU train step)
+
+- Hot-path control-flow checklist:
+  - Where is the hot-path `while` / `conditional` coming from in this design?
+    - The expected visible control wall remained the CE backward/custom-VJP shell; the candidate itself targeted the saved GDN chunk-start tape and the post-train-path remainder.
+  - Does this candidate add or preserve a hot-path `lax.scan`?
+    - It preserved the existing CE shell only and did not add a new hot-path `lax.scan`.
+  - Does it add a hot-path `lax.cond` / runtime branch?
+    - No.
+  - Why should that not become a TPU `WhileOp` / `Conditional` hotspot?
+    - The intended recompute path used `lax.associative_scan` over fixed chunk summaries rather than a new runtime-dispatched or loop-carried shell.
+  - If the candidate keeps a scan shell, why is that still the right bet despite recent evidence?
+    - The point was to attack the untracked remainder by shrinking the full backward residual, not to preserve another GDN-local serial shell.
+  - Is the residual `while` still CE-attributed in this design?
+    - Expected yes, but unconfirmed because no profile completed.
+  - What do you expect to happen to `while_ms`?
+    - Flat to slightly down.
+  - What do you expect to happen to `remainder_budget_ms`?
+    - Down materially.
+  - Should this candidate be rejected if `while_ms` remains flat or `remainder_budget_ms` grows? Why?
+    - Reject if `remainder_budget_ms` grows; the tape-shrink tradeoff is only worthwhile if it shortens the full step instead of shifting cost into overlap loss.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `87 passed, 2 skipped in 225.97s`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: n/a`
+    - Forward closed-call `n/a`
+    - Backward closed-call `n/a`
+    - `while: n/a`
+    - `conditional: n/a`
+    - `Kernel budget: n/a`
+    - `Control budget: n/a`
+    - `Train-path budget: n/a`
+    - `Step duration: n/a`
+    - `Remainder budget: n/a`
+    - `throughput/mfu`: `n/a`
+    - `throughput/tokens_per_second`: `n/a`
+    - `throughput/duration`: `n/a`
+  - Governance:
+    - CE stayed fixed at the required deployable setting throughout.
+    - No speculative source changes remain in the tree.
+    - The candidate cannot be judged on performance because both required profile paths failed before a usable TPU train step:
+      - dev TPU profile wrapper bootstrap failed on the broken `../../.venv/bin/python` path,
+      - Ray fallback failed scheduling / TPU runtime bootstrap and ran on CPU-only workers.
+    - This iteration is therefore blocked on profiling infra, not closed as a promising or regressive performance result.
+
+- Assessment: **validated, profile-blocked, and reverted**. The backward chunk-start recompute arm is still unjudged on runtime behavior because the session never produced a completed TPU profile run. Correctness passed on the required TPU slice after rerunning the one transient parity wobble, but both profile paths failed before step logging or profiler artifact capture. No speculative code remains.
+- Next bold hypothesis:
+  - Fix the managed dev TPU profile wrapper so it uses the active remote environment instead of falling into the broken `../../.venv/bin/python` path.
+  - If Ray fallback remains necessary, restore TPU-capable scheduling/runtime bootstrap before spending another structural iteration; otherwise the loop cannot tell whether a remainder-targeting outer-structure move is helping.
