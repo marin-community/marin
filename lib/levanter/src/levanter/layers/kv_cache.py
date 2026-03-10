@@ -11,7 +11,6 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
-from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call
 from jax import lax
 
@@ -33,10 +32,10 @@ class PageCache(eqx.Module):
 class KvPageCache(PageCache):
     """Concrete KV cache storing interleaved key/value pages for paged attention."""
 
-    kv_pages: NamedArray  # [Page, Slot, 2 * KVHeads, Embed]
+    kv_pages: hax.NamedArray  # [Page, Slot, 2 * KVHeads, Embed]
 
     @staticmethod
-    def init(spec: PageTableSpec, kv_heads: Axis, head_size: Axis, dtype=jnp.float32) -> "KvPageCache":
+    def init(spec: PageTableSpec, kv_heads: hax.Axis, head_size: hax.Axis, dtype=jnp.float32) -> "KvPageCache":
         """
         Initialize a KvPageCache with the given page table specification and dimensions.
 
@@ -60,14 +59,14 @@ class KvPageCache(PageCache):
     def reset(self) -> "KvPageCache":
         """Return a reset version of this cache."""
         reset_pages = jnp.zeros_like(self.kv_pages.array)
-        return dataclasses.replace(self, kv_pages=NamedArray(reset_pages, self.kv_pages.axes))
+        return dataclasses.replace(self, kv_pages=hax.NamedArray(reset_pages, self.kv_pages.axes))
 
     @named_call
     def update(
         self,
         batch_info: PageBatchInfo,
-        new_k: NamedArray,  # [Tok, KvHeads, HeadDim]
-        new_v: NamedArray,  # [Tok, KvHeads, HeadDim]
+        new_k: hax.NamedArray,  # [Tok, KvHeads, HeadDim]
+        new_v: hax.NamedArray,  # [Tok, KvHeads, HeadDim]
     ) -> "KvPageCache":
         """Append keys and values to the cache based on *batch_info*."""
         page_size = self.kv_pages.array.shape[1]
@@ -88,7 +87,7 @@ class KvPageCache(PageCache):
             new_v.array,
             K,
         )
-        updated = NamedArray(updated, self.kv_pages.axes)
+        updated = hax.NamedArray(updated, self.kv_pages.axes)
         return dataclasses.replace(self, kv_pages=updated)
 
     def copy_page(self, src_page: int, dst_page: int) -> "KvPageCache":

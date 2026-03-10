@@ -15,7 +15,6 @@ from jaxtyping import PRNGKeyArray
 import haliax as hax
 import haliax.jax_utils
 import haliax.nn as hnn
-from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call, shaped_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
@@ -52,11 +51,11 @@ class Gpt2HyenaConfig(LmConfig):
 
     # Axes
     @property
-    def Embed(self) -> Axis:
+    def Embed(self) -> hax.Axis:
         return self.hyena.Embed
 
-    Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
-    Mlp = property(lambda self: Axis(name="mlp", size=self.Embed.size * self.mlp_scale))
+    Layers = property(lambda self: hax.Axis(name="layers", size=self.num_layers))
+    Mlp = property(lambda self: hax.Axis(name="mlp", size=self.Embed.size * self.mlp_scale))
 
     @property
     def model_type(cls) -> Type["Gpt2HyenaModel"]:
@@ -96,7 +95,7 @@ class Gpt2HyenaBlock(eqx.Module):
         return Gpt2HyenaBlock(config, ln_1, hyena_operator, ln_2, mlp, resid_dropout)
 
     @named_call
-    def __call__(self, x: NamedArray, *, key):
+    def __call__(self, x: hax.NamedArray, *, key):
         k1, k2, k3, k4 = haliax.jax_utils.maybe_rng_split(key, 4)
 
         x_for_hyena = self.ln_1(x)
@@ -131,9 +130,9 @@ class Gpt2HyenaBackbone(ModuleWithStateDictSerialization):
         return Gpt2HyenaBackbone(config, blocks, ln_f)
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: hax.NamedArray, *, key=None) -> hax.NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.blocks.fold(x, key=keys))
+        x = cast(hax.NamedArray, self.blocks.fold(x, key=keys))
         x = self.ln_f(x)
 
         return x
@@ -151,15 +150,15 @@ class Gpt2HyenaModel(LmHeadModel[Gpt2HyenaConfig]):
         return self.backbone.config
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     @property
-    def Pos(self) -> Axis:
+    def Pos(self) -> hax.Axis:
         return self.config.max_Pos
 
     @classmethod
-    def init(cls, Vocab: Axis, config: Gpt2HyenaConfig, *, key) -> "Gpt2HyenaModel":
+    def init(cls, Vocab: hax.Axis, config: Gpt2HyenaConfig, *, key) -> "Gpt2HyenaModel":
         k_t, k_embeddings = jrandom.split(key, 2)
         backbone = Gpt2HyenaBackbone.init(config, key=k_t)
         embeddings = Gpt2Embeddings.init(
@@ -173,12 +172,12 @@ class Gpt2HyenaModel(LmHeadModel[Gpt2HyenaConfig]):
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[AttentionMask | hax.NamedArray] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         # NOTE: attn_mask not used since we use the Hyena operator instead of attention.
         k_embed, k_backbone = haliax.jax_utils.maybe_rng_split(key, 2)
         if pos_ids is None:

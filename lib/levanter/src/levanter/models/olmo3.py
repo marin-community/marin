@@ -18,7 +18,6 @@ import jax.random as jrandom
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
@@ -77,14 +76,14 @@ class Olmo3Config(HFCompatConfig):
     tokenizer: Optional[str] = None
 
     @property
-    def Embed(self) -> Axis:
-        return Axis(name="embed", size=self.hidden_dim)
+    def Embed(self) -> hax.Axis:
+        return hax.Axis(name="embed", size=self.hidden_dim)
 
-    Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
-    KVHeads = property(lambda self: Axis(name="kv_head", size=self.num_kv_heads))
-    Layers = property(lambda self: Axis(name="layer", size=self.num_layers))
-    Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
-    HeadSize = property(lambda self: Axis(name="head_size", size=self.actual_head_size))
+    Heads = property(lambda self: hax.Axis(name="heads", size=self.num_heads))
+    KVHeads = property(lambda self: hax.Axis(name="kv_head", size=self.num_kv_heads))
+    Layers = property(lambda self: hax.Axis(name="layer", size=self.num_layers))
+    Mlp = property(lambda self: hax.Axis(name="mlp", size=self.intermediate_dim))
+    HeadSize = property(lambda self: hax.Axis(name="head_size", size=self.actual_head_size))
 
     def __post_init__(self):
         assert (
@@ -155,7 +154,7 @@ class Olmo3Config(HFCompatConfig):
     def model_type(self) -> Type["Olmo3LMHeadModel"]:
         return Olmo3LMHeadModel
 
-    def mk_LayerNorm(self, axis: AxisSpec) -> hnn.RmsNorm:
+    def mk_LayerNorm(self, axis: hax.AxisSpec) -> hnn.RmsNorm:
         return self.norm_config.build(axis)
 
     @property
@@ -265,8 +264,13 @@ class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key=None,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
         # Self-attention with post-norm
@@ -328,10 +332,15 @@ class Olmo3Transformer(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        attn_mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self._layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
+        x = cast(hax.NamedArray, self._layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
@@ -353,11 +362,11 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     @classmethod
-    def init(cls, Vocab: Axis, config: Olmo3Config, *, key) -> "Olmo3LMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: Olmo3Config, *, key) -> "Olmo3LMHeadModel":
         k_t, k_emb, k_head = jrandom.split(key, 3)
         transformer = Olmo3Transformer.init(config, key=k_t)
         embeddings = Olmo2Embedding.init(Vocab, config, key=k_emb)
@@ -377,12 +386,12 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
 
     def __call__(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
-        pos_ids: NamedArray | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[Union[hax.NamedArray, AttentionMask]] = None,
+        pos_ids: hax.NamedArray | None = None,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> hax.NamedArray:
         k_t, k_head = maybe_rng_split(key, 2)
 
         x = self.embeddings.embed(input_ids)
@@ -397,12 +406,12 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[AttentionMask | hax.NamedArray] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         x = self.embeddings.embed(input_ids)
         x = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
         return x

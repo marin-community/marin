@@ -11,10 +11,9 @@ import jax
 import jax.numpy as jnp
 
 import haliax as hax
-from haliax import Axis, NamedArray
 
 
-def _rotate_half(x: NamedArray, HeadSize: Axis) -> NamedArray:
+def _rotate_half(x: hax.NamedArray, HeadSize: hax.Axis) -> hax.NamedArray:
     """Rotates half of the hidden dims of the input and concatenates them."""
     x1 = x[HeadSize, : HeadSize.size // 2]
     x2 = x[HeadSize, HeadSize.size // 2 :]
@@ -23,18 +22,20 @@ def _rotate_half(x: NamedArray, HeadSize: Axis) -> NamedArray:
 
 
 class RotaryEmbeddings(eqx.Module):
-    def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
+    def __call__(self, q: hax.NamedArray, position_ids: hax.NamedArray) -> hax.NamedArray:
         raise NotImplementedError("This is an abstract base class for RotaryEmbeddings. Use a subclass instead.")
 
 
 class DefaultRotaryEmbeddings(RotaryEmbeddings):
-    HeadDim: Axis = eqx.field(static=True)
+    HeadDim: hax.Axis = eqx.field(static=True)
     config: "DefaultRotaryEmbeddingsConfig" = eqx.field(static=True)
 
-    def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
+    def __call__(self, q: hax.NamedArray, position_ids: hax.NamedArray) -> hax.NamedArray:
         with jax.ensure_compile_time_eval():
             HeadHalfSize = self.HeadDim.resize(self.HeadDim.size // 2)
-            inv_freq: NamedArray = 1.0 / (self.config.theta ** (hax.arange(HeadHalfSize, step=2) / self.HeadDim.size))
+            inv_freq: hax.NamedArray = 1.0 / (
+                self.config.theta ** (hax.arange(HeadHalfSize, step=2) / self.HeadDim.size)
+            )
             inv_freq = inv_freq / self.config.factor
 
         freqs = inv_freq.broadcast_axis(position_ids.axes) * position_ids
@@ -51,7 +52,7 @@ class RotaryEmbeddingsConfig(abc.ABC, draccus.ChoiceRegistry):
     theta: float = 10000.0
 
     @abc.abstractmethod
-    def build(self, HeadSize: Axis) -> RotaryEmbeddings:
+    def build(self, HeadSize: hax.Axis) -> RotaryEmbeddings:
         pass
 
     @staticmethod
@@ -77,7 +78,7 @@ class DefaultRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
     theta: float = 10000
     factor: float = 1.0  # this should have been called scale_factor, but for hf compat
 
-    def build(self, HeadSize: Axis) -> RotaryEmbeddings:
+    def build(self, HeadSize: hax.Axis) -> RotaryEmbeddings:
         return DefaultRotaryEmbeddings(HeadSize, self)
 
     @classmethod
@@ -95,10 +96,10 @@ RotaryEmbeddingsConfig.register_subclass("linear", DefaultRotaryEmbeddingsConfig
 
 
 class Llama3RotaryEmbeddings(RotaryEmbeddings):
-    HeadDim: Axis = eqx.field(static=True)
+    HeadDim: hax.Axis = eqx.field(static=True)
     config: "Llama3RotaryEmbeddingsConfig" = eqx.field(static=True)
 
-    def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
+    def __call__(self, q: hax.NamedArray, position_ids: hax.NamedArray) -> hax.NamedArray:
         inv_freq_llama = self._compute_inv_freq_llama()
         freqs = position_ids * inv_freq_llama.broadcast_axis(position_ids.axes)
         emb = hax.concatenate(self.HeadDim, (freqs, freqs))
@@ -117,7 +118,9 @@ class Llama3RotaryEmbeddings(RotaryEmbeddings):
             # This is the Llama3 implementation of rotary embeddings.
             # It uses a different scaling factor and frequency calculation.
             HeadHalfSize = self.HeadDim.resize(self.HeadDim.size // 2)
-            inv_freq: NamedArray = 1.0 / (self.config.theta ** (hax.arange(HeadHalfSize, step=2) / self.HeadDim.size))
+            inv_freq: hax.NamedArray = 1.0 / (
+                self.config.theta ** (hax.arange(HeadHalfSize, step=2) / self.HeadDim.size)
+            )
 
             old_context_len = self.config.original_max_position_embeddings
             low_freq_wavelen = old_context_len / self.config.low_freq_factor
@@ -155,7 +158,7 @@ class Llama3RotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
     high_freq_factor: float = 4.0
     original_max_position_embeddings: int = 8192
 
-    def build(self, HeadSize: Axis) -> RotaryEmbeddings:
+    def build(self, HeadSize: hax.Axis) -> RotaryEmbeddings:
         # https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_rope_utils.py#L307
         # Porting that to JAX/Haliax:
         return Llama3RotaryEmbeddings.init(HeadSize, self)
@@ -184,17 +187,17 @@ RotaryEmbeddingsConfig.register_subclass("llama3", Llama3RotaryEmbeddingsConfig)
 
 
 class YarnRotaryEmbeddings(RotaryEmbeddings):
-    HeadDim: Axis = eqx.field(static=True)
+    HeadDim: hax.Axis = eqx.field(static=True)
     config: "YarnRotaryEmbeddingsConfig" = eqx.field(static=True)
 
-    def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
+    def __call__(self, q: hax.NamedArray, position_ids: hax.NamedArray) -> hax.NamedArray:
         import math
 
         with jax.ensure_compile_time_eval():
             half_dim = self.HeadDim.size // 2
             head_dim = self.HeadDim.size
             HeadHalfSize = self.HeadDim.resize(self.HeadDim.size // 2)
-            inv_freq: NamedArray = 1.0 / (
+            inv_freq: hax.NamedArray = 1.0 / (
                 self.config.theta ** (hax.arange(HeadHalfSize, step=2, dtype=jnp.float32) / head_dim)
             )
 
@@ -245,7 +248,7 @@ class YarnRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
     original_max_position_embeddings: int = 2048
     mscale: float = 1.0
 
-    def build(self, HeadSize: Axis) -> RotaryEmbeddings:
+    def build(self, HeadSize: hax.Axis) -> RotaryEmbeddings:
         return YarnRotaryEmbeddings.init(HeadSize, self)
 
     @classmethod
@@ -274,13 +277,13 @@ RotaryEmbeddingsConfig.register_subclass("yarn", YarnRotaryEmbeddingsConfig)
 
 
 def rotary_pos_emb(
-    HeadSize: Axis, Pos: Axis, theta: float = 10000, scale: float = 1.0
-) -> Tuple[NamedArray, NamedArray]:
+    HeadSize: hax.Axis, Pos: hax.Axis, theta: float = 10000, scale: float = 1.0
+) -> Tuple[hax.NamedArray, hax.NamedArray]:
     with jax.ensure_compile_time_eval():
         HeadHalfSize = HeadSize.resize(HeadSize.size // 2)
-        inv_freq: NamedArray = 1.0 / (theta ** (hax.arange(HeadHalfSize, step=2) / HeadSize.size)) / scale
+        inv_freq: hax.NamedArray = 1.0 / (theta ** (hax.arange(HeadHalfSize, step=2) / HeadSize.size)) / scale
 
-        position_ids: NamedArray = hax.arange(Pos)
+        position_ids: hax.NamedArray = hax.arange(Pos)
 
         freqs = position_ids * inv_freq.broadcast_axis(Pos)
         # This is different from the paper but aligns with HF implementation:

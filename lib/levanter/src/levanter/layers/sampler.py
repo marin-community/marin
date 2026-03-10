@@ -7,7 +7,6 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import AxisSelector, NamedArray
 
 __all__ = ["Sampler"]
 
@@ -27,18 +26,18 @@ class Sampler(eqx.Module):
     scalar, a per-batch, or a per-batch-and-time temperature.
     """
 
-    Vocab: AxisSelector = eqx.field(static=True)
+    Vocab: hax.AxisSelector = eqx.field(static=True)
 
     def __init__(self, Vocab: hax.AxisSelector = "vocab"):
         self.Vocab = Vocab
 
     def __call__(
         self,
-        logits: NamedArray,
-        temperatures: NamedArray | float | jnp.ndarray,
+        logits: hax.NamedArray,
+        temperatures: hax.NamedArray | float | jnp.ndarray,
         *,
         key: PRNGKeyArray,
-    ) -> tuple[NamedArray, NamedArray]:
+    ) -> tuple[hax.NamedArray, hax.NamedArray]:
         """Sample token IDs and their log-probs.
 
         Args:

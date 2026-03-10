@@ -12,7 +12,6 @@ from jaxtyping import PRNGKeyArray
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
@@ -87,17 +86,17 @@ class LlamaConfig(HFCompatConfig):
     reference_checkpoint: str = "NousResearch/Llama-2-7b-hf"
     tokenizer: Optional[str] = None
 
-    # Axis
+    # Axes
     @property
-    def KeyPos(self) -> Axis:
+    def KeyPos(self) -> hax.Axis:
         return self.max_Pos.alias("key_position")
 
     @property
-    def Embed(self) -> Axis:
-        return Axis(name="embed", size=self.hidden_dim)
+    def Embed(self) -> hax.Axis:
+        return hax.Axis(name="embed", size=self.hidden_dim)
 
-    Layers = property(lambda self: Axis(name="layer", size=self.num_layers))
-    Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
+    Layers = property(lambda self: hax.Axis(name="layer", size=self.num_layers))
+    Mlp = property(lambda self: hax.Axis(name="mlp", size=self.intermediate_dim))
 
     def __post_init__(self):
         assert (
@@ -193,7 +192,7 @@ class LlamaConfig(HFCompatConfig):
             eps=self.layer_norm_epsilon,
         )
 
-    def mk_LayerNorm(self, axis: AxisSpec):
+    def mk_LayerNorm(self, axis: hax.AxisSpec):
         return self.norm_config.build(axis)
 
     def flops_per_token(self, vocab_size: int, context_length: int):
@@ -266,8 +265,8 @@ class LlamaMlp(eqx.Module):
 
     @staticmethod
     def init(
-        Embed: AxisSpec,
-        Mlp: AxisSpec,
+        Embed: hax.AxisSpec,
+        Mlp: hax.AxisSpec,
         activation_fn: Union[ActivationFunctionEnum, Callable],
         *,
         key,
@@ -284,7 +283,7 @@ class LlamaMlp(eqx.Module):
         return LlamaMlp(gate_proj, up_proj, down_proj, activation_fn)
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: hax.NamedArray, *, key=None) -> hax.NamedArray:
         k_gate, k_up, k_down = maybe_rng_split(key, 3)
         hidden_states = self.gate_proj(x, key=k_gate)
         hidden_states = self.act(hidden_states)
@@ -326,8 +325,13 @@ class LlamaDecoderLayer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key=None,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
@@ -349,13 +353,13 @@ class LlamaDecoderLayer(eqx.Module):
     @named_call
     def decode(
         self,
-        x: NamedArray,
+        x: hax.NamedArray,
         kv_cache: KvPageCache,
         batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
+        pos_ids: hax.NamedArray,
         *,
         key=None,
-    ) -> tuple[NamedArray, KvPageCache]:
+    ) -> tuple[hax.NamedArray, KvPageCache]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
@@ -404,10 +408,15 @@ class LlamaTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+        self,
+        x: hax.NamedArray,
+        attn_mask: Optional[hax.NamedArray | AttentionMask],
+        *,
+        key,
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
+        x = cast(hax.NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
 
         return x
@@ -416,12 +425,12 @@ class LlamaTransformer(eqx.Module):
     def decode(
         self,
         kv_cache: ListCache[KvPageCache],
-        x: NamedArray,
+        x: hax.NamedArray,
         batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
+        pos_ids: hax.NamedArray,
         *,
         key=None,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+    ) -> tuple[hax.NamedArray, ListCache[KvPageCache]]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
 
         # Unfortunately, JAX does not seem to want to intelligently reuse memory here, so we manually unroll the loop
@@ -477,7 +486,7 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
     norm: Optional[hnn.RmsNorm] = None
 
     @staticmethod
-    def init(Vocab: Axis, config: LlamaConfig, *, key) -> "LlamaEmbedding":
+    def init(Vocab: hax.Axis, config: LlamaConfig, *, key) -> "LlamaEmbedding":
         token_embeddings = hnn.Embedding.init(Vocab, config.Embed, key=key)
         norm = None
         if config.input_embedding_norm:
@@ -485,12 +494,12 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
         return LlamaEmbedding(token_embeddings, norm)
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.token_embeddings.Vocab
 
     @property
-    def Embed(self) -> Axis:
-        return cast(Axis, self.token_embeddings.Embed)
+    def Embed(self) -> hax.Axis:
+        return cast(hax.Axis, self.token_embeddings.Embed)
 
     @named_call
     def embed(self, input_ids, *args):
@@ -499,7 +508,7 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
             input_embeds = self.norm(input_embeds)
         return input_embeds
 
-    def unembed(self, x: NamedArray):
+    def unembed(self, x: hax.NamedArray):
         return self.token_embeddings.unembed(x)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
@@ -524,11 +533,11 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     @classmethod
-    def init(cls, Vocab: Axis, config: LlamaConfig, *, key) -> "LlamaLMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: LlamaConfig, *, key) -> "LlamaLMHeadModel":
         k_t, k_emb = jrandom.split(key, 2)
         transformer = LlamaTransformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
@@ -541,23 +550,23 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
 
     def __call__(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
-        pos_ids: NamedArray | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[Union[hax.NamedArray, AttentionMask]] = None,
+        pos_ids: hax.NamedArray | None = None,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> hax.NamedArray:
         """
         Args:
-            input_ids (NamedArray): [batch, position]
+            input_ids (hax.NamedArray): [batch, position]
                 Indices of input sequence tokens in the vocabulary.
-            attn_mask (Union[NamedArray, AttentionMask], optional): [batch, position]
+            attn_mask (Union[hax.NamedArray, AttentionMask], optional): [batch, position]
                 Mask to avoid performing attention on the padding token indices of the encoder input.
-                The attn_mask from training pipeline may be an AttentionMask object instead of NamedArray
-            pos_ids: NamedArray | None = None,
+                The attn_mask from training pipeline may be an AttentionMask object instead of hax.NamedArray
+            pos_ids: hax.NamedArray | None = None,
 
         Returns:
-            NamedArray: logits with shape {Batch, Pos, Vocab}
+            hax.NamedArray: logits with shape {Batch, Pos, Vocab}
         """
         k_t, k_head = maybe_rng_split(key, 2)
         x = self.embeddings.embed(input_ids)
@@ -570,12 +579,12 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[AttentionMask | hax.NamedArray] = None,
         *,
         key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+        pos_ids: hax.NamedArray | None = None,
+    ) -> hax.NamedArray:
         """
         Compute the activations for the next token in a sequence.
         Args:
@@ -585,7 +594,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
             pos_ids: position IDs with shape {Pos}
 
         Returns:
-            NamedArray: activations with shape {Pos, Embed}
+            hax.NamedArray: activations with shape {Pos, Embed}
 
         """
         x = self.embeddings.embed(input_ids)
@@ -623,23 +632,23 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
     @named_call
     def decode(
         self,
-        input_ids: NamedArray,  # token IDs for *this* step (shape {Pos} or {Batch, Pos})
+        input_ids: hax.NamedArray,  # token IDs for *this* step (shape {Pos} or {Batch, Pos})
         kv_cache: ListCache[KvPageCache],
         batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
+        pos_ids: hax.NamedArray,
         *,
         key=None,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+    ) -> tuple[hax.NamedArray, ListCache[KvPageCache]]:
         """Run one decode / pre-fill step with an existing paged-KV *state*.
 
         Parameters
         ----------
-        input_ids : NamedArray
+        input_ids : hax.NamedArray
             Token IDs for the positions being decoded **this call**.
         kv_cache : ListCache[KvPageCache]
             Current paged-KV cache (one per layer). Obtain the initial value via
             ``self.initial_cache`` and update with the returned *new_state* each step.
-        pos_ids : NamedArray
+        pos_ids : hax.NamedArray
             Absolute position IDs matching *input_ids* (negative IDs can mark padding as
             in the lower-level API).
         key : jax.random.PRNGKey | None
@@ -647,7 +656,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
 
         Returns
         -------
-        logits : NamedArray
+        logits : hax.NamedArray
             Logits for the provided tokens (axes match *input_ids* + ``Vocab``).
         new_state : ListCache[KvPageCache]
             Updated cache to pass into the next decode call.

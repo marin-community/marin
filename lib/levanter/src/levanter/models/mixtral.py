@@ -16,7 +16,6 @@ from jax import shard_map
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.normalization import LayerNormBase
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
@@ -103,19 +102,19 @@ class MixtralConfig(MistralConfig):
     reference_checkpoint: str = "mistralai/Mixtral-8x7B-v0.1"
     tokenizer: Optional[str] = None
 
-    # Axis
+    # Axes
     @property
-    def Embed(self) -> Axis:
-        return Axis(name="embed", size=self.hidden_dim)
+    def Embed(self) -> hax.Axis:
+        return hax.Axis(name="embed", size=self.hidden_dim)
 
-    Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
-    KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
-    Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
-    Experts = property(lambda self: Axis(name="experts", size=self.n_routed_experts))
-    SharedExperts = property(lambda self: Axis(name="shared_experts", size=self.n_shared_experts))
-    TopExperts = property(lambda self: Axis(name="top_experts", size=self.num_experts_per_tok))
-    Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
-    HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
+    Heads = property(lambda self: hax.Axis(name="heads", size=self.num_heads))
+    KVHeads = property(lambda self: hax.Axis(name="kv_heads", size=self.num_kv_heads))
+    Layers = property(lambda self: hax.Axis(name="layers", size=self.num_layers))
+    Experts = property(lambda self: hax.Axis(name="experts", size=self.n_routed_experts))
+    SharedExperts = property(lambda self: hax.Axis(name="shared_experts", size=self.n_shared_experts))
+    TopExperts = property(lambda self: hax.Axis(name="top_experts", size=self.num_experts_per_tok))
+    Mlp = property(lambda self: hax.Axis(name="mlp", size=self.intermediate_dim))
+    HeadSize = property(lambda self: hax.Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
     def __post_init__(self):
         super().__post_init__()
@@ -194,7 +193,7 @@ class MixtralConfig(MistralConfig):
     def model_type(cls) -> Type["MixtralLMHeadModel"]:
         return MixtralLMHeadModel
 
-    def mk_LayerNorm(self, axis: AxisSpec) -> LayerNormBase:
+    def mk_LayerNorm(self, axis: hax.AxisSpec) -> LayerNormBase:
         return hnn.RmsNorm.init(
             axis, eps=self.layer_norm_epsilon, use_weight=self.use_layer_norm_weight, use_bias=self.use_bias
         )
@@ -259,9 +258,9 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
 
     @staticmethod
     def init(
-        Experts: Axis,
-        Embed: Axis,
-        Mlp: Axis,
+        Experts: hax.Axis,
+        Embed: hax.Axis,
+        Mlp: hax.Axis,
         activation_fn: Union[ActivationFunctionEnum, Callable],
         *,
         key,
@@ -276,7 +275,7 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
         return MixtralMoEMlp(w1, w2, w3, Embed, Mlp, activation_fn)
 
     @named_call
-    def __call__(self, x: NamedArray, group_sizes: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: hax.NamedArray, group_sizes: hax.NamedArray, *, key=None) -> hax.NamedArray:
         k1, k2, k3 = maybe_rng_split(key, 3)
         hidden_states = self.w1(x, group_sizes, key=k1)
         hidden_states = self.act(hidden_states)
@@ -337,7 +336,7 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         return MixtralSparseMoeBlock(config, gate, experts)
 
-    def _route(self, router_probs: NamedArray, Token: Axis, TopExperts: Axis):
+    def _route(self, router_probs: hax.NamedArray, Token: hax.Axis, TopExperts: hax.Axis):
         @partial(
             shard_map,
             mesh=get_active_mesh(),
@@ -357,12 +356,12 @@ class MixtralSparseMoeBlock(eqx.Module):
         with jax.named_scope("route"):
             selected_weights_, selected_experts_ = sharded_route(router_probs.array)
 
-            selected_weights = NamedArray(selected_weights_, (Token, TopExperts))
-            selected_experts = NamedArray(selected_experts_, (Token, TopExperts))
+            selected_weights = hax.NamedArray(selected_weights_, (Token, TopExperts))
+            selected_experts = hax.NamedArray(selected_experts_, (Token, TopExperts))
 
         return selected_weights, selected_experts
 
-    def _permute(self, x_flat: NamedArray, topk_idx_flat: NamedArray, TokenRepeat: Axis):
+    def _permute(self, x_flat: hax.NamedArray, topk_idx_flat: hax.NamedArray, TokenRepeat: hax.Axis):
         Experts = self.config.Experts
 
         @partial(
@@ -388,20 +387,20 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("permute"):
             x_repeat_sort_, group_sizes_, sort_idx_ = permute_sharded(x_flat.array, topk_idx_flat.array)
-            x_repeat_sort = NamedArray(x_repeat_sort_, (TokenRepeat, self.config.Embed))
-            group_sizes = NamedArray(group_sizes_, (Experts,))
-            sort_idx = NamedArray(sort_idx_, (TokenRepeat,))
+            x_repeat_sort = hax.NamedArray(x_repeat_sort_, (TokenRepeat, self.config.Embed))
+            group_sizes = hax.NamedArray(group_sizes_, (Experts,))
+            sort_idx = hax.NamedArray(sort_idx_, (TokenRepeat,))
 
         return x_repeat_sort, group_sizes, sort_idx
 
     def _unpermute(
         self,
-        out_repeat_sort: NamedArray,
-        sort_idx: NamedArray,
-        topk_weights: NamedArray,
-        Token: Axis,
-        TokenRepeat: Axis,
-        TopExperts: Axis,
+        out_repeat_sort: hax.NamedArray,
+        sort_idx: hax.NamedArray,
+        topk_weights: hax.NamedArray,
+        Token: hax.Axis,
+        TokenRepeat: hax.Axis,
+        TopExperts: hax.Axis,
     ):
         @partial(
             shard_map,
@@ -424,12 +423,12 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("unpermute"):
             out_repeat_unflat_ = unpermute_sharded(out_repeat_sort.array, sort_idx.array)
-            out_repeat_unflat = NamedArray(out_repeat_unflat_, (Token, TopExperts, self.config.Embed))
+            out_repeat_unflat = hax.NamedArray(out_repeat_unflat_, (Token, TopExperts, self.config.Embed))
 
         return out_repeat_unflat
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> tuple[NamedArray, Dict[str, NamedArray]]:
+    def __call__(self, x: hax.NamedArray, *, key=None) -> tuple[hax.NamedArray, Dict[str, hax.NamedArray]]:
         if x.has_axis("batch"):
             squash_axes = [x.resolve_axis("batch"), x.resolve_axis(self.config.max_Pos.name)]
         else:
@@ -506,8 +505,8 @@ class MixtralDecoderLayer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None
-    ) -> tuple[NamedArray, Dict[str, NamedArray]]:
+        self, x: hax.NamedArray, mask: Optional[hax.NamedArray | AttentionMask], *, key=None
+    ) -> tuple[hax.NamedArray, Dict[str, hax.NamedArray]]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
@@ -545,8 +544,8 @@ class MixtralTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray], *, key, pos_ids: NamedArray | None = None
-    ) -> tuple[NamedArray, dict]:
+        self, x: hax.NamedArray, attn_mask: Optional[hax.NamedArray], *, key, pos_ids: hax.NamedArray | None = None
+    ) -> tuple[hax.NamedArray, dict]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
         x = self.norm(x)
@@ -587,11 +586,11 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
         return self.Vocab.size
 
     @property
-    def Vocab(self) -> Axis:
+    def Vocab(self) -> hax.Axis:
         return self.embeddings.Vocab
 
     @classmethod
-    def init(cls, Vocab: Axis, config: MistralConfig, *, key) -> "MixtralLMHeadModel":
+    def init(cls, Vocab: hax.Axis, config: MistralConfig, *, key) -> "MixtralLMHeadModel":
         k_t, k_emb = jrandom.split(key, 2)
         transformer = MixtralTransformer.init(config, key=k_t)
         embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
@@ -604,19 +603,19 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
 
     def __call__(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
-        pos_ids: NamedArray | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[Union[hax.NamedArray, AttentionMask]] = None,
+        pos_ids: hax.NamedArray | None = None,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> hax.NamedArray:
         """
         Args:
-            input_ids (NamedArray): [batch, position]
+            input_ids (hax.NamedArray): [batch, position]
                 Indices of input sequence tokens in the vocabulary.
-            attn_mask (Union[NamedArray, AttentionMask], optional): [batch, position]
+            attn_mask (Union[hax.NamedArray, AttentionMask], optional): [batch, position]
                 Mask to avoid performing attention on the padding token indices of the encoder input.
-                The attn_mask from training pipeline may be an AttentionMask object instead of NamedArray
+                The attn_mask from training pipeline may be an AttentionMask object instead of hax.NamedArray
         """
         k_t, k_head = maybe_rng_split(key, 2)
         x = self.embeddings.embed(input_ids)
@@ -629,12 +628,12 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
 
     def activations(
         self,
-        input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
-        pos_ids: NamedArray | None = None,
+        input_ids: hax.NamedArray,
+        attn_mask: Optional[AttentionMask | hax.NamedArray] = None,
+        pos_ids: hax.NamedArray | None = None,
         *,
         key=None,
-    ) -> tuple[NamedArray, NamedArray | float]:
+    ) -> tuple[hax.NamedArray, hax.NamedArray | float]:
         """
         Compute the activations for the next token in a sequence.
         Args:
@@ -643,13 +642,13 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
             key: PRNGKey for random number generation
 
         Returns:
-            NamedArray: activations with shape {Pos, Embed}
+            hax.NamedArray: activations with shape {Pos, Embed}
 
         """
         x = self.embeddings.embed(input_ids)
         x, extras = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
 
-        aux_loss: NamedArray | float = 0
+        aux_loss: hax.NamedArray | float = 0
         if self.config.lbl_coef is not None:
             aux_loss += extras["load_balancing_loss"]
         if self.config.rzl_coef is not None:
