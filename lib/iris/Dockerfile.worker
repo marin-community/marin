@@ -6,6 +6,15 @@
 # Or via CLI:
 #   uv run python -m iris.cluster.vm.cli build-image
 #
+
+# --- Frontend build stage ---
+FROM node:22-slim AS dashboard-build
+WORKDIR /dashboard
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci
+COPY dashboard/ ./
+RUN npm run build
+
 FROM python:3.12
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
@@ -64,6 +73,9 @@ RUN uv sync --no-install-project
 # Copy source and install the project itself (fast, deps already installed above)
 COPY src/ ./src/
 RUN uv sync
+
+# Copy built dashboard assets
+COPY --from=dashboard-build /dashboard/dist /app/dashboard/dist
 
 # Install profiling tools (py-spy for CPU/thread profiling, memray for memory profiling).
 # These are needed for /system/process profiling on the worker.

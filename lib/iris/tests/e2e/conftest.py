@@ -481,16 +481,20 @@ def dashboard_goto(page, url: str) -> None:
 
 
 def wait_for_dashboard_ready(page) -> None:
-    """Wait for Preact to render the dashboard root.
+    """Wait for the dashboard framework (Vue or Preact) to render.
 
-    Waits until the #root element has children and no longer shows "Loading...".
-    Used by dashboard assertion tests across multiple test modules.
+    Vue uses #app as its mount point; legacy Preact uses #root. This checks
+    whichever is present and waits until it has rendered children.
     """
     if _is_noop_page(page):
         return
     page.wait_for_function(
-        "() => document.getElementById('root').children.length > 0"
-        " && !document.getElementById('root').textContent.includes('Loading...')",
+        "() => {"
+        "  const app = document.getElementById('app');"
+        "  const root = document.getElementById('root');"
+        "  const el = app || root;"
+        "  return el !== null && el.children.length > 0;"
+        "}",
         timeout=30000,
     )
 

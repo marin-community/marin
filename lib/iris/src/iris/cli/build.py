@@ -376,6 +376,23 @@ def build_task_image(
     )
 
 
+@build.command("dashboard")
+def build_dashboard():
+    """Build Vue dashboard assets via Rsbuild."""
+    dashboard_dir = find_iris_root() / "dashboard"
+    if not (dashboard_dir / "package.json").exists():
+        raise click.ClickException(f"Dashboard source not found at {dashboard_dir}")
+    if not (dashboard_dir / "node_modules").exists():
+        click.echo("Installing dashboard dependencies...")
+        subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
+    click.echo("Building dashboard...")
+    result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
+    if result.returncode != 0:
+        click.echo(result.stderr, err=True)
+        raise click.ClickException("Dashboard build failed")
+    click.echo("Dashboard built successfully.")
+
+
 @build.command("push")
 @click.argument("source_tag")
 @click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")

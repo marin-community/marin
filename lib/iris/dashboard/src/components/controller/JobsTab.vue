@@ -1,0 +1,508 @@
+<script setup lang="ts">
+import { ref, computed, watch, onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { stateToName, statusColors } from '@/types/status'
+import type { JobStatus, ListJobsResponse, ProtoTimestamp } from '@/types/rpc'
+import StatusBadge from '@/components/shared/StatusBadge.vue'
+import EmptyState from '@/components/shared/EmptyState.vue'
+
+const PAGE_SIZE = 50
+
+const SORT_FIELD_MAP: Record<string, string> = {
+  date: 'JOB_SORT_FIELD_DATE',
+  name: 'JOB_SORT_FIELD_NAME',
+  state: 'JOB_SORT_FIELD_STATE',
+  failures: 'JOB_SORT_FIELD_FAILURES',
+  preemptions: 'JOB_SORT_FIELD_PREEMPTIONS',
+}
+
+type SortField = 'date' | 'name' | 'state' | 'failures' | 'preemptions'
+type SortDir = 'asc' | 'desc'
+
+const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
+
+// -- State --
+
+const jobs = ref<JobStatus[]>([])
+const totalCount = ref(0)
+const hasMore = ref(false)
+const page = ref(0)
+const sortField = ref<SortField>('date')
+const sortDir = ref<SortDir>('desc')
+const nameFilter = ref('')
+const localFilter = ref('')
+const loading = ref(false)
+const error = ref<string | null>(null)
+const expandedJobs = ref<Set<string>>(loadExpandedJobs())
+
+// -- Session storage for expanded state --
+
+function loadExpandedJobs(): Set<string> {
+  try {
+    const stored = sessionStorage.getItem(EXPANDED_JOBS_KEY)
+    return stored ? new Set(JSON.parse(stored) as string[]) : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+function saveExpandedJobs() {
+  try {
+    sessionStorage.setItem(EXPANDED_JOBS_KEY, JSON.stringify([...expandedJobs.value]))
+  } catch {
+    // ignore
+  }
+}
+
+// -- Fetch --
+
+async function fetchJobs() {
+  loading.value = true
+  error.value = null
+  try {
+    const resp = await fetch('/iris.cluster.ControllerService/ListJobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        offset: page.value * PAGE_SIZE,
+        limit: PAGE_SIZE,
+        sortField: SORT_FIELD_MAP[sortField.value],
+        sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
+        nameFilter: nameFilter.value || undefined,
+      }),
+    })
+    if (!resp.ok) throw new Error(`ListJobs: ${resp.status}`)
+    const data: ListJobsResponse = await resp.json()
+    jobs.value = data.jobs ?? []
+    totalCount.value = data.totalCount ?? 0
+    hasMore.value = data.hasMore ?? false
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(fetchJobs)
+useAutoRefresh(fetchJobs, 30_000)
+
+watch([page, sortField, sortDir, nameFilter], () => {
+  fetchJobs()
+})
+
+// -- Job tree --
+
+function getParentName(jobName: string): string | null {
+  if (!jobName) return null
+  const lastSlash = jobName.lastIndexOf('/')
+  if (lastSlash <= 0) return null
+  return jobName.slice(0, lastSlash)
+}
+
+function getLeafName(jobName: string): string {
+  if (!jobName) return jobName
+  const lastSlash = jobName.lastIndexOf('/')
+  return lastSlash >= 0 ? jobName.slice(lastSlash + 1) : jobName
+}
+
+interface JobTreeNode {
+  job: JobStatus
+  depth: number
+}
+
+const flattenedJobs = computed<JobTreeNode[]>(() => {
+  const jobList = jobs.value
+  const jobByName = new Map(jobList.map(j => [j.name, j]))
+  const childrenMap = new Map<string, JobStatus[]>()
+  const rootJobs: JobStatus[] = []
+
+  for (const job of jobList) {
+    const parentName = getParentName(job.name)
+    if (parentName && jobByName.has(parentName)) {
+      const children = childrenMap.get(parentName)
+      if (children) {
+        children.push(job)
+      } else {
+        childrenMap.set(parentName, [job])
+      }
+    } else {
+      rootJobs.push(job)
+    }
+  }
+
+  const result: JobTreeNode[] = []
+
+  function walk(list: JobStatus[], depth: number) {
+    for (const job of list) {
+      result.push({ job, depth })
+      const children = childrenMap.get(job.name)
+      if (children && expandedJobs.value.has(job.name)) {
+        walk(children, depth + 1)
+      }
+    }
+  }
+
+  walk(rootJobs, 0)
+  return result
+})
+
+// Track which jobs have children for expand/collapse UI
+const jobsWithChildren = computed(() => {
+  const jobByName = new Map(jobs.value.map(j => [j.name, j]))
+  const set = new Set<string>()
+  for (const job of jobs.value) {
+    const parentName = getParentName(job.name)
+    if (parentName && jobByName.has(parentName)) {
+      set.add(parentName)
+    }
+  }
+  return set
+})
+
+// -- Interactions --
+
+function toggleExpanded(jobName: string) {
+  const next = new Set(expandedJobs.value)
+  if (next.has(jobName)) {
+    next.delete(jobName)
+  } else {
+    next.add(jobName)
+  }
+  expandedJobs.value = next
+  saveExpandedJobs()
+}
+
+function handleSort(field: SortField) {
+  if (sortField.value === field) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortField.value = field
+    sortDir.value = field === 'date' ? 'desc' : 'asc'
+  }
+  page.value = 0
+}
+
+function handleFilterSubmit() {
+  nameFilter.value = localFilter.value
+  page.value = 0
+}
+
+function handleFilterClear() {
+  localFilter.value = ''
+  nameFilter.value = ''
+  page.value = 0
+}
+
+// -- Formatting --
+
+function epochMs(ts: ProtoTimestamp | undefined): number {
+  if (!ts?.epochMs) return 0
+  return parseInt(ts.epochMs, 10) || 0
+}
+
+function formatDuration(startMs: number, endMs: number): string {
+  if (!startMs) return '-'
+  const diffSec = Math.floor((endMs - startMs) / 1000)
+  if (diffSec < 0) return '-'
+  if (diffSec < 60) return `${diffSec}s`
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ${diffSec % 60}s`
+  const hours = Math.floor(diffSec / 3600)
+  const mins = Math.floor((diffSec % 3600) / 60)
+  return `${hours}h ${mins}m`
+}
+
+function formatRelativeTime(ms: number): string {
+  if (!ms) return '-'
+  const seconds = Math.floor((Date.now() - ms) / 1000)
+  if (seconds < 0) return 'just now'
+  if (seconds < 60) return `${seconds}s ago`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+  return `${Math.floor(seconds / 86400)}d ago`
+}
+
+function jobDuration(job: JobStatus): string {
+  const started = epochMs(job.startedAt)
+  if (started) {
+    const ended = epochMs(job.finishedAt) || Date.now()
+    return formatDuration(started, ended)
+  }
+  const submitted = epochMs(job.submittedAt)
+  if (submitted) {
+    return 'queued ' + formatRelativeTime(submitted)
+  }
+  return '-'
+}
+
+// -- Progress bar --
+
+interface ProgressSegment {
+  count: number
+  colorClass: string
+  label: string
+}
+
+const SEGMENT_COLORS: Record<string, string> = {
+  succeeded: 'bg-status-success',
+  running: 'bg-accent',
+  building: 'bg-status-purple',
+  assigned: 'bg-status-orange',
+  failed: 'bg-status-danger',
+  worker_failed: 'bg-status-danger',
+  killed: 'bg-text-muted',
+  pending: 'bg-surface-border',
+}
+
+function progressSegments(job: JobStatus): ProgressSegment[] {
+  const counts = job.taskStateCounts ?? {}
+  const total = job.taskCount ?? 0
+  if (total === 0) return []
+
+  const succeeded = counts['succeeded'] ?? 0
+  const running = counts['running'] ?? 0
+  const building = counts['building'] ?? 0
+  const assigned = counts['assigned'] ?? 0
+  const failed = counts['failed'] ?? 0
+  const workerFailed = counts['worker_failed'] ?? 0
+  const killed = counts['killed'] ?? 0
+  const pending = total - succeeded - running - building - assigned - failed - workerFailed - killed
+
+  return [
+    { count: succeeded, colorClass: SEGMENT_COLORS['succeeded'], label: 'succeeded' },
+    { count: running, colorClass: SEGMENT_COLORS['running'], label: 'running' },
+    { count: building, colorClass: SEGMENT_COLORS['building'], label: 'building' },
+    { count: assigned, colorClass: SEGMENT_COLORS['assigned'], label: 'assigned' },
+    { count: failed, colorClass: SEGMENT_COLORS['failed'], label: 'failed' },
+    { count: workerFailed, colorClass: SEGMENT_COLORS['worker_failed'], label: 'worker_failed' },
+    { count: killed, colorClass: SEGMENT_COLORS['killed'], label: 'killed' },
+    { count: Math.max(0, pending), colorClass: SEGMENT_COLORS['pending'], label: 'pending' },
+  ].filter(s => s.count > 0)
+}
+
+function progressSummary(job: JobStatus): string {
+  const counts = job.taskStateCounts ?? {}
+  const running = counts['running'] ?? 0
+  const total = job.taskCount ?? 0
+  const succeeded = counts['succeeded'] ?? 0
+  if (running > 0) return `${running} running`
+  return `${succeeded}/${total}`
+}
+
+// -- Pagination --
+
+const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_SIZE)))
+
+// -- Sortable columns --
+
+interface SortableCol {
+  field: SortField
+  label: string
+}
+
+const SORTABLE_COLS: SortableCol[] = [
+  { field: 'name', label: 'Name' },
+  { field: 'state', label: 'State' },
+  { field: 'date', label: 'Date' },
+  { field: 'failures', label: 'Failures' },
+  { field: 'preemptions', label: 'Preemptions' },
+]
+
+function sortIndicator(field: SortField): string {
+  if (sortField.value !== field) return '\u2195'
+  return sortDir.value === 'asc' ? '\u2191' : '\u2193'
+}
+</script>
+
+<template>
+  <!-- Filter bar -->
+  <div class="mb-4 flex items-center gap-3">
+    <form class="flex gap-2" @submit.prevent="handleFilterSubmit">
+      <input
+        v-model="localFilter"
+        type="text"
+        placeholder="Filter by name..."
+        class="w-52 px-3 py-1.5 text-sm border border-surface-border rounded
+               bg-white placeholder:text-text-muted
+               focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+      />
+      <button
+        type="submit"
+        class="px-3 py-1.5 text-sm border border-surface-border rounded hover:bg-surface-raised"
+      >
+        Filter
+      </button>
+      <button
+        v-if="nameFilter"
+        type="button"
+        class="px-3 py-1.5 text-sm border border-surface-border rounded hover:bg-surface-raised text-status-danger"
+        @click="handleFilterClear"
+      >
+        Clear
+      </button>
+    </form>
+    <span class="text-[13px] text-text-secondary">
+      {{ totalCount }} job{{ totalCount !== 1 ? 's' : '' }}
+    </span>
+  </div>
+
+  <!-- Error -->
+  <div
+    v-if="error"
+    class="mb-4 px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
+  >
+    {{ error }}
+  </div>
+
+  <!-- Loading -->
+  <div v-if="loading && jobs.length === 0" class="flex items-center justify-center py-12 text-text-muted text-sm">
+    <svg class="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+    Loading...
+  </div>
+
+  <!-- Empty state -->
+  <EmptyState
+    v-else-if="!loading && jobs.length === 0"
+    :message="nameFilter ? 'No jobs matching filter' : 'No jobs'"
+  />
+
+  <!-- Jobs table -->
+  <div v-else class="overflow-x-auto">
+    <table class="w-full border-collapse">
+      <thead>
+        <tr class="border-b border-surface-border">
+          <th
+            v-for="col in SORTABLE_COLS"
+            :key="col.field"
+            class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary
+                   cursor-pointer select-none hover:text-text"
+            @click="handleSort(col.field)"
+          >
+            <span class="inline-flex items-center gap-1">
+              {{ col.label }}
+              <span :class="sortField === col.field ? 'text-accent' : 'text-text-muted/40'">
+                {{ sortIndicator(col.field) }}
+              </span>
+            </span>
+          </th>
+          <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
+            Tasks
+          </th>
+          <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
+            Diagnostic
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr
+          v-for="node in flattenedJobs"
+          :key="node.job.jobId"
+          class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+        >
+          <!-- Name -->
+          <td
+            class="px-3 py-2 text-[13px]"
+            :style="{ paddingLeft: (node.depth * 20 + 12) + 'px' }"
+          >
+            <span class="inline-flex items-center gap-1">
+              <button
+                v-if="jobsWithChildren.has(node.job.name)"
+                class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
+                @click.stop="toggleExpanded(node.job.name)"
+              >
+                {{ expandedJobs.has(node.job.name) ? '\u25BC' : '\u25B6' }}
+              </button>
+              <span v-else class="w-4" />
+              <RouterLink
+                :to="'/job/' + encodeURIComponent(node.job.jobId)"
+                class="text-accent hover:underline font-mono"
+              >
+                {{ node.depth > 0 ? getLeafName(node.job.name) : (node.job.name || 'unnamed') }}
+              </RouterLink>
+            </span>
+          </td>
+
+          <!-- State -->
+          <td class="px-3 py-2 text-[13px]">
+            <StatusBadge :status="node.job.state" size="sm" />
+          </td>
+
+          <!-- Date -->
+          <td class="px-3 py-2 text-[13px] text-text-secondary font-mono">
+            {{ jobDuration(node.job) }}
+          </td>
+
+          <!-- Failures -->
+          <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+            {{ node.job.failureCount ?? 0 }}
+          </td>
+
+          <!-- Preemptions -->
+          <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+            {{ node.job.preemptionCount ?? 0 }}
+          </td>
+
+          <!-- Tasks progress bar -->
+          <td class="px-3 py-2 text-[13px]">
+            <div v-if="(node.job.taskCount ?? 0) === 0" class="text-xs text-text-muted">
+              no tasks
+            </div>
+            <div v-else class="flex items-center gap-1.5">
+              <div class="flex h-2 w-28 rounded-full overflow-hidden bg-surface-sunken">
+                <div
+                  v-for="(seg, i) in progressSegments(node.job)"
+                  :key="i"
+                  :class="seg.colorClass"
+                  :style="{ width: (seg.count / (node.job.taskCount ?? 1) * 100).toFixed(1) + '%' }"
+                  :title="seg.label + ': ' + seg.count"
+                />
+              </div>
+              <span class="text-xs text-text-secondary whitespace-nowrap">
+                {{ progressSummary(node.job) }}
+              </span>
+            </div>
+          </td>
+
+          <!-- Diagnostic -->
+          <td
+            class="px-3 py-2 text-xs text-text-muted max-w-xs truncate"
+            :title="node.job.pendingReason ?? ''"
+          >
+            {{ node.job.pendingReason || '\u2014' }}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Pagination -->
+    <div
+      v-if="totalPages > 1"
+      class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border"
+    >
+      <span>
+        {{ page * PAGE_SIZE + 1 }}&ndash;{{ Math.min((page + 1) * PAGE_SIZE, totalCount) }}
+        of {{ totalCount }}
+      </span>
+      <div class="flex items-center gap-1">
+        <button
+          :disabled="page === 0"
+          class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+          @click="page = Math.max(0, page - 1)"
+        >
+          &larr; Prev
+        </button>
+        <span class="px-2 font-mono">{{ page + 1 }} / {{ totalPages }}</span>
+        <button
+          :disabled="!hasMore"
+          class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+          @click="page++"
+        >
+          Next &rarr;
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
