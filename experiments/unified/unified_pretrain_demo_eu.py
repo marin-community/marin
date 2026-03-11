@@ -93,6 +93,7 @@ _VLM_HLO_DUMP_XLA_FLAGS = [
 TEXT_STEPS = int(os.environ.get("TEXT_STEPS", "5000"))
 UND_STEPS = int(os.environ.get("UND_STEPS", "2500"))
 GEN_STEPS = int(os.environ.get("GEN_STEPS", "2500"))
+VIS_STEPS = int(os.environ.get("VIS_STEPS", "0"))
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
 MUON_LR = float(os.environ.get("MUON_LR", "0.004"))
@@ -245,7 +246,9 @@ def unified_data_config(
     text_steps: int = 5000,
     und_steps: int = 2500,
     gen_steps: int = 2500,
+    vis_steps: int = 0,
     multimodal_cache_path: str = UNIFIED_CACHE_PATH,
+    visual_cache_path: str = VISUAL_ONLY_CACHE_PATH,
     eval_benchmarks: list[str] | None = None,
     eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
     w_visual: float | None = 1.0,
@@ -258,9 +261,11 @@ def unified_data_config(
         text_steps: Number of training steps for text data.
         und_steps: Number of training steps for multimodal understanding data.
         gen_steps: Number of training steps for multimodal generation data.
-            The three step counts determine relative sampling weights (proportional
+        vis_steps: Number of training steps for visual-only data (pure image AR).
+            The step counts determine relative sampling weights (proportional
             to step counts) and their sum becomes the total training steps.
         multimodal_cache_path: GCS path to the pre-built multimodal Levanter cache.
+        visual_cache_path: GCS path to the visual-only Levanter cache.
         eval_benchmarks: List of VLM eval benchmark names to include as validation-only
             components (train_weight=0.0). Set to None to disable eval.
         eval_cache_path: GCS path to VLM eval benchmark Levanter caches.
@@ -272,10 +277,11 @@ def unified_data_config(
         text_eval_cache_path: GCS path to text eval benchmark Levanter caches.
     """
     # Compute mixture weights proportional to step counts
-    total = text_steps + und_steps + gen_steps
+    total = text_steps + und_steps + gen_steps + vis_steps
     text_weight = text_steps / total
     und_weight = und_steps / total
     gen_weight = gen_steps / total
+    vis_weight = vis_steps / total
 
     # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
@@ -314,6 +320,28 @@ def unified_data_config(
         "multimodal_understanding": und_weight,
         "multimodal_generation": gen_weight,
     }
+
+    # Visual-only: pure image AR sequences (no text tokens).
+    if vis_steps > 0:
+        vis_prebuilt_format = PrebuiltLmDatasetFormat(
+            input_ids_key="input_ids",
+            loss_weights_key="loss_weights",
+        )
+        components["visual_only"] = DatasetComponent(
+            cache_dir=f"{visual_cache_path}/train",
+            format=vis_prebuilt_format,
+            pack=True,
+            tags=["visual"],
+        )
+        weights["visual_only"] = vis_weight
+
+        components["val_visual"] = DatasetComponent(
+            cache_dir=f"{visual_cache_path}/validation",
+            format=vis_prebuilt_format,
+            pack=True,
+            tags=["visual"],
+        )
+        weights["val_visual"] = 0.0
 
     # Multimodal validation: separate understanding and generation val loss.
     # These are produced by vlm_tokenize_captions.py with val_fraction > 0.
@@ -587,6 +615,7 @@ def make_unified_0_6b(
     text_steps: int = 5000,
     und_steps: int = 2500,
     gen_steps: int = 2500,
+    vis_steps: int = 0,
     muon_lr: float = 0.008,
     adam_lr: float = 0.0024,
     lr_schedule: str = "cosine",
@@ -601,6 +630,7 @@ def make_unified_0_6b(
             text_steps=text_steps,
             und_steps=und_steps,
             gen_steps=gen_steps,
+            vis_steps=vis_steps,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
             text_eval_benchmarks=text_eval_benchmarks,
@@ -609,7 +639,7 @@ def make_unified_0_6b(
         train_config=_demo_train_config(
             muon_lr=muon_lr,
             adam_lr=adam_lr,
-            num_train_steps=text_steps + und_steps + gen_steps,
+            num_train_steps=text_steps + und_steps + gen_steps + vis_steps,
             lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
@@ -626,6 +656,7 @@ def make_unified_1_7b(
     text_steps: int = 5000,
     und_steps: int = 2500,
     gen_steps: int = 2500,
+    vis_steps: int = 0,
     muon_lr: float = 0.004,
     adam_lr: float = 0.0012,
     lr_schedule: str = "cosine",
@@ -640,6 +671,7 @@ def make_unified_1_7b(
             text_steps=text_steps,
             und_steps=und_steps,
             gen_steps=gen_steps,
+            vis_steps=vis_steps,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
             text_eval_benchmarks=text_eval_benchmarks,
@@ -648,7 +680,7 @@ def make_unified_1_7b(
         train_config=_demo_train_config(
             muon_lr=muon_lr,
             adam_lr=adam_lr,
-            num_train_steps=text_steps + und_steps + gen_steps,
+            num_train_steps=text_steps + und_steps + gen_steps + vis_steps,
             lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
@@ -664,6 +696,7 @@ def make_unified_4b(
     text_steps: int = 5000,
     und_steps: int = 2500,
     gen_steps: int = 2500,
+    vis_steps: int = 0,
     muon_lr: float = 0.002,
     adam_lr: float = 0.0006,
     lr_schedule: str = "cosine",
@@ -678,6 +711,7 @@ def make_unified_4b(
             text_steps=text_steps,
             und_steps=und_steps,
             gen_steps=gen_steps,
+            vis_steps=vis_steps,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
             text_eval_benchmarks=text_eval_benchmarks,
@@ -686,7 +720,7 @@ def make_unified_4b(
         train_config=_demo_train_config(
             muon_lr=muon_lr,
             adam_lr=adam_lr,
-            num_train_steps=text_steps + und_steps + gen_steps,
+            num_train_steps=text_steps + und_steps + gen_steps + vis_steps,
             lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
@@ -789,7 +823,7 @@ def make_visual_only_4b(
 
 if __name__ == "__main__":
     # steps = [make_unified_0_6b(
-    #     text_steps=TEXT_STEPS, und_steps=UND_STEPS, gen_steps=GEN_STEPS,
+    #     text_steps=TEXT_STEPS, und_steps=UND_STEPS, gen_steps=GEN_STEPS, vis_steps=VIS_STEPS,
     #     muon_lr=MUON_LR, adam_lr=ADAM_LR,
     #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL,
     #     z_loss_weight=Z_LOSS_WEIGHT,
@@ -799,6 +833,7 @@ if __name__ == "__main__":
             text_steps=TEXT_STEPS,
             und_steps=UND_STEPS,
             gen_steps=GEN_STEPS,
+            vis_steps=VIS_STEPS,
             muon_lr=MUON_LR,
             adam_lr=ADAM_LR,
             lr_schedule=LR_SCHEDULE,
@@ -807,13 +842,14 @@ if __name__ == "__main__":
         )
     ]
     # steps = [make_unified_4b(
-    #     text_steps=TEXT_STEPS, und_steps=UND_STEPS, gen_steps=GEN_STEPS,
+    #     text_steps=TEXT_STEPS, und_steps=UND_STEPS, gen_steps=GEN_STEPS, vis_steps=VIS_STEPS,
     #     muon_lr=MUON_LR, adam_lr=ADAM_LR,
     #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL,
     #     z_loss_weight=Z_LOSS_WEIGHT,
     # )]
     # steps = [make_visual_only_1_7b(
-    #     muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=TEXT_STEPS + UND_STEPS + GEN_STEPS,
+    #     muon_lr=MUON_LR, adam_lr=ADAM_LR,
+    #     num_train_steps=TEXT_STEPS + UND_STEPS + GEN_STEPS + VIS_STEPS,
     #     lr_schedule=LR_SCHEDULE, z_loss_weight=Z_LOSS_WEIGHT,
     # )]
     executor_main(
