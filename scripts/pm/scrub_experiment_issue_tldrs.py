@@ -14,7 +14,6 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
 
 from github import Github
 from github.Issue import Issue
@@ -26,21 +25,13 @@ EXPERIMENT_LABEL = "experiment"
 TLDR_LABEL = "tldr"
 SUMMARY_START = "<!-- experiment-tldr:start -->"
 SUMMARY_END = "<!-- experiment-tldr:end -->"
-DOC_ISSUE_MARKER_PREFIX = "<!-- experiment-tldr:doc-issue="
 MAX_COMMENT_COUNT = 15
-MAX_SUMMARY_WORDS = 250
 BODY_BLOCK_RE = re.compile(
     rf"\n?{re.escape(SUMMARY_START)}.*?{re.escape(SUMMARY_END)}\n?",
     re.DOTALL,
 )
 DOC_ISSUE_MARKER_RE = re.compile(r"<!-- experiment-tldr:doc-issue=(\d+) -->")
 URL_RE = re.compile(r"https?://[^\s>)\]]+")
-
-
-@dataclass(frozen=True)
-class IssueSummaryBlock:
-    summary: str
-    relevant_links: list[str]
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,10 +59,6 @@ def ensure_env(var_name: str) -> str:
     return value
 
 
-def words(text: str) -> list[str]:
-    return re.findall(r"\S+", text.strip())
-
-
 def dedupe_preserving_order(values: list[str]) -> list[str]:
     seen: set[str] = set()
     deduped: list[str] = []
@@ -97,30 +84,6 @@ def extract_existing_doc_issue_number(body: str | None) -> int | None:
     if match is None:
         return None
     return int(match.group(1))
-
-
-def render_tldr_block(block: IssueSummaryBlock, *, doc_issue_number: int | None = None) -> str:
-    if len(words(block.summary)) > MAX_SUMMARY_WORDS:
-        raise ValueError(f"Summary exceeds soft cap of {MAX_SUMMARY_WORDS} words: {block.summary!r}")
-
-    lines = [SUMMARY_START, "## Summary", "", block.summary.strip()]
-    if block.relevant_links:
-        lines.extend(["", "### Helpful links"])
-        lines.extend(f"- {link}" for link in dedupe_preserving_order(block.relevant_links))
-    if doc_issue_number is not None:
-        lines.extend(["", f"{DOC_ISSUE_MARKER_PREFIX}{doc_issue_number} -->"])
-    lines.append("")
-    lines.append(SUMMARY_END)
-    return "\n".join(lines)
-
-
-def upsert_tldr_block(body: str | None, block: str) -> str:
-    if not body:
-        return block
-    if BODY_BLOCK_RE.search(body):
-        updated = BODY_BLOCK_RE.sub(f"\n{block}\n", body).strip()
-        return updated
-    return f"{body.rstrip()}\n\n{block}"
 
 
 def collect_issue_context(issue: Issue) -> tuple[str, list[str]]:
@@ -217,7 +180,6 @@ def main() -> None:
 
     payload = {
         "repo": args.repo,
-        "max_summary_words": MAX_SUMMARY_WORDS,
         "candidate_count": len(candidates),
         "candidates": [serialize_issue(issue) for issue in candidates],
     }

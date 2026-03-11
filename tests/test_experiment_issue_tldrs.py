@@ -4,11 +4,9 @@
 from types import SimpleNamespace
 
 from scripts.pm.scrub_experiment_issue_tldrs import (
-    IssueSummaryBlock,
+    dedupe_preserving_order,
     extract_existing_doc_issue_number,
     issue_needs_summary_refresh,
-    render_tldr_block,
-    upsert_tldr_block,
 )
 
 
@@ -19,43 +17,24 @@ def _issue(*, body: str | None, labels: list[str]):
     )
 
 
-def test_upsert_tldr_block_appends_when_missing():
-    body = "Original issue body."
-    updated = upsert_tldr_block(body, "<!-- experiment-tldr:start -->\nnew\n<!-- experiment-tldr:end -->")
-
-    assert updated.startswith("Original issue body.\n\n")
-    assert updated.endswith("<!-- experiment-tldr:end -->")
+def test_dedupe_preserving_order_keeps_first_occurrence():
+    assert dedupe_preserving_order(["a", "b", "a", "c", "b"]) == ["a", "b", "c"]
 
 
-def test_upsert_tldr_block_replaces_existing_managed_block():
+def test_extract_existing_doc_issue_number_reads_marker():
     body = "\n".join(
         [
-            "Original issue body.",
-            "",
             "<!-- experiment-tldr:start -->",
-            "old",
+            "## Summary",
+            "",
+            "Example summary.",
+            "",
+            "<!-- experiment-tldr:doc-issue=123 -->",
             "<!-- experiment-tldr:end -->",
         ]
     )
 
-    updated = upsert_tldr_block(body, "<!-- experiment-tldr:start -->\nnew\n<!-- experiment-tldr:end -->")
-
-    assert "old" not in updated
-    assert updated.count("<!-- experiment-tldr:start -->") == 1
-    assert "new" in updated
-
-
-def test_render_tldr_block_tracks_doc_issue_marker():
-    block = IssueSummaryBlock(
-        summary="A short summary.",
-        relevant_links=["https://example.com/doc"],
-    )
-
-    rendered = render_tldr_block(block, doc_issue_number=123)
-
-    assert "## Summary" in rendered
-    assert "### Helpful links" in rendered
-    assert extract_existing_doc_issue_number(rendered) == 123
+    assert extract_existing_doc_issue_number(body) == 123
 
 
 def test_issue_without_managed_block_needs_refresh():

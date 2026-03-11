@@ -78,7 +78,7 @@ jobs:
             Read AGENTS.md, [docs/explanations/guidelines.md](docs/explanations/guidelines.md), and [.github/prompts/experiment-issue-tldr.md](.github/prompts/experiment-issue-tldr.md).
 
             The candidate discovery step wrote JSON to `/tmp/experiment_issue_tldr_candidates.json`.
-            Use that file as the source of truth for which issues to process. The script has already handled candidate selection and max-issue limits.
+            Use that file as the source of truth for which issues to process. The script is only a candidate/context selector; the markdown prompt defines the desired output and workflow.
 
             For each candidate issue in order:
             1. Read the provided issue context and any linked GitHub issue/PR pages you need with `gh`.
