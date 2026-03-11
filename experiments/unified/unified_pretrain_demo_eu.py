@@ -90,15 +90,14 @@ _VLM_HLO_DUMP_XLA_FLAGS = [
 # --- Train Configs ---
 
 # 1 epoch ≈ 1,582,102 records / 256 batch_size ≈ 6,180 steps
-NUM_STEPS = int(os.environ.get("NUM_STEPS", "10000"))
+TEXT_STEPS = int(os.environ.get("TEXT_STEPS", "5000"))
+UND_STEPS = int(os.environ.get("UND_STEPS", "2500"))
+GEN_STEPS = int(os.environ.get("GEN_STEPS", "2500"))
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
-TEXT_WEIGHT = float(os.environ.get("TEXT_WEIGHT", "1.0"))
-MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
 MUON_LR = float(os.environ.get("MUON_LR", "0.004"))
 ADAM_LR = float(os.environ.get("ADAM_LR", "0.0012"))
 W_VISUAL = float(os.environ.get("W_VISUAL", "1.0"))
-UND_GEN_RATIO = float(os.environ.get("UND_GEN_RATIO", "1.0"))
 LR_SCHEDULE = os.environ.get("LR_SCHEDULE", "cosine")
 Z_LOSS_WEIGHT = float(os.environ.get("Z_LOSS_WEIGHT", "0.0"))
 
@@ -243,22 +242,24 @@ def _replace_text_with_eos(input_ids: np.ndarray) -> np.ndarray:
 
 
 def unified_data_config(
-    text_weight: float = 1.0,
-    multimodal_weight: float = 1.0,
+    text_steps: int = 5000,
+    und_steps: int = 2500,
+    gen_steps: int = 2500,
     multimodal_cache_path: str = UNIFIED_CACHE_PATH,
     eval_benchmarks: list[str] | None = None,
     eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
     w_visual: float | None = 1.0,
-    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = None,
     text_eval_cache_path: str = TEXT_EVAL_CACHE_PATH,
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
     Args:
-        text_weight: Scaling factor applied to each Nemotron split's weight (controls r1).
-        multimodal_weight: Total weight for multimodal data, split between understanding
-            and generation according to und_gen_ratio.
+        text_steps: Number of training steps for text data.
+        und_steps: Number of training steps for multimodal understanding data.
+        gen_steps: Number of training steps for multimodal generation data.
+            The three step counts determine relative sampling weights (proportional
+            to step counts) and their sum becomes the total training steps.
         multimodal_cache_path: GCS path to the pre-built multimodal Levanter cache.
         eval_benchmarks: List of VLM eval benchmark names to include as validation-only
             components (train_weight=0.0). Set to None to disable eval.
@@ -266,12 +267,16 @@ def unified_data_config(
         w_visual: Override for the visual token loss weight. When set, replaces
             the preprocessing-baked w_visual at data loading time. None uses the
             original preprocessing value unchanged.
-        und_gen_ratio: Ratio of understanding to generation weight. E.g. 3.0 means
-            understanding gets 3/(3+1) of multimodal_weight, generation gets 1/(3+1).
         text_eval_benchmarks: List of text eval benchmark names (e.g. hellaswag, mmlu)
             to include as validation-only components. Set to None to disable.
         text_eval_cache_path: GCS path to text eval benchmark Levanter caches.
     """
+    # Compute mixture weights proportional to step counts
+    total = text_steps + und_steps + gen_steps
+    text_weight = text_steps / total
+    und_weight = und_steps / total
+    gen_weight = gen_steps / total
+
     # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
     hq_key = "nemotron_cc/hq_actual"
@@ -288,8 +293,6 @@ def unified_data_config(
         loss_weights_key="loss_weights",
         loss_weight_transform=loss_weight_transform,
     )
-    und_weight = multimodal_weight * und_gen_ratio / (und_gen_ratio + 1)
-    gen_weight = multimodal_weight / (und_gen_ratio + 1)
 
     components = {
         **text_components,
@@ -520,7 +523,7 @@ def visual_only_data_config(
 def _demo_train_config(
     muon_lr: float = 0.004,
     adam_lr: float = 0.0012,
-    num_train_steps: int = NUM_STEPS,
+    num_train_steps: int = 10000,
     lr_schedule: str = "cosine",
     z_loss_weight: float = 0.0,
 ) -> SimpleTrainConfig:
@@ -581,33 +584,32 @@ DEFAULT_TEXT_EVAL_BENCHMARKS = [
 
 
 def make_unified_0_6b(
-    text_weight: float = 1.0,
-    multimodal_weight: float = 1.0,
+    text_steps: int = 5000,
+    und_steps: int = 2500,
+    gen_steps: int = 2500,
     muon_lr: float = 0.008,
     adam_lr: float = 0.0024,
-    num_train_steps: int = NUM_STEPS,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
-    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
     z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-0.6b-demo",
         tokenized=unified_data_config(
-            text_weight=text_weight,
-            multimodal_weight=multimodal_weight,
+            text_steps=text_steps,
+            und_steps=und_steps,
+            gen_steps=gen_steps,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
-            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_0_6b,
         train_config=_demo_train_config(
             muon_lr=muon_lr,
             adam_lr=adam_lr,
-            num_train_steps=num_train_steps,
+            num_train_steps=text_steps + und_steps + gen_steps,
             lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
@@ -621,33 +623,32 @@ def make_unified_0_6b(
 
 
 def make_unified_1_7b(
-    text_weight: float = 1.0,
-    multimodal_weight: float = 1.0,
+    text_steps: int = 5000,
+    und_steps: int = 2500,
+    gen_steps: int = 2500,
     muon_lr: float = 0.004,
     adam_lr: float = 0.0012,
-    num_train_steps: int = NUM_STEPS,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
-    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
     z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-1.7b-demo",
         tokenized=unified_data_config(
-            text_weight=text_weight,
-            multimodal_weight=multimodal_weight,
+            text_steps=text_steps,
+            und_steps=und_steps,
+            gen_steps=gen_steps,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
-            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_1_7b,
         train_config=_demo_train_config(
             muon_lr=muon_lr,
             adam_lr=adam_lr,
-            num_train_steps=num_train_steps,
+            num_train_steps=text_steps + und_steps + gen_steps,
             lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
@@ -660,33 +661,32 @@ def make_unified_1_7b(
 
 
 def make_unified_4b(
-    text_weight: float = 1.0,
-    multimodal_weight: float = 1.0,
+    text_steps: int = 5000,
+    und_steps: int = 2500,
+    gen_steps: int = 2500,
     muon_lr: float = 0.002,
     adam_lr: float = 0.0006,
-    num_train_steps: int = NUM_STEPS,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
-    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
     z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-4b-demo",
         tokenized=unified_data_config(
-            text_weight=text_weight,
-            multimodal_weight=multimodal_weight,
+            text_steps=text_steps,
+            und_steps=und_steps,
+            gen_steps=gen_steps,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
-            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_4b,
         train_config=_demo_train_config(
             muon_lr=muon_lr,
             adam_lr=adam_lr,
-            num_train_steps=num_train_steps,
+            num_train_steps=text_steps + und_steps + gen_steps,
             lr_schedule=lr_schedule,
             z_loss_weight=z_loss_weight,
         ),
@@ -709,7 +709,7 @@ DEFAULT_VISUAL_EVAL_BENCHMARKS = [
 def make_visual_only_0_6b(
     muon_lr: float = 0.008,
     adam_lr: float = 0.0024,
-    num_train_steps: int = NUM_STEPS,
+    num_train_steps: int = 10000,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
     z_loss_weight: float = 0.0,
@@ -736,7 +736,7 @@ def make_visual_only_0_6b(
 def make_visual_only_1_7b(
     muon_lr: float = 0.004,
     adam_lr: float = 0.0012,
-    num_train_steps: int = NUM_STEPS,
+    num_train_steps: int = 10000,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
     z_loss_weight: float = 0.0,
@@ -763,7 +763,7 @@ def make_visual_only_1_7b(
 def make_visual_only_4b(
     muon_lr: float = 0.002,
     adam_lr: float = 0.0006,
-    num_train_steps: int = NUM_STEPS,
+    num_train_steps: int = 10000,
     lr_schedule: str = "cosine",
     eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
     z_loss_weight: float = 0.0,
@@ -789,32 +789,31 @@ def make_visual_only_4b(
 
 if __name__ == "__main__":
     # steps = [make_unified_0_6b(
-    #     text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT,
-    #     muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=NUM_STEPS,
-    #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO,
+    #     text_steps=TEXT_STEPS, und_steps=UND_STEPS, gen_steps=GEN_STEPS,
+    #     muon_lr=MUON_LR, adam_lr=ADAM_LR,
+    #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL,
     #     z_loss_weight=Z_LOSS_WEIGHT,
     # )]
     steps = [
         make_unified_1_7b(
-            text_weight=TEXT_WEIGHT,
-            multimodal_weight=MULTIMODAL_WEIGHT,
+            text_steps=TEXT_STEPS,
+            und_steps=UND_STEPS,
+            gen_steps=GEN_STEPS,
             muon_lr=MUON_LR,
             adam_lr=ADAM_LR,
-            num_train_steps=NUM_STEPS,
             lr_schedule=LR_SCHEDULE,
             w_visual=W_VISUAL,
-            und_gen_ratio=UND_GEN_RATIO,
             z_loss_weight=Z_LOSS_WEIGHT,
         )
     ]
     # steps = [make_unified_4b(
-    #     text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT,
-    #     muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=NUM_STEPS,
-    #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO,
+    #     text_steps=TEXT_STEPS, und_steps=UND_STEPS, gen_steps=GEN_STEPS,
+    #     muon_lr=MUON_LR, adam_lr=ADAM_LR,
+    #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL,
     #     z_loss_weight=Z_LOSS_WEIGHT,
     # )]
     # steps = [make_visual_only_1_7b(
-    #     muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=NUM_STEPS,
+    #     muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=TEXT_STEPS + UND_STEPS + GEN_STEPS,
     #     lr_schedule=LR_SCHEDULE, z_loss_weight=Z_LOSS_WEIGHT,
     # )]
     executor_main(
