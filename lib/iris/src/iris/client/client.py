@@ -18,7 +18,7 @@ Example:
 """
 
 import logging
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -538,6 +538,7 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
+        on_retry: Callable[[Exception], None] | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for RPC-based cluster execution.
 
@@ -549,6 +550,8 @@ class IrisClient:
             bundle_id: Workspace bundle identifier for sub-job inheritance.
                 When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
+            on_retry: Optional callback invoked on retryable RPC failures before
+                each retry attempt (e.g. to re-establish a tunnel).
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -564,6 +567,7 @@ class IrisClient:
             bundle_id=bundle_id,
             bundle_blob=bundle_blob,
             timeout_ms=timeout_ms,
+            on_retry=on_retry,
         )
         return cls(cluster)
 

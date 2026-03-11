@@ -10,6 +10,7 @@ import json
 import logging as _logging_module
 import os
 import sys
+from pathlib import Path
 
 import click
 
@@ -44,6 +45,15 @@ def _configure_client_s3(config) -> None:
         if _needs_virtual_host_addressing(endpoint):
             fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
         os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
+
+
+def require_client(ctx: click.Context, **kwargs):
+    """Create an IrisClient with ``on_retry`` from context."""
+    from iris.client import IrisClient
+
+    controller_url = require_controller_url(ctx)
+    on_retry = ctx.obj.get("on_retry") if ctx.obj else None
+    return IrisClient.remote(controller_url, workspace=Path.cwd(), on_retry=on_retry, **kwargs)
 
 
 def require_controller_url(ctx: click.Context) -> str:
@@ -83,6 +93,11 @@ def require_controller_url(ctx: click.Context) -> str:
             tunnel_cm = platform.tunnel(address=controller_address)
             tunnel_url = tunnel_cm.__enter__()
             ctx.obj["controller_url"] = tunnel_url
+            # Wire tunnel reconnect into RPC retry (CW-specific, see #3437)
+            from iris.cluster.platform.coreweave import CoreweavePlatform
+
+            if isinstance(platform, CoreweavePlatform) and platform.tunnel_reconnect is not None:
+                ctx.obj["on_retry"] = lambda _exc, _fn=platform.tunnel_reconnect: _fn()
             # Clean up tunnel when context closes
             ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
             return tunnel_url

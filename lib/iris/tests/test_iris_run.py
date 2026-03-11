@@ -324,3 +324,42 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert len(zone_constraints) == 1
     assert zone_constraints[0].op == ConstraintOp.EQ
     assert zone_constraints[0].value == "us-central2-b"
+
+
+def test_require_client_wires_on_retry():
+    """require_client passes on_retry from ctx to the RPC client."""
+    import click
+
+    from iris.cli.main import require_client
+
+    callback_called = False
+
+    def fake_on_retry(exc):
+        nonlocal callback_called
+        callback_called = True
+
+    ctx = click.Context(click.Command("test"))
+    ctx.ensure_object(dict)
+    ctx.obj["controller_url"] = "http://localhost:9999"
+    ctx.obj["on_retry"] = fake_on_retry
+
+    client = require_client(ctx)
+    # The on_retry should be wired through to the underlying RemoteClusterClient
+    assert client._cluster_client._on_retry is not None
+    # Verify it's the same callback
+    client._cluster_client._on_retry(Exception("test"))
+    assert callback_called
+
+
+def test_require_client_works_without_on_retry():
+    """require_client works when no on_retry is set (non-CW platforms)."""
+    import click
+
+    from iris.cli.main import require_client
+
+    ctx = click.Context(click.Command("test"))
+    ctx.ensure_object(dict)
+    ctx.obj["controller_url"] = "http://localhost:9999"
+
+    client = require_client(ctx)
+    assert client._cluster_client._on_retry is None
