@@ -1,98 +1,42 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Unified worker managing all components and lifecycle."""
 
 import logging
-import shutil
-import socket
-import tempfile
 import threading
 import time
-import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
-import cloudpickle
 import uvicorn
 
-from iris.rpc import cluster_pb2
-from iris.time_utils import ExponentialBackoff, now_ms
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc.errors import format_exception_with_traceback
-from iris.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
-from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
+from iris.chaos import chaos
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
+from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.types import ContainerRuntime
+from iris.cluster.types import JobName
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
-from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, DockerRuntime
-from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider, collect_workdir_size_mb
+from iris.cluster.worker.env_probe import (
+    EnvironmentProvider,
+    HostMetricsCollector,
+    build_worker_metadata,
+    check_worker_health,
+    probe_hardware,
+)
+from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.worker_types import Task
+from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
+from iris.cluster.worker.worker_types import TaskInfo
+from iris.logging import slow_log
+from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
-
-
-def _rewrite_address_for_container(address: str) -> str:
-    """Rewrite localhost addresses to host.docker.internal for container access.
-
-    Docker containers on Mac/Windows cannot reach host localhost directly.
-    Using host.docker.internal works cross-platform when combined with
-    --add-host=host.docker.internal:host-gateway on Linux.
-    """
-    for localhost in ("127.0.0.1", "localhost", "0.0.0.0"):
-        if localhost in address:
-            return address.replace(localhost, "host.docker.internal")
-    return address
-
-
-class PortAllocator:
-    """Allocate ephemeral ports for tasks."""
-
-    def __init__(self, port_range: tuple[int, int] = (30000, 40000)):
-        self._range = port_range
-        self._allocated: set[int] = set()
-        self._lock = threading.Lock()
-
-    def allocate(self, count: int = 1) -> list[int]:
-        with self._lock:
-            ports = []
-            for _ in range(count):
-                port = self._find_free_port()
-                self._allocated.add(port)
-                ports.append(port)
-            return ports
-
-    def release(self, ports: list[int]) -> None:
-        with self._lock:
-            for port in ports:
-                self._allocated.discard(port)
-
-    def _find_free_port(self) -> int:
-        for port in range(self._range[0], self._range[1]):
-            if port in self._allocated:
-                continue
-            if self._is_port_free(port):
-                return port
-        logger.warning("Port allocation exhausted: no free ports in range %d-%d", self._range[0], self._range[1])
-        raise RuntimeError("No free ports available")
-
-    def _is_port_free(self, port: int) -> bool:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("", port))
-                return True
-            except OSError:
-                return False
 
 
 @dataclass
@@ -102,11 +46,66 @@ class WorkerConfig:
     host: str = "127.0.0.1"
     port: int = 0
     cache_dir: Path | None = None
-    registry: str = "localhost:5000"
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
-    poll_interval_seconds: float = 5.0
+    worker_attributes: dict[str, str] = field(default_factory=dict)
+    default_task_env: dict[str, str] = field(default_factory=dict)
+    default_task_image: str | None = None
+    resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
+    heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(600.0))
+    accelerator_type: int = 0
+    accelerator_variant: str = ""
+    gpu_count: int = 0
+    preemptible: bool = False
+    storage_prefix: str = ""
+
+
+def worker_config_from_proto(
+    proto: config_pb2.WorkerConfig,
+    resolve_image: Callable[[str], str] | None = None,
+) -> WorkerConfig:
+    """Create internal WorkerConfig from WorkerConfig proto.
+
+    Translates the proto representation into the internal dataclass,
+    applying defaults where proto fields are unset.
+    """
+    port_start, port_end = 30000, 40000
+    if proto.port_range:
+        port_start, port_end = map(int, proto.port_range.split("-"))
+
+    controller_address = proto.controller_address
+    if controller_address and not controller_address.startswith("http"):
+        controller_address = f"http://{controller_address}"
+
+    return WorkerConfig(
+        host=proto.host or "0.0.0.0",
+        port=proto.port or 8080,
+        cache_dir=Path(proto.cache_dir) if proto.cache_dir else None,
+        port_range=(port_start, port_end),
+        controller_address=controller_address or None,
+        worker_id=proto.worker_id or None,
+        worker_attributes=dict(proto.worker_attributes),
+        default_task_env=dict(proto.default_task_env),
+        default_task_image=proto.default_task_image or None,
+        resolve_image=resolve_image or (lambda image: image),
+        poll_interval=(
+            Duration.from_ms(proto.poll_interval.milliseconds)
+            if proto.HasField("poll_interval")
+            else Duration.from_seconds(5.0)
+        ),
+        heartbeat_timeout=(
+            Duration.from_ms(proto.heartbeat_timeout.milliseconds)
+            if proto.HasField("heartbeat_timeout")
+            else Duration.from_seconds(600.0)
+        ),
+        accelerator_type=proto.accelerator_type,
+        accelerator_variant=proto.accelerator_variant,
+        gpu_count=proto.gpu_count,
+        preemptible=proto.preemptible,
+        storage_prefix=proto.storage_prefix,
+    )
 
 
 class Worker:
@@ -115,138 +114,201 @@ class Worker:
     def __init__(
         self,
         config: WorkerConfig,
-        cache_dir: Path | None = None,
-        bundle_provider: BundleProvider | None = None,
-        image_provider: ImageProvider | None = None,
+        bundle_store: BundleStore | None = None,
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
+        port_allocator: PortAllocator | None = None,
+        threads: ThreadContainer | None = None,
+        worker_metadata: cluster_pb2.WorkerMetadata | None = None,
     ):
         self._config = config
 
-        # Setup cache directory
-        self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
-        if cache_dir:
-            self._cache_dir = cache_dir
-        elif config.cache_dir:
-            self._cache_dir = config.cache_dir
-        else:
-            # Create temporary cache
-            self._temp_dir = tempfile.TemporaryDirectory(prefix="worker_cache_")
-            self._cache_dir = Path(self._temp_dir.name)
-
+        if not config.cache_dir:
+            raise ValueError("WorkerConfig.cache_dir is required")
+        self._cache_dir = config.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Use overrides if provided, otherwise create defaults
-        self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
-        self._venv_cache = VenvCache()
-        self._image_cache = image_provider or ImageCache(
-            self._cache_dir,
-            registry=config.registry,
-            max_images=50,
+        self._bundle_store = bundle_store or BundleStore(
+            db_path=self._cache_dir / "bundles.sqlite3",
+            controller_address=config.controller_address,
+            max_items=100,
         )
         self._runtime = container_runtime or DockerRuntime()
-        self._environment_provider = environment_provider or DefaultEnvironmentProvider()
-        self._port_allocator = PortAllocator(config.port_range)
+        self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
-        # Task state
-        self._tasks: dict[str, Task] = {}
+        # Resolve worker metadata: explicit > environment_provider > hardware probe
+        if worker_metadata is not None:
+            self._worker_metadata = worker_metadata
+        elif environment_provider is not None:
+            self._worker_metadata = environment_provider.probe()
+        else:
+            hardware = probe_hardware()
+            self._worker_metadata = build_worker_metadata(
+                hardware=hardware,
+                accelerator_type=config.accelerator_type,
+                accelerator_variant=config.accelerator_variant,
+                gpu_count_override=config.gpu_count,
+                preemptible=config.preemptible,
+                worker_attributes=config.worker_attributes,
+            )
+
+        # Task state: maps (task_id, attempt_id) -> TaskAttempt.
+        # Preserves all attempts so logs for historical attempts remain accessible.
+        self._tasks: dict[tuple[str, int], TaskAttempt] = {}
         self._lock = threading.Lock()
 
-        self._service = WorkerServiceImpl(self)
+        self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
+
+        self._log_store = LogStore()
+        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
+        self._log_store_handler.setLevel(logging.INFO)
+        self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(self._log_store_handler)
+
+        self._service = WorkerServiceImpl(self, log_store=self._log_store)
         self._dashboard = WorkerDashboard(
             self._service,
             host=config.host,
             port=config.port,
         )
 
-        self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
+        self._threads = threads if threads is not None else get_thread_container()
+        self._task_threads = self._threads.create_child("tasks")
 
-        # Heartbeat/registration thread
-        self._heartbeat_thread: threading.Thread | None = None
-        self._stop_heartbeat = threading.Event()
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
 
+        # Heartbeat tracking for timeout detection
+        self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
+
     def start(self) -> None:
-        self._server_thread = threading.Thread(
-            target=self._run_server,
-            daemon=True,
+        # Clean up any orphaned containers from previous runs
+        self._cleanup_all_iris_containers()
+
+        # Start HTTP server
+        # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
+        # causing TCP resets on idle connections.
+        self._server = uvicorn.Server(
+            uvicorn.Config(
+                self._dashboard.app,
+                host=self._config.host,
+                port=self._config.port,
+                log_level="error",
+                log_config=None,
+                timeout_keep_alive=120,
+            )
         )
-        self._server_thread.start()
+        self._threads.spawn_server(self._server, name="worker-server")
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server is not None and self._server.started,
-            timeout=5.0,
+            lambda: self._server.started,
+            timeout=Duration.from_seconds(5.0),
         )
 
-        # Create controller client synchronously (before any tasks can be dispatched)
+        # Create controller client if controller configured
         if self._config.controller_address:
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=5000,
             )
 
-        # Start heartbeat loop if controller configured
-        if self._config.controller_address:
-            self._heartbeat_thread = threading.Thread(
-                target=self._heartbeat_loop,
-                daemon=True,
-            )
-            self._heartbeat_thread.start()
+            # Start lifecycle thread: register + serve + reset loop
+            self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
+
+    def _cleanup_all_iris_containers(self) -> None:
+        """Remove all iris-managed containers at startup.
+
+        This handles crash recovery cleanly without tracking complexity.
+        """
+        removed = self._runtime.remove_all_iris_containers()
+        if removed > 0:
+            logger.info("Startup cleanup: removed %d iris containers", removed)
+
+    def wait(self) -> None:
+        self._threads.wait()
 
     def stop(self) -> None:
-        self._stop_heartbeat.set()
-        if self._heartbeat_thread:
-            self._heartbeat_thread.join(timeout=5.0)
+        # Stop task threads first so running tasks exit before infrastructure
+        # tears down. ThreadContainer.stop() signals each thread's stop_event,
+        # which the _run_task watcher bridges to attempt.should_stop + container kill.
+        self._task_threads.stop()
 
-        # Stop uvicorn server
         if self._server:
             self._server.should_exit = True
-        if self._server_thread:
-            self._server_thread.join(timeout=5.0)
+        self._threads.stop()
+        if self._controller_client:
+            self._controller_client.close()
+        logging.getLogger().removeHandler(self._log_store_handler)
+        self._log_store_handler.close()
+        self._log_store.close()
+        self._bundle_store.close()
 
-        # Kill and remove all containers
-        with self._lock:
-            tasks = list(self._tasks.values())
-        for task in tasks:
-            if task.container_id:
-                try:
-                    self._runtime.kill(task.container_id, force=True)
-                except RuntimeError:
-                    pass
-                try:
-                    self._runtime.remove(task.container_id)
-                except RuntimeError:
-                    pass
+    def _run_lifecycle(self, stop_event: threading.Event) -> None:
+        """Main lifecycle: register, serve, reset, repeat.
 
-        # Cleanup temp directory (best-effort)
-        if self._temp_dir:
-            try:
-                self._temp_dir.cleanup()
-            except OSError:
-                pass
-
-    def _run_server(self) -> None:
+        This loop runs continuously until shutdown. On each iteration:
+        1. Reset worker state (kill all containers)
+        2. Register with controller (retry until accepted)
+        3. Serve (wait for heartbeats from controller)
+        4. If heartbeat timeout expires, return to step 1
+        """
         try:
-            config = uvicorn.Config(
-                self._dashboard._app,
-                host=self._config.host,
-                port=self._config.port,
-                log_level="error",
-            )
-            self._server = uvicorn.Server(config)
-            self._server.run()
-        except Exception as e:
-            print(f"Worker server error: {e}")
+            while not stop_event.is_set():
+                self._reset_worker_state()
+                worker_id = self._register(stop_event)
+                if worker_id is None:
+                    # Shutdown requested during registration
+                    break
+                self._worker_id = worker_id
+                self._serve(stop_event)
+        except Exception:
+            logger.exception("Worker lifecycle crashed")
+            raise
 
-    def _heartbeat_loop(self) -> None:
-        metadata = self._environment_provider.probe()
+    def _register(self, stop_event: threading.Event) -> str | None:
+        """Register with controller. Retries until accepted or shutdown.
 
-        # Generate worker ID if not provided
-        if not self._worker_id:
-            self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
+        Returns the assigned worker_id, or None if shutdown was requested.
+        """
+        metadata = self._worker_metadata
+        address = self._resolve_address()
+
+        # Controller client is created in start() before this thread starts
+        assert self._controller_client is not None
+
+        logger.info("Attempting to register with controller at %s", self._config.controller_address)
+
+        while not stop_event.is_set():
+            try:
+                # Chaos injection for testing delayed registration
+                if rule := chaos("worker.register"):
+                    time.sleep(rule.delay_seconds)
+                    if rule.error:
+                        raise rule.error
+
+                response = self._controller_client.register(
+                    cluster_pb2.Controller.RegisterRequest(
+                        address=address,
+                        metadata=metadata,
+                    )
+                )
+                if response.accepted:
+                    logger.info("Registered with controller: %s", response.worker_id)
+                    return response.worker_id
+                else:
+                    logger.warning("Registration rejected by controller, retrying in 5s")
+            except Exception as e:
+                logger.warning("Registration failed: %s, retrying in 5s", e)
+            stop_event.wait(5.0)
+
+        return None
+
+    def _resolve_address(self) -> str:
+        """Resolve the address to advertise to the controller."""
+        metadata = self._worker_metadata
 
         # Determine the address to advertise to the controller.
         # If host is 0.0.0.0 (bind to all interfaces), use the probed IP for external access.
@@ -255,373 +317,358 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Build registration request
-        request = cluster_pb2.Controller.RegisterWorkerRequest(
-            worker_id=self._worker_id,
-            address=f"{address_host}:{self._config.port}",
-            metadata=metadata,
-        )
+        return f"{address_host}:{self._config.port}"
 
-        # Controller client is created in start() before this thread starts
-        assert self._controller_client is not None
+    def _serve(self, stop_event: threading.Event) -> None:
+        """Wait for heartbeats from controller. Returns when heartbeat timeout expires.
 
-        # Retry registration until successful
-        attempt = 0
-        while not self._stop_heartbeat.is_set():
-            attempt += 1
-            try:
-                logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
-                response = self._controller_client.register_worker(request)
-                if response.accepted:
-                    logger.info("Registered with controller: %s", self._worker_id)
-                    break
-            except Exception as e:
-                logger.warning("Registration attempt %d failed, retrying in 5s: %s", attempt, e)
-            self._stop_heartbeat.wait(5.0)
+        This method blocks in a loop, checking the time since last heartbeat.
+        When the timeout expires, it returns, triggering a reset and re-registration.
+        """
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
+        logger.info("Serving (waiting for controller heartbeats)")
 
-        # Periodic heartbeat (re-registration)
-        heartbeat_interval = 10.0  # seconds
-        while not self._stop_heartbeat.is_set():
-            self._stop_heartbeat.wait(heartbeat_interval)
-            if self._stop_heartbeat.is_set():
-                break
-            try:
-                self._controller_client.register_worker(request)
-            except Exception as e:
-                logger.warning(f"Heartbeat failed: {e}")
+        while not stop_event.is_set():
+            if self._heartbeat_deadline.expired():
+                logger.warning("No heartbeat from controller, resetting")
+                return
+            # Check every second
+            stop_event.wait(1.0)
 
-    def _report_task_state(self, task: Task) -> None:
-        """Report task state to controller."""
-        if not self._controller_client or not self._worker_id:
-            return
+    def _reset_worker_state(self) -> None:
+        """Reset worker state: stop task threads, wipe containers, clear tracking."""
+        logger.info("Resetting worker state")
 
-        try:
-            request = cluster_pb2.Controller.ReportTaskStateRequest(
-                worker_id=self._worker_id,
-                task_id=task.task_id,
-                job_id=task.job_id,
-                task_index=task.task_index,
-                state=task.status,
-                exit_code=task.exit_code or 0,
-                error=task.error or "",
-                finished_at_ms=task.finished_at_ms or 0,
-                attempt_id=task.attempt_id,
-            )
-            self._controller_client.report_task_state(request)
-        except Exception as e:
-            logger.warning(f"Failed to report task state to controller: {e}")
+        # Stop all running task threads so they exit cleanly before we
+        # kill containers.  Without this, orphaned threads discover their
+        # containers are gone and log confusing "Container not found" errors.
+        self._task_threads.stop()
+
+        # Clear task tracking
+        with self._lock:
+            self._tasks.clear()
+
+        # Replace the task thread container so new tasks get a fresh group.
+        self._task_threads = self._threads.create_child("tasks")
+
+        # Wipe ALL iris containers (simple, no tracking needed)
+        self._cleanup_all_iris_containers()
+
+        logger.info("Worker state reset complete")
 
     # Task management methods
 
+    _TERMINAL_STATES = frozenset(
+        {
+            cluster_pb2.TASK_STATE_SUCCEEDED,
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        }
+    )
+
+    def _get_current_attempt(self, task_id_wire: str) -> TaskAttempt | None:
+        """Get the most recent attempt for a task, or None if no attempts exist."""
+        # Find all attempts for this task and return the one with highest attempt_id
+        matching = [(key, task) for key, task in self._tasks.items() if key[0] == task_id_wire]
+        if not matching:
+            return None
+        # Return the attempt with the highest attempt_id
+        matching.sort(key=lambda x: x[0][1], reverse=True)
+        return matching[0][1]
+
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
-        """Submit a new task for execution."""
-        task_id = request.task_id
-        job_id = request.job_id
-        task_index = request.task_index
-        num_tasks = request.num_tasks
+        """Submit a new task for execution.
+
+        If a non-terminal task with the same task_id already exists:
+        - Same or older attempt_id: rejected as duplicate
+        - Newer attempt_id: old attempt is killed and new one starts
+
+        Raises:
+            RuntimeError: If a non-terminal attempt already exists (sanity check)
+        """
+        if rule := chaos("worker.submit_task"):
+            time.sleep(rule.delay_seconds)
+            raise RuntimeError("chaos: worker rejecting task")
+        task_id_wire = request.task_id
+        task_id = JobName.from_wire(task_id_wire)
         attempt_id = request.attempt_id
+        key = (task_id_wire, attempt_id)
 
-        # Allocate requested ports
-        port_names = list(request.ports)
-        allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
-        ports = dict(zip(port_names, allocated_ports, strict=True))
+        should_kill_existing = False
+        with self._lock:
+            # Check if this exact (task_id, attempt_id) already exists
+            if key in self._tasks:
+                existing = self._tasks[key]
+                logger.info(
+                    "Rejecting duplicate task %s attempt %d (status=%s)",
+                    task_id,
+                    attempt_id,
+                    existing.status,
+                )
+                return task_id_wire
 
-        # Create task working directory with attempt isolation
-        # Use safe path component for hierarchical task IDs (e.g., "my-exp/task-0" -> "my-exp__task-0")
-        safe_task_id = task_id.replace("/", "__")
-        workdir = Path(tempfile.gettempdir()) / "iris-worker" / "tasks" / f"{safe_task_id}_attempt_{attempt_id}"
-        workdir.mkdir(parents=True, exist_ok=True)
+            # Sanity check: find any non-terminal attempt for this task
+            current = self._get_current_attempt(task_id_wire)
+            if current is not None and current.status not in self._TERMINAL_STATES:
+                if attempt_id <= current.attempt_id:
+                    logger.info(
+                        "Rejecting duplicate task %s (attempt %d, current attempt %d status=%s)",
+                        task_id,
+                        attempt_id,
+                        current.attempt_id,
+                        current.status,
+                    )
+                    return task_id_wire
+                # New attempt with higher ID supersedes old one - kill the old attempt
+                logger.info(
+                    "Superseding task %s: attempt %d -> %d, killing old attempt",
+                    task_id,
+                    current.attempt_id,
+                    attempt_id,
+                )
+                should_kill_existing = True
 
-        task = Task(
+        if should_kill_existing:
+            self._kill_task_attempt(task_id_wire, current.attempt_id)  # type: ignore[union-attr]
+
+        task_id.require_task()
+
+        # Create a minimal TaskAttemptConfig. Expensive setup (port allocation,
+        # workdir creation, log sink init) is deferred to TaskAttempt.run() so
+        # the heartbeat RPC returns quickly.
+        config = TaskAttemptConfig(
             task_id=task_id,
-            job_id=job_id,
-            task_index=task_index,
-            num_tasks=num_tasks,
+            num_tasks=request.num_tasks,
             attempt_id=attempt_id,
             request=request,
-            status=cluster_pb2.TASK_STATE_PENDING,
-            ports=ports,
-            workdir=workdir,
+            cache_dir=self._cache_dir,
+            storage_prefix=self._config.storage_prefix,
+        )
+
+        attempt = TaskAttempt(
+            config=config,
+            bundle_store=self._bundle_store,
+            container_runtime=self._runtime,
+            worker_metadata=self._worker_metadata,
+            worker_id=self._worker_id,
+            controller_address=self._config.controller_address,
+            default_task_env=self._config.default_task_env,
+            default_task_image=self._config.default_task_image,
+            resolve_image=self._config.resolve_image,
+            port_allocator=self._port_allocator,
+            log_store=self._log_store,
+            poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
         with self._lock:
-            self._tasks[task_id] = task
+            self._tasks[key] = attempt
 
-        # Start execution in background
-        task.thread = threading.Thread(target=self._execute_task, args=(task,), daemon=True)
-        task.thread.start()
+        # Start execution in a monitored non-daemon thread. When stop() is called,
+        # the on_stop callback kills the container so attempt.run() exits promptly.
+        def _run_task(stop_event: threading.Event) -> None:
+            attempt.run()
 
-        return task_id
-
-    def _execute_task(self, task: Task) -> None:
-        import sys
-
-        try:
-            # Phase 1: Download bundle
-            task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
-            task.started_at_ms = now_ms()
-
-            bundle_path = self._bundle_cache.get_bundle(
-                task.request.bundle_gcs_path,
-                expected_hash=None,
-            )
-
-            # Phase 2: Build image
-            task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
-            task.build_started_ms = now_ms()
-            env_config = task.request.environment
-            extras = list(env_config.extras)
-
-            # Compute deps_hash for caching
-            deps_hash = self._venv_cache.compute_deps_hash(bundle_path)
-
-            task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
-            task.logs.add("build", "Building Docker image...")
-
-            # Detect host Python version for container compatibility
-            # cloudpickle serializes bytecode which is version-specific
-            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-            base_image = f"python:{py_version}-slim"
-
-            build_result = self._image_cache.build(
-                bundle_path=bundle_path,
-                base_image=base_image,
-                extras=extras,
-                job_id=task.job_id,
-                deps_hash=deps_hash,
-                task_logs=task.logs,
-            )
-
-            task.build_finished_ms = now_ms()
-            task.build_from_cache = build_result.from_cache
-            task.image_tag = build_result.image_tag
-
-            # Protect image from eviction while task is running
-            if self._image_cache:
-                self._image_cache.protect(build_result.image_tag)
-
-            # Phase 3: Create and start container
-            task.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-
-            # Deserialize entrypoint
-            entrypoint = cloudpickle.loads(task.request.serialized_entrypoint)
-            entrypoint_tuple = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
-
-            # Build environment from user-provided vars + EnvironmentConfig
-            env = dict(env_config.env_vars)
-
-            # Build iris system environment based on runtime
-            iris_env = self._build_iris_env(task)
-            env.update(iris_env)
-
-            config = ContainerConfig(
-                image=build_result.image_tag,
-                entrypoint=entrypoint_tuple,
-                env=env,
-                resources=task.request.resources if task.request.HasField("resources") else None,
-                timeout_seconds=task.request.timeout_seconds or None,
-                ports=task.ports,
-                mounts=[(str(task.workdir), "/workdir", "rw")],
-            )
-
-            # Create and start container with retry on port binding failures
-            container_id = None
-            max_port_retries = 3
-            for attempt in range(max_port_retries):
-                try:
-                    container_id = self._runtime.create_container(config)
-                    task.container_id = container_id
-                    self._runtime.start_container(container_id)
-                    break
-                except RuntimeError as e:
-                    if "address already in use" in str(e) and attempt < max_port_retries - 1:
-                        logger.warning(
-                            "Port conflict for task %s, retrying with new ports (attempt %d)", task.task_id, attempt + 2
-                        )
-                        task.logs.add("build", f"Port conflict, retrying with new ports (attempt {attempt + 2})")
-                        # Release current ports and allocate new ones
-                        self._port_allocator.release(list(task.ports.values()))
-                        port_names = list(task.ports.keys())
-                        new_ports = self._port_allocator.allocate(len(port_names))
-                        task.ports = dict(zip(port_names, new_ports, strict=True))
-
-                        # Update config with new ports
-                        config.ports = task.ports
-                        for name, port in task.ports.items():
-                            config.env[f"IRIS_PORT_{name.upper()}"] = str(port)
-
-                        # Try to remove failed container if it was created
-                        if container_id:
-                            try:
-                                self._runtime.remove(container_id)
-                            except RuntimeError:
-                                pass
-                            container_id = None
-                    else:
-                        raise
-
-            # container_id is guaranteed to be set here (loop breaks on success, raises on failure)
-            assert container_id is not None
-
-            # Report RUNNING state to controller so endpoints become visible
-            self._report_task_state(task)
-
-            # Phase 4: Monitor task execution
-            self._monitor_task(task, container_id, config.timeout_seconds)
-
-        except Exception as e:
-            error_msg = format_exception_with_traceback(e)
-            task.logs.add("error", f"Task failed:\n{error_msg}")
-            task.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
-        finally:
-            # Report task state to controller if in terminal state
-            if task.status in (
-                cluster_pb2.TASK_STATE_SUCCEEDED,
-                cluster_pb2.TASK_STATE_FAILED,
-                cluster_pb2.TASK_STATE_KILLED,
-            ):
-                self._report_task_state(task)
-
-            # Cleanup: release ports, remove workdir (keep container for logs)
-            if not task.cleanup_done:
-                task.cleanup_done = True
-                self._port_allocator.release(list(task.ports.values()))
-                # Unprotect image from eviction now that task is done
-                if self._image_cache and task.image_tag:
-                    self._image_cache.unprotect(task.image_tag)
-                # Keep container around for log retrieval via docker logs
-                # Remove working directory (no longer needed since logs come from Docker)
-                if task.workdir and task.workdir.exists():
-                    shutil.rmtree(task.workdir, ignore_errors=True)
-
-    def _monitor_task(self, task: Task, container_id: str, timeout_seconds: int | None) -> None:
-        """Monitor task execution: check status, collect stats, handle timeouts.
-
-        Polls container status at regular intervals until the container stops.
-        Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
-        Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
-        """
-        start_time = time.time()
-
-        while True:
-            # Check if we should stop
-            if task.should_stop:
-                task.transition_to(cluster_pb2.TASK_STATE_KILLED)
-                break
-
-            # Check timeout
-            if timeout_seconds and (time.time() - start_time) > timeout_seconds:
-                self._runtime.kill(container_id, force=True)
-                task.transition_to(
-                    cluster_pb2.TASK_STATE_FAILED,
-                    error="Timeout exceeded",
-                    exit_code=-1,
-                )
-                break
-
-            # Check container status
-            status = self._runtime.inspect(container_id)
-            if not status.running:
-                # Read result file only if container succeeded
-                if status.exit_code == 0 and task.workdir:
-                    result_path = task.workdir / "_result.pkl"
-                    if result_path.exists():
-                        try:
-                            task.result = result_path.read_bytes()
-                        except Exception as e:
-                            task.logs.add("error", f"Failed to read result file: {e}")
-
-                # Container has stopped
-                if status.error:
-                    task.transition_to(
-                        cluster_pb2.TASK_STATE_FAILED,
-                        error=status.error,
-                        exit_code=status.exit_code or -1,
-                    )
-                elif status.exit_code == 0:
-                    task.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
-                else:
-                    task.transition_to(
-                        cluster_pb2.TASK_STATE_FAILED,
-                        error=f"Exit code: {status.exit_code}",
-                        exit_code=status.exit_code or -1,
-                    )
-                break
-
-            # Collect stats
+        def _stop_task() -> None:
             try:
-                stats = self._runtime.get_stats(container_id)
-                if stats.available:
-                    task.current_memory_mb = stats.memory_mb
-                    task.current_cpu_percent = stats.cpu_percent
-                    task.process_count = stats.process_count
-                    if stats.memory_mb > task.peak_memory_mb:
-                        task.peak_memory_mb = stats.memory_mb
+                attempt.stop(force=True)
+            except RuntimeError:
+                pass
 
-                if task.workdir:
-                    task.disk_mb = collect_workdir_size_mb(task.workdir)
-            except Exception:
-                pass  # Don't fail task on stats collection errors
+        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id_wire}", on_stop=_stop_task)
+        attempt.thread = mt._thread
 
-            # Sleep before next poll
-            time.sleep(self._config.poll_interval_seconds)
+        return task_id_wire
 
-    def _build_iris_env(self, task: Task) -> dict[str, str]:
-        """Build Iris system environment variables for the task container.
+    def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None:
+        """Get a task by ID and optionally attempt ID.
 
-        Auto-injects task metadata and configuration that tasks need to interact
-        with the Iris cluster (task ID, job ID, worker ID, controller address, ports).
-        These override user-provided values.
+        Args:
+            task_id: Task identifier
+            attempt_id: Specific attempt ID, or -1 to get the most recent attempt
+
+        Returns:
+            TaskInfo view (implemented by TaskAttempt) to decouple callers
+            from execution internals.
         """
-        env = {}
+        if attempt_id >= 0:
+            return self._tasks.get((task_id, attempt_id))
+        return self._get_current_attempt(task_id)
 
-        # Core task metadata
-        env["IRIS_JOB_ID"] = task.job_id
-        env["IRIS_TASK_ID"] = task.task_id
-        env["IRIS_TASK_INDEX"] = str(task.task_index)
-        env["IRIS_NUM_TASKS"] = str(task.num_tasks)
-        env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
+    def list_tasks(self) -> list[TaskInfo]:
+        """List all task attempts.
 
-        if self._config.worker_id:
-            env["IRIS_WORKER_ID"] = self._config.worker_id
-
-        if self._config.controller_address:
-            # Only rewrite localhost addresses for Docker containers
-            if isinstance(self._runtime, DockerRuntime):
-                env["IRIS_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(self._config.controller_address)
-            else:
-                env["IRIS_CONTROLLER_ADDRESS"] = self._config.controller_address
-
-        # Inject bundle path for sub-task inheritance
-        if task.request.bundle_gcs_path:
-            env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
-
-        # Inject bind host - 0.0.0.0 for Docker (so port mapping works), 127.0.0.1 otherwise
-        # Also inject advertise host - the address other containers should use to reach this one
-        if isinstance(self._runtime, DockerRuntime):
-            env["IRIS_BIND_HOST"] = "0.0.0.0"
-            env["IRIS_ADVERTISE_HOST"] = "host.docker.internal"
-        else:
-            env["IRIS_BIND_HOST"] = "127.0.0.1"
-            env["IRIS_ADVERTISE_HOST"] = "127.0.0.1"
-
-        # Inject allocated ports
-        for name, port in task.ports.items():
-            env[f"IRIS_PORT_{name.upper()}"] = str(port)
-
-        return env
-
-    def get_task(self, task_id: str) -> Task | None:
-        """Get a task by ID."""
-        return self._tasks.get(task_id)
-
-    def list_tasks(self) -> list[Task]:
-        """List all tasks."""
+        Returns TaskInfo views (implemented by TaskAttempt) to decouple callers
+        from execution internals. Returns all attempts, not just current ones.
+        """
         return list(self._tasks.values())
 
-    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
-        """Kill a running task."""
-        task = self._tasks.get(task_id)
+    def list_current_tasks(self) -> list[TaskInfo]:
+        """List only the most recent attempt for each task.
+
+        Returns TaskInfo views for the current (highest attempt_id) attempt of each task.
+        """
+        # Group by task_id and return only the highest attempt_id for each
+        by_task: dict[str, TaskAttempt] = {}
+        for (task_id, attempt_id), task in self._tasks.items():
+            existing = by_task.get(task_id)
+            if existing is None or attempt_id > existing.attempt_id:
+                by_task[task_id] = task
+        return list(by_task.values())
+
+    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
+        """Handle controller-initiated heartbeat with reconciliation.
+
+        Processing order (sequential, not concurrent):
+        1. Submit tasks_to_run — registers each task in self._tasks
+        2. Kill tasks_to_kill — async, sets stop flag immediately
+        3. Reconcile expected_tasks — for each expected task, report its current
+           state. If not found in self._tasks, report WORKER_FAILED ("Task not
+           found on worker"). This happens when the worker has reset its state
+           (_tasks.clear() in _reset_worker_state) between heartbeats — from
+           the controller's perspective this is equivalent to a worker restart.
+        4. Kill unexpected tasks — any task in self._tasks that is NOT in
+           expected_tasks or tasks_to_run is killed (controller no longer wants it)
+
+        The ordering guarantee between steps 1 and 3 is critical: a task that
+        appears in both tasks_to_run and expected_tasks (which is always the case
+        for newly-assigned tasks) will be submitted before reconciliation checks
+        for it, so it will be found.
+
+        Kill operations are performed asynchronously in daemon threads to avoid
+        blocking the heartbeat RPC.
+        """
+        # Reset heartbeat deadline
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
+
+        with slow_log(logger, "handle_heartbeat", threshold_ms=2000):
+            # Start new tasks
+            with slow_log(logger, "heartbeat submit_tasks", threshold_ms=200):
+                for run_req in request.tasks_to_run:
+                    try:
+                        self.submit_task(run_req)
+                        logger.info("Heartbeat: submitted task %s", run_req.task_id)
+                    except Exception as e:
+                        logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
+
+            # Kill requested tasks asynchronously so the heartbeat returns immediately
+            with slow_log(logger, "heartbeat kill_tasks", threshold_ms=100):
+                for task_id in request.tasks_to_kill:
+                    try:
+                        current = self._get_current_attempt(task_id)
+                        if current:
+                            self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
+                            logger.info("Heartbeat: initiated async kill for task %s", task_id)
+                    except Exception as e:
+                        logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
+
+            tasks: list[cluster_pb2.Controller.WorkerTaskStatus] = []
+
+            with slow_log(logger, "heartbeat reconciliation", threshold_ms=200):
+                with self._lock:
+                    # Reconcile expected_tasks against actual state
+                    for expected_entry in request.expected_tasks:
+                        task_id = expected_entry.task_id
+                        expected_attempt_id = expected_entry.attempt_id
+                        key = (task_id, expected_attempt_id)
+                        task = self._tasks.get(key)
+
+                        if task is None:
+                            tasks.append(
+                                cluster_pb2.Controller.WorkerTaskStatus(
+                                    task_id=task_id,
+                                    attempt_id=expected_attempt_id,
+                                    state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                                    exit_code=0,
+                                    error="Task not found on worker",
+                                    finished_at=Timestamp.now().to_proto(),
+                                )
+                            )
+                        else:
+                            task_proto = task.to_proto()
+                            reported_state = task.status
+                            if reported_state == cluster_pb2.TASK_STATE_PENDING:
+                                reported_state = cluster_pb2.TASK_STATE_BUILDING
+
+                            is_terminal = task.status in self._TERMINAL_STATES
+                            log_cap = 50000 if is_terminal else 5000
+                            log_entries = task.drain_heartbeat_logs(max_entries=log_cap, final=is_terminal)
+                            entry = cluster_pb2.Controller.WorkerTaskStatus(
+                                task_id=task_id,
+                                attempt_id=task_proto.current_attempt_id,
+                                state=reported_state,
+                                exit_code=task_proto.exit_code,
+                                error=task_proto.error or "",
+                                log_entries=log_entries,
+                            )
+                            if task.status in self._TERMINAL_STATES:
+                                entry.finished_at.CopyFrom(task_proto.finished_at)
+                            if task_proto.resource_usage.ByteSize() > 0:
+                                entry.resource_usage.CopyFrom(task_proto.resource_usage)
+                            tasks.append(entry)
+
+                    # Kill tasks not in expected_tasks - the controller has decided these
+                    # tasks should no longer run (e.g., job was killed, task was reassigned).
+                    # Include tasks_to_run in the expected set: these were just submitted
+                    # in this heartbeat and may not yet appear in expected_tasks if the
+                    # controller excludes unconfirmed tasks.
+                    expected_keys = {(entry.task_id, entry.attempt_id) for entry in request.expected_tasks}
+                    for run_req in request.tasks_to_run:
+                        expected_keys.add((run_req.task_id, run_req.attempt_id))
+                    tasks_to_kill: list[tuple[str, int]] = []
+                    for key, task in self._tasks.items():
+                        if key not in expected_keys and task.status not in self._TERMINAL_STATES:
+                            tasks_to_kill.append(key)
+
+                # Kill removed tasks asynchronously outside lock to avoid deadlock
+                for task_id, attempt_id in tasks_to_kill:
+                    logger.warning("Killing task %s attempt %d (no longer in expected_tasks)", task_id, attempt_id)
+                    self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+
+            # Collect host metrics and aggregate task stats
+            with slow_log(logger, "heartbeat host_metrics", threshold_ms=100):
+                resource_snapshot = self._host_metrics.collect()
+                running_count = 0
+                total_processes = 0
+                with self._lock:
+                    for task in self._tasks.values():
+                        if task.status == cluster_pb2.TASK_STATE_RUNNING:
+                            running_count += 1
+                            total_processes += task.process_count
+                resource_snapshot.running_task_count = running_count
+                resource_snapshot.total_process_count = total_processes
+
+            # Run health checks to detect local faults (disk full, write failure)
+            with slow_log(logger, "heartbeat health_check", threshold_ms=100):
+                health = check_worker_health(disk_path=str(self._cache_dir))
+                if not health.healthy:
+                    logger.warning("Worker health check failed: %s", health.error)
+
+            return cluster_pb2.HeartbeatResponse(
+                tasks=tasks,
+                resource_snapshot=resource_snapshot,
+                worker_healthy=health.healthy,
+                health_error=health.error,
+            )
+
+    def _kill_task_attempt(
+        self,
+        task_id: str,
+        attempt_id: int,
+        term_timeout_ms: int = 5000,
+        async_kill: bool = False,
+    ) -> bool:
+        """Kill a specific task attempt.
+
+        Args:
+            task_id: Wire-format task ID.
+            attempt_id: Attempt number to kill.
+            term_timeout_ms: Time to wait for graceful shutdown before SIGKILL.
+            async_kill: If True, signal the task immediately but perform the
+                container stop/wait/force-kill sequence in a daemon thread.
+                Used by heartbeat to avoid blocking the RPC response.
+        """
+        task = self._tasks.get((task_id, attempt_id))
         if not task:
             return False
 
@@ -633,56 +680,81 @@ class Worker:
         ):
             return False
 
-        # Set flag to signal thread to stop
+        # Set flag to signal the task's execution thread to stop.
+        # This is always done immediately regardless of async_kill.
         task.should_stop = True
 
-        # If container exists, try to kill it
-        if task.container_id:
-            try:
-                # Send SIGTERM
-                self._runtime.kill(task.container_id, force=False)
-
-                # Wait for shutdown
-                running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
-                stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-                    lambda: task.status not in running_states,
-                    timeout=term_timeout_ms / 1000,
-                )
-
-                # Force kill if graceful shutdown timed out
-                if not stopped:
-                    try:
-                        self._runtime.kill(task.container_id, force=True)
-                    except RuntimeError:
-                        pass
-            except RuntimeError:
-                # Container may have already been removed or stopped
-                pass
+        if async_kill:
+            thread = threading.Thread(
+                target=self._do_kill_container,
+                args=(task, term_timeout_ms),
+                name=f"kill-{task_id}-{attempt_id}",
+                daemon=True,
+            )
+            thread.start()
+        else:
+            self._do_kill_container(task, term_timeout_ms)
 
         return True
 
-    def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
-        """Get logs for a task."""
-        task = self._tasks.get(task_id)
-        if not task:
-            return []
+    @staticmethod
+    def _do_kill_container(task: TaskAttempt, term_timeout_ms: int) -> None:
+        """Perform the SIGTERM -> wait -> SIGKILL sequence for a task's container."""
+        if not task.has_container:
+            return
 
-        logs: list[cluster_pb2.Worker.LogEntry] = []
+        try:
+            task.stop(force=False)
 
-        # Add build logs from task.logs (these have proper timestamps)
-        for log_line in task.logs.lines:
-            logs.append(log_line.to_proto())
+            running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+            stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+                lambda: task.status not in running_states,
+                timeout=Duration.from_ms(term_timeout_ms),
+            )
 
-        # Fetch container stdout/stderr from Docker if container exists
-        if task.container_id:
-            container_logs = self._runtime.get_logs(task.container_id)
-            for log_line in container_logs:
-                logs.append(log_line.to_proto())
+            if not stopped:
+                try:
+                    task.stop(force=True)
+                except RuntimeError:
+                    pass
+        except RuntimeError:
+            # Container may have already been removed or stopped
+            pass
 
-        # Sort by timestamp
-        logs.sort(key=lambda x: x.timestamp_ms)
+    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
+        """Kill the current (most recent) attempt of a task."""
+        current = self._get_current_attempt(task_id)
+        if not current:
+            return False
+        return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
 
-        return logs[start_line:]
+    def profile_task(
+        self,
+        task_id: str,
+        duration_seconds: int,
+        profile_type: cluster_pb2.ProfileType,
+        attempt_id: int | None = None,
+    ) -> bytes:
+        """Profile a running task by delegating to its container handle.
+
+        Args:
+            task_id: Bare task ID (e.g. ``/alice/job/0``).
+            duration_seconds: How long to sample.
+            profile_type: CPU, memory, or threads profiler config.
+            attempt_id: Specific attempt to profile.  When ``None``, the
+                current (most recent) attempt is used.
+        """
+        if attempt_id is not None:
+            attempt = self._tasks.get((task_id, attempt_id))
+            if not attempt:
+                raise ValueError(f"Task {task_id} attempt {attempt_id} not found")
+        else:
+            attempt = self._get_current_attempt(task_id)
+            if not attempt:
+                raise ValueError(f"Task {task_id} not found")
+        if attempt.status != cluster_pb2.TASK_STATE_RUNNING:
+            raise ValueError(f"Task {task_id} is not running (state={cluster_pb2.TaskState.Name(attempt.status)})")
+        return attempt.profile(duration_seconds, profile_type)
 
     @property
     def url(self) -> str:

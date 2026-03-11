@@ -1,24 +1,16 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """NEMOTRON CC dataset definitions and tokenization."""
 
+import dataclasses
 import os.path
 
+from experiments.defaults import DEFAULT_NEW_RUN_DATA_SHUFFLE
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
@@ -73,7 +65,11 @@ def _get_nemotron_split_paths(split: str):
     return [_nemotron_cc_path / pattern for pattern in patterns]
 
 
-def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
+def tokenize_nemotron(
+    *,
+    tokenizer: str | None = None,
+    max_workers: int = 4096,
+) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Nemotron CC dataset splits."""
     if tokenizer is None:
         from experiments.llama import llama3_tokenizer
@@ -92,6 +88,7 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
+                max_workers=max_workers,
             ),
         )
 
@@ -105,6 +102,22 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
 
     assert nemotron_steps.keys() == NEMOTRON_WEIGHTS.keys()
     return nemotron_steps
+
+
+nemotron_mix = lm_mixture_data_config(
+    components={
+        **tokenize_nemotron(),
+        "starcoderdata": dclm_components_llama3["starcoderdata"],
+        "proofpile_2": dclm_components_llama3["proofpile_2"],
+    },
+    weights={
+        **NEMOTRON_WEIGHTS,
+        "starcoderdata": 0.25,
+        "proofpile_2": 0.055,
+    },
+)
+
+nemotron_mix_block_shuffle = dataclasses.replace(nemotron_mix, shuffle=DEFAULT_NEW_RUN_DATA_SHUFFLE)
 
 
 def tokenize_nemotron_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:

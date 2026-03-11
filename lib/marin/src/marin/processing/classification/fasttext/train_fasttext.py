@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 train_fasttext.py
@@ -29,15 +18,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import draccus
-import fsspec
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from iris.marin_fs import open_url
 from marin.processing.classification.dataset_utils import (
     Attribute,
     DatasetConfig,
     Document,
 )
 from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm, rebase_file_path
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +95,8 @@ def create_dataset(config: CreateDatasetConfig) -> None:
     if config.merge_dataset_shards:
         output_path = os.path.join(config.output_dataset_path, "data", "data.jsonl.gz")
 
-    Backend.execute(
+    ctx = ZephyrContext(name="fasttext-prep")
+    ctx.execute(
         Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
         .flat_map(processing_func)
         .write_jsonl(output_path)
@@ -130,12 +120,12 @@ def create_dataset_shard(
     from contextlib import ExitStack
 
     with ExitStack() as stack:
-        doc_fs = fsspec.open(input_file_path, "r", compression="infer")
+        doc_fs = open_url(input_file_path, "r", compression="infer")
         doc_file = stack.enter_context(doc_fs)
 
         attr_files = []
         for attr_file_path in attr_file_paths:
-            attr_fs = fsspec.open(attr_file_path, "r", compression="infer")
+            attr_fs = open_url(attr_file_path, "r", compression="infer")
             attr_file = stack.enter_context(attr_fs)
             attr_files.append(attr_file)
 
@@ -178,7 +168,7 @@ def merge_dataset_shards(shard_paths: list[str], output_path: str) -> None:
 
     with open(output_path, "w") as output_file:
         for shard_path in shard_paths:
-            with fsspec.open(shard_path, "r", compression="infer") as shard_file:
+            with open_url(shard_path, "r", compression="infer") as shard_file:
                 for line in shard_file:
                     output_file.write(line)
 
@@ -293,8 +283,6 @@ def train_model(
     Returns:
         None: No return value.
     """
-    logger = logging.getLogger("ray")
-
     logger.info(f"Training fastText model for experiment {output_path}")
     datetime_start = datetime.utcnow()
 

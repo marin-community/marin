@@ -277,12 +277,12 @@ To force it to rerun a step, you can use the `--force_run_failed true` flag.
 
 === "CPU"
     ```bash
-    python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store --force_run_failed true
+    uv run python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store --force_run_failed true
     ```
 
 === "GPU"
     ```bash
-    python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store --force_run_failed true
+    uv run python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store --force_run_failed true
     ```
 
 ### I want to rerun the step after it succeeded, how do I do that?
@@ -292,7 +292,7 @@ The easiest way to do this is to remove the output directory for the step.
 For instance, if the step is named `marin-nano-tinystories-b4157e`, you can remove the output directory with:
 
 ```bash
-rm -rf local_store/marin-nano-tinystories-b4157e
+rm -rf local_store/checkpoints/marin-nano-tinystories-b4157e
 ```
 
 Note, however, that WandB does not like reusing the same run ID, so you may need to change the `name` argument to `default_train` to a new value.

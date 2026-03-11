@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Default functions, configurations and utilities for Marin speedruns to use.
@@ -23,12 +12,13 @@ import dataclasses
 import datetime
 import json
 import logging
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
-import fsspec
 from fray.cluster import ResourceConfig
+from iris.marin_fs import open_url
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -44,7 +34,7 @@ from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _num_accelerator_chips(resources: ResourceConfig) -> int:
@@ -99,10 +89,11 @@ class SpeedrunConfig:
         # runtimeenv is not serializable
         train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
         resources_dict = asdict_excluding(self.train_config.resources, exclude={"runtime_env"})
+        model_config_dict = asdict_excluding(self.model_config, exclude={"loss_fn", "model_cls_fn"})
         return {
             "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
-            "model_config": _make_serializable(dataclasses.asdict(self.model_config)),
+            "model_config": _make_serializable(model_config_dict),
             "train_config": _make_serializable(train_config_dict),
             "tokenized_dataset": str(self.tokenized_dataset),
             "resources": _make_serializable(resources_dict),
@@ -208,17 +199,28 @@ class SpeedrunResultsConfig:
 ### Utils and analysis functions ###
 
 
-def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
-    try:
-        run = wandb.Api().run(f"{entity}/{project}/{run_id}")
-        return [
-            row["throughput/duration"]
-            for row in run.scan_history(keys=["throughput/duration"])
-            if "throughput/duration" in row
-        ]
-    except Exception as e:
-        logger.error(f"Failed to fetch step times: {e}")
-        return []
+def _wandb_mode_disabled() -> bool:
+    mode = os.getenv("WANDB_MODE")
+    if mode is None:
+        return False
+    return mode.lower() in {"disabled", "offline", "dryrun"}
+
+
+def _default_wandb_entity() -> str:
+    if _wandb_mode_disabled() or not os.getenv("WANDB_API_KEY"):
+        return WANDB_ENTITY
+    return wandb.Api().default_entity
+
+
+def get_step_times_from_wandb(run_id: str, entity: str | None = None, project: str = WANDB_PROJECT) -> list[float]:
+    if entity is None:
+        entity = _default_wandb_entity()
+    run = wandb.Api().run(f"{entity}/{project}/{run_id}")
+    return [
+        row["throughput/duration"]
+        for row in run.scan_history(keys=["throughput/duration"])
+        if "throughput/duration" in row
+    ]
 
 
 def speedrun_results(config: SpeedrunResultsConfig):
@@ -229,8 +231,10 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
     step_times = get_step_times_from_wandb(run_id=wandb_run_id, entity=config.wandb_entity, project=config.wandb_project)
     if not step_times:
-        logger.error("No step times available; analysis aborted.")
-        return
+        raise ValueError(
+            f"No step times found for run '{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}'. "
+            "Ensure the run logged 'throughput/duration' metrics."
+        )
 
     model_flops = config.speedrun_config.compute_model_flops()
     model_size = config.speedrun_config.model_config.total_trainable_params(config.speedrun_config.vocab_size)
@@ -327,7 +331,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     logger.info(f"Speedrun info and results: {run_info}")
 
     output_data = {"runs": [{"run_info": run_info}]}
-    with fsspec.open(config.output_path, "w") as f:
+    with open_url(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun info and results written to {config.output_path}")
 
@@ -370,7 +374,6 @@ def default_speedrun(
             training_set=config.tokenized_dataset,
             validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
             # TODO: when should we update this
-            permutation_type="linear",
         )
     else:
         pretraining_data = add_validation_sets_to_mixture(
@@ -398,7 +401,7 @@ def default_speedrun(
         and train_step.config.train_config.trainer
         and train_step.config.train_config.trainer.tracker
     ):
-        wandb_entity = train_step.config.train_config.trainer.tracker.entity or WANDB_ENTITY
+        wandb_entity = train_step.config.train_config.trainer.tracker.entity or _default_wandb_entity()
         wandb_project = train_step.config.train_config.trainer.tracker.project or WANDB_PROJECT
 
         # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when

@@ -33,17 +33,9 @@ guidelines.
 
 # GitHub pull requests
 
-A pull request (PR) should address (or partially address) an issue.  Please
-abide by the following guidelines:
-
-- The PR description should link to the issue.
-- The PR should have a high-level bulleted list of the changes made.
-- The PR should have example output and metrics obtained from running the code
-  when appropriate (e.g., the change is substantial).
-- The PR author should go through the code and do a **self-review**, adding
-  high-level comments that are not obvious from reading the code (e.g., this
-  block of code that looks like it was deleted was actually moved to another
-  file).  This will make the reviewer's job a lot easier.
+Agents can use the `pull-request` skill for PR
+description style, testing requirements, self-review, and specification
+guidelines.
 
 ## General code style
 

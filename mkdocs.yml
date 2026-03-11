@@ -77,6 +77,7 @@ nav:
       - Executor: explanations/executor.md
       - Guidelines: explanations/guidelines.md
   - Experiments:
+      - Daily Ferry Log: experiments/daily-ferry-log.md
       - Report Index: reports/index.md
       - Auto-Generated Summary: reports/summary.md
       - Marin 8B Retro: reports/marin-8b-retro.md
@@ -85,6 +86,7 @@ nav:
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Deployment: dev-guide/deployment.md
+      - Dev TPU: dev-guide/dev_tpu.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Guidelines: dev-guide/guidelines-internal.md
       - Building Docs: dev-guide/building-docs.md

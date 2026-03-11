@@ -227,3 +227,9 @@ scr/*
 .marin.yaml
 
 /scratch
+
+.claude
+!.claude/skills
+.agents/tmp/
+.codex
+.entire

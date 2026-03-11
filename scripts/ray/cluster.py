@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Usage:
@@ -37,8 +26,8 @@ from typing import Any
 import click
 import yaml
 
-from fray.cluster.ray.auth import ray_auth_secret
-from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
+from fray.v1.cluster.ray.auth import ray_auth_secret
+from fray.v1.cluster.ray.dashboard import DashboardConfig, ray_dashboard
 from marin.cluster import gcp
 from marin.cluster.config import (
     RayClusterConfig,
@@ -69,6 +58,72 @@ def _list_jobs(filters: list[str] | None = None) -> list[dict]:
     except json.JSONDecodeError:
         logger.warning(f"Failed to parse JSON output from ray list jobs: {result}")
         return []
+
+
+def _select_job(jobs: list[dict], job_id: str, match: bool) -> dict | None:
+    if match:
+        matches = [
+            job for job in jobs if job_id in (job.get("submission_id") or "") or job_id in (job.get("job_id") or "")
+        ]
+        if not matches:
+            return None
+        return max(
+            matches,
+            key=lambda job: (job.get("start_time") or 0, job.get("submission_id") or ""),
+        )
+
+    for job in jobs:
+        if job_id == job.get("submission_id") or job_id == job.get("job_id"):
+            return job
+    return None
+
+
+def _print_job_logs(job_id: str, tail: int | None = None, grep: str | None = None) -> None:
+    cmd = ["ray", "job", "logs", job_id]
+    ray_proc = None
+    grep_proc = None
+    if tail is not None or grep is not None:
+        try:
+            ray_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            if grep is not None:
+                grep_proc = subprocess.Popen(
+                    ["grep", grep],
+                    stdin=ray_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                ray_proc.stdout.close()
+                prev_proc = grep_proc
+            else:
+                prev_proc = ray_proc
+
+            if tail is not None:
+                tail_proc = subprocess.Popen(
+                    ["tail", f"-{tail}"],
+                    stdin=prev_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                prev_proc.stdout.close()
+                output, _ = tail_proc.communicate(timeout=120)
+            else:
+                output, _ = prev_proc.communicate(timeout=120)
+
+            print(output, end="")
+        finally:
+            if grep_proc is not None:
+                try:
+                    grep_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    grep_proc.kill()
+            if ray_proc is not None:
+                try:
+                    ray_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    ray_proc.kill()
+    else:
+        subprocess.run(cmd, check=False)
 
 
 def _submit_job(
@@ -659,23 +714,27 @@ def cluster_update_configs(ctx):
 @cli.command("ssh-tpu")
 @click.argument("target")
 @click.option("--project", help="GCP project ID")
-@click.option("--zone", help="GCP zone")
+@click.option("--zone", help="GCP zone (searches all zones by default)")
 @click.argument("extra_args", nargs=-1)
 @click.pass_context
 def ssh_connect(ctx, target, project, zone, extra_args):
-    """SSH to TPU node by IP address."""
-    project = project or gcp.get_project_id()
-    zone = zone or gcp.get_default_zone()
+    """SSH to TPU node by IP address.
 
-    if not project or not zone:
-        print("Error: Could not determine project or zone", file=sys.stderr)
+    Searches all zones for the TPU matching the given internal IP.
+    """
+    project = project or gcp.get_project_id()
+
+    if not project:
+        print("Error: Could not determine project", file=sys.stderr)
         sys.exit(1)
 
-    # Find TPU by IP and SSH to it
+    # Search all zones by default (zone="-"), matching ssh_tpu behavior
+    zone = zone or "-"
+
     tpu_result = gcp.find_tpu_by_ip(target, project, zone)
     if tpu_result:
         tpu_name, tpu_zone, worker_id = tpu_result
-        print(f"Connecting to TPU {tpu_name} worker {worker_id} at IP {target}")
+        print(f"Found TPU: {tpu_name} in zone: {tpu_zone}")
         gcp.ssh_to_tpu(tpu_name, tpu_zone, project, list(extra_args) if extra_args else None, worker_id)
     else:
         print(f"Error: No TPU found with IP {target}", file=sys.stderr)
@@ -742,15 +801,60 @@ def stop_job(ctx, job_id):
 @cli.command("job-logs")
 @click.argument("job_id")
 @click.option("--follow", "-f", is_flag=True, help="Follow the logs (stream in real-time)")
+@click.option("--tail", "-n", type=int, default=None, help="Show only the last N lines of logs")
+@click.option("--grep", "-g", type=str, default=None, help="Filter lines containing this pattern")
 @click.pass_context
-def job_logs(ctx, job_id, follow):
+def job_logs(ctx, job_id, follow, tail, grep):
     """View logs for a Ray job."""
     with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
-        cmd = ["ray", "job", "logs"]
         if follow:
-            cmd.append("--follow")
-        cmd.append(job_id)
-        subprocess.run(cmd)
+            subprocess.run(["ray", "job", "logs", "--follow", job_id], check=False)
+            return
+        _print_job_logs(job_id, tail=tail, grep=grep)
+
+
+@cli.command("wait-job")
+@click.argument("job_id")
+@click.option("--match", is_flag=True, help="Match job_id as a substring of submission_id.")
+@click.option("--poll", type=float, default=5.0, show_default=True, help="Polling interval in seconds.")
+@click.option("--timeout", type=float, default=None, help="Timeout in seconds before exiting.")
+@click.option("--show-logs", is_flag=True, help="Print logs after completion.")
+@click.option("--tail", "-n", type=int, default=200, show_default=True, help="Show only the last N lines of logs.")
+@click.option("--grep", "-g", type=str, default=None, help="Filter lines containing this pattern.")
+@click.pass_context
+def wait_job(ctx, job_id, match, poll, timeout, show_logs, tail, grep):
+    """Wait for a Ray job to finish."""
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        if job_id == "latest":
+            print("Error: job_id must be an explicit submission id; 'latest' is not supported.", file=sys.stderr)
+            sys.exit(1)
+        start = time.time()
+        last_status = None
+
+        while True:
+            job = _select_job(_list_jobs(), job_id, match=match)
+            if job is None:
+                print(f"Job '{job_id}' not found.", file=sys.stderr)
+                sys.exit(1)
+
+            status = job.get("status")
+            message = job.get("message", "")
+            if status != last_status:
+                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                print(f"[{ts}] {job.get('submission_id')} status={status} {message}".rstrip())
+                last_status = status
+
+            if status in {"SUCCEEDED", "FAILED", "STOPPED"}:
+                break
+
+            if timeout is not None and (time.time() - start) > timeout:
+                print("Timeout reached while waiting for job completion.", file=sys.stderr)
+                sys.exit(2)
+
+            time.sleep(poll)
+
+        if show_logs:
+            _print_job_logs(job.get("submission_id") or job_id, tail=tail, grep=grep)
 
 
 # Top-level commands

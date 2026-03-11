@@ -1,10 +1,14 @@
 data:
-  train_urls:
-  - gs://pubmed-mosaic/pubmed-sharded/pubmedRandomized_train.{1..128}-of-128.jsonl.gz
-  validation_urls:
-  - gs://pubmed-mosaic/pubmed-sharded/pubmedRandomized_val.{1..8}-of-8.jsonl.gz
   cache_dir: gs://pubmed-mosaic/tokenized/pubmed-sharded-neox/
   tokenizer: EleutherAI/gpt-neox-20b
+  components:
+    main:
+      source:
+        type: url
+        train_urls:
+        - gs://pubmed-mosaic/pubmed-sharded/pubmedRandomized_train.{1..128}-of-128.jsonl.gz
+        validation_urls:
+        - gs://pubmed-mosaic/pubmed-sharded/pubmedRandomized_val.{1..8}-of-8.jsonl.gz
 initialize_from_hf: mosaicml/mpt-7b@68e1a8e0ebb9b30f3c45c1ef6195980f29063ae2
 lora:
   r: 32

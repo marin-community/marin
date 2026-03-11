@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import logging
@@ -18,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.cluster import (
+from fray.v1.cluster import (
     CpuConfig,
     Entrypoint,
     EnvironmentConfig,
@@ -138,7 +127,6 @@ def convert_checkpoint_to_hf_step(
     save_tokenizer: bool = True,
     use_cpu: bool = False,
     override_output_path: str | None = None,
-    pip_dependency_groups: list[str] | None = None,
     discover_latest: bool = False,
 ) -> ExecutorStep:
     """
@@ -159,7 +147,6 @@ def convert_checkpoint_to_hf_step(
         use_cpu: Force conversion to run on CPU instead of the configured device mesh. When False, CPU mode is enabled
             automatically if the provided resources do not expose an accelerator.
         override_output_path: Explicit output path override. Useful when aligning with pre-existing directories.
-        pip_dependency_groups: Optional executor dependency groups.
         discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
     """
 
@@ -188,5 +175,4 @@ def convert_checkpoint_to_hf_step(
         fn=convert_checkpoint_to_hf,
         config=config,
         override_output_path=override_output_path,
-        pip_dependency_groups=pip_dependency_groups,
     )

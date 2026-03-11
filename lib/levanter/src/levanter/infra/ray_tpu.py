@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -19,7 +19,7 @@ from typing import Optional, Sequence
 
 import draccus
 import ray
-from fray.cluster.ray.tpu import run_on_pod
+from fray.v1.cluster.ray.tpu import run_on_pod
 from ray.dashboard.modules.job.sdk import JobSubmissionClient
 
 from levanter.infra.docker import make_docker_run_command
@@ -30,7 +30,7 @@ __all__ = [
     "submit_tpu_job_on_ray",
 ]
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _run_command(*args, **kwargs):

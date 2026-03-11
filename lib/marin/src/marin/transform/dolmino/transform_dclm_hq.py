@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 marin/transform/dolmino/transform_dclm_hq.py
@@ -50,13 +39,13 @@ import os
 from dataclasses import dataclass
 
 import draccus
-import fsspec
+from iris.marin_fs import open_url, url_to_fs
 from marin.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
 from marin.download.huggingface.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 from tqdm import tqdm
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
@@ -86,8 +75,8 @@ def process_file(
 
     with atomic_rename(output_file_path) as temp_path:
         with (
-            fsspec.open(input_file_path, "rt", compression="zstd") as source,
-            fsspec.open(temp_path, "wt", compression="gzip") as output,
+            open_url(input_file_path, "rt", compression="zstd") as source,
+            open_url(temp_path, "wt", compression="gzip") as output,
         ):
             for line in tqdm(source, desc="Processing lines"):
                 row = json.loads(line)
@@ -151,7 +140,7 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
 
     pipeline = (
         Dataset.from_list(all_files)
-        .filter(lambda f: not fsspec.url_to_fs(f["output"])[0].exists(f["output"]))
+        .filter(lambda f: not url_to_fs(f["output"])[0].exists(f["output"]))
         .map(
             lambda f: process_file(
                 input_file_path=f["input"],
@@ -162,4 +151,5 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
         )
     )
 
-    Backend.execute(pipeline)
+    ctx = ZephyrContext(name="transform-dclm-hq")
+    ctx.execute(pipeline)

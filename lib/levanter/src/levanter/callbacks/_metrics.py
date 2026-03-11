@@ -1,13 +1,15 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import collections
 import copy
 import logging as pylogging
+import statistics
 from datetime import timedelta
 from typing import Optional
 
 import jax
-from fray.cluster.device_flops import device_flops_for_jax_device
+from fray.v1.cluster.device_flops import device_flops_for_jax_device
 from tqdm_loggable.auto import tqdm
 from tqdm_loggable.tqdm_logging import tqdm_logging
 
@@ -18,30 +20,6 @@ from levanter.tracker import log_optimizer_hyperparams
 from levanter.utils.jax_utils import jnp_to_python
 
 logger = pylogging.getLogger(__name__)
-
-
-def log_epoch_progress(total_tokens_future, tokens_per_example, batch_size, max_epochs: Optional[int] = None):
-    total_tokens = None
-
-    def log_epoch(step_info: StepInfo):
-        nonlocal total_tokens
-        if total_tokens is None:
-            if not total_tokens_future.done():
-                if step_info.step % 1000 == 0:
-                    logger.info("Dataset not finished. Can't compute epochs.")
-                return  # We don't have the total tokens yet, so we can't calculate epoch
-            total_tokens = total_tokens_future.result()
-
-        # Get the total processed tokens from the metrics logged by log_performance_stats
-        processed_tokens = tokens_per_example * batch_size * step_info.step
-
-        # If we're doing multiple epochs, adjust the denominator
-        total_tokens_for_epochs = total_tokens * max_epochs if max_epochs else total_tokens
-        current_epoch = processed_tokens / total_tokens_for_epochs
-
-        levanter.tracker.log({"train/current_epoch": current_epoch}, step=step_info.step)
-
-    return log_epoch
 
 
 def log_step_info(total_steps: Optional[int]):
@@ -92,6 +70,10 @@ def log_performance_stats(
     if flops_per_example is not None:
         levanter.tracker.log_summary({wrap_key("flops_per_example"): flops_per_example})
 
+    # Accumulate MFU samples over a trailing window for robust distribution stats.
+    # 500 steps is large enough for stable percentiles while bounded in memory.
+    mfu_window: collections.deque[float] = collections.deque(maxlen=500)
+
     def log_performance_stats(step_info: StepInfo):
         dict_to_log: dict[str, float | int] = {}
 
@@ -118,9 +100,32 @@ def log_performance_stats(
                 if flops_per_device is not None:
                     mfu_instant = model_flops_instant / theoretical_flops * 100.0
                     dict_to_log["mfu"] = mfu_instant
+                    mfu_window.append(mfu_instant)
 
         dict_to_log = {wrap_key(k): v for k, v in dict_to_log.items()}
         levanter.tracker.log(dict_to_log, step=step_info.step)
+
+        if len(mfu_window) > 0:
+            n = len(mfu_window)
+            mean = statistics.mean(mfu_window)
+            med = statistics.median(mfu_window)
+            if n >= 2:
+                deciles = statistics.quantiles(mfu_window, n=10)
+                p10, p90 = deciles[0], deciles[8]
+                sd = statistics.stdev(mfu_window)
+            else:
+                p10 = p90 = mfu_window[0]
+                sd = 0.0
+            levanter.tracker.log_summary(
+                {
+                    wrap_key("p10_mfu"): p10,
+                    wrap_key("p50_mfu"): med,
+                    wrap_key("p90_mfu"): p90,
+                    wrap_key("mean_mfu"): mean,
+                    wrap_key("stddev_mfu"): sd,
+                    wrap_key("mfu_sample_count"): n,
+                }
+            )
 
     return log_performance_stats
 

@@ -1,24 +1,13 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import json
 import logging
 import os
 
-import fsspec
 import jmp
+from iris.marin_fs import filesystem as marin_filesystem
 import levanter
 import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -30,7 +19,7 @@ from experiments.evals.task_configs import convert_to_levanter_task_config
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +118,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 logger.info(f"Uploading results to GCS: {output_path}")
 
                 # write output JSON directly to output_path on GCS
-                fs = fsspec.filesystem("gcs")
+                fs = marin_filesystem("gcs")
                 with fs.open(output_path, "w") as f:
                     json.dump(results, f, indent=2, default=_json_default)
 

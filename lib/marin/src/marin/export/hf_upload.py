@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
 import functools
@@ -24,6 +13,7 @@ from urllib.parse import urlparse
 import fsspec
 import humanfriendly
 from fsspec.implementations.local import LocalFileSystem
+from iris.marin_fs import open_url
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
@@ -271,7 +261,7 @@ if __name__ == "__main__":
         )
 
     # also test memory fs
-    with fsspec.open("memory://foo/bar/test.txt", "w") as f:
+    with open_url("memory://foo/bar/test.txt", "w") as f:
         f.write("Hello, world!!!!!\nadad :-)")
 
     _actually_upload_to_hf(

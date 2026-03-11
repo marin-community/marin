@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Download and normalize the latest Uncheatable Eval data dumps."""
 
@@ -25,16 +14,16 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-import fsspec
 import requests
+from iris.marin_fs import open_url
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-from zephyr import Backend, Dataset
+from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 FILENAME_PATTERN = re.compile(r"^(?P<benchmark>.+)_(?P<start>\d{8})to(?P<end>\d{8})(?P<suffix>(?:\.[^.]+)*)$")
 
@@ -268,7 +257,7 @@ def _download_and_convert_single(
 
     record_count = 0
     with atomic_rename(task.output_file_path) as temp_path:
-        with fsspec.open(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
+        with open_url(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
             for index, raw in enumerate(payload):
                 normalized = _normalize_record(raw, task.dataset, index)
                 json.dump(normalized, outfile, ensure_ascii=False)
@@ -304,7 +293,7 @@ def _write_metadata(cfg: UncheatableEvalDownloadConfig, records: list[dict[str, 
     if not records:
         return
     metadata_path = posixpath.join(str(cfg.output_path), cfg.metadata_filename)
-    with fsspec.open(metadata_path, "w", encoding="utf-8") as meta_file:
+    with open_url(metadata_path, "w", encoding="utf-8") as meta_file:
         json.dump(records, meta_file, indent=2, ensure_ascii=False)
     logger.info("Wrote metadata to %s", metadata_path)
 
@@ -336,10 +325,11 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
         .map(lambda task: _download_and_convert_single(task))
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
-    output_paths = Backend.execute(pipeline, max_parallelism=cfg.max_concurrent_downloads)
+    ctx = ZephyrContext(name="download-uncheatable-eval")
+    output_paths = ctx.execute(pipeline)
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
-        with fsspec.open(metadata_file, "r", encoding="utf-8") as meta_file:
+        with open_url(metadata_file, "r", encoding="utf-8") as meta_file:
             result = json.load(meta_file)
 
         try:

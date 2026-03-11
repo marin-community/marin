@@ -1,103 +1,41 @@
-# Agent Tips
+# Iris Agent Notes
 
-* Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate-protos.py to regenerate files after changing the `.proto` files.
-* Prefer shallow, functional interfaces which return control to the user, vs callbacks or inheritance.
+Distributed job orchestration replacing Ray with simpler primitives. Start with the shared instructions in `/AGENTS.md`; only Iris-specific conventions are below.
 
-e.g.
+## Key Docs
 
-class Scheduler:
-  def add_job()
-  def add_worker():
-  def compute_schedule() -> ScheduledJobs:
+- `README.md` — overview + quick start
+- `OPS.md` — operating / troubleshooting a live cluster
+- `TESTING.md` — testing policy, markers, and commands
+- `docs/autoscaler-v2.md` — autoscaler design + terminology
+- `docs/controller-flow.md`, `docs/worker-flow.md` — controller/worker lifecycle
+- `docs/task-states.md` — task state machine + retry semantics
+- `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
+- `docs/image-push.md` — multi-region image push/pull architecture
+- `docs/constraints.md` — constraint system design
 
-is preferable to:
+## Development
 
-class Scheduler:
-  def __init__(self, job_creator: JobCreator):
-    self.job_creator = job_creator
-  def run(self):
-    ... self.job_creator.create_job()
+```bash
+# Unit tests
+uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
+```
 
-It's acceptable to have a top-level class which implements the main loop of
-course, but prefer to keep other interfaces shallow and functional whenever
-possible.
+See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
 
-* Tests should evaluate _behavior_, not implementation. Don't test things that are trivially caught by the type checker. Explicitly that means:
+## Code Conventions
 
-- No tests for "constant = constant"
-- No tests for "method exists"
-- No tests for "create an object(x, y, z) and attributes are x, y, z"
-
-These tests have negative value - they make our code more brittle. Test
-_behavior_ instead. You can use mocks as needed to isolate environments (e.g.
-mock around a remote API). Prefer "fakes" -- e.g. create a real database but
-with fake data -- when reasonable.
-
-## Protocols and Testing
-
-Non-trivial public classes should define a protocol which represents their
-_important_ interface characteristics. Use this protocol in type hints for
-when the class is used instead of the concrete class.
-
-Test to this protocol, not the concrete class: the protocol should describe the
-interesting behavior of the class, but not betray the implementation details.
-
-(You may of course _instantiate_ the concrete class for testing.)
-
-## Imports
-
-Don't use TYPE_CHECKING. Use the real import. If there is a circular dependency:
-
-* Prefer to resolve it with refactoring when sensible
-* Otherwise use a protocol if you simply need the type information
-
-## RPC/API Accessibility
-
-Any functionality exposed by the worker or controller dashboards must also be
-available via RPC. The dashboards should be a friendly interface on top of the
-machine accessible RPC API, and should not use internal APIs (except for
-efficiency). For example, if we wanted to show the scheduling status for a task,
-we should define a new RPC endpoint `/TestSchedule(task_id)` and use that from
-the dashboard, rather than creating a scheduler and running it manually.
+- Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
+- After changing `.proto` files, regenerate via `scripts/generate_protos.py`.
+- Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
+- Dashboards must be a thin UI over the RPC API, not a second implementation path.
+- Use `iris.time_utils` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.
+- Use `concurrent.futures.ThreadPoolExecutor` (not asyncio) for concurrent platform operations, with hard timeouts.
+- Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
+- Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
 
 ## Architecture Notes
 
-### Job vs Attempt
+Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
 
-- **Job**: A logical unit of work with a hierarchical `job_id` (e.g., "my-exp/worker-0/task-1")
-- **Attempt**: A single execution of a job, identified by `attempt_id` (0, 1, 2...)
-- Jobs may be retried on failure/preemption; each retry creates a new attempt
-- The controller tracks all attempts for history; workers execute individual attempts
-- `(job_id, attempt_id)` uniquely identifies an execution on the worker side
-
-### Key Environment Variables (injected into job containers)
-
-- `IRIS_JOB_ID` - Hierarchical job identifier
-- `IRIS_ATTEMPT_ID` - Current attempt number (0-indexed)
-- `IRIS_WORKER_ID` - Worker executing the job
-- `IRIS_CONTROLLER_ADDRESS` - Controller URL for sub-jobs/actors
-- `IRIS_PORT_<NAME>` - Allocated port numbers
-
-## Planning
-
-Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
-
-Step 1:
-* Add the minimal changes to the `.proto` file
-* Add the server stub code
-* Add a client wiring
-* Add an end-to-end test
-
-Step 2:
-* Extend proto with additional field
-* Update server code
-* Update client code
-* Update tests
-
-...
-
-That is _each stage of the plan_ should be a independently testable,
-self-contained unit of work. THis is preferable to plans which attempt to make
-all of the changes for one area (e.g. all proto changes, then all server
-changes, etc.)
+The controller is a plain GCE VM (or K8s Deployment on CoreWeave) with no zone affinity to workers. See `docs/coreweave.md` for CoreWeave-specific deployment topology and `docs/image-push.md` for the GHCR → AR remote repo image pipeline.

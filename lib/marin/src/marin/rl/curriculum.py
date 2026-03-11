@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Adaptive curriculum learning system for RL training.
@@ -26,9 +15,9 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-import fsspec
 import numpy as np
-from fray.job import get_default_job_ctx
+from iris.marin_fs import url_to_fs
+from fray.v1.job import get_default_job_ctx
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
@@ -547,7 +536,7 @@ class Curriculum:
 
         logger.info("Saving curriculum checkpoint to %s/%s at step %d", checkpoint_dir, filename, self.current_step)
 
-        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
+        fs, _ = url_to_fs(checkpoint_dir)
         fs.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
@@ -587,7 +576,7 @@ class Curriculum:
             checkpoint_dir: Directory containing the checkpoint.
             filename: Name of the checkpoint file to load (default pattern).
         """
-        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
+        fs, _ = url_to_fs(checkpoint_dir)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         if not fs.exists(checkpoint_path):

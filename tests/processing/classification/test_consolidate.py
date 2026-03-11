@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import gzip
 import json
@@ -170,7 +159,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 
     # Verify dedupe output exists and has same structure as input
-    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.jsonl.gz"))
+    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.vortex"))
     assert len(dedupe_output_files) > 0
 
     # Now run consolidate using the dedupe attributes
@@ -183,7 +172,9 @@ def test_dedupe_consolidate_integration(fox_corpus):
             FilterConfig(
                 type=FilterType.REMOVE_SPANS,
                 attribute_path=f"{dedupe_output_dir}/data",
-                name=DedupMode.EXACT_PARAGRAPH,
+                name="dup_spans",
+                attribute_filetype="vortex",
+                keep_if_missing=True,
             )
         ],
     )

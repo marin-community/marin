@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -13,8 +13,8 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 import braceexpand
 import datasets
 import equinox as eqx
-import fsspec
 import haliax as hax
+from iris.marin_fs import url_to_fs
 import jax
 import numpy as np
 from draccus import field
@@ -213,7 +213,7 @@ class AudioDatasetSourceConfig:
 
         def fsspec_expand_glob(url):
             if "*" in url:
-                fs = fsspec.core.url_to_fs(url)[0]
+                fs = url_to_fs(url)[0]
                 return fs.glob(url)
             else:
                 return [url]
@@ -275,14 +275,8 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
     async def async_len(self) -> int:
         return await self.cache.async_len()
 
-    async def final_length_is_known(self) -> bool:
-        return await self.cache.final_length_is_known()
-
     def is_finite(self) -> bool:
         return self.cache.is_finite()
-
-    async def current_len(self) -> Optional[int]:
-        return await self.cache.current_len()
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[AudioTextDict]:
         return await self.cache.get_batch(indices)

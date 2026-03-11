@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 validate.py
@@ -33,11 +22,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import draccus
-import fsspec
 import numpy as np
+from iris.marin_fs import open_url
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
-from zephyr import Dataset, load_jsonl
-from zephyr.backends import Backend
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 
 @dataclass
@@ -148,7 +136,7 @@ def aggregate_and_write_metadata(shard_metadata_iter: Iterator[list[dict]], outp
         "examples": examples,
     }
 
-    with fsspec.open(output_path, "wt") as f:
+    with open_url(output_path, "wt") as f:
         json.dump(metadata, f, indent=2)
 
     return {
@@ -171,7 +159,8 @@ def main(cfg: ValidationConfig) -> None:
         )
     )
 
-    result = list(Backend.execute(pipeline))
+    ctx = ZephyrContext(name="validate")
+    result = list(ctx.execute(pipeline))
     print(f"Validation complete: {result[0]}")
 
 

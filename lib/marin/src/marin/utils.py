@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import functools
 import logging
@@ -29,6 +18,7 @@ import datasets
 import fsspec
 import requests
 import transformers
+from iris.marin_fs import url_to_fs
 from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
@@ -47,7 +37,7 @@ def fsspec_exists(file_path):
     """
 
     # Use fsspec to check if the file exists
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
     return fs.exists(file_path)
 
 
@@ -63,7 +53,7 @@ def fsspec_rm(path: str):
     """
 
     # Use fsspec to check if the file exists
-    fs = fsspec.core.url_to_fs(path)[0]
+    fs = url_to_fs(path)[0]
     if fs.exists(path):
         try:
             fs.rm(path, recursive=True)
@@ -91,7 +81,7 @@ def fsspec_glob(file_path):
     """
 
     # Use fsspec to get a list of files
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
     protocol = fsspec.core.split_protocol(file_path)[0]
 
     def join_protocol(file):
@@ -117,7 +107,7 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     """
 
     # Use fsspec to create the directory
-    fs = fsspec.core.url_to_fs(dir_path)[0]
+    fs = url_to_fs(dir_path)[0]
     fs.makedirs(dir_path, exist_ok=exist_ok)
 
 
@@ -131,7 +121,7 @@ def fsspec_get_curr_subdirectories(dir_path):
     Returns:
         list: A list of subdirectories.
     """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
+    fs, _ = url_to_fs(dir_path)
     protocol = fsspec.core.split_protocol(dir_path)[0]
 
     # List only immediate subdirectories
@@ -148,7 +138,7 @@ def fsspec_dir_only_contains_files(dir_path):
     """
     Check if a directory only contains files in a fsspec filesystem.
     """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
+    fs, _ = url_to_fs(dir_path)
     ls_res = fs.ls(dir_path, detail=True)
     if len(ls_res) == 0:
         return False
@@ -175,7 +165,7 @@ def fsspec_isdir(dir_path):
     """
     Check if a path is a directory in fsspec filesystem.
     """
-    fs, _ = fsspec.core.url_to_fs(dir_path)
+    fs, _ = url_to_fs(dir_path)
     return fs.isdir(dir_path)
 
 
@@ -306,16 +296,27 @@ def load_tokenizer_with_backoff(
 
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
 
     return fs.size(file_path)
 
 
 def fsspec_mtime(file_path: str) -> datetime:
     """Get file modification time (in seconds since epoch) of a file on an `fsspec` filesystem."""
-    fs = fsspec.core.url_to_fs(file_path)[0]
+    fs = url_to_fs(file_path)[0]
 
     return fs.modified(file_path)
+
+
+def is_path_like(path: str) -> bool:
+    """Return True if path is a URL (gs://, s3://, etc.) or an existing local path.
+
+    Use this to distinguish file paths from HuggingFace dataset/model identifiers.
+    """
+    protocol, _ = fsspec.core.split_protocol(path)
+    if protocol is not None:
+        return True
+    return os.path.exists(path)
 
 
 def validate_marin_gcp_path(path: str) -> str:
@@ -380,7 +381,9 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     rel_path = os.path.relpath(file_path, base_in_path)
 
     # Construct the output file path
-    # TODO: if old_extension is not None, but new_extension is None, raise an error or warning?
+    if old_extension and not new_extension:
+        raise ValueError("old_extension requires new_extension to be set")
+
     if new_extension:
         if old_extension:
             rel_path = rel_path[: rel_path.rfind(old_extension)] + new_extension

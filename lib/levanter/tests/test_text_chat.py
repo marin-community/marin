@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -392,5 +392,5 @@ def test_chat_processor_rejects_system_mapping_without_content(tokenizer_path: P
         }
     ]
 
-    with pytest.raises(ValueError, match="System prompt mapping must include a 'content' field"):
+    with pytest.raises(ValueError, match="System prompt mapping must include 'content'"):
         processor(batch)

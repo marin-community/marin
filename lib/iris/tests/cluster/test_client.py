@@ -1,24 +1,13 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Tests for cluster client hierarchical name handling."""
 
 import pytest
-from connectrpc.errors import ConnectError
 
 from iris.client import IrisClient, LocalClientConfig
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.client.client import JobAlreadyExists
+from iris.cluster.types import Entrypoint, JobName, ResourceSpec, adjust_tpu_replicas, tpu_device
 from iris.rpc import cluster_pb2
 
 
@@ -47,19 +36,22 @@ def test_submit_rejects_name_with_slash(local_client):
 
 
 def test_submit_rejects_duplicate_name(local_client):
-    """Verify submit rejects duplicate job names."""
+    """Verify submit raises JobAlreadyExists with a valid job handle for duplicate names."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
     # First submit should succeed
-    job = local_client.submit(entrypoint, "duplicate-job", resources)
-    assert job.job_id == "duplicate-job"
+    job = local_client.submit(entrypoint, "duplicate-job", resources, user="test-user")
+    assert job.job_id == JobName.root("test-user", "duplicate-job")
 
-    # Second submit with same name should fail with RPC conflict error
-    with pytest.raises(ConnectError) as exc_info:
-        local_client.submit(entrypoint, "duplicate-job", resources)
+    # Second submit with same name should raise JobAlreadyExists
+    with pytest.raises(JobAlreadyExists) as exc_info:
+        local_client.submit(entrypoint, "duplicate-job", resources, user="test-user")
 
-    assert "already exists" in str(exc_info.value)
+    assert "already exists" in str(exc_info.value).lower()
+    # The exception carries a Job handle that can be used to adopt the existing job
+    assert exc_info.value.job is not None
+    assert exc_info.value.job.job_id == JobName.root("test-user", "duplicate-job")
 
 
 def test_list_jobs_returns_all_jobs(local_client):
@@ -67,14 +59,14 @@ def test_list_jobs_returns_all_jobs(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job1 = local_client.submit(entrypoint, "list-job-1", resources)
-    job2 = local_client.submit(entrypoint, "list-job-2", resources)
+    job1 = local_client.submit(entrypoint, "list-job-1", resources, user="test-user")
+    job2 = local_client.submit(entrypoint, "list-job-2", resources, user="test-user")
 
     jobs = local_client.list_jobs()
     job_ids = {j.job_id for j in jobs}
 
-    assert job1.job_id in job_ids
-    assert job2.job_id in job_ids
+    assert job1.job_id.to_wire() in job_ids
+    assert job2.job_id.to_wire() in job_ids
 
 
 def test_list_jobs_filter_by_state(local_client):
@@ -82,16 +74,16 @@ def test_list_jobs_filter_by_state(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job = local_client.submit(entrypoint, "state-filter-job", resources)
+    job = local_client.submit(entrypoint, "state-filter-job", resources, user="test-user")
     job.wait()  # Wait for completion
 
     # Filter for SUCCEEDED only
     succeeded_jobs = local_client.list_jobs(states=[cluster_pb2.JOB_STATE_SUCCEEDED])
-    assert any(j.job_id == job.job_id for j in succeeded_jobs)
+    assert any(j.job_id == job.job_id.to_wire() for j in succeeded_jobs)
 
     # Filter for PENDING only - should not include completed job
     pending_jobs = local_client.list_jobs(states=[cluster_pb2.JOB_STATE_PENDING])
-    assert not any(j.job_id == job.job_id for j in pending_jobs)
+    assert not any(j.job_id == job.job_id.to_wire() for j in pending_jobs)
 
 
 def test_list_jobs_filter_by_prefix(local_client):
@@ -99,17 +91,17 @@ def test_list_jobs_filter_by_prefix(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    local_client.submit(entrypoint, "exp-a-job", resources)
-    local_client.submit(entrypoint, "exp-b-job", resources)
-    local_client.submit(entrypoint, "other-job", resources)
+    local_client.submit(entrypoint, "exp-a-job", resources, user="test-user")
+    local_client.submit(entrypoint, "exp-b-job", resources, user="test-user")
+    local_client.submit(entrypoint, "other-job", resources, user="test-user")
 
     # Filter by prefix
-    jobs = local_client.list_jobs(prefix="exp-")
+    jobs = local_client.list_jobs(prefix=JobName.root("test-user", "exp-"))
     job_ids = {j.job_id for j in jobs}
 
-    assert "exp-a-job" in job_ids
-    assert "exp-b-job" in job_ids
-    assert "other-job" not in job_ids
+    assert JobName.root("test-user", "exp-a-job").to_wire() in job_ids
+    assert JobName.root("test-user", "exp-b-job").to_wire() in job_ids
+    assert JobName.root("test-user", "other-job").to_wire() not in job_ids
 
 
 def test_terminate_prefix_basic(local_client):
@@ -118,17 +110,17 @@ def test_terminate_prefix_basic(local_client):
     resources = ResourceSpec(cpu=1, memory="1g")
 
     # Submit jobs with different prefixes
-    local_client.submit(entrypoint, "exp-a-job1", resources)
-    local_client.submit(entrypoint, "exp-a-job2", resources)
-    local_client.submit(entrypoint, "exp-b-job1", resources)
+    local_client.submit(entrypoint, "exp-a-job1", resources, user="test-user")
+    local_client.submit(entrypoint, "exp-a-job2", resources, user="test-user")
+    local_client.submit(entrypoint, "exp-b-job1", resources, user="test-user")
 
     # Terminate exp-a jobs
-    terminated = local_client.terminate_prefix("exp-a")
+    terminated = local_client.terminate_prefix(JobName.root("test-user", "exp-a"))
 
     assert len(terminated) == 2
-    assert "exp-a-job1" in terminated
-    assert "exp-a-job2" in terminated
-    assert "exp-b-job1" not in terminated
+    assert JobName.root("test-user", "exp-a-job1") in terminated
+    assert JobName.root("test-user", "exp-a-job2") in terminated
+    assert JobName.root("test-user", "exp-b-job1") not in terminated
 
 
 def test_terminate_prefix_excludes_finished(local_client):
@@ -136,7 +128,7 @@ def test_terminate_prefix_excludes_finished(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job = local_client.submit(entrypoint, "finished-test", resources)
+    job = local_client.submit(entrypoint, "finished-test", resources, user="test-user")
     job.wait()  # Wait for completion
 
     # Job should be SUCCEEDED now
@@ -144,63 +136,25 @@ def test_terminate_prefix_excludes_finished(local_client):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # terminate_prefix should not include it
-    terminated = local_client.terminate_prefix("finished-test")
+    terminated = local_client.terminate_prefix(JobName.root("test-user", "finished-test"))
     assert job.job_id not in terminated
 
 
-# =============================================================================
-# Task API Tests (using new Job/Task objects)
-# =============================================================================
+def test_adjust_tpu_replicas(local_client):
+    """Test that TPU replicas are auto-adjusted for multi-host topologies."""
+    # replicas=1 auto-scales to vm_count
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=1) == 8
+    assert adjust_tpu_replicas(tpu_device("v5litepod-16"), replicas=1) == 4
 
+    # Explicit wrong replicas (>1) still rejected
+    with pytest.raises(ValueError, match="replicas must be a multiple of 4"):
+        adjust_tpu_replicas(tpu_device("v5litepod-16"), replicas=3)
 
-def test_job_tasks_returns_single_task_for_job(local_client):
-    """Verify job.tasks() returns a task for a single-task job."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
+    # Correct counts and multislice pass through unchanged
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=8) == 8
+    assert adjust_tpu_replicas(tpu_device("v6e-32"), replicas=16) == 16
 
-    job = local_client.submit(entrypoint, "task-test-job", resources)
-    job.wait()
-
-    tasks = job.tasks()
-    assert len(tasks) == 1
-    assert tasks[0].job_id == job.job_id
-    assert tasks[0].task_index == 0
-    assert tasks[0].task_id == f"{job.job_id}/task-0"
-
-
-def test_task_status_returns_task_info(local_client):
-    """Verify task.status() returns task-level information."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-
-    job = local_client.submit(entrypoint, "task-status-job", resources)
-    job.wait()
-
-    tasks = job.tasks()
-    assert len(tasks) == 1
-    task = tasks[0]
-    status = task.status()
-    assert status.task_id == f"{job.job_id}/task-0"
-    assert status.job_id == job.job_id
-    assert status.task_index == 0
-    assert status.state == cluster_pb2.TASK_STATE_SUCCEEDED
-
-
-def test_task_logs_returns_logs(local_client):
-    """Verify task.logs() returns logs when available (integration test)."""
-
-    def logging_entrypoint():
-        print("Hello from task")
-
-    entrypoint = Entrypoint.from_callable(logging_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-
-    job = local_client.submit(entrypoint, "task-logs-job", resources)
-    job.wait()
-
-    # The method should be callable without error
-    # In local mode, stdout capture may or may not produce logs depending on timing
-    tasks = job.tasks()
-    logs = tasks[0].logs()
-    # Just verify we get a list back (logs may be empty in fast local execution)
-    assert isinstance(logs, list)
+    # Single-host, no device, and unknown topology return replicas unchanged
+    assert adjust_tpu_replicas(tpu_device("v6e-4"), replicas=1) == 1
+    assert adjust_tpu_replicas(None, replicas=1) == 1
+    assert adjust_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1) == 1

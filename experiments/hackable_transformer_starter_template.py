@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Hackable transformer training speedrun sweep (template)
@@ -72,7 +61,7 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 _IMPORT_PATH = getattr(__spec__, "name", __name__)
 
@@ -377,7 +366,6 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
         attn_backend=AttentionBackend.JAX_FLASH,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
-        cross_entropy_block_size=4096,  # avoid materializing full logits (batch*seq*vocab)
     )
     return {
         "130m": HackableTransformerConfig(

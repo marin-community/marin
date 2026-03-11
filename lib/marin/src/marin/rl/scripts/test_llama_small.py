@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 import argparse
 import dataclasses
@@ -40,7 +29,9 @@ from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+from iris.logging import configure_logging
+
+configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Test configuration
@@ -210,7 +201,7 @@ def cleanup():
 
 def run_inference_mode(args):
     """Run in inference worker mode."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    configure_logging(level=logging.INFO)
     logger = logging.getLogger("rollout_worker")
 
     logger.info("Starting inference worker mode...")
@@ -227,7 +218,7 @@ def run_inference_mode(args):
 
 def run_training_mode(args):
     """Run in training worker mode."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    configure_logging(level=logging.INFO)
     logger = logging.getLogger("training_worker")
 
     logger.info("Starting training worker mode...")
@@ -243,7 +234,7 @@ def run_training_mode(args):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    configure_logging(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
