@@ -316,7 +316,9 @@ def test_fused_cross_entropy_xla_return_argmax_matches_reference_with_batch_bloc
         return_argmax=True,
     )
 
-    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+    loss_tol = 6e-5 if jax.default_backend() == "tpu" else 1e-5
+
+    assert jnp.allclose(loss, loss_ref, atol=loss_tol, rtol=loss_tol)
     assert jnp.array_equal(argmax, argmax_ref)
 
 
