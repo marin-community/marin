@@ -757,6 +757,7 @@ def test_gpu_worker_metadata(tmp_path):
                 port=0,
                 cache_dir=cache_dir,
                 controller_address=url,
+                worker_id=f"test-gpu-worker-{uuid.uuid4().hex[:8]}",
                 poll_interval=Duration.from_seconds(0.1),
             )
             worker = Worker(
