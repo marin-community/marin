@@ -31,6 +31,11 @@ from iris.cluster.controller.db import (
     ENDPOINT_TASKS,
     endpoint_query_predicate,
 )
+from iris.cluster.controller.checkpoint import (
+    ScalingGroupSnapshotData,
+    TrackedWorkerSnapshotData,
+    serialize_scaling_group,
+)
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
     JobName,
@@ -38,7 +43,7 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import cluster_pb2, logging_pb2, snapshot_pb2
+from iris.rpc import cluster_pb2, logging_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -369,10 +374,11 @@ class ControllerTransitions:
 
     def persist_checkpoint_state(
         self,
-        scaling_groups: list[snapshot_pb2.ScalingGroupSnapshot],
-        tracked_workers: list[snapshot_pb2.TrackedWorkerSnapshot],
+        scaling_groups: list[ScalingGroupSnapshotData],
+        tracked_workers: list[TrackedWorkerSnapshotData],
     ) -> None:
         """Persist checkpoint metadata rows into the controller DB."""
+
         with self._db.transaction() as cur:
             cur.execute("DELETE FROM scaling_groups")
             for group in scaling_groups:
@@ -380,7 +386,7 @@ class ControllerTransitions:
                     "INSERT INTO scaling_groups(name, snapshot_proto, updated_at_ms) VALUES (?, ?, ?)",
                     (
                         group.name,
-                        group.SerializeToString(),
+                        serialize_scaling_group(group),
                         Timestamp.now().epoch_ms(),
                     ),
                 )

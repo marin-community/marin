@@ -28,12 +28,13 @@ from iris.cluster.constraints import (
     evaluate_constraint,
     is_cpu_device_type_constraint,
 )
+from iris.cluster.controller.checkpoint import ScalingGroupSnapshotData, SliceSnapshotData
 from iris.cluster.types import (
     VmWorkerStatusMap,
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, time_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, time_pb2, vm_pb2
 from iris.time_utils import Deadline, Duration, Timestamp, TokenBucket
 
 logger = logging.getLogger(__name__)
@@ -927,44 +928,39 @@ class ScalingGroup:
         for handle in snapshot:
             handle.terminate()
 
-    def to_snapshot(self) -> snapshot_pb2.ScalingGroupSnapshot:
+    def to_snapshot(self) -> ScalingGroupSnapshotData:
         """Serialize this group's state for checkpointing.
 
         Captures slice inventory and timing state under lock. Deadlines are
         stored as wall-clock timestamps for portability across restarts.
         """
-
-        snap = snapshot_pb2.ScalingGroupSnapshot(
-            name=self.name,
-            consecutive_failures=self._consecutive_failures,
-        )
-
+        slices: list[SliceSnapshotData] = []
         with self._slices_lock:
             for slice_id, slice_state in self._slices.items():
-                slice_snap = snapshot_pb2.SliceSnapshot(
-                    slice_id=slice_id,
-                    scale_group=self.name,
-                    lifecycle=slice_state.lifecycle.value,
-                    error_message=slice_state.error_message,
+                slices.append(
+                    SliceSnapshotData(
+                        slice_id=slice_id,
+                        scale_group=self.name,
+                        lifecycle=slice_state.lifecycle.value,
+                        vm_addresses=list(slice_state.vm_addresses),
+                        created_at_ms=slice_state.handle.created_at.epoch_ms(),
+                        last_active_ms=slice_state.last_active.epoch_ms(),
+                        error_message=slice_state.error_message,
+                    )
                 )
-                slice_snap.vm_addresses.extend(slice_state.vm_addresses)
-                slice_snap.created_at.CopyFrom(slice_state.handle.created_at.to_proto())
-                slice_snap.last_active.CopyFrom(slice_state.last_active.to_proto())
-                snap.slices.append(slice_snap)
 
-        if self._backoff_until is not None:
-            snap.backoff_until.CopyFrom(self._backoff_until.as_timestamp().to_proto())
-
-        if self._last_scale_up.epoch_ms() > 0:
-            snap.last_scale_up.CopyFrom(self._last_scale_up.to_proto())
-        if self._last_scale_down.epoch_ms() > 0:
-            snap.last_scale_down.CopyFrom(self._last_scale_down.to_proto())
-
-        if self._quota_exceeded_until is not None:
-            snap.quota_exceeded_until.CopyFrom(self._quota_exceeded_until.as_timestamp().to_proto())
-        snap.quota_reason = self._quota_reason
-
-        return snap
+        return ScalingGroupSnapshotData(
+            name=self.name,
+            consecutive_failures=self._consecutive_failures,
+            slices=slices,
+            backoff_until_ms=self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
+            last_scale_up_ms=self._last_scale_up.epoch_ms(),
+            last_scale_down_ms=self._last_scale_down.epoch_ms(),
+            quota_exceeded_until_ms=(
+                self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0
+            ),
+            quota_reason=self._quota_reason,
+        )
 
     def restore_from_snapshot(
         self,
@@ -1023,3 +1019,106 @@ class ScalingGroup:
         for state_name, count in counts.items():
             status.slice_state_counts[state_name] = count
         return status
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint restore: reconcile checkpointed group state against live cloud
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ScalingGroupRestoreResult:
+    """Result of restoring a single scaling group from checkpoint metadata."""
+
+    slices: dict[str, SliceState] = field(default_factory=dict)
+    consecutive_failures: int = 0
+    backoff_active: bool = False
+    quota_exceeded_active: bool = False
+    quota_reason: str = ""
+    discarded_count: int = 0
+    adopted_count: int = 0
+    last_scale_up: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    last_scale_down: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    backoff_until: Deadline | None = None
+    quota_exceeded_until: Deadline | None = None
+
+
+def restore_scaling_group(
+    group_snapshot: ScalingGroupSnapshotData,
+    platform: Platform,
+    config: config_pb2.ScaleGroupConfig,
+    label_prefix: str,
+) -> ScalingGroupRestoreResult:
+    """Reconcile checkpointed group slices against live cloud slices."""
+    labels = Labels(label_prefix)
+    filter_labels = {labels.iris_scale_group: group_snapshot.name}
+
+    zones = _zones_from_config(config)
+    cloud_handles = platform.list_slices(zones=zones, labels=filter_labels)
+    cloud_by_id: dict[str, SliceHandle] = {h.slice_id: h for h in cloud_handles}
+    checkpoint_slices = {s.slice_id: s for s in group_snapshot.slices}
+
+    result = ScalingGroupRestoreResult()
+    result.consecutive_failures = group_snapshot.consecutive_failures
+
+    for slice_id, slice_snap in checkpoint_slices.items():
+        cloud_handle = cloud_by_id.get(slice_id)
+        if cloud_handle is None:
+            logger.info("Scaling group %s: discarding slice %s (missing from cloud)", group_snapshot.name, slice_id)
+            result.discarded_count += 1
+            continue
+
+        try:
+            lifecycle = SliceLifecycleState(slice_snap.lifecycle)
+        except ValueError:
+            logger.warning(
+                "Scaling group %s: unknown lifecycle %r for slice %s, defaulting to BOOTING",
+                group_snapshot.name,
+                slice_snap.lifecycle,
+                slice_id,
+            )
+            lifecycle = SliceLifecycleState.BOOTING
+
+        result.slices[slice_id] = SliceState(
+            handle=cloud_handle,
+            lifecycle=lifecycle,
+            vm_addresses=list(slice_snap.vm_addresses),
+            last_active=Timestamp.from_ms(slice_snap.last_active_ms),
+            error_message=slice_snap.error_message,
+        )
+
+    for slice_id, cloud_handle in cloud_by_id.items():
+        if slice_id in checkpoint_slices:
+            continue
+        logger.info("Scaling group %s: adopting unknown cloud slice %s as BOOTING", group_snapshot.name, slice_id)
+        result.slices[slice_id] = SliceState(handle=cloud_handle, lifecycle=SliceLifecycleState.BOOTING)
+        result.adopted_count += 1
+
+    if group_snapshot.backoff_until_ms > 0:
+        backoff_ts = Timestamp.from_ms(group_snapshot.backoff_until_ms)
+        result.backoff_until = Deadline.after(backoff_ts, Duration.from_ms(0))
+        result.backoff_active = not result.backoff_until.expired()
+
+    if group_snapshot.quota_exceeded_until_ms > 0:
+        quota_ts = Timestamp.from_ms(group_snapshot.quota_exceeded_until_ms)
+        result.quota_exceeded_until = Deadline.after(quota_ts, Duration.from_ms(0))
+        result.quota_exceeded_active = not result.quota_exceeded_until.expired()
+        result.quota_reason = group_snapshot.quota_reason
+
+    if group_snapshot.last_scale_up_ms > 0:
+        result.last_scale_up = Timestamp.from_ms(group_snapshot.last_scale_up_ms)
+    if group_snapshot.last_scale_down_ms > 0:
+        result.last_scale_down = Timestamp.from_ms(group_snapshot.last_scale_down_ms)
+
+    logger.info(
+        "Restored scaling group %s: %d slices (%d discarded, %d adopted), consecutive_failures=%d, "
+        "backoff_active=%s, quota_exceeded=%s",
+        group_snapshot.name,
+        len(result.slices),
+        result.discarded_count,
+        result.adopted_count,
+        result.consecutive_failures,
+        result.backoff_active,
+        result.quota_exceeded_active,
+    )
+    return result
