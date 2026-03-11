@@ -7090,3 +7090,362 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Stay on `S`/`T` mainline work and widen the attribution boundary so decoder-layer shell buckets (`shard_map`, `closed_call/shard_map`) and the CE backward matmul shell stop landing in undifferentiated remainder.
   - If a product-side tradeoff is allowed, evaluate whether the lower-GDN regime is acceptable, because the `1/4` setting is materially faster than the current `3/4` regime without any new kernel rewrite.
+
+### Iteration 87 - Coverage Slot S / train-path-aware remainder attribution refresh on the current head (validated, attribution-only)
+
+- Coverage slot: `S`
+- Change class: `attribution`
+- Why this is mainline-worthy now:
+  - `S` and `T` were already validated on the current head, but the largest unresolved question stayed inside `S`: whether the hybrid-only remainder was still dominated by decoder-layer shell/tape buckets once CE-while internals were separated instead of mixed into `remainder_topk`.
+  - `U` stayed lower value because there was no new narrow CE hypothesis with a credible end-to-end promotion path; residual CE while was already bounded and the gap outside the tracked train path remained the bigger fact.
+  - This run keeps model math fixed and spends the iteration budget on better accounting: a train-path-aware summary helper that preserves `forward/backward closed-call` and `CE while` as tracked budgets, then reports hybrid-only remainder deltas against the attention-only control.
+
+- Codex loop iteration: `4 / 10`
+- Date: `2026-03-11T17:55:03Z`
+- Starting commit: `d49d5e7389566a4e3b7b65393ed647f6beb8c847`
+- Commit: `d49d5e7389566a4e3b7b65393ed647f6beb8c847`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion: `70a947614d96e9c4f008e09b359e5b13409d536f`
+  - `throughput/mfu=6.090697`
+  - `throughput/tokens_per_second=197032.897899`
+  - `throughput/duration=0.166307253 s`
+  - `step_duration=166.307253 ms`
+  - Fresh attribution reference from Iteration 85:
+    - `throughput/mfu=5.868201`
+    - `step_duration=172.612896 ms`
+    - `train_path_budget=42.653247 ms`
+    - `remainder_budget=129.959649 ms`
+    - `upper_bound_gap=114.457165 ms`
+    - `gap_explained_by_train_path=37.27%`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot S (selected):** refresh hybrid-vs-attention attribution with a train-path-aware summary helper so decoder shell/tape buckets are compared against the control without CE-while internals polluting `remainder_topk` (`highest information`, `low code risk`, `medium infra risk`).
+  2. **Coverage slot T:** rerun the fixed-CE `gdn_layers_per_block` sweep with the same helper to decompose the fraction penalty into closed-call vs shell budgets (`high follow-up value`, `lower priority because T coverage already exists on this head`).
+  3. **Coverage slot U:** explicit CE backward side-arm (`pallas` vs `xla_streaming`) on the current head (`bounded upside`, `strict rejection risk because CE is no longer the mainline explanation`).
+
+- Selected slot rationale:
+  - `S` remains the highest-priority uncovered information gain because the current loop still needed a cleaner answer to: what remains outside the tracked train path once CE-while internals are tracked separately?
+
+- CE hygiene:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - Why CE stayed fixed:
+    - This was not a CE A/B slot. Both fresh runs held CE at the required deployable setting.
+
+- Expected effect on `step_duration_ms`:
+  - No code-path speedup was expected because the source diff is attribution tooling only; the fresh hybrid and control were expected to land near the Iteration 85/86 range.
+- Expected effect on `train_path_budget_ms`:
+  - No meaningful change expected; the tracked GDN closed-call + CE-while budget should stay near the current head.
+- Expected effect on `remainder_budget_ms`:
+  - No meaningful change expected from the code diff itself, but the interpretation of `remainder_topk` should improve by removing CE-while internals from the remainder list.
+- Expected effect on `upper_bound_gap_ms`:
+  - No meaningful change expected; this slot is about accounting clarity, not shortening the hybrid step.
+- Reject if `step_duration_ms` does not improve? **No for iteration validity.**
+  - This is an attribution slot, not a promotable speedup candidate.
+- Reject if `remainder_budget_ms` grows? **No for iteration validity.**
+  - The point of the run is measurement quality, though any growth would still block speedup claims.
+
+- Change summary:
+  - Added `summary-attribution` to `scripts/gdn/gdnctl.py` so normalized profile summaries can be converted into:
+    - per-step `forward/backward closed-call`,
+    - `CE-attributed while`,
+    - `conditional`,
+    - `train_path_budget`,
+    - `remainder_topk` outside the tracked train path,
+    - `ce_while_topk`,
+    - hybrid-only remainder deltas vs an attention-only control.
+  - Added unit coverage for divisor inference, tracked-budget extraction, and remainder-delta reporting in `scripts/gdn/tests/test_gdnctl_summary_attribution.py`.
+  - No GDN kernel, benchmark-model, or CE-backend math changes. The profiled training head stayed at `d49d5e7389566a4e3b7b65393ed647f6beb8c847`.
+
+- Correctness checks:
+  - Local tooling slice:
+    - `uv run python -m pytest -o addopts='' scripts/gdn/tests/test_gdnctl_summary_attribution.py scripts/gdn/tests/test_gdnctl_profile_env.py -q`
+    - result: `22 passed, 1 warning in 0.06s`
+  - Dev TPU attempt:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync`
+    - result: failed before remote execution with `ssh: Could not resolve hostname dev-tpu-calvinxu-gdn`, so this iteration fell back to Ray TPU as directed.
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both --no-wait`
+    - `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-levanter-20260311-173658 --show-logs --tail 180`
+    - result: `88 passed, 2 skipped in 239.20s (0:03:59)`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`, Ray fallback on `us-east5-a`):
+  - Hybrid current head:
+    - command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_s_attrib_i04_hybrid --profile-env WANDB_DISABLE_CODE=true --no-wait`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s_attrib_i04_hybrid_gdn3of4_130m_ch128_seg16_20step-87c585`
+    - summary: `scratch/gdn_s_attrib_i04_hybrid_summary_200.json`
+  - Attention-only control:
+    - command: `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_s_attrib_i04_attn --profile-env WANDB_DISABLE_CODE=true --no-wait`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s_attrib_i04_attn_attnonly_130m_ch128_seg16_20steps-f7f3d8`
+    - summary: `scratch/gdn_s_attrib_i04_attn_summary_200.json`
+
+- Fresh hybrid attribution metrics:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - `gdn_layer_fraction: 0.833333`
+  - `CE-attributed while: 8.860128 ms -> 8.909159 ms`
+  - `Forward closed-call: 20.663540 ms -> 20.663761 ms`
+  - `Backward closed-call: 13.128211 ms -> 13.128702 ms`
+  - `while: 8.860128 ms -> 8.909159 ms`
+  - `conditional: 0.001368 ms -> 0.001365 ms`
+  - `Kernel budget: 33.791751 ms -> 33.792462 ms`
+  - `Control budget: 8.861495 ms -> 8.910524 ms`
+  - `Train-path budget: 42.653247 ms -> 42.702986 ms`
+  - `Step duration: 172.612896 ms -> 169.608950 ms`
+  - `Remainder budget: 129.959649 ms -> 126.905964 ms`
+  - `Upper-bound gap: 114.457165 ms -> 111.566009 ms`
+  - `Gap explained by train-path: 37.27% -> 38.28%`
+  - `Remainder top-k: HackableDecoderLayer/shard_map/pallas_call 5.218923 ms; HackableDecoderLayer/closed_call/shard_map 4.520675 ms; CE forward pallas_call 2.704561 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 1.999737 ms; HackableDecoderLayer/reshape 1.831703 ms`
+  - `CE while top-k: CE backward dot_general 6.030140 ms; CE backward dynamic_update_slice 2.858742 ms; CE backward pad 0.111172 ms; CE backward slice 0.111162 ms; CE backward broadcast_in_dim 0.085833 ms`
+  - `throughput/mfu=5.972133`
+  - `throughput/tokens_per_second=193197.351904`
+  - `throughput/duration=0.169608950 s`
+
+- Fresh attention-only control reference:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - `gdn_layer_fraction: 0.000000`
+  - `Step duration: 58.042941 ms`
+  - `throughput/mfu=21.020049`
+  - `throughput/tokens_per_second=564547.547649`
+  - `throughput/duration=0.058042941 s`
+  - The fresh control reproduced the standing `57.860499 ms` ceiling within `+0.182442 ms`.
+
+- Hybrid-only remainder delta vs the fresh attention-only control:
+  - `HackableDecoderLayer/shard_map/pallas_call` `+5.218923 ms`
+  - `HackableDecoderLayer/closed_call/shard_map` `+4.520675 ms`
+  - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map` `+1.999737 ms`
+  - `HackableDecoderLayer/reshape` `+1.831703 ms`
+  - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any` `+1.789607 ms`
+
+- Gap accounting:
+  - `Upper-bound gap: 111.566009 ms`
+  - `Gap explained by train-path: 38.28%`
+  - Unexplained hybrid-vs-attention gap outside the tracked train path: `68.863023 ms` (`61.72%` of the gap)
+
+- Interpretation:
+  - The fresh pair still says the same mainline thing as Iterations 85-86: most of the hybrid-vs-attention gap remains outside the tracked train path.
+  - The new attribution helper materially sharpens where that remainder sits:
+    - `remainder_topk` no longer mixes CE-while internals into the decoder-shell remainder,
+    - `ce_while_topk` isolates the bounded CE shell separately (`dot_general` + `dynamic_update_slice` dominate it),
+    - the largest hybrid-only remainder outside the tracked train path is still decoder-layer shell/tape/scaffolding, not another same-boundary GDN closed-call bucket.
+  - That keeps `S/T` ahead of `U`: the current evidence still points to product/model boundary plus decoder shell structure as the bigger unresolved lever than another CE side-arm.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both --no-wait` + `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-levanter-20260311-173658 --show-logs --tail 180` -> `88 passed, 2 skipped in 239.20s (0:03:59)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `Forward closed-call: 20.663761 ms`
+    - `Backward closed-call: 13.128702 ms`
+    - `while: 8.909159 ms`
+    - `conditional: 0.001365 ms`
+    - `Kernel budget: 33.792462 ms`
+    - `Control budget: 8.910524 ms`
+    - `Train-path budget: 42.702986 ms`
+    - `Step duration: 169.608950 ms`
+    - `Remainder budget: 126.905964 ms`
+    - `Upper-bound gap: 111.566009 ms`
+    - `Gap explained by train-path: 38.28%`
+    - `Remainder top-k: HackableDecoderLayer/shard_map/pallas_call 5.218923 ms; HackableDecoderLayer/closed_call/shard_map 4.520675 ms; CE forward pallas_call 2.704561 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 1.999737 ms; HackableDecoderLayer/reshape 1.831703 ms`
+    - `throughput/mfu=5.972133`, `throughput/tokens_per_second=193197.351904`, `throughput/duration=0.169608950 s`
+  - Governance:
+    - This is a validated `S` slot and attribution-only, so it is not judged as a promotion candidate.
+    - CE stayed fixed at `pallas_tpu` + `pallas` on both runs.
+    - The slot is still high-information even without a new speed win because it materially improves where the unexplained gap is landing: decoder shell/tape buckets remain the dominant hybrid-only remainder once CE while is broken out explicitly.
+
+- Assessment: **validated, attribution-only, and informative**. The refreshed same-lane hybrid/control pair still leaves about `61.72%` of the hybrid-vs-attention gap outside the tracked train path, but the new helper removes the last big attribution blur: the dominant hybrid-only remainder outside the tracked train path is still decoder shell/tape/scaffolding (`shard_map`, `closed_call/shard_map`, reshape/add-any), while the bounded CE side-arm is now isolated into a smaller `ce_while_topk`.
+- Next bold hypothesis:
+  - Apply the same train-path-aware attribution helper to the fixed-CE `T` sweep so the `0/4,1/4,2/4,3/4` points are decomposed into:
+    - `closed-call budget`,
+    - `decoder shell remainder`,
+    - `CE while`,
+    - and hybrid-only deltas vs `0/4`.
+  - If that shell budget scales roughly with GDN fraction, treat model/product boundary plus decoder shell structure as the stronger mainline lever than a fresh `U` or same-boundary kernel hillclimb.
+
+### Iteration 88 - Coverage Slot T / train-path-aware fixed-CE `gdn_layers_per_block` sweep on the current head (validated, measurement-only)
+
+- Coverage slot: `T`
+- Change class: `model boundary`
+- Why this is mainline-worthy now:
+  - Iteration 87 already showed that the dominant unexplained remainder on the `3/4` hybrid head lived in decoder-layer shell/tape categories once CE-while internals were split out.
+  - The next unanswered mainline question was therefore model boundary, not another same-boundary shell tweak: do those decoder-shell remainder buckets scale with GDN fraction itself?
+  - `U` stayed lower value because there was still no new narrow CE hypothesis with a plausible end-to-end promotion path. Residual CE while remained bounded, while the hybrid-vs-attention remainder stayed much larger.
+
+- Codex loop iteration: `5 / 10`
+- Date: `2026-03-11T18:41:27Z`
+- Starting commit: `b775c3b986b80a679eedde28af6fc7bb78543dc5`
+- Commit: `b775c3b986b80a679eedde28af6fc7bb78543dc5`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion: `70a947614d96e9c4f008e09b359e5b13409d536f`
+  - `throughput/mfu=6.090697`
+  - `throughput/tokens_per_second=197032.897899`
+  - `throughput/duration=0.166307253 s`
+  - `step_duration=166.307253 ms`
+  - Latest train-path-aware attribution reference from Iteration 87:
+    - `throughput/mfu=5.972133`
+    - `step_duration=169.608950 ms`
+    - `train_path_budget=42.702986 ms`
+    - `remainder_budget=126.905964 ms`
+    - `upper_bound_gap=111.566009 ms`
+    - `gap_explained_by_train_path=38.28%`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot T (selected):** rerun the fixed-CE `gdn_layers_per_block in {0,1,2,3}` sweep with the restored train-path-aware attribution helper so the fraction penalty is decomposed into tracked closed-call, decoder shell remainder, and CE while (`highest information`, `low code risk`, `medium TPU time risk`).
+  2. **Coverage slot S:** refresh the `3/4` hybrid-vs-attention pair only if the fixed-CE control drifted materially from Iteration 87 (`high information`, but lower value than finishing the fraction decomposition).
+  3. **Coverage slot U:** bounded CE side-arm only if the sweep made CE attribution ambiguous again (`bounded upside`, `strict rejection risk because CE is not the dominant gap anymore`).
+
+- Selected slot rationale:
+  - Iteration 87 isolated the dominant remainder on the `3/4` head. The next missing mainline measurement was whether that shell/remainder cost scales roughly with GDN fraction. That makes `T` higher-value than another `S` refresh and still higher-value than `U`.
+
+- CE hygiene:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - Why CE stayed fixed:
+    - This was not a CE A/B slot. All four sweep points requested and selected the deployable `pallas_tpu` + `pallas` path.
+
+- Expected effect on `step_duration_ms`:
+  - No iteration-level speedup target. Per-fraction expectation was monotonic slowdown as GDN fraction rises, with `0/4` near the attention-only ceiling and `3/4` near the current hybrid regime.
+- Expected effect on `train_path_budget_ms`:
+  - Up with GDN fraction as more decoder layers enter the tracked GDN closed-call path.
+- Expected effect on `remainder_budget_ms`:
+  - Also up with GDN fraction if the decoder shell/tape scaffolding is coupled to GDN usage rather than only to the already-tracked closed-call core.
+- Expected effect on `upper_bound_gap_ms`:
+  - Near zero at `0/4`, then widening as GDN fraction rises.
+- Reject if `step_duration_ms` does not improve? **No for iteration validity; yes for promotion.**
+  - This is a measurement-first `T` slot, not a fresh same-boundary speedup attempt.
+- Reject if `remainder_budget_ms` grows? **No for iteration validity; yes for promotion.**
+  - Remainder growth is one of the outputs this sweep is meant to measure, but it disqualifies a point as a speedup claim.
+
+- Change summary:
+  - Restored the previously validated `summary-attribution` helper and unit test after the starting commit had reverted them, so the fixed-CE sweep could be analyzed with the same train-path-aware boundary as Iteration 87.
+  - Reused that helper to convert the four normalized profile summaries into:
+    - per-step `forward/backward closed-call`,
+    - `CE-attributed while`,
+    - `conditional`,
+    - `train_path_budget`,
+    - `remainder_topk`,
+    - and positive remainder deltas vs the fresh `0/4` attention-only control.
+  - No GDN kernel, benchmark-model, or CE-backend math changes. The profiled train path stayed at the starting head.
+
+- Correctness checks:
+  - Local tooling slice:
+    - `uv run python -m pytest -o addopts='' scripts/gdn/tests/test_gdnctl_summary_attribution.py scripts/gdn/tests/test_gdnctl_profile_env.py -q`
+    - result: `22 passed, 1 warning in 0.06s`
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync`
+    - result: `88 passed, 2 skipped in 229.76s (0:03:49)`
+
+- Profile sweep (CE fixed to `pallas_tpu` + `pallas` on dev TPU `calvinxu-gdn`):
+  - `gdn_layers_per_block=0`
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 0 --run-name-prefix gdn_t_sweep_i05_g0 --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_t_sweep_i05_g0_gdn0of4_130m_ch128_seg16_20steps-179eb6`
+    - summary: `scratch/gdn_t_sweep_i05_g0_summary_200.json`
+    - attribution: `scratch/gdn_t_sweep_i05_g0_metrics_200.json`
+  - `gdn_layers_per_block=1`
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 1 --run-name-prefix gdn_t_sweep_i05_g1 --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_t_sweep_i05_g1_gdn1of4_130m_ch128_seg16_20steps-fc2517`
+    - summary: `scratch/gdn_t_sweep_i05_g1_summary_200.json`
+    - attribution: `scratch/gdn_t_sweep_i05_g1_metrics_200.json`
+  - `gdn_layers_per_block=2`
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 2 --run-name-prefix gdn_t_sweep_i05_g2 --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_t_sweep_i05_g2_gdn2of4_130m_ch128_seg16_20steps-587ba7`
+    - summary: `scratch/gdn_t_sweep_i05_g2_summary_200.json`
+    - attribution: `scratch/gdn_t_sweep_i05_g2_metrics_200.json`
+  - `gdn_layers_per_block=3`
+    - command: `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 3 --run-name-prefix gdn_t_sweep_i05_g3 --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_t_sweep_i05_g3_gdn3of4_130m_ch128_seg16_20steps-8a058d`
+    - summary: `scratch/gdn_t_sweep_i05_g3_summary_200.json`
+    - attribution: `scratch/gdn_t_sweep_i05_g3_metrics_200.json`
+
+- Sweep summary:
+  - The benchmark-reported `gdn_layer_fraction` values for this run were `0.000000`, `0.333333`, `0.666667`, and `0.833333` for `gdn_layers_per_block=0,1,2,3`.
+  - The fresh `0/4` control reproduced the standing attention-only ceiling (`57.860499 ms`) within `-0.852376 ms`.
+
+| `gdn_layers_per_block` | `gdn_layer_fraction` | `throughput/mfu` | `throughput/tokens_per_second` | `step_duration_ms` | `train_path_budget_ms` | `remainder_budget_ms` | `upper_bound_gap_ms` | `gap_explained_by_train_path` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `0` | `0.000000` | `21.401607` | `574795.279615` | `57.008123` | `8.569065` | `48.439058` | `0.000000` | `0.00%` |
+| `1` | `0.333333` | `8.697857` | `250623.317273` | `130.746015` | `26.465844` | `104.280171` | `73.737892` | `35.89%` |
+| `2` | `0.666667` | `6.786690` | `210921.652956` | `155.356264` | `35.861583` | `119.494681` | `98.348141` | `36.46%` |
+| `3` | `0.833333` | `6.111359` | `197701.303630` | `165.744987` | `42.686103` | `123.058884` | `108.736864` | `39.26%` |
+
+- Delta vs the fresh `0/4` attention-only control:
+  - `1/4`:
+    - `throughput/mfu -59.36%`
+    - `step_duration_ms +73.737892`
+    - `train_path_budget_ms +17.896778`
+    - `remainder_budget_ms +55.841114`
+  - `2/4`:
+    - `throughput/mfu -68.29%`
+    - `step_duration_ms +98.348141`
+    - `train_path_budget_ms +27.292518`
+    - `remainder_budget_ms +71.055623`
+  - `3/4`:
+    - `throughput/mfu -71.44%`
+    - `step_duration_ms +108.736864`
+    - `train_path_budget_ms +34.117038`
+    - `remainder_budget_ms +74.619826`
+
+- Decoder-shell delta vs the fresh `0/4` control:
+  - `1/4`: `HackableDecoderLayer/shard_map/pallas_call +3.135824 ms`; `HackableDecoderLayer/closed_call/shard_map +2.679990 ms`; transpose attention `splash_mha_dkv +2.363326 ms`; `dot_general +2.109322 ms`; transpose attention `splash_mha_dq +1.770898 ms`
+  - `2/4`: `HackableDecoderLayer/shard_map/pallas_call +4.171792 ms`; `HackableDecoderLayer/closed_call/shard_map +3.604748 ms`; transpose `HackableDecoderLayer/closed_call/shard_map +2.073590 ms`; `dot_general +1.934004 ms`; `HackableDecoderLayer/reshape +1.465524 ms`
+  - `3/4`: `HackableDecoderLayer/shard_map/pallas_call +5.218472 ms`; `HackableDecoderLayer/closed_call/shard_map +4.525456 ms`; transpose `HackableDecoderLayer/closed_call/shard_map +1.998982 ms`; `HackableDecoderLayer/reshape +1.832208 ms`; transpose `HackableDecoderLayer/add_any +1.789096 ms`
+
+- Interpretation:
+  - Throughput still degrades monotonically as GDN fraction rises:
+    - `21.401607 -> 8.697857 -> 6.786690 -> 6.111359 MFU`
+    - `57.008123 -> 130.746015 -> 155.356264 -> 165.744987 ms`
+  - The tracked train path still explains only a minority of the added full-step gap:
+    - `35.89% | 36.46% | 39.26%` at nonzero GDN fractions.
+  - The train-path-aware decomposition sharpens the model-boundary story:
+    - `CE-attributed while` stays nearly flat (`8.567918 -> 8.892669 ms`, only `+0.324751 ms` from `0/4` to `3/4`),
+    - tracked closed-call grows materially with GDN fraction (`0.000000 -> 33.792067 ms`),
+    - but decoder shell/tape remainder grows even more (`HackableDecoderLayer/shard_map/pallas_call`, `closed_call/shard_map`, reshape/add-any all widen roughly monotonically).
+  - Mainline conclusion:
+    - The product/model boundary remains the stronger lever than another same-boundary GDN kernel rewrite. Higher GDN fraction costs end-to-end step time roughly monotonically, and the added cost still lands mostly outside the currently tracked train path.
+  - Governance note:
+    - The fresh `3/4` point is slightly above the standing champion numerically (`throughput/mfu +0.339%`, `step_duration -0.562266 ms`), but the source diff in this iteration is attribution/tooling-only and does not change the train path. Treat this as a reproduced current-head measurement, not a new champion commit.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync` -> `88 passed, 2 skipped in 229.76s (0:03:49)`
+  - Perf:
+    - `CE backend selected: pallas_tpu` on all four sweep points
+    - `CE bwd mode: pallas` on all four sweep points
+    - `CE-attributed while: 8.567918 | 8.817998 | 8.832890 | 8.892669 ms`
+    - `gdn_layer_fraction: 0.000000 | 0.333333 | 0.666667 | 0.833333`
+    - `Forward closed-call: 0.000000 | 12.394931 | 16.528556 | 20.663765 ms`
+    - `Backward closed-call: 0.000000 | 5.251654 | 10.498754 | 13.128303 ms`
+    - `while: 8.567918 | 8.817998 | 8.832890 | 8.892669 ms`
+    - `conditional: 0.001147 | 0.001261 | 0.001383 | 0.001366 ms`
+    - `Kernel budget: 0.000000 | 17.646585 | 27.027310 | 33.792067 ms`
+    - `Control budget: 8.569065 | 8.819259 | 8.834273 | 8.894035 ms`
+    - `Train-path budget: 8.569065 | 26.465844 | 35.861583 | 42.686103 ms`
+    - `Step duration: 57.008123 | 130.746015 | 155.356264 | 165.744987 ms`
+    - `Remainder budget: 48.439058 | 104.280171 | 119.494681 | 123.058884 ms`
+    - `Upper-bound gap: 0.000000 | 73.737892 | 98.348141 | 108.736864 ms`
+    - `Gap explained by train-path: 0.00% | 35.89% | 36.46% | 39.26%`
+    - `Remainder top-k:`
+      - `0/4`: attention `splash_mha_fwd` `5.373455 ms`; attention `splash_mha_dkv` `3.616122 ms`; CE forward `pallas_call` `2.703003 ms`; attention `splash_mha_dq` `2.656742 ms`; `vmap()/dot_general` `2.628617 ms`
+      - `1/4`: `HackableDecoderLayer/shard_map/pallas_call 3.135824 ms`; attention `splash_mha_fwd 2.776540 ms`; CE forward `pallas_call 2.703949 ms`; `HackableDecoderLayer/closed_call/shard_map 2.679990 ms`; transpose attention `splash_mha_dkv 2.363326 ms`
+      - `2/4`: `HackableDecoderLayer/shard_map/pallas_call 4.171792 ms`; `HackableDecoderLayer/closed_call/shard_map 3.604748 ms`; CE forward `pallas_call 2.702762 ms`; transpose `HackableDecoderLayer/closed_call/shard_map 2.073590 ms`; `dot_general 1.934004 ms`
+      - `3/4`: `HackableDecoderLayer/shard_map/pallas_call 5.218472 ms`; `HackableDecoderLayer/closed_call/shard_map 4.525456 ms`; CE forward `pallas_call 2.703809 ms`; transpose `HackableDecoderLayer/closed_call/shard_map 1.998982 ms`; `HackableDecoderLayer/reshape 1.832208 ms`
+    - `throughput/mfu: 21.401607 | 8.697857 | 6.786690 | 6.111359`
+    - `throughput/tokens_per_second: 574795.279615 | 250623.317273 | 210921.652956 | 197701.303630`
+    - `throughput/duration: 0.057008123 s | 0.130746015 s | 0.155356264 s | 0.165744987 s`
+  - Governance:
+    - This is a validated `T` slot and is measurement-only, so it is not judged as a promoted speedup candidate.
+    - CE stayed fixed at `pallas_tpu` + `pallas` throughout.
+    - The sweep directly answers the mainline model-boundary question:
+      - higher GDN fraction drives lower MFU and longer steps,
+      - `CE while` stays bounded and almost flat,
+      - decoder shell/tape remainder grows roughly with GDN fraction and remains larger than the tracked incremental train-path growth.
+
+- Assessment: **validated, informative, and mainline-worthy**. The train-path-aware fixed-CE sweep confirms that the throughput penalty from higher GDN fraction is still roughly monotonic, while only about `36-39%` of the added full-step gap is explained by the tracked train path. The largest positive remainder deltas vs `0/4` are decoder shell/tape buckets, not CE while, which keeps model boundary plus shell structure ahead of another same-boundary kernel hillclimb.
+- Next bold hypothesis:
+  - Stay on `S/T` mainline work and widen the tracked boundary so the decoder shell buckets that scale with GDN fraction stop landing in undifferentiated remainder.
+  - If a product-side tradeoff is acceptable, evaluate whether the `1/4` or `2/4` regimes are viable, because they are materially faster than `3/4` without any new kernel rewrite.
