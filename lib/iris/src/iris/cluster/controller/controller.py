@@ -690,6 +690,9 @@ class ControllerConfig:
     auth_verifier: TokenVerifier | None = None
     """When set, all RPC calls require a valid bearer token verified by this verifier."""
 
+    auth_provider: str | None = None
+    """Name of the auth provider (e.g. "gcp", "static") for the dashboard UI."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -776,6 +779,7 @@ class Controller:
             host=config.host,
             port=config.port,
             auth_verifier=config.auth_verifier,
+            auth_provider=config.auth_provider,
         )
 
         # Ingest process logs into the LogStore so they are available via FetchLogs.

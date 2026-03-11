@@ -47,11 +47,13 @@ class ControllerDashboard:
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
+        auth_provider: str | None = None,
     ):
         self._service = service
         self._host = host
         self._port = port
         self._auth_verifier = auth_verifier
+        self._auth_provider = auth_provider
         self._app = self._create_app()
 
     @property
@@ -71,6 +73,7 @@ class ControllerDashboard:
 
         routes = [
             Route("/", self._dashboard),
+            Route("/auth/config", self._auth_config),
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
@@ -88,6 +91,15 @@ class ControllerDashboard:
 
     def _worker_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Worker Detail", "controller"))
+
+    def _auth_config(self, _request: Request) -> JSONResponse:
+        """Unauthenticated endpoint telling the frontend whether auth is required."""
+        return JSONResponse(
+            {
+                "auth_enabled": self._auth_verifier is not None,
+                "provider": self._auth_provider,
+            }
+        )
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""

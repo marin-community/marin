@@ -19,6 +19,36 @@ export interface RpcState<T> {
   refresh: () => Promise<void>
 }
 
+const AUTH_TOKEN_KEY = 'iris-auth-token'
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem(AUTH_TOKEN_KEY)
+}
+
+export function setAuthToken(token: string): void {
+  localStorage.setItem(AUTH_TOKEN_KEY, token)
+}
+
+export function clearAuthToken(): void {
+  localStorage.removeItem(AUTH_TOKEN_KEY)
+}
+
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = getAuthToken()
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return headers
+}
+
+function handleUnauthorized(resp: Response): void {
+  if (resp.status === 401) {
+    clearAuthToken()
+    window.dispatchEvent(new CustomEvent('iris-auth-required'))
+  }
+}
+
 function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T> {
   const data = ref<T | null>(null) as Ref<T | null>
   const loading = ref(false)
@@ -31,9 +61,10 @@ function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T>
       const resolvedBody = typeof body === 'function' ? body() : (body ?? {})
       const resp = await fetch(`/${service}/${method}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify(resolvedBody),
       })
+      handleUnauthorized(resp)
       if (!resp.ok) {
         throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
       }
@@ -69,9 +100,10 @@ export function useWorkerRpc<T>(
 export async function controllerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   const resp = await fetch(`/iris.cluster.ControllerService/${method}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify(body ?? {}),
   })
+  handleUnauthorized(resp)
   if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
   return resp.json() as Promise<T>
 }
@@ -79,9 +111,10 @@ export async function controllerRpcCall<T>(method: string, body?: Record<string,
 export async function workerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   const resp = await fetch(`/iris.cluster.WorkerService/${method}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify(body ?? {}),
   })
+  handleUnauthorized(resp)
   if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
   return resp.json() as Promise<T>
 }

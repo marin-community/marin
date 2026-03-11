@@ -176,12 +176,14 @@ def serve(
     # and wrap both verifiers in a CompositeTokenVerifier so the controller
     # accepts both GCP user tokens and the static worker token.
     auth_verifier = None
+    auth_provider: str | None = None
     if cluster_config and cluster_config.HasField("auth"):
         gcp_verifier = create_auth_verifier(cluster_config.auth)
         if gcp_verifier is not None:
             worker_token = secrets.token_urlsafe(32)
             worker_verifier = StaticTokenVerifier({worker_token: "iris-worker"})
             auth_verifier = CompositeTokenVerifier([worker_verifier, gcp_verifier])
+            auth_provider = "gcp"
             if base_worker_config is not None:
                 base_worker_config.auth_token = worker_token
             logger.info("Auth enabled with worker token for worker→controller RPCs")
@@ -197,6 +199,7 @@ def serve(
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
         log_dir=Path("/tmp/iris/controller-logs"),
         auth_verifier=auth_verifier,
+        auth_provider=auth_provider,
     )
 
     try:
