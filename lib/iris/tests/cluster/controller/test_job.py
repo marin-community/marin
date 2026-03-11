@@ -3,32 +3,34 @@
 
 """DB-native tests for job/task state behavior and expansion."""
 
+
 import pytest
 
-from iris.cluster.controller.db import JOBS, TASKS, WORKERS, Job, Task, Worker
+from iris.cluster.controller.db import JOBS, TASKS, WORKERS, ControllerDB, Job, Task, Worker
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.log_store import LogStore
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import Timestamp
 
 
-def _query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
-    with state.db.snapshot() as q:
+def _query_job(db: ControllerDB, job_id: JobName) -> Job | None:
+    with db.snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
 
 
-def _query_task(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    with state.db.snapshot() as q:
+def _query_task(db: ControllerDB, task_id: JobName) -> Task | None:
+    with db.snapshot() as q:
         return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
 
 
-def _query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
-    with state.db.snapshot() as q:
+def _query_worker(db: ControllerDB, worker_id: WorkerId) -> Worker | None:
+    with db.snapshot() as q:
         return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
 
 
-def _query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[Task]:
-    with state.db.snapshot() as q:
+def _query_tasks_for_job(db: ControllerDB, job_id: JobName) -> list[Task]:
+    with db.snapshot() as q:
         return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
 
 
@@ -39,10 +41,14 @@ def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
 
 
 @pytest.fixture
-def state() -> ControllerTransitions:
-    s = ControllerTransitions()
+def state(tmp_path):
+    db_path = tmp_path / "controller.sqlite3"
+    db = ControllerDB(db_path=db_path)
+    log_store = LogStore(db_path=db_path)
+    s = ControllerTransitions(db=db, log_store=log_store)
     yield s
-    s.close()
+    log_store.close()
+    db.close()
 
 
 @pytest.fixture
@@ -99,10 +105,10 @@ def test_job_becomes_succeeded_when_all_tasks_succeed(state: ControllerTransitio
     state.submit_job(jid, request, Timestamp.now())
 
     wid = _register_worker(state, "w1")
-    for task in _query_tasks_for_job(state, jid):
+    for task in _query_tasks_for_job(state._db, jid):
         _run_task_to_state(state, task.task_id, wid, cluster_pb2.TASK_STATE_SUCCEEDED)
 
-    job = _query_job(state, jid)
+    job = _query_job(state._db, jid)
     assert job is not None
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -116,10 +122,10 @@ def test_job_failure_threshold_applies(state: ControllerTransitions, make_job_re
     state.submit_job(jid, request, Timestamp.now())
 
     wid = _register_worker(state, "w1")
-    first = _query_tasks_for_job(state, jid)[0]
+    first = _query_tasks_for_job(state._db, jid)[0]
     _run_task_to_state(state, first.task_id, wid, cluster_pb2.TASK_STATE_FAILED)
 
-    job = _query_job(state, jid)
+    job = _query_job(state._db, jid)
     assert job is not None
     assert job.state == cluster_pb2.JOB_STATE_FAILED
 
@@ -133,7 +139,7 @@ def test_job_expands_to_replicas_and_retry_limits(state: ControllerTransitions, 
     request.name = jid.to_wire()
 
     state.submit_job(jid, request, Timestamp.now())
-    tasks = _query_tasks_for_job(state, jid)
+    tasks = _query_tasks_for_job(state._db, jid)
 
     assert len(tasks) == 3
     for idx, task in enumerate(tasks):
@@ -149,10 +155,10 @@ def test_job_becomes_unschedulable_when_task_unschedulable(state: ControllerTran
     request.name = jid.to_wire()
     state.submit_job(jid, request, Timestamp.now())
 
-    first_task = _query_tasks_for_job(state, jid)[0]
+    first_task = _query_tasks_for_job(state._db, jid)[0]
     state.mark_task_unschedulable(first_task.task_id, reason="no capacity")
 
-    job = _query_job(state, jid)
+    job = _query_job(state._db, jid)
     assert job is not None
     assert job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
 
@@ -165,6 +171,6 @@ def test_job_cancel_marks_job_killed(state: ControllerTransitions, make_job_requ
     state.submit_job(jid, request, Timestamp.now())
 
     state.cancel_job(jid, reason="manual")
-    job = _query_job(state, jid)
+    job = _query_job(state._db, jid)
     assert job is not None
     assert job.state == cluster_pb2.JOB_STATE_KILLED

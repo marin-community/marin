@@ -14,7 +14,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.db import JOBS, TASKS, ATTEMPTS, _tasks_with_attempts
+from iris.cluster.controller.db import JOBS, TASKS, ATTEMPTS, ControllerDB, _tasks_with_attempts
+from iris.cluster.log_store import LogStore
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.constraints import device_variant_constraint
@@ -25,13 +26,13 @@ from iris.time_utils import Timestamp
 
 def _query_job(state: ControllerTransitions, job_id: JobName):
     """Read a single job from state DB."""
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
 
 
 def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
     """Read tasks with attempts for a job."""
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         tasks = q.select(
             TASKS,
             where=TASKS.c.job_id == job_id.to_wire(),
@@ -157,11 +158,15 @@ def worker_metadata():
 
 
 @pytest.fixture
-def state():
+def state(tmp_path):
     """Create a fresh ControllerTransitions for each test."""
-    s = ControllerTransitions()
+    db_path = tmp_path / "controller.sqlite3"
+    db = ControllerDB(db_path=db_path)
+    log_store = LogStore(db_path=db_path)
+    s = ControllerTransitions(db=db, log_store=log_store)
     yield s
-    s.close()
+    log_store.close()
+    db.close()
 
 
 class MockSchedulerWake:
@@ -188,7 +193,11 @@ def service(state, mock_scheduler, tmp_path):
     from iris.cluster.bundle import BundleStore
 
     return ControllerServiceImpl(
-        state, state.db, controller=mock_scheduler, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3")
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
     )
 
 

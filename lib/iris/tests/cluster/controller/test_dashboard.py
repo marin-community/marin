@@ -17,12 +17,14 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     TASKS,
     ATTEMPTS,
+    ControllerDB,
     Endpoint,
     _tasks_with_attempts,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.log_store import LogStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
@@ -31,7 +33,7 @@ from iris.time_utils import Timestamp
 
 def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
     """Read tasks with attempts for a job."""
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         tasks = q.select(
             TASKS,
             where=TASKS.c.job_id == job_id.to_wire(),
@@ -125,10 +127,14 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
 
 
 @pytest.fixture
-def state():
-    s = ControllerTransitions()
+def state(tmp_path):
+    db_path = tmp_path / "controller.sqlite3"
+    db = ControllerDB(db_path=db_path)
+    log_store = LogStore(db_path=db_path)
+    s = ControllerTransitions(db=db, log_store=log_store)
     yield s
-    s.close()
+    log_store.close()
+    db.close()
 
 
 @pytest.fixture
@@ -145,7 +151,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     """
 
     def _create_scheduling_context(workers):
-        with state.db.snapshot() as q:
+        with state._db.snapshot() as q:
             rows = q.raw(
                 "SELECT a.worker_id, COUNT(*) as c FROM tasks t "
                 "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
@@ -185,7 +191,11 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 def service(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
     return ControllerServiceImpl(
-        state, state.db, controller=controller_mock, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3")
+        state,
+        state._db,
+        controller=controller_mock,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
     )
 
 
@@ -200,7 +210,11 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
     """Service with autoscaler enabled for tests."""
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
     return ControllerServiceImpl(
-        state, state.db, controller=controller_mock, bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3")
+        state,
+        state._db,
+        controller=controller_mock,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
     )
 
 

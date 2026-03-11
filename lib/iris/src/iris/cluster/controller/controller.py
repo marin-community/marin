@@ -745,9 +745,9 @@ class Controller:
         self._db = ControllerDB(db_path=db_path)
         self._log_store = LogStore(db_path=db_path)
         self._transitions = ControllerTransitions(
-            heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             db=self._db,
             log_store=self._log_store,
+            heartbeat_failure_threshold=config.heartbeat_failure_threshold,
         )
         self._scheduler = Scheduler()
 
@@ -759,6 +759,7 @@ class Controller:
             self._db,
             controller=self,
             bundle_store=self._bundle_store,
+            log_store=self._log_store,
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -903,8 +904,8 @@ class Controller:
         # sqlite3.ProgrammingError spam from late log records.
         logging.getLogger("iris").removeHandler(self._log_store_handler)
         self._log_store_handler.close()
-        self._transitions.close()
         self._log_store.close()
+        self._db.close()
         self._bundle_store.close()
 
     def _atexit_checkpoint(self) -> None:
