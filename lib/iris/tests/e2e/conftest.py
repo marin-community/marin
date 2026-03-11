@@ -474,23 +474,31 @@ def dashboard_click(page, selector: str) -> None:
 
 
 def dashboard_goto(page, url: str) -> None:
-    """Navigate to URL. No-op when Playwright is unavailable."""
+    """Navigate to URL, converting paths to hash-based URLs for Vue Router.
+
+    Vue Router uses createWebHashHistory, so /job/X must become /#/job/X.
+    """
     if _is_noop_page(page):
         return
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    path = parsed.path
+    if path and path != "/":
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        url = f"{base}/#{path}"
     page.goto(url)
 
 
 def wait_for_dashboard_ready(page) -> None:
-    """Wait for Preact to render the dashboard root.
-
-    Waits until the #root element has children and no longer shows "Loading...".
-    Used by dashboard assertion tests across multiple test modules.
-    """
+    """Wait for the Vue 3 dashboard to mount and render children into #app."""
     if _is_noop_page(page):
         return
     page.wait_for_function(
-        "() => document.getElementById('root').children.length > 0"
-        " && !document.getElementById('root').textContent.includes('Loading...')",
+        "() => {"
+        "  const app = document.getElementById('app');"
+        "  return app !== null && app.children.length > 0;"
+        "}",
         timeout=30000,
     )
 

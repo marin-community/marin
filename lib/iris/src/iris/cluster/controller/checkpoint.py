@@ -194,11 +194,7 @@ def restore_db_from_checkpoint(
     checkpoint_path: str | None = None,
 ) -> bool:
     """Restore the SQLite DB file from a checkpoint. Returns True if found."""
-    source = (
-        str(Path(checkpoint_path))
-        if checkpoint_path
-        else str(db.db_path.parent / CHECKPOINT_DIR_NAME / "latest.sqlite3")
-    )
+    source = checkpoint_path if checkpoint_path else str(db.db_path.parent / CHECKPOINT_DIR_NAME / "latest.sqlite3")
     fs, fs_path = fsspec.core.url_to_fs(source)
     if not fs.exists(fs_path):
         logger.info("No checkpoint DB found at %s, starting fresh", source)

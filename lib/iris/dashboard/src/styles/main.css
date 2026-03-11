@@ -1,0 +1,6 @@
+@import '@fontsource-variable/plus-jakarta-sans';
+@import '@fontsource-variable/jetbrains-mono';
+
+@import 'tailwindcss';
+
+@config '../../tailwind.config.ts';
