@@ -237,6 +237,7 @@ class ControllerTransitions:
         log_dir: Path | None = None,
         db_path: Path | None = None,
         db: ControllerDB | None = None,
+        log_store: LogStore | None = None,
     ):
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
         if db is not None:
@@ -249,7 +250,10 @@ class ControllerTransitions:
                     tmp = Path(tempfile.mkdtemp(prefix="iris_controller_state_"))
                     db_path = tmp / "controller.sqlite3"
             self._db = ControllerDB(db_path=db_path)
-        self._log_store = LogStore(db_path=self._db.db_path)
+        self._owns_log_store = log_store is None
+        if log_store is None:
+            log_store = LogStore(db_path=self._db.db_path)
+        self._log_store: LogStore = log_store
 
     @property
     def log_store(self) -> LogStore:
@@ -264,7 +268,8 @@ class ControllerTransitions:
         return self._db.db_path
 
     def close(self) -> None:
-        self._log_store.close()
+        if self._owns_log_store:
+            self._log_store.close()
         self._db.close()
 
     def backup_to(self, destination: Path) -> None:

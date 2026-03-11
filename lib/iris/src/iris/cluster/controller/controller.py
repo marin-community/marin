@@ -70,7 +70,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatAction,
     ReservationClaim,
 )
-from iris.cluster.log_store import PROCESS_LOG_KEY, LogStoreHandler
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.types import (
     JobName,
     VmWorkerStatus,
@@ -743,9 +743,11 @@ class Controller:
             tmp = Path(tempfile.mkdtemp(prefix="iris_controller_state_"))
             db_path = tmp / "controller.sqlite3"
         self._db = ControllerDB(db_path=db_path)
+        self._log_store = LogStore(db_path=db_path)
         self._transitions = ControllerTransitions(
             heartbeat_failure_threshold=config.heartbeat_failure_threshold,
             db=self._db,
+            log_store=self._log_store,
         )
         self._scheduler = Scheduler()
 
@@ -765,7 +767,7 @@ class Controller:
         )
 
         # Ingest process logs into the LogStore so they are available via FetchLogs.
-        self._log_store_handler = LogStoreHandler(self._transitions.log_store, key=PROCESS_LOG_KEY)
+        self._log_store_handler = LogStoreHandler(self._log_store, key=PROCESS_LOG_KEY)
         self._log_store_handler.setLevel(logging.DEBUG)
         self._log_store_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_store_handler)
@@ -902,6 +904,7 @@ class Controller:
         logging.getLogger("iris").removeHandler(self._log_store_handler)
         self._log_store_handler.close()
         self._transitions.close()
+        self._log_store.close()
         self._bundle_store.close()
 
     def _atexit_checkpoint(self) -> None:

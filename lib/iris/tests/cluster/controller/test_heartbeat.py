@@ -23,7 +23,9 @@ from iris.time_utils import Duration, Timestamp
 
 @pytest.fixture
 def state():
-    return ControllerTransitions()
+    s = ControllerTransitions()
+    yield s
+    s.close()
 
 
 @pytest.fixture
