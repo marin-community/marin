@@ -524,7 +524,9 @@ def make_unified_0_6b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_0_6b,
-        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight),
+        train_config=_demo_train_config(
+            learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight
+        ),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -556,7 +558,9 @@ def make_unified_1_7b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_1_7b,
-        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight),
+        train_config=_demo_train_config(
+            learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight
+        ),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -587,7 +591,9 @@ def make_unified_4b(
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_4b,
-        train_config=_demo_train_config(learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight),
+        train_config=_demo_train_config(
+            learning_rate=learning_rate, num_train_steps=num_train_steps, z_loss_weight=z_loss_weight
+        ),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
