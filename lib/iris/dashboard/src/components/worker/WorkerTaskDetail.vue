@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useWorkerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
-import type { TaskStatus, GetTaskStatusResponse } from '@/types/rpc'
+import type { TaskStatus } from '@/types/rpc'
 import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatTimestamp } from '@/utils/formatting'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -19,13 +19,11 @@ const props = defineProps<{
 }>()
 
 const {
-  data: taskResponse,
+  data: task,
   loading,
   error,
   refresh: fetchTask,
-} = useWorkerRpc<GetTaskStatusResponse>('GetTaskStatus', () => ({ taskId: props.taskId }))
-
-const task = computed(() => taskResponse.value?.task ?? null)
+} = useWorkerRpc<TaskStatus>('GetTaskStatus', () => ({ taskId: props.taskId }))
 
 // Track resource history for sparklines (up to MAX_HISTORY_SAMPLES samples)
 const cpuHistory = ref<number[]>([])
@@ -39,8 +37,8 @@ function pushSample(history: number[], value: number) {
 }
 
 // Record resource snapshot for sparklines on each successful fetch
-watch(taskResponse, (resp) => {
-  const ru = resp?.task?.resourceUsage
+watch(task, (t) => {
+  const ru = t?.resourceUsage
   if (ru) {
     pushSample(cpuHistory.value, ru.cpuPercent ?? 0)
     pushSample(memHistory.value, ru.memoryMb ? parseFloat(ru.memoryMb) : 0)
@@ -91,10 +89,43 @@ const ports = computed<[string, number][]>(() => {
   return Object.entries(p)
 })
 
-// Profiling endpoints — only available while running
-function openProfile(type: 'cpu' | 'memory' | 'thread') {
-  const base = `/iris.cluster.WorkerService/Profile?taskId=${encodeURIComponent(props.taskId)}&type=${type}`
-  window.open(base, '_blank')
+// Profiling — calls the worker's ProfileTask RPC via Connect
+const profiling = ref(false)
+
+function buildProfileType(profilerType: string): Record<string, unknown> {
+  if (profilerType === 'cpu') return { cpu: { format: 'SPEEDSCOPE' } }
+  if (profilerType === 'memory') return { memory: { format: 'FLAMEGRAPH' } }
+  return { threads: {} }
+}
+
+async function handleProfile(profilerType: string) {
+  profiling.value = true
+  try {
+    const { workerRpcCall } = await import('@/composables/useRpc')
+    const body = {
+      target: props.taskId,
+      durationSeconds: 10,
+      profileType: buildProfileType(profilerType),
+    }
+    const resp = await workerRpcCall<{ profileData?: string; error?: string }>('ProfileTask', body)
+    if (resp.error) {
+      alert(`${profilerType.toUpperCase()} profile failed: ${resp.error}`)
+      return
+    }
+    if (resp.profileData) {
+      const blob = new Blob([atob(resp.profileData)], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `profile-${props.taskId.replace(/\//g, '_')}.out`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  } catch (e) {
+    alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
+  } finally {
+    profiling.value = false
+  }
 }
 
 const { active: autoRefreshActive, start: startRefresh, stop: stopRefresh } = useAutoRefresh(
@@ -266,22 +297,25 @@ onMounted(async () => {
       <div v-if="isActive" class="flex items-center gap-3">
         <span class="text-xs text-text-secondary font-medium uppercase tracking-wider">Profiling</span>
         <button
-          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary"
-          @click="openProfile('cpu')"
+          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary disabled:opacity-50"
+          :disabled="profiling"
+          @click="handleProfile('cpu')"
         >
-          CPU Profile
+          {{ profiling ? '\u23F3' : 'CPU Profile' }}
         </button>
         <button
-          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary"
-          @click="openProfile('memory')"
+          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary disabled:opacity-50"
+          :disabled="profiling"
+          @click="handleProfile('memory')"
         >
-          Memory Profile
+          {{ profiling ? '\u23F3' : 'Memory Profile' }}
         </button>
         <button
-          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary"
-          @click="openProfile('thread')"
+          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary disabled:opacity-50"
+          :disabled="profiling"
+          @click="handleProfile('threads')"
         >
-          Thread Dump
+          {{ profiling ? '\u23F3' : 'Thread Dump' }}
         </button>
       </div>
 

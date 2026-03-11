@@ -159,18 +159,31 @@ const diskDisplay = computed(() => {
 
 // -- Profiling --
 
+function buildProfileType(profilerType: string, format: string | null): Record<string, unknown> {
+  if (profilerType === 'cpu') return { cpu: { format: format ?? 'SPEEDSCOPE' } }
+  if (profilerType === 'memory') return { memory: { format: format ?? 'FLAMEGRAPH' } }
+  return { threads: {} }
+}
+
 async function handleProfile(taskId: string, profilerType: string, format: string | null) {
   profilingTaskId.value = taskId
   try {
-    const body: Record<string, unknown> = { taskId, profilerType }
-    if (format) body.format = format
-    const resp = await controllerRpcCall<{ data?: string; filename?: string }>('ProfileTask', body)
-    if (resp.data) {
-      const blob = new Blob([atob(resp.data)], { type: 'application/octet-stream' })
+    const body = {
+      target: taskId,
+      durationSeconds: 10,
+      profileType: buildProfileType(profilerType, format),
+    }
+    const resp = await controllerRpcCall<{ profileData?: string; error?: string }>('ProfileTask', body)
+    if (resp.error) {
+      alert(`${profilerType.toUpperCase()} profile failed: ${resp.error}`)
+      return
+    }
+    if (resp.profileData) {
+      const blob = new Blob([atob(resp.profileData)], { type: 'application/octet-stream' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = resp.filename ?? `profile-${taskId}.out`
+      a.download = `profile-${taskId.replace(/\//g, '_')}.out`
       a.click()
       URL.revokeObjectURL(url)
     }
