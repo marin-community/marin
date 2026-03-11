@@ -42,12 +42,14 @@ N_TOPIC_CLUSTERS = 15
 ORACLE_BACKEND = OracleBackend.CLAUDE
 PROMPT_VERSION = "v1"
 
-# Input data: concrete GCS paths for Nemotron CC and Dolma 1.7 on the primary bucket.
-_PREFIX = marin_prefix()
-NEMOTRON_BASE_PATH = f"{_PREFIX}/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl"
-DOLMA_BASE_PATH = f"{_PREFIX}/raw/dolma/v1.7"
+# Known relative paths for input data (relative to marin_prefix()).
+# The actual GCS prefix is resolved at runtime inside each lambda.
+NEMOTRON_REL_PATH = "raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl"
+DOLMA_REL_PATH = "raw/dolma/v1.7"
 
-# Output: temp bucket with 7-day TTL
+# Output prefix: temp bucket with 7-day TTL.
+# marin_temp_bucket resolves to gs://marin-tmp-{region}/ttl=7d/... on GCP,
+# or {MARIN_PREFIX}/tmp/... locally.
 _OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="embed-everything")
 
 # ---------------------------------------------------------------------------
@@ -61,7 +63,7 @@ sample_quality = StepSpec(
     fn=remote(
         lambda output_path: sample_quality_documents(
             output_path=output_path,
-            nemotron_base_path=NEMOTRON_BASE_PATH,
+            nemotron_base_path=f"{marin_prefix()}/{NEMOTRON_REL_PATH}",
             n_per_bucket=N_PER_BUCKET,
         ),
         resources=ResourceConfig.with_cpu(),
@@ -75,7 +77,7 @@ sample_topic = StepSpec(
     fn=remote(
         lambda output_path: sample_topic_documents(
             output_path=output_path,
-            dolma_base_path=DOLMA_BASE_PATH,
+            dolma_base_path=f"{marin_prefix()}/{DOLMA_REL_PATH}",
             n_per_source=N_PER_SOURCE,
         ),
         resources=ResourceConfig.with_cpu(),
