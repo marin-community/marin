@@ -52,7 +52,6 @@ class JpegTokenizerLaunchConfig:
     token_store_path: str
     output_path: str
     run_id: str
-    load_checkpoint_path: str | None = None
     resources: ResourceConfig
     steps: int
     batch_size: int
@@ -61,6 +60,7 @@ class JpegTokenizerLaunchConfig:
     tracker: TrackerConfig
     optimizer: OptimizerConfig
     pip_packages: tuple[str, ...] = ()
+    load_checkpoint_path: str | None = None
     checkpoint_minutes: int = 10
     checkpoint_keep_every_steps: int = 1_000
     jpeg_trainer: JpegTrainerConfig = field(default_factory=JpegTrainerConfig)
