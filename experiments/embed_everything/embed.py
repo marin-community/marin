@@ -11,12 +11,9 @@ evaluation (linear probes, clustering).
 import json
 import logging
 import os
-from dataclasses import dataclass
 
 import numpy as np
 from iris.marin_fs import open_url
-
-from marin.execution import THIS_OUTPUT_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -81,33 +78,27 @@ def _save_embeddings(
     logger.info("Saved embeddings to %s (shape=%s)", dest, embeddings.shape)
 
 
-@dataclass(frozen=True)
-class EmbedConfig:
-    """Config for computing document embeddings."""
-
-    input_path: str
-    output_path: str = THIS_OUTPUT_PATH
-    model_name: str = LUXICAL_MODEL
-    batch_size: int = DEFAULT_BATCH_SIZE
-    input_filename: str = "quality_samples.jsonl"
-    output_filename: str = "quality_embeddings.npz"
-    label_field: str = "quality_bucket"
-
-
-def embed_documents(config: EmbedConfig) -> None:
+def embed_documents(
+    output_path: str,
+    input_path: str,
+    model_name: str = LUXICAL_MODEL,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    input_filename: str = "quality_samples.jsonl",
+    output_filename: str = "quality_embeddings.npz",
+    label_field: str = "quality_bucket",
+) -> None:
     """Compute embeddings for sampled documents and save as .npz."""
-    input_file = os.path.join(config.input_path, config.input_filename)
+    input_file = os.path.join(input_path, input_filename)
     docs = _read_jsonl(input_file)
-    logger.info("Embedding %d documents with model=%s", len(docs), config.model_name)
+    logger.info("Embedding %d documents with model=%s", len(docs), model_name)
 
-    model = _load_model(config.model_name)
+    model = _load_model(model_name)
 
     texts = [doc["text"] for doc in docs]
     doc_ids = [doc["doc_id"] for doc in docs]
-    labels = [doc.get(config.label_field, "unknown") for doc in docs]
+    labels = [doc.get(label_field, "unknown") for doc in docs]
     splits = [doc.get("split", "unknown") for doc in docs]
 
-    embeddings = _embed_texts(model, texts, config.batch_size)
+    embeddings = _embed_texts(model, texts, batch_size)
 
-    os.makedirs(config.output_path, exist_ok=True)
-    _save_embeddings(embeddings, doc_ids, labels, splits, config.output_path, config.output_filename)
+    _save_embeddings(embeddings, doc_ids, labels, splits, output_path, output_filename)
