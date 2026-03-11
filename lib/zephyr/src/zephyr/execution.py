@@ -20,13 +20,14 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import cloudpickle
+import pyarrow as pa
 import pyarrow.compute as pc
 import vortex
 from iris.marin_fs import open_url, url_to_fs
@@ -40,8 +41,10 @@ from zephyr.plan import (
     Join,
     PhysicalOp,
     PhysicalPlan,
+    Scatter,
     SourceItem,
     StageContext,
+    StageResultChunk,
     StageType,
     compute_plan,
     run_stage,
@@ -224,6 +227,98 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
         finally:
             elapsed = time.monotonic() - t_0
             logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
+
+
+def _write_scatter_results(
+    scatter_gen: Iterator[StageResultChunk],
+    vortex_path: str,
+    source_shard: int,
+    chunk_path_fn: Callable[[int], str],
+) -> list[ResultChunk]:
+    """Write scatter output to Vortex, falling back to pickle on failure.
+
+    Streams scatter chunks into a single Vortex file with envelope wrapping.
+    If the first chunk fails Arrow/Vortex conversion, falls back to writing
+    each chunk as a PickleDiskChunk.
+
+    Args:
+        scatter_gen: Generator of StageResultChunks (each .chunk is a sorted list)
+        vortex_path: Target path for the Vortex file
+        source_shard: Source shard index
+        chunk_path_fn: Function from chunk_idx to pickle file path (for fallback)
+
+    Returns:
+        List of ResultChunks with VortexDiskChunk or PickleDiskChunk data
+    """
+    first_result = next(scatter_gen, None)
+    if first_result is None:
+        return []
+
+    first_items = list(first_result.chunk)
+
+    # Attempt Vortex conversion on first chunk
+    chunk_idx_per_shard: dict[int, int] = defaultdict(int)
+    first_cidx = chunk_idx_per_shard[first_result.target_shard]
+    chunk_idx_per_shard[first_result.target_shard] += 1
+
+    try:
+        first_envelope = [
+            {_ZEPHYR_SHARD_IDX_COL: first_result.target_shard, _ZEPHYR_CHUNK_IDX_COL: first_cidx, _ZEPHYR_ITEM_COL: item}
+            for item in first_items
+        ]
+        first_batch = pa.RecordBatch.from_pylist(first_envelope)
+        first_arr = vortex.array(first_batch.to_struct_array())
+    except Exception:
+        logger.warning(
+            "Vortex scatter serialization failed for shard %d; " "falling back to pickle. Performance will be degraded.",
+            source_shard,
+            exc_info=True,
+        )
+        # Pickle fallback: write first chunk + remaining
+        results: list[ResultChunk] = []
+        pidx = 0
+        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), first_items)
+        results.append(ResultChunk(source_shard=source_shard, target_shard=first_result.target_shard, data=chunk_ref))
+        pidx += 1
+        for result in scatter_gen:
+            items = list(result.chunk)
+            chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), items)
+            results.append(ResultChunk(source_shard=source_shard, target_shard=result.target_shard, data=chunk_ref))
+            pidx += 1
+        return results
+
+    # Vortex conversion succeeded — stream remaining chunks
+    chunk_records: list[tuple[int, int, int]] = [(first_result.target_shard, first_cidx, len(first_items))]
+
+    def _remaining_arrays():
+        for result in scatter_gen:
+            items = list(result.chunk)
+            target = result.target_shard
+            cidx = chunk_idx_per_shard[target]
+            chunk_idx_per_shard[target] += 1
+            envelope = [
+                {_ZEPHYR_SHARD_IDX_COL: target, _ZEPHYR_CHUNK_IDX_COL: cidx, _ZEPHYR_ITEM_COL: item} for item in items
+            ]
+            batch = pa.RecordBatch.from_pylist(envelope)
+            chunk_records.append((target, cidx, len(items)))
+            yield vortex.array(batch.to_struct_array())
+
+    def _all_arrays():
+        yield first_arr
+        yield from _remaining_arrays()
+
+    ensure_parent_dir(vortex_path)
+    array_iter = vortex.ArrayIterator.from_iter(first_arr.dtype, _all_arrays())
+    vortex.io.write(array_iter, vortex_path)
+
+    return [
+        ResultChunk(
+            source_shard=source_shard,
+            target_shard=target,
+            data=VortexDiskChunk(path=vortex_path, filter_shard=target, filter_chunk=cidx, count=count),
+        )
+        for target, cidx, count in chunk_records
+    ]
 
 
 class WorkerState(enum.Enum):
@@ -1010,23 +1105,38 @@ class ZephyrWorker:
             stage_name=task.stage_name,
         )
 
+        is_scatter = any(isinstance(op, Scatter) for op in task.operations)
+
+        if is_scatter:
+            vortex_path = (
+                f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}" f"/shard-{task.shard_idx:04d}.vortex"
+            )
+
+            def pickle_path_fn(idx: int) -> str:
+                return _chunk_path(self._chunk_prefix, self._execution_id, task.stage_name, task.shard_idx, idx)
+
+            results = _write_scatter_results(
+                run_stage(stage_ctx, task.operations),
+                vortex_path=vortex_path,
+                source_shard=task.shard_idx,
+                chunk_path_fn=pickle_path_fn,
+            )
+            logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, len(results))
+            return TaskResult(chunks=results)
+
         results: list[ResultChunk] = []
         chunk_idx = 0
 
         for stage_output in run_stage(stage_ctx, task.operations):
-            if isinstance(stage_output.chunk, VortexDiskChunk):
-                # Scatter already wrote the Vortex file — use directly
-                chunk_ref: Chunk = stage_output.chunk
-            else:
-                chunk_path = _chunk_path(
-                    self._chunk_prefix,
-                    self._execution_id,
-                    task.stage_name,
-                    task.shard_idx,
-                    chunk_idx,
-                )
-                chunk = list(stage_output.chunk)
-                chunk_ref = PickleDiskChunk.write(chunk_path, chunk)
+            chunk_path = _chunk_path(
+                self._chunk_prefix,
+                self._execution_id,
+                task.stage_name,
+                task.shard_idx,
+                chunk_idx,
+            )
+            chunk = list(stage_output.chunk)
+            chunk_ref: Chunk = PickleDiskChunk.write(chunk_path, chunk)
             results.append(
                 ResultChunk(
                     source_shard=stage_output.source_shard,
