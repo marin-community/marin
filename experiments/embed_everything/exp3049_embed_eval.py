@@ -135,7 +135,7 @@ embed_quality = StepSpec(
             label_field="quality_bucket",
         ),
         resources=ResourceConfig.with_cpu(),
-        pip_dependency_groups=["embed"],
+        pip_dependency_groups=["cpu", "embed"],
     ),
 )
 
@@ -154,7 +154,7 @@ embed_topic = StepSpec(
             label_field="source_label",
         ),
         resources=ResourceConfig.with_cpu(),
-        pip_dependency_groups=["embed"],
+        pip_dependency_groups=["cpu", "embed"],
     ),
 )
 
