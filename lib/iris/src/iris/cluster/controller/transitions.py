@@ -180,7 +180,6 @@ class DispatchBatch:
 
     worker_id: WorkerId
     worker_address: str
-    vm_address: str
     running_tasks: list[RunningTaskEntry]
     tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest] = field(default_factory=list)
     tasks_to_kill: list[str] = field(default_factory=list)
@@ -1297,7 +1296,6 @@ class ControllerTransitions:
             return DispatchBatch(
                 worker_id=WorkerId(str(worker_row["worker_id"])),
                 worker_address=str(worker_row["address"]),
-                vm_address=metadata.vm_address or "",
                 running_tasks=[
                     RunningTaskEntry(
                         task_id=JobName.from_wire(str(row["task_id"])),
@@ -1457,7 +1455,6 @@ class ControllerTransitions:
                 snapshot=DispatchBatch(
                     worker_id=snapshot.worker_id,
                     worker_address=snapshot.worker_address,
-                    vm_address=snapshot.vm_address,
                     running_tasks=snapshot.running_tasks,
                 ),
                 force_remove=False,
@@ -1490,12 +1487,12 @@ class ControllerTransitions:
         result = self.fail_heartbeat_for_worker(snapshot.worker_id, error, snapshot)
         return result.action
 
-    def fail_workers_by_vm_addresses(
+    def fail_workers_by_ids(
         self,
-        vm_addresses: list[str],
+        worker_ids: list[str],
         reason: str,
     ) -> list[tuple[WorkerId, str]]:
-        """Fail all active workers matching the given VM addresses.
+        """Fail all active workers matching the given worker IDs.
 
         Used for slice reaping: when one worker on a multi-VM slice fails, all
         sibling workers on that slice must be failed immediately rather than
@@ -1503,14 +1500,14 @@ class ControllerTransitions:
 
         Returns list of (worker_id, worker_address) pairs for workers that were removed.
         """
-        if not vm_addresses:
+        if not worker_ids:
             return []
-        target_set = set(vm_addresses)
+        target_set = set(worker_ids)
         with self._db.snapshot() as snap:
             all_workers = snap.select(WORKERS, where=WORKERS.c.active == 1)
         candidates: list[tuple[WorkerId, str]] = []
         for w in all_workers:
-            if w.metadata.vm_address in target_set:
+            if w.worker_id in target_set:
                 candidates.append((w.worker_id, w.address))
         removed: list[tuple[WorkerId, str]] = []
         for worker_id, address in candidates:
@@ -1520,7 +1517,6 @@ class ControllerTransitions:
                 snapshot=DispatchBatch(
                     worker_id=worker_id,
                     worker_address=address,
-                    vm_address="",
                     running_tasks=[],
                 ),
                 force_remove=True,

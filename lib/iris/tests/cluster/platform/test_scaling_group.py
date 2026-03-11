@@ -22,9 +22,9 @@ from iris.cluster.platform.base import (
     Labels,
     QuotaExhaustedError,
     SliceStatus,
-    WorkerStatus,
+    WorkerStatus as CloudWorkerStatus,
 )
-from iris.cluster.types import VmWorkerStatus
+from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -64,7 +64,7 @@ def make_mock_worker_handle(vm_id: str, address: str, state: vm_pb2.VmState) -> 
     handle.worker_id = vm_id
     handle.internal_address = address
     handle.external_address = None
-    handle.status.return_value = WorkerStatus(state=_cloud_worker_state_from_iris(state))
+    handle.status.return_value = CloudWorkerStatus(state=_cloud_worker_state_from_iris(state))
     return handle
 
 
@@ -139,8 +139,8 @@ def make_mock_platform(slice_handles_to_discover: list[MagicMock] | None = None)
 def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
     """Mark discovered slices as READY with their VM addresses."""
     for handle in handles:
-        vm_addresses = [vm.internal_address for vm in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, vm_addresses, timestamp=timestamp)
+        worker_ids = [vm.internal_address for vm in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, worker_ids, timestamp=timestamp)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> None:
@@ -487,7 +487,7 @@ class TestScalingGroupIdleTracking:
 
         # Mark slice as active at t=1000 via update_slice_activity
         vm_status_map = {
-            vm_address: VmWorkerStatus(vm_address=vm_address, running_task_ids=frozenset({"task-1"})),
+            vm_address: WorkerStatus(worker_id=vm_address, running_task_ids=frozenset({"task-1"})),
         }
         group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
 
@@ -506,7 +506,7 @@ class TestScalingGroupIdleTracking:
 
         # Mark slice as active at t=1000 via update_slice_activity
         vm_status_map = {
-            vm_address: VmWorkerStatus(vm_address=vm_address, running_task_ids=frozenset({"task-1"})),
+            vm_address: WorkerStatus(worker_id=vm_address, running_task_ids=frozenset({"task-1"})),
         }
         group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
 
@@ -532,13 +532,13 @@ class TestScalingGroupIdleTracking:
 
         # Mark slice-001 as active at t=1000 (will be idle longer)
         vm_status_map_001 = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+            slice_001_addr: WorkerStatus(worker_id=slice_001_addr, running_task_ids=frozenset({"task-1"})),
         }
         group.update_slice_activity(vm_status_map_001, Timestamp.from_ms(1000))
 
         # Mark slice-002 as active at t=5000 (more recently active)
         vm_status_map_002 = {
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset({"task-2"})),
+            slice_002_addr: WorkerStatus(worker_id=slice_002_addr, running_task_ids=frozenset({"task-2"})),
         }
         group.update_slice_activity(vm_status_map_002, Timestamp.from_ms(5000))
 
@@ -566,8 +566,8 @@ class TestScalingGroupIdleTracking:
 
         # slice-001 has running tasks, slice-002 is idle
         vm_status_map = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_001_addr: WorkerStatus(worker_id=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+            slice_002_addr: WorkerStatus(worker_id=slice_002_addr, running_task_ids=frozenset()),
         }
 
         check_ts = Timestamp.from_ms(5000)
@@ -596,15 +596,15 @@ class TestScalingGroupIdleTracking:
 
         # Mark both slices as active at t=0 (they'll be idle for 10s, exceeding 1s threshold)
         vm_status_map_active = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset({"task-2"})),
+            slice_001_addr: WorkerStatus(worker_id=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+            slice_002_addr: WorkerStatus(worker_id=slice_002_addr, running_task_ids=frozenset({"task-2"})),
         }
         group.update_slice_activity(vm_status_map_active, Timestamp.from_ms(0))
 
         # At t=10_000, workers are now idle
         vm_status_map_idle = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_001_addr: WorkerStatus(worker_id=slice_001_addr, running_task_ids=frozenset()),
+            slice_002_addr: WorkerStatus(worker_id=slice_002_addr, running_task_ids=frozenset()),
         }
 
         # Target capacity = 1, but we have 2 ready slices
@@ -624,7 +624,7 @@ class TestScalingGroupIdleTracking:
 
         slice_001 = group.get_slice("slice-001")
         slice_001_addr = _get_vm_address(slice_001)
-        vm_status_map = {slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset())}
+        vm_status_map = {slice_001_addr: WorkerStatus(worker_id=slice_001_addr, running_task_ids=frozenset())}
 
         # Target = 1, ready = 1, should not scale down
         scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity=1, timestamp=Timestamp.from_ms(10_000))
@@ -643,7 +643,7 @@ class TestScalingGroupIdleTracking:
         vm_address = _get_vm_address(handle)
 
         vm_status_map = {
-            vm_address: VmWorkerStatus(vm_address=vm_address, running_task_ids=frozenset({"task-1"})),
+            vm_address: WorkerStatus(worker_id=vm_address, running_task_ids=frozenset({"task-1"})),
         }
         group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
 
@@ -989,13 +989,13 @@ class TestVerifySliceIdle:
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
         handle = _tracked_scale_up(group, timestamp=ts)
-        vm_addresses = [vm.internal_address for vm in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        worker_ids = [vm.internal_address for vm in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, worker_ids)
         state = _get_slice_state(group, handle)
 
         # Get VM addresses from mock
         vm_address = _get_vm_address(handle)
-        status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset())}
+        status_map = {vm_address: WorkerStatus(worker_id="", running_task_ids=frozenset())}
         assert group._verify_slice_idle(state, status_map)
 
     def test_known_busy_worker_blocks_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
@@ -1007,7 +1007,7 @@ class TestVerifySliceIdle:
         state = _get_slice_state(group, handle)
 
         vm_address = _get_vm_address(handle)
-        status_map = {vm_address: VmWorkerStatus(vm_address="", running_task_ids=frozenset({"task-1"}))}
+        status_map = {vm_address: WorkerStatus(worker_id="", running_task_ids=frozenset({"task-1"}))}
         assert not group._verify_slice_idle(state, status_map)
 
 
@@ -1141,7 +1141,7 @@ class TestMarkSliceLockDiscipline:
     """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
 
     def test_mark_slice_ready_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """lifecycle and vm_addresses are set while holding the lock."""
+        """lifecycle and worker_ids are set while holding the lock."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         handle = _tracked_scale_up(group)
@@ -1149,7 +1149,7 @@ class TestMarkSliceLockDiscipline:
         # Verify the slice starts as BOOTING with no addresses
         state = _get_slice_state(group, handle)
         assert state.lifecycle == SliceLifecycleState.BOOTING
-        assert state.vm_addresses == []
+        assert state.worker_ids == []
 
         addresses = ["10.0.0.1", "10.0.0.2"]
         group.mark_slice_ready(handle.slice_id, addresses)
@@ -1158,7 +1158,7 @@ class TestMarkSliceLockDiscipline:
         with group._slices_lock:
             state = group._slices[handle.slice_id]
             assert state.lifecycle == SliceLifecycleState.READY
-            assert state.vm_addresses == addresses
+            assert state.worker_ids == addresses
 
     def test_mark_slice_failed_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """lifecycle is set to FAILED while holding the lock."""
@@ -1185,8 +1185,8 @@ class TestMarkSliceLockDiscipline:
         group.mark_slice_failed("nonexistent")
 
 
-def test_slice_state_to_proto_generates_synthetic_vm_ids():
-    """slice_state_to_proto generates synthetic VM IDs from slice_id and index."""
+def test_slice_state_to_proto_uses_worker_ids_as_vm_ids():
+    """slice_state_to_proto uses worker_ids directly as vm_id."""
     from iris.cluster.controller.scaling_group import slice_state_to_proto
 
     handle = MagicMock()
@@ -1197,13 +1197,11 @@ def test_slice_state_to_proto_generates_synthetic_vm_ids():
     state = SliceState(
         handle=handle,
         lifecycle=SliceLifecycleState.READY,
-        vm_addresses=["10.0.0.1", "10.0.0.2"],
+        worker_ids=["10.0.0.1", "10.0.0.2"],
     )
     proto = slice_state_to_proto(state)
-    assert proto.vms[0].vm_id == "my-slice-vm-0"
-    assert proto.vms[1].vm_id == "my-slice-vm-1"
-    assert proto.vms[0].address == "10.0.0.1"
-    assert proto.vms[1].address == "10.0.0.2"
+    assert proto.vms[0].vm_id == "10.0.0.1"
+    assert proto.vms[1].vm_id == "10.0.0.2"
 
 
 def _make_worker_handle(vm_id: str, cloud_state: CloudWorkerState, address: str = "10.0.0.1") -> MagicMock:
@@ -1211,7 +1209,7 @@ def _make_worker_handle(vm_id: str, cloud_state: CloudWorkerState, address: str 
     handle.vm_id = vm_id
     handle.worker_id = vm_id
     handle.internal_address = address
-    handle.status.return_value = WorkerStatus(state=cloud_state)
+    handle.status.return_value = CloudWorkerStatus(state=cloud_state)
     return handle
 
 
@@ -1275,11 +1273,11 @@ class TestMultiVmSliceIdleScaleDown:
         assert len(addrs) == 4
 
         # Mark all workers as active at t=0
-        active_map = {addr: VmWorkerStatus(vm_address=addr, running_task_ids=frozenset({"task"})) for addr in addrs}
+        active_map = {addr: WorkerStatus(worker_id=addr, running_task_ids=frozenset({"task"})) for addr in addrs}
         group.update_slice_activity(active_map, Timestamp.from_ms(0))
 
         # At t=10_000 (past threshold), all workers now idle
-        idle_map = {addr: VmWorkerStatus(vm_address=addr, running_task_ids=frozenset()) for addr in addrs}
+        idle_map = {addr: WorkerStatus(worker_id=addr, running_task_ids=frozenset()) for addr in addrs}
         scaled_down = group.scale_down_if_idle(idle_map, target_capacity=0, timestamp=Timestamp.from_ms(10_000))
 
         assert len(scaled_down) == 1
@@ -1299,14 +1297,14 @@ class TestMultiVmSliceIdleScaleDown:
         addrs = [w.internal_address for w in workers]
 
         # Mark all active initially
-        active_map = {addr: VmWorkerStatus(vm_address=addr, running_task_ids=frozenset({"task"})) for addr in addrs}
+        active_map = {addr: WorkerStatus(worker_id=addr, running_task_ids=frozenset({"task"})) for addr in addrs}
         group.update_slice_activity(active_map, Timestamp.from_ms(0))
 
         # 3 workers idle, 1 still has tasks
         mixed_map = {}
         for i, addr in enumerate(addrs):
             tasks = frozenset({"task-running"}) if i == 0 else frozenset()
-            mixed_map[addr] = VmWorkerStatus(vm_address=addr, running_task_ids=tasks)
+            mixed_map[addr] = WorkerStatus(worker_id=addr, running_task_ids=tasks)
 
         scaled_down = group.scale_down_if_idle(mixed_map, target_capacity=0, timestamp=Timestamp.from_ms(10_000))
 
@@ -1330,7 +1328,7 @@ class TestMultiVmSliceIdleScaleDown:
         vm_map = {}
         for i, addr in enumerate(addrs):
             tasks = frozenset({"task-on-vm-2"}) if i == 2 else frozenset()
-            vm_map[addr] = VmWorkerStatus(vm_address=addr, running_task_ids=tasks)
+            vm_map[addr] = WorkerStatus(worker_id=addr, running_task_ids=tasks)
 
         group.update_slice_activity(vm_map, Timestamp.from_ms(5000))
 
@@ -1357,16 +1355,16 @@ class TestMultiVmSliceIdleScaleDown:
         # Mark both slices active initially
         all_active = {}
         for addr in addrs_1 + addrs_2:
-            all_active[addr] = VmWorkerStatus(vm_address=addr, running_task_ids=frozenset({"task"}))
+            all_active[addr] = WorkerStatus(worker_id=addr, running_task_ids=frozenset({"task"}))
         group.update_slice_activity(all_active, Timestamp.from_ms(0))
 
         # At t=10_000: slice-001 all idle, slice-002 still has work on one VM
         vm_map = {}
         for addr in addrs_1:
-            vm_map[addr] = VmWorkerStatus(vm_address=addr, running_task_ids=frozenset())
+            vm_map[addr] = WorkerStatus(worker_id=addr, running_task_ids=frozenset())
         for i, addr in enumerate(addrs_2):
             tasks = frozenset({"running"}) if i == 0 else frozenset()
-            vm_map[addr] = VmWorkerStatus(vm_address=addr, running_task_ids=tasks)
+            vm_map[addr] = WorkerStatus(worker_id=addr, running_task_ids=tasks)
 
         scaled_down = group.scale_down_if_idle(vm_map, target_capacity=1, timestamp=Timestamp.from_ms(10_000))
 
@@ -1381,14 +1379,14 @@ class TestMultiVmSliceIdleScaleDown:
         group = ScalingGroup(config, platform)
 
         handle = _tracked_scale_up(group)
-        vm_addresses = [f"10.0.0.{i}" for i in range(4)]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        worker_ids = [f"10.0.0.{i}" for i in range(4)]
+        group.mark_slice_ready(handle.slice_id, worker_ids)
         state = _get_slice_state(group, handle)
 
         # Only 2 of 4 workers in status map, both idle
         partial_map = {
-            "10.0.0.0": VmWorkerStatus(vm_address="10.0.0.0", running_task_ids=frozenset()),
-            "10.0.0.1": VmWorkerStatus(vm_address="10.0.0.1", running_task_ids=frozenset()),
+            "10.0.0.0": WorkerStatus(worker_id="10.0.0.0", running_task_ids=frozenset()),
+            "10.0.0.1": WorkerStatus(worker_id="10.0.0.1", running_task_ids=frozenset()),
         }
         # Should still return True — known workers are all idle, unknown are skipped
         assert group._verify_slice_idle(state, partial_map)
@@ -1400,8 +1398,8 @@ class TestMultiVmSliceIdleScaleDown:
         group = ScalingGroup(config, platform)
 
         handle = _tracked_scale_up(group)
-        vm_addresses = [f"10.0.0.{i}" for i in range(4)]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        worker_ids = [f"10.0.0.{i}" for i in range(4)]
+        group.mark_slice_ready(handle.slice_id, worker_ids)
         state = _get_slice_state(group, handle)
 
         assert not group._verify_slice_idle(state, {})
@@ -1421,7 +1419,7 @@ class TestSliceStateToProtoIdleFields:
         state = SliceState(
             handle=handle,
             lifecycle=SliceLifecycleState.READY,
-            vm_addresses=["10.0.0.1"],
+            worker_ids=["10.0.0.1"],
             last_active=Timestamp.from_ms(1000),
         )
 
@@ -1442,7 +1440,7 @@ class TestSliceStateToProtoIdleFields:
         state = SliceState(
             handle=handle,
             lifecycle=SliceLifecycleState.READY,
-            vm_addresses=["10.0.0.1"],
+            worker_ids=["10.0.0.1"],
             last_active=Timestamp.from_ms(1000),
         )
         proto = slice_state_to_proto(state, idle_threshold=None)
@@ -1459,7 +1457,7 @@ class TestSliceStateToProtoIdleFields:
         state = SliceState(
             handle=handle,
             lifecycle=SliceLifecycleState.BOOTING,
-            vm_addresses=[],
+            worker_ids=[],
             last_active=Timestamp.from_ms(0),
         )
         proto = slice_state_to_proto(state, idle_threshold=Duration.from_ms(1))
