@@ -2436,6 +2436,51 @@ def _run_command_with_output(cmd: Sequence[str], *, cwd: Path | None = None) -> 
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
+def _submit_ray_job(cmd: Sequence[str], *, cwd: Path | None = None) -> tuple[int, str, str | None]:
+    proc = _run(cmd, cwd=cwd, capture_output=True, check=False)
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    return proc.returncode, combined, _extract_submission_id(combined)
+
+
+def _wait_for_ray_job(
+    *,
+    cluster: str,
+    job_id: str,
+    timeout_seconds: float | None,
+    tail: int,
+) -> tuple[int, str]:
+    cmd = [
+        *CLUSTER_CLI,
+        "--cluster",
+        cluster,
+        "wait-job",
+        job_id,
+        "--poll",
+        "5.0",
+        "--show-logs",
+        "--tail",
+        str(tail),
+    ]
+    if timeout_seconds is not None:
+        cmd += ["--timeout", str(timeout_seconds)]
+    return _run_command_with_output(cmd)
+
+
+def _stop_ray_job_best_effort(*, cluster: str, job_id: str) -> None:
+    cmd = [
+        *CLUSTER_CLI,
+        "--cluster",
+        cluster,
+        "stop-job",
+        job_id,
+    ]
+    _run(cmd, check=False)
+
+
 def cmd_ray_wait(args: argparse.Namespace) -> int:
     cmd = [
         *CLUSTER_CLI,
@@ -2774,29 +2819,42 @@ def _run_validation_ray_test_once(args: argparse.Namespace, *, cluster: str) -> 
         "EQX_ON_ERROR=nan",
         "-e",
         "WANDB_MODE=offline",
+        "--no_wait",
         "--",
         "bash",
         "-lc",
         remote_cmd,
     ]
-    proc = _run(cmd, capture_output=True, check=False)
-    if proc.stdout:
-        sys.stdout.write(proc.stdout)
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
-    combined = (proc.stdout or "") + (proc.stderr or "")
-    if proc.returncode != 0 and "No cluster config found for region" in combined:
+    rc, combined, submission_id = _submit_ray_job(cmd)
+    if rc != 0 and "No cluster config found for region" in combined:
         _validation_bad_ray_clusters(args).add(cluster)
         print(
             f"[gdnctl] validation Ray cluster is invalid and will be skipped in future retries: {cluster}",
             file=sys.stderr,
         )
-        return proc.returncode, False
-    return proc.returncode, True
+        return rc, False
+    if rc != 0:
+        return rc, True
+    if submission_id is None:
+        print("[gdnctl] validation Ray test submission did not return a job id.", file=sys.stderr)
+        return 1, True
+
+    wait_rc, _wait_output = _wait_for_ray_job(
+        cluster=cluster,
+        job_id=submission_id,
+        timeout_seconds=args.validation_ray_test_timeout,
+        tail=args.validation_ray_log_tail,
+    )
+    if wait_rc != 0:
+        _stop_ray_job_best_effort(cluster=cluster, job_id=submission_id)
+    return wait_rc, True
 
 
 def _run_validation_tests_once(args: argparse.Namespace) -> tuple[int, bool]:
     active_cluster = getattr(args, "active_dev_tpu_cluster", None)
+    if active_cluster is None and args.dev_tpu_name and args.hold_dev_tpu:
+        _try_reacquire_managed_dev_tpu(args, reason="validation tests starting without an active held dev TPU")
+        active_cluster = getattr(args, "active_dev_tpu_cluster", None)
     if args.dev_tpu_name and active_cluster is not None:
         dev_test_args = argparse.Namespace(
             cluster=active_cluster,
@@ -2842,6 +2900,28 @@ def _run_validation_tests_once(args: argparse.Namespace) -> tuple[int, bool]:
             return 0, True
         last_rc = rc
         retryable = retryable or cluster_retryable
+    if (
+        args.dev_tpu_name
+        and args.hold_dev_tpu
+        and _try_reacquire_managed_dev_tpu(
+            args,
+            reason="validation tests Ray fallback failed",
+        )
+    ):
+        retry_cluster = getattr(args, "active_dev_tpu_cluster", None)
+        if retry_cluster is not None:
+            retry_args = argparse.Namespace(
+                cluster=retry_cluster,
+                tpu_name=args.dev_tpu_name,
+                tests=args.validation_tests,
+                pytest_args=args.validation_pytest_args,
+                no_sync=args.validation_dev_no_sync,
+            )
+            rc = cmd_dev_tpu_test(retry_args)
+            if rc == 0:
+                return 0, True
+            last_rc = rc
+            retryable = True
     return last_rc, retryable
 
 
@@ -2885,9 +2965,9 @@ def _run_validation_ray_profile_once(
         profile_args += ["--dry_run", "true"]
     profile_cmd_lines = _profile_command_lines(include_tpu_sync=False, profile_args=profile_args)
     profile_cmd = " && ".join(profile_cmd_lines)
-    cmd += ["--", "bash", "-lc", profile_cmd]
+    cmd += ["--no_wait", "--", "bash", "-lc", profile_cmd]
 
-    rc, combined = _run_command_with_output(cmd)
+    rc, combined, submission_id = _submit_ray_job(cmd)
     if rc != 0 and "No cluster config found for region" in combined:
         _validation_bad_ray_clusters(args).add(cluster)
         print(
@@ -2895,7 +2975,23 @@ def _run_validation_ray_profile_once(
             file=sys.stderr,
         )
         return rc, False, combined
-    return rc, True, combined
+    if rc != 0:
+        return rc, True, combined
+    if submission_id is None:
+        message = combined + "\n[gdnctl] validation Ray profile submission did not return a job id.\n"
+        print("[gdnctl] validation Ray profile submission did not return a job id.", file=sys.stderr)
+        return 1, True, message
+
+    wait_rc, wait_output = _wait_for_ray_job(
+        cluster=cluster,
+        job_id=submission_id,
+        timeout_seconds=args.validation_ray_profile_timeout,
+        tail=args.validation_ray_log_tail,
+    )
+    combined_output = combined + "\n" + wait_output
+    if wait_rc != 0:
+        _stop_ray_job_best_effort(cluster=cluster, job_id=submission_id)
+    return wait_rc, True, combined_output
 
 
 def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) -> tuple[int, bool, dict[str, object]]:
@@ -2917,6 +3013,9 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
     ):
         should_run_compare = False
     active_cluster = getattr(args, "active_dev_tpu_cluster", None)
+    if active_cluster is None and args.dev_tpu_name and args.hold_dev_tpu:
+        _try_reacquire_managed_dev_tpu(args, reason="validation profile starting without an active held dev TPU")
+        active_cluster = getattr(args, "active_dev_tpu_cluster", None)
     if args.dev_tpu_name and active_cluster is not None:
 
         def _run_on_cluster(
@@ -3110,6 +3209,112 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
         last_rc = rc
         last_output = output_text
         retryable = retryable or cluster_retryable
+    if (
+        args.dev_tpu_name
+        and args.hold_dev_tpu
+        and _try_reacquire_managed_dev_tpu(
+            args,
+            reason="validation profile Ray fallback failed",
+        )
+    ):
+        retry_cluster = getattr(args, "active_dev_tpu_cluster", None)
+        if retry_cluster is not None:
+
+            def _run_on_cluster(
+                cluster: str,
+                *,
+                run_name_prefix: str,
+                ce_implementation: str,
+                ce_bwd_mode: str,
+            ) -> tuple[int, str]:
+                dev_profile_args = argparse.Namespace(
+                    cluster=cluster,
+                    tpu_name=args.dev_tpu_name,
+                    tpu=args.validation_profile_tpu,
+                    size=args.validation_profile_size,
+                    num_steps=args.validation_profile_num_steps,
+                    profile_start_step=args.validation_profile_start_step,
+                    profile_num_steps=args.validation_profile_num_steps_window,
+                    batch_size=args.validation_profile_batch_size,
+                    chunk_size=args.validation_profile_chunk_size,
+                    segment_size=args.validation_profile_segment_size,
+                    gdn_layers_per_block=args.validation_profile_gdn_layers_per_block,
+                    gdn_block_size=args.validation_profile_gdn_block_size,
+                    all_transformer=args.validation_profile_all_transformer,
+                    run_name_prefix=profile_prefix,
+                    wandb_mode=args.validation_profile_wandb_mode,
+                    profile_env=args.validation_profile_env,
+                    marin_prefix=args.validation_profile_marin_prefix,
+                    dry_run=args.validation_profile_dry_run,
+                    no_sync=args.validation_dev_no_sync,
+                    ce_implementation=ce_implementation,
+                    ce_bwd_mode=ce_bwd_mode,
+                )
+                cmd = [
+                    *DEV_TPU,
+                    "--cluster",
+                    dev_profile_args.cluster,
+                    "--tpu-name",
+                    dev_profile_args.tpu_name,
+                    "execute",
+                ]
+                _append_profile_env(cmd, dev_profile_args)
+                if dev_profile_args.marin_prefix:
+                    marin_prefix = dev_profile_args.marin_prefix
+                else:
+                    marin_prefix = f"gs://marin-{dev_profile_args.cluster}"
+                cmd += ["-e", f"MARIN_PREFIX={marin_prefix}"]
+                if dev_profile_args.no_sync:
+                    cmd.append("--no-sync")
+                profile_args = ["--force_run_failed", "true"]
+                if dev_profile_args.dry_run:
+                    profile_args += ["--dry_run", "true"]
+                profile_cmd_lines = _profile_command_lines(include_tpu_sync=True, profile_args=profile_args)
+                cmd += ["--", " && ".join(profile_cmd_lines)]
+                return _run_command_with_output(cmd)
+
+            rc, output_text = _run_on_cluster(
+                retry_cluster,
+                run_name_prefix=profile_prefix,
+                ce_implementation=primary_ce_impl,
+                ce_bwd_mode=primary_ce_bwd_mode,
+            )
+            if rc == 0:
+                primary_info = _collect_profile_metrics(
+                    _profile_metric_args(
+                        args,
+                        ce_implementation=primary_ce_impl,
+                        ce_bwd_mode=primary_ce_bwd_mode,
+                    ),
+                    output_text=output_text,
+                    profile_prefix=profile_prefix,
+                )
+                if should_run_compare:
+                    compare_prefix = (
+                        f"{profile_prefix}_ce_{compare_ce_impl_effective}_bwd_{compare_ce_bwd_mode_effective}"
+                    )
+                    compare_rc, compare_output = _run_on_cluster(
+                        retry_cluster,
+                        run_name_prefix=compare_prefix,
+                        ce_implementation=compare_ce_impl_effective,
+                        ce_bwd_mode=compare_ce_bwd_mode_effective,
+                    )
+                    if compare_rc != 0:
+                        return compare_rc, True, primary_info
+                    compare_info = _collect_profile_metrics(
+                        _profile_metric_args(
+                            args,
+                            ce_implementation=compare_ce_impl_effective,
+                            ce_bwd_mode=compare_ce_bwd_mode_effective,
+                        ),
+                        output_text=compare_output,
+                        profile_prefix=compare_prefix,
+                    )
+                    primary_info["ce_ab_compare"] = compare_info
+                return 0, True, primary_info
+            last_rc = rc
+            last_output = output_text
+            retryable = True
     if last_output:
         return (
             last_rc,
@@ -3400,6 +3605,12 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
 
     if args.validation_retry_sleep < 0:
         raise SystemExit("[gdnctl] --validation-retry-sleep must be >= 0.")
+    if args.validation_ray_test_timeout is not None and args.validation_ray_test_timeout <= 0:
+        raise SystemExit("[gdnctl] --validation-ray-test-timeout must be > 0 when set.")
+    if args.validation_ray_profile_timeout is not None and args.validation_ray_profile_timeout <= 0:
+        raise SystemExit("[gdnctl] --validation-ray-profile-timeout must be > 0 when set.")
+    if args.validation_ray_log_tail <= 0:
+        raise SystemExit("[gdnctl] --validation-ray-log-tail must be > 0.")
 
     args.validation_ray_cluster_exclude = [
         token.strip() for token in args.validation_ray_cluster_exclude if token and token.strip()
@@ -3958,6 +4169,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=120.0,
         help="Seconds to wait between validation retries.",
+    )
+    codex_loop.add_argument(
+        "--validation-ray-test-timeout",
+        type=float,
+        default=1800.0,
+        help="Timeout in seconds for Ray fallback validation test jobs before they are stopped and retried elsewhere.",
+    )
+    codex_loop.add_argument(
+        "--validation-ray-profile-timeout",
+        type=float,
+        default=3600.0,
+        help=(
+            "Timeout in seconds for Ray fallback validation profile jobs before they are stopped and retried elsewhere."
+        ),
+    )
+    codex_loop.add_argument(
+        "--validation-ray-log-tail",
+        type=int,
+        default=400,
+        help="Number of trailing Ray job log lines captured for validation fallback jobs.",
     )
     codex_loop.add_argument(
         "--validation-tests",

@@ -194,6 +194,134 @@ def test_validation_gate_records_full_parity_test_metadata(monkeypatch: pytest.M
     assert info["profile_prefix"] == "iter-009"
 
 
+def test_validation_tests_reacquire_dev_tpu_before_ray_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def _fake_reacquire(args: argparse.Namespace, *, reason: str) -> bool:
+        calls.append(reason)
+        args.active_dev_tpu_cluster = "us-east5-a"
+        return True
+
+    def _fake_dev_test(args: argparse.Namespace) -> int:
+        assert args.cluster == "us-east5-a"
+        return 0
+
+    def _unexpected_ray(*_args: object, **_kwargs: object) -> tuple[int, bool]:
+        raise AssertionError("Ray fallback should not run when dev TPU re-acquire succeeds.")
+
+    monkeypatch.setattr(gdnctl, "_try_reacquire_managed_dev_tpu", _fake_reacquire)
+    monkeypatch.setattr(gdnctl, "cmd_dev_tpu_test", _fake_dev_test)
+    monkeypatch.setattr(gdnctl, "_run_validation_ray_test_once", _unexpected_ray)
+
+    args = argparse.Namespace(
+        dev_tpu_name="calvinxu-gdn",
+        hold_dev_tpu=True,
+        validation_tests="both",
+        validation_pytest_args=None,
+        validation_dev_no_sync=True,
+    )
+    rc, retryable = gdnctl._run_validation_tests_once(args)
+    assert rc == 0
+    assert retryable is True
+    assert calls == ["validation tests starting without an active held dev TPU"]
+
+
+def test_validation_tests_cycle_back_to_dev_tpu_after_ray_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    reacquire_calls: list[str] = []
+
+    def _fake_reacquire(args: argparse.Namespace, *, reason: str) -> bool:
+        reacquire_calls.append(reason)
+        if "starting without" in reason:
+            return False
+        args.active_dev_tpu_cluster = "us-central1"
+        return True
+
+    def _fake_ray_clusters(_args: argparse.Namespace, *, purpose: str) -> list[str]:
+        assert purpose == "test"
+        return ["us-east5-a"]
+
+    def _fake_ray_test(_args: argparse.Namespace, *, cluster: str) -> tuple[int, bool]:
+        assert cluster == "us-east5-a"
+        return 1, True
+
+    def _fake_dev_test(args: argparse.Namespace) -> int:
+        assert args.cluster == "us-central1"
+        return 0
+
+    monkeypatch.setattr(gdnctl, "_try_reacquire_managed_dev_tpu", _fake_reacquire)
+    monkeypatch.setattr(gdnctl, "_validation_ray_clusters", _fake_ray_clusters)
+    monkeypatch.setattr(gdnctl, "_run_validation_ray_test_once", _fake_ray_test)
+    monkeypatch.setattr(gdnctl, "cmd_dev_tpu_test", _fake_dev_test)
+
+    args = argparse.Namespace(
+        dev_tpu_name="calvinxu-gdn",
+        hold_dev_tpu=True,
+        validation_tests="both",
+        validation_pytest_args=None,
+        validation_dev_no_sync=False,
+    )
+    rc, retryable = gdnctl._run_validation_tests_once(args)
+    assert rc == 0
+    assert retryable is True
+    assert reacquire_calls == [
+        "validation tests starting without an active held dev TPU",
+        "validation tests Ray fallback failed",
+    ]
+
+
+def test_validation_ray_profile_stops_job_after_wait_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    stopped: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        gdnctl,
+        "_submit_ray_job",
+        lambda _cmd: (0, "Job submitted with ID: ray-run-demo\n", "ray-run-demo"),
+    )
+    monkeypatch.setattr(
+        gdnctl,
+        "_wait_for_ray_job",
+        lambda *, cluster, job_id, timeout_seconds, tail: (
+            124,
+            f"timed out waiting for {job_id} on {cluster} timeout={timeout_seconds} tail={tail}",
+        ),
+    )
+    monkeypatch.setattr(
+        gdnctl,
+        "_stop_ray_job_best_effort",
+        lambda *, cluster, job_id: stopped.append((cluster, job_id)),
+    )
+
+    args = argparse.Namespace(
+        validation_profile_tpu="v5p-8",
+        validation_profile_wandb_mode="online",
+        validation_profile_size="130m",
+        validation_profile_num_steps=20,
+        validation_profile_start_step=2,
+        validation_profile_num_steps_window=6,
+        validation_profile_batch_size=8,
+        validation_profile_chunk_size=None,
+        validation_profile_segment_size=None,
+        validation_profile_gdn_layers_per_block=None,
+        validation_profile_gdn_block_size=None,
+        validation_profile_all_transformer=False,
+        validation_profile_env=[],
+        validation_profile_dry_run=False,
+        validation_ray_profile_timeout=123.0,
+        validation_ray_log_tail=77,
+    )
+    rc, retryable, output = gdnctl._run_validation_ray_profile_once(
+        args,
+        cluster="us-east5-a",
+        run_name_prefix="demo",
+        ce_implementation="pallas_tpu",
+        ce_bwd_mode="pallas",
+    )
+    assert rc == 124
+    assert retryable is True
+    assert "ray-run-demo" in output
+    assert stopped == [("us-east5-a", "ray-run-demo")]
+
+
 def test_collect_profile_metrics_records_profile_architecture_metadata() -> None:
     args = argparse.Namespace(
         perf_metric="throughput/mfu",
