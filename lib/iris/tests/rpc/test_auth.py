@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 
 import pytest
+from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
@@ -21,24 +22,12 @@ class FakeMethodInfo:
     name: str
 
 
-class FakeHeaders(dict):
-    """Minimal headers container matching Connect RPC Headers behavior."""
-
-    def get(self, key, default=None):
-        val = super().get(key)
-        if val is None:
-            return default
-        if isinstance(val, list):
-            return val
-        return [val]
-
-
 def _make_ctx(headers: dict | None = None):
     """Create a fake RequestContext with optional headers."""
 
     class FakeCtx:
         def __init__(self):
-            self._request_headers = FakeHeaders(headers or {})
+            self._request_headers = Headers(headers or {})
 
         def method(self):
             return FakeMethodInfo(name="TestMethod")

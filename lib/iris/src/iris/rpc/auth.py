@@ -88,8 +88,7 @@ class AuthInterceptor:
 
     def intercept_unary_sync(self, call_next, request, ctx):
         headers = ctx.request_headers()
-        auth_values = headers.get("authorization", [])
-        auth_header = auth_values[0] if auth_values else ""
+        auth_header = headers.get("authorization", "")
 
         if not auth_header.startswith("Bearer "):
             raise ConnectError(Code.UNAUTHENTICATED, "Missing or malformed Authorization header")
