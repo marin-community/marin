@@ -59,7 +59,7 @@ def _make_slice_snapshot(
         slice_id=slice_id,
         scale_group=scale_group,
         lifecycle=lifecycle,
-        vm_addresses=vm_addresses or [],
+        worker_ids=worker_ids or [],
         created_at_ms=created_at_ms,
         last_active_ms=created_at_ms,
         error_message=error_message,
