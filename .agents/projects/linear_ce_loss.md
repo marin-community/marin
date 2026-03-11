@@ -258,6 +258,42 @@ Notes:
 - `B=8192`: pallas bwd `43,580.19 tok/s` vs xla bwd `49,992.28 tok/s`
 - `B=16384`: pallas bwd `43,742.56 tok/s` vs xla bwd `51,350.72 tok/s`
 - `B=32768`: pallas bwd `43,151.46 tok/s` vs xla bwd `49,678.96 tok/s`
+
+### 2026-03-09: v5p-8 mixed-dtype large-batch-medium-h retune
+- Target reproducer:
+  - `B=40960`, `H=2048`, `V=128256`
+  - `x.dtype=bf16`, `w.dtype=float32`, `compute dtype=float32`
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+- Root cause for the earlier “autotune didn’t fire” report:
+  - the repro path called `infer_block_sizes_with_tuned_match(...)`, materialized a `BlockSizes(...)`, and passed it into `fused_cross_entropy_loss_and_logsumexp_penalty(...)`
+  - the API correctly treats any caller-supplied `block_sizes` as explicit/pinned, so autotune-on-miss was bypassed
+- Fixes landed:
+  - tuned block-size lookup now uses the widest participating dtype bucket, so mixed `x=bf16` / `w=float32` hits the float32 tuning
+  - added `large-batch-medium-h` TPU bucket for `B=32768..131072`, `H=1536..3072`, `V=120000..131072`
+  - TPU autotune miss sweep for this regime now explores `h in {256,512,1024,2048}` and `v in {128,256,512,768,1024}`
+  - autotune now raises if every candidate fails instead of silently caching the inferred miss config
+  - the checked-in repro helper leaves `block_sizes=None` on lookup miss unless the user explicitly overrides block sizes
+- Scoped-VMEM failure classification:
+  - all `v_block_size=512` candidates OOM in the same forward/JVP compile site:
+    - `jit(loss_fn)/jvp(jit(linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu))/pallas_call`
+    - scoped allocation `50.45M`, limit `48.83M`, exceeded by `1.62M`
+- Explicit mixed-dtype sweep on v5p-8 (`steps=1`, `value_and_grad=True`):
+
+| `h_block_size` | `v=128` | `v=256` | `v=512` | `v=768` | `v=1024` |
+| --- | ---: | ---: | --- | ---: | ---: |
+| `256` | `82,957.69` | `132,996.62` | `OOM` | `176,259.82` | `180,141.22` |
+| `512` | `82,962.24` | `132,996.63` | `OOM` | `183,573.79` | `180,073.16` |
+| `1024` | `82,976.04` | `132,986.13` | `OOM` | `183,801.09` | `180,212.50` |
+| `2048` | `82,966.04` | `133,023.67` | `OOM` | `183,796.71` | `180,247.28` |
+
+- Selected tuned entry:
+  - `BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=768)`
+  - checked in for `TPU v5p` and `TPU v5`, for both `bfloat16` and `float32` tuned buckets in `large-batch-medium-h`
+- Default-path verification after the table update:
+  - launcher: `ray-run-dlwh-bench_fused_ce_default_verify-20260309-verify`
+  - selected tuned block sizes: `BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=768)`
+  - repro ran with `block_sizes=None`, `has_tuned_match=True`, `autotune_bypassed=False`
+  - result: `compile_time_s=8.0815`, `steady_time_s=0.22973`, `tokens_per_s=178,293.57`, `loss=200.1534`
 - Net: forward parity is achieved/beaten; backward remains slower.
 
 #### Additional investigations
