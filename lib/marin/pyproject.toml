@@ -179,6 +179,11 @@ dedup = [
     "dupekit",
 ]
 
+embed = [
+    "luxical",
+    "sentence-transformers",
+]
+
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
