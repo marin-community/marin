@@ -99,6 +99,9 @@ As the experiment progresses, bugs are fixed, and analyses are conducted:
 - Make sure issue comments are added to capture the updated thinking.
 - The issue description should be updated with a short summary at the end to
   capture a snapshot of the current status.
+- A nightly scrub maintains a short `TL;DR` block for experiment issues so a
+  newcomer can understand why the work matters and what was learned; issues that
+  also have enough supporting links get the `tldr` label.
 
 Keep the scope of an experiment as small as possible, so that experiments do
 not stay open for long periods of time.  Follow up experiemnts can be handled

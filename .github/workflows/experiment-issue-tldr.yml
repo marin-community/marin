@@ -1,0 +1,68 @@
+name: Experiment Issue TL;DR Scrub
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # Daily at 8 AM UTC
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Optional single issue number to scrub"
+        required: false
+        type: string
+      max_issues:
+        description: "Maximum number of issues to inspect"
+        required: false
+        default: "20"
+        type: string
+      refresh_existing:
+        description: "Refresh issues that already have a managed TL;DR block"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: experiment-issue-tldr
+  cancel-in-progress: false
+
+jobs:
+  scrub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Scrub experiment issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-4.1-mini
+        run: |
+          args=()
+          if [ -n "${{ github.event.inputs.issue_number }}" ]; then
+            args+=(--issue-number "${{ github.event.inputs.issue_number }}")
+          fi
+          if [ -n "${{ github.event.inputs.max_issues }}" ]; then
+            args+=(--max-issues "${{ github.event.inputs.max_issues }}")
+          fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            args+=(--refresh-existing)
+          fi
+          if [ "${{ github.event.inputs.refresh_existing }}" = "true" ]; then
+            args+=(--refresh-existing)
+          fi
+          uv run --script scripts/pm/scrub_experiment_issue_tldrs.py "${args[@]}"
