@@ -207,6 +207,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     def loss_custom(x_raw, w_raw):
         loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
             block_size,
+            6,
             jnp.float32,
             logit_soft_cap,
             None,
@@ -252,6 +253,7 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blo
     def loss_custom(x_raw, w_raw):
         loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
             block_size,
+            64,
             jnp.float32,
             logit_soft_cap,
             None,
@@ -277,6 +279,48 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blo
 
     assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_xla_uses_explicit_batch_block_size(monkeypatch: pytest.MonkeyPatch):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+    captured: dict[str, int] = {}
+
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
+
+    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
+        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+        captured["block_size"] = block_size
+        captured["batch_block_size"] = batch_block_size
+        return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
+
+    monkeypatch.setattr(fused_xla, "_linear_softmax_cross_entropy_loss_streaming_custom_vjp", fake_custom_vjp)
+
+    fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        block_sizes=fused_api.BlockSizes(b_block_size=2, h_block_size=4, v_block_size=4),
+        dtype=jnp.float32,
+    )
+
+    assert captured == {"block_size": 4, "batch_block_size": 2}
+
+
+def test_fused_cross_entropy_xla_rejects_unsafe_explicit_batch_block_size():
+    x = jnp.zeros((1024, 4), dtype=jnp.float32)
+    w = jnp.zeros((4, 4_194_304), dtype=jnp.float32)
+    y = jnp.zeros((1024,), dtype=jnp.int32)
+
+    with pytest.raises(ValueError, match="int32 word-count limit"):
+        fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x,
+            y,
+            w,
+            block_sizes=fused_api.BlockSizes(b_block_size=1024, h_block_size=4, v_block_size=4_194_304),
+            dtype=jnp.float32,
+        )
 
 
 def test_fused_cross_entropy_xla_return_argmax_matches_reference_with_batch_blocking(

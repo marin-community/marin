@@ -12,6 +12,8 @@ from .config import BlockSizes
 from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
 from .tuned_block_sizes import infer_xla_b_block_size, infer_xla_v_block_size
 
+_XLA_MAX_TILE_WORDS = 2**31 - 1
+
 
 def _materialize_cotangent(
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero, reference: jax.Array
@@ -19,6 +21,24 @@ def _materialize_cotangent(
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
         return jnp.zeros_like(reference)
     return jnp.asarray(cotangent, dtype=reference.dtype)
+
+
+def _resolve_xla_batch_block_size(b_dim: int, v_block_size: int, block_sizes: BlockSizes | None) -> int:
+    inferred = infer_xla_b_block_size(b_dim, v_block_size)
+    if block_sizes is None:
+        return inferred
+
+    requested = block_sizes.b_block_size
+    if requested <= 0:
+        raise ValueError(f"XLA batch block size must be positive, got {requested}.")
+    if b_dim % requested != 0:
+        raise ValueError(f"XLA batch block size must divide B, got B={b_dim}, b_block_size={requested}.")
+    if requested * v_block_size > _XLA_MAX_TILE_WORDS:
+        raise ValueError(
+            "XLA batch/vocab tile exceeds TPU/XLA int32 word-count limit: "
+            f"b_block_size={requested}, v_block_size={v_block_size}."
+        )
+    return requested
 
 
 def _linear_softmax_cross_entropy_loss_streaming_fwd(
@@ -230,9 +250,10 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
     return gx, gw[:, :v_dim]
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3))
+@partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3, 4))
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     block_size: int,
+    batch_block_size: int,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
@@ -240,7 +261,6 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
-    batch_block_size = infer_xla_b_block_size(x.shape[0], block_size)
     loss, lse, *_ = _linear_softmax_cross_entropy_loss_streaming_fwd(
         x,
         labels,
@@ -256,6 +276,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
 
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     block_size: int,
+    batch_block_size: int,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
@@ -263,7 +284,6 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[tuple[Float[Array, "B"], Float[Array, "B"]], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
-    batch_block_size = infer_xla_b_block_size(x.shape[0], block_size)
     loss, lse, *_ = _linear_softmax_cross_entropy_loss_streaming_fwd(
         x,
         labels,
@@ -279,6 +299,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
 
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
     block_size: int,
+    batch_block_size: int,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
@@ -291,7 +312,6 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
     dout_loss, dout_lse = cotangents
     dout_loss_arr = _materialize_cotangent(dout_loss, lse)
     dout_lse_arr = _materialize_cotangent(dout_lse, lse)
-    batch_block_size = infer_xla_b_block_size(x.shape[0], block_size)
     gx, gw = _linear_softmax_cross_entropy_loss_streaming_bwd(
         x,
         labels,
@@ -329,7 +349,7 @@ def linear_softmax_cross_entropy_loss_xla(
         v_block_size = infer_xla_v_block_size(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
     else:
         v_block_size = block_sizes.v_block_size
-    b_block_size = infer_xla_b_block_size(x.shape[0], v_block_size)
+    b_block_size = _resolve_xla_batch_block_size(x.shape[0], v_block_size, block_sizes)
     if v_block_size >= w.shape[1]:
         return linear_softmax_cross_entropy_loss_reference(
             x,
@@ -356,6 +376,7 @@ def linear_softmax_cross_entropy_loss_xla(
 
     return _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
         v_block_size,
+        b_block_size,
         dtype,
         logit_soft_cap,
         precision,

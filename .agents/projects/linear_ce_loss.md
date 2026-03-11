@@ -1,5 +1,14 @@
 # Linear CE Loss Pallas Kernel – Status (2026-01-31)
 
+## 2026-03-11: XLA explicit batch-block override for tuning
+- Plumbed explicit `block_sizes.b_block_size` through the XLA fused CE path so tuning scripts can sweep the new batch-block knob instead of always using the inferred value.
+- Behavior:
+  - `block_sizes is None`: keep inferred `infer_xla_b_block_size(B, v_block_size)` behavior.
+  - explicit `block_sizes.b_block_size`: use it exactly for XLA if it divides `B` and satisfies the TPU/XLA int32 tile-word limit; otherwise raise.
+- Added regression coverage for:
+  - explicit XLA `b_block_size` reaching the custom-VJP path
+  - rejection of unsafe explicit `b_block_size * v_block_size` tiles
+
 ## 2026-03-11: XLA fused CE batch tiling for issue #3530
 - Added an XLA-side `infer_xla_b_block_size(b, v_block_size)` heuristic to cap the streaming working set below the TPU/XLA int32 word-count limit.
 - Updated the XLA fused CE path to chunk over batch as well as vocab in both:
