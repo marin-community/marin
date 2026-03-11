@@ -17,6 +17,7 @@ This CLI wraps the most repetitive commands used while optimizing
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 import json
@@ -110,6 +111,24 @@ FUSED_CE_IMPLEMENTATION_CHOICES = ("auto", "xla", "reference", "pallas_tpu", "pa
 PALLAS_TPU_CE_BWD_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
 PALLAS_TPU_CE_BWD_MODE_CHOICES = ("pallas", "xla_streaming")
 PALLAS_TPU_CE_BWD_MODE_COMPARE_CHOICES = ("off", *PALLAS_TPU_CE_BWD_MODE_CHOICES)
+PROFILE_SUMMARY_CE_FORWARD_HOT_PATH = "linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu)/pallas_call:"
+PROFILE_SUMMARY_FORWARD_CLOSED_CALL_HOT_PATH = (
+    "jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/pallas_call:"
+)
+PROFILE_SUMMARY_BACKWARD_CLOSED_CALL_HOT_PATH = (
+    "transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/pallas_call:"
+)
+PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH = (
+    "transpose(jvp())/shard_map/jit(linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu)/"
+    "jit(_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined)/"
+    "jit(_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul)"
+)
+PROFILE_SUMMARY_CE_BWD_WHILE_REGION_PATH = (
+    "_train_step=>linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu=>"
+    "_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined=>"
+    "_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul=>while=>body=>closed_call"
+)
+PROFILE_SUMMARY_CONDITIONAL_REGION_PATH = "conditional"
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -2362,6 +2381,241 @@ def _with_upper_bound_gap_metrics(
     return augmented
 
 
+def _profile_summary_hot_ops(summary: dict[str, object]) -> list[dict[str, object]]:
+    hot_ops = summary.get("hot_ops")
+    if not isinstance(hot_ops, list):
+        raise ValueError("profile summary did not contain a hot_ops list")
+    return [op for op in hot_ops if isinstance(op, dict)]
+
+
+def _profile_summary_hierarchical_regions(summary: dict[str, object]) -> list[dict[str, object]]:
+    regions = summary.get("hierarchical_regions")
+    if not isinstance(regions, list):
+        raise ValueError("profile summary did not contain a hierarchical_regions list")
+    return [region for region in regions if isinstance(region, dict)]
+
+
+def _profile_summary_step_divisor(summary: dict[str, object]) -> int:
+    hot_ops = _profile_summary_hot_ops(summary)
+    ce_forward_counts = [
+        int(count)
+        for op in hot_ops
+        if PROFILE_SUMMARY_CE_FORWARD_HOT_PATH in str(op.get("tf_op_path") or "")
+        for count in [op.get("count")]
+        if isinstance(count, int) and count > 0
+    ]
+    if ce_forward_counts:
+        return max(ce_forward_counts)
+
+    counts = [int(count) for op in hot_ops for count in [op.get("count")] if isinstance(count, int) and count > 1]
+    if not counts:
+        raise ValueError("could not infer a positive per-step divisor from profile summary hot-op counts")
+
+    divisor = counts[0]
+    for count in counts[1:]:
+        divisor = math.gcd(divisor, count)
+    if divisor > 1:
+        return divisor
+
+    repeated_counts = Counter(counts)
+    repeated = [count for count, frequency in repeated_counts.items() if frequency >= 2]
+    if repeated:
+        return min(repeated)
+
+    return min(counts)
+
+
+def _profile_summary_ms_from_total_duration(total_duration: object, *, divisor: int) -> float:
+    total_duration_value = _coerce_float(total_duration)
+    if total_duration_value is None or divisor <= 0:
+        return 0.0
+    return total_duration_value / divisor / 1000.0
+
+
+def _profile_summary_group_label(tf_op_path: str) -> str:
+    path = tf_op_path.strip()
+    if not path:
+        return "(unknown)"
+    if PROFILE_SUMMARY_CE_FORWARD_HOT_PATH in path:
+        return "CE forward pallas_call"
+    if PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH in path:
+        if path.endswith("closed_call/dot_general:"):
+            return "CE backward dot_general"
+        if path.endswith("closed_call/dynamic_update_slice:"):
+            return "CE backward dynamic_update_slice"
+        suffix = path.split(PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH, 1)[-1].lstrip("/")
+        return f"CE backward {suffix}" if suffix else "CE backward while shell"
+
+    if "transpose(jvp(HackableTransformer))/HackableDecoderLayer/" in path:
+        trimmed = path[path.index("transpose(jvp(HackableTransformer))/HackableDecoderLayer/") :]
+    elif "jvp(HackableTransformer)/HackableDecoderLayer/" in path:
+        trimmed = path[path.index("HackableDecoderLayer/") :]
+    elif "HackableDecoderLayer/" in path:
+        trimmed = path[path.index("HackableDecoderLayer/") :]
+    else:
+        trimmed = path.removeprefix("jit(_train_step)/")
+
+    if "/closed_call/shard_map/" in trimmed and not trimmed.endswith("pallas_call:"):
+        prefix = trimmed.split("/closed_call/shard_map/", 1)[0]
+        return f"{prefix}/closed_call/shard_map:"
+    return trimmed
+
+
+def _profile_summary_hot_path_buckets(
+    summary: dict[str, object],
+    *,
+    divisor: int,
+    include_predicate,
+) -> dict[str, float]:
+    buckets: dict[str, float] = {}
+    for op in _profile_summary_hot_ops(summary):
+        tf_op_path = str(op.get("tf_op_path") or "")
+        if not tf_op_path or not include_predicate(tf_op_path):
+            continue
+        label = _profile_summary_group_label(tf_op_path)
+        buckets[label] = buckets.get(label, 0.0) + _profile_summary_ms_from_total_duration(
+            op.get("total_duration"),
+            divisor=divisor,
+        )
+    return buckets
+
+
+def _profile_summary_region_ms(
+    summary: dict[str, object],
+    *,
+    path: str,
+    divisor: int,
+    duration_key: str,
+) -> float:
+    for region in _profile_summary_hierarchical_regions(summary):
+        if str(region.get("path") or "") != path:
+            continue
+        return _profile_summary_ms_from_total_duration(region.get(duration_key), divisor=divisor)
+    return 0.0
+
+
+def _profile_summary_top_buckets(
+    buckets: dict[str, float],
+    *,
+    top_k: int,
+) -> list[dict[str, object]]:
+    ranked = sorted(
+        ({"path": path, "ms": value} for path, value in buckets.items() if value > 0.0),
+        key=lambda item: (-float(item["ms"]), str(item["path"])),
+    )
+    return ranked[:top_k]
+
+
+def _profile_summary_bucket_deltas(
+    candidate: dict[str, float],
+    baseline: dict[str, float],
+    *,
+    top_k: int,
+) -> list[dict[str, object]]:
+    deltas: list[dict[str, object]] = []
+    for path in sorted(set(candidate) | set(baseline)):
+        delta_ms = candidate.get(path, 0.0) - baseline.get(path, 0.0)
+        if delta_ms <= 0.0:
+            continue
+        deltas.append({"path": path, "ms": delta_ms})
+    deltas.sort(key=lambda item: (-float(item["ms"]), str(item["path"])))
+    return deltas[:top_k]
+
+
+def _profile_summary_attribution(
+    summary: dict[str, object],
+    *,
+    step_duration_ms: float | None = None,
+    upper_bound_step_ms: float | None = None,
+    gdn_layer_fraction: float | None = None,
+    gdn_layers_per_block: int | None = None,
+    gdn_block_size: int | None = None,
+    top_k: int = 5,
+) -> dict[str, object]:
+    divisor = _profile_summary_step_divisor(summary)
+    forward_closed_call_ms = sum(
+        _profile_summary_ms_from_total_duration(op.get("total_duration"), divisor=divisor)
+        for op in _profile_summary_hot_ops(summary)
+        if PROFILE_SUMMARY_FORWARD_CLOSED_CALL_HOT_PATH in str(op.get("tf_op_path") or "")
+    )
+    backward_closed_call_ms = sum(
+        _profile_summary_ms_from_total_duration(op.get("total_duration"), divisor=divisor)
+        for op in _profile_summary_hot_ops(summary)
+        if PROFILE_SUMMARY_BACKWARD_CLOSED_CALL_HOT_PATH in str(op.get("tf_op_path") or "")
+    )
+    ce_forward_pallas_ms = sum(
+        _profile_summary_ms_from_total_duration(op.get("total_duration"), divisor=divisor)
+        for op in _profile_summary_hot_ops(summary)
+        if PROFILE_SUMMARY_CE_FORWARD_HOT_PATH in str(op.get("tf_op_path") or "")
+    )
+    ce_attributed_while_ms = _profile_summary_region_ms(
+        summary,
+        path=PROFILE_SUMMARY_CE_BWD_WHILE_REGION_PATH,
+        divisor=divisor,
+        duration_key="inclusive_duration",
+    )
+    conditional_ms = _profile_summary_region_ms(
+        summary,
+        path=PROFILE_SUMMARY_CONDITIONAL_REGION_PATH,
+        divisor=divisor,
+        duration_key="exclusive_duration",
+    )
+
+    remainder_bucket_ms = _profile_summary_hot_path_buckets(
+        summary,
+        divisor=divisor,
+        include_predicate=lambda tf_op_path: not any(
+            tracked_path in tf_op_path
+            for tracked_path in (
+                PROFILE_SUMMARY_FORWARD_CLOSED_CALL_HOT_PATH,
+                PROFILE_SUMMARY_BACKWARD_CLOSED_CALL_HOT_PATH,
+                PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH,
+            )
+        ),
+    )
+    ce_while_bucket_ms = _profile_summary_hot_path_buckets(
+        summary,
+        divisor=divisor,
+        include_predicate=lambda tf_op_path: PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH in tf_op_path,
+    )
+
+    hotspot_metrics: dict[str, object] = {
+        "per_step_divisor": divisor,
+        "forward_closed_call_ms": forward_closed_call_ms,
+        "backward_closed_call_ms": backward_closed_call_ms,
+        "ce_forward_pallas_ms": ce_forward_pallas_ms,
+        "ce_attributed_while_ms": ce_attributed_while_ms,
+        "while_ms": ce_attributed_while_ms,
+        "conditional_ms": conditional_ms,
+        "kernel_budget_ms": forward_closed_call_ms + backward_closed_call_ms,
+        "control_budget_ms": ce_attributed_while_ms + conditional_ms,
+        "remainder_bucket_ms": remainder_bucket_ms,
+        "remainder_topk": _profile_summary_top_buckets(remainder_bucket_ms, top_k=top_k),
+        "ce_while_bucket_ms": ce_while_bucket_ms,
+        "ce_while_topk": _profile_summary_top_buckets(ce_while_bucket_ms, top_k=top_k),
+    }
+    hotspot_metrics["train_path_budget_ms"] = float(hotspot_metrics["kernel_budget_ms"]) + float(
+        hotspot_metrics["control_budget_ms"]
+    )
+
+    if step_duration_ms is not None:
+        hotspot_metrics["step_duration_ms"] = step_duration_ms
+    if gdn_layer_fraction is not None:
+        hotspot_metrics["gdn_layer_fraction"] = gdn_layer_fraction
+    if gdn_layers_per_block is not None:
+        hotspot_metrics["gdn_layers_per_block"] = gdn_layers_per_block
+    if gdn_block_size is not None:
+        hotspot_metrics["gdn_block_size"] = gdn_block_size
+
+    return _with_upper_bound_gap_metrics(
+        _with_step_and_remainder_metrics(
+            hotspot_metrics,
+            profile_metrics={"step_duration_ms": step_duration_ms} if step_duration_ms is not None else {},
+        ),
+        upper_bound_step_ms=upper_bound_step_ms,
+    )
+
+
 def _append_profile_env(cmd: list[str], args: argparse.Namespace) -> None:
     cmd += ["-e", "EQX_ON_ERROR=nan"]
     cmd += ["-e", f"WANDB_MODE={args.wandb_mode}"]
@@ -2595,6 +2849,52 @@ def cmd_hf_download_trace(args: argparse.Namespace) -> int:
         )
         print(f"[gdnctl] {file_path} -> {local_path}")
 
+    return 0
+
+
+def cmd_summary_attribution(args: argparse.Namespace) -> int:
+    summary = json.loads(args.summary.read_text(encoding="utf-8"))
+    result = _profile_summary_attribution(
+        summary,
+        step_duration_ms=args.step_duration_ms,
+        upper_bound_step_ms=args.upper_bound_step_ms,
+        gdn_layer_fraction=args.gdn_layer_fraction,
+        gdn_layers_per_block=args.gdn_layers_per_block,
+        gdn_block_size=args.gdn_block_size,
+        top_k=args.top_k,
+    )
+
+    payload: dict[str, object] = {"summary": str(args.summary), "attribution": result}
+    if args.baseline_summary is not None:
+        baseline_summary = json.loads(args.baseline_summary.read_text(encoding="utf-8"))
+        baseline_result = _profile_summary_attribution(
+            baseline_summary,
+            step_duration_ms=args.baseline_step_duration_ms,
+            upper_bound_step_ms=args.upper_bound_step_ms,
+            gdn_layer_fraction=args.baseline_gdn_layer_fraction,
+            gdn_layers_per_block=args.baseline_gdn_layers_per_block,
+            gdn_block_size=args.baseline_gdn_block_size,
+            top_k=args.top_k,
+        )
+        payload["baseline_summary"] = str(args.baseline_summary)
+        payload["baseline_attribution"] = baseline_result
+        payload["baseline_remainder_delta_topk"] = _profile_summary_bucket_deltas(
+            result.get("remainder_bucket_ms", {}) if isinstance(result.get("remainder_bucket_ms"), dict) else {},
+            (
+                baseline_result.get("remainder_bucket_ms", {})
+                if isinstance(baseline_result.get("remainder_bucket_ms"), dict)
+                else {}
+            ),
+            top_k=args.top_k,
+        )
+
+    output_json = json.dumps(payload, indent=2, sort_keys=True)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(output_json + "\n", encoding="utf-8")
+        print(str(args.output))
+    else:
+        print(output_json)
     return 0
 
 
@@ -4088,6 +4388,35 @@ def build_parser() -> argparse.ArgumentParser:
     hf_trace.add_argument("--output-dir", default=".profiles/hf")
     hf_trace.add_argument("--token", default=None, help="HF token (optional)")
     hf_trace.set_defaults(func=cmd_hf_download_trace)
+
+    summary_attr = subparsers.add_parser(
+        "summary-attribution",
+        help="Summarize tracked train-path and remainder attribution from a normalized profile summary JSON",
+    )
+    summary_attr.add_argument("--summary", type=Path, required=True, help="Path to a profile summary JSON.")
+    summary_attr.add_argument(
+        "--baseline-summary",
+        type=Path,
+        default=None,
+        help="Optional baseline/control profile summary JSON for delta top-k reporting.",
+    )
+    summary_attr.add_argument("--step-duration-ms", type=float, default=None, help="Optional full-step duration.")
+    summary_attr.add_argument(
+        "--baseline-step-duration-ms",
+        type=float,
+        default=None,
+        help="Optional full-step duration for --baseline-summary.",
+    )
+    summary_attr.add_argument("--upper-bound-step-ms", type=float, default=None, help="Optional attention-only ceiling.")
+    summary_attr.add_argument("--gdn-layer-fraction", type=float, default=None)
+    summary_attr.add_argument("--baseline-gdn-layer-fraction", type=float, default=None)
+    summary_attr.add_argument("--gdn-layers-per-block", type=int, default=None)
+    summary_attr.add_argument("--baseline-gdn-layers-per-block", type=int, default=None)
+    summary_attr.add_argument("--gdn-block-size", type=int, default=None)
+    summary_attr.add_argument("--baseline-gdn-block-size", type=int, default=None)
+    summary_attr.add_argument("--top-k", type=int, default=5)
+    summary_attr.add_argument("--output", type=Path, default=None, help="Optional JSON output path.")
+    summary_attr.set_defaults(func=cmd_summary_attribution)
 
     codex_loop = subparsers.add_parser("codex-loop", help="Run unattended Codex hill-climb iterations")
     codex_loop.add_argument("--iterations", type=int, required=True)
