@@ -180,7 +180,7 @@ class LocalController:
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
-        db = ControllerDB(db_path=Path(self._temp_dir.name) / "controller.sqlite3")
+        db = ControllerDB(db_path=Path(self._db_dir.name) / "controller.sqlite3")
 
         # Autoscaler creates its own temp dirs for worker resources
         self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
