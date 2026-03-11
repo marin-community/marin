@@ -13,7 +13,6 @@ import vortex
 import pyarrow as pa
 
 from zephyr.writers import (
-    _estimate_batch_size,
     atomic_rename,
     infer_arrow_schema,
     unique_temp_path,
@@ -185,24 +184,6 @@ def test_write_levanter_cache_end_to_end():
         assert len(store) == len(records)
         assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
         assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
-
-
-def test_estimate_batch_size_small_records():
-    """Small records yield a large batch size."""
-    records = [{"id": i} for i in range(100)]
-    schema = infer_arrow_schema(records)
-    batch_size = _estimate_batch_size(records, schema, target_bytes=64 * 1024 * 1024)
-    # int64 is 8 bytes/row → 64MB / 8 ≈ 8M, clamped to 1M
-    assert batch_size == 1_000_000
-
-
-def test_estimate_batch_size_large_records():
-    """Large records yield a small batch size."""
-    records = [{"id": i, "payload": "x" * 10_000} for i in range(100)]
-    schema = infer_arrow_schema(records)
-    batch_size = _estimate_batch_size(records, schema, target_bytes=64 * 1024 * 1024)
-    # ~10KB/row → 64MB / 10KB ≈ 6553
-    assert 1 <= batch_size < 100_000
 
 
 def test_infer_arrow_schema_basic():
