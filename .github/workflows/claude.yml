@@ -117,26 +117,36 @@ jobs:
 
             Read AGENTS.md and .agents/skills/fix-issue/SKILL.md.
 
-            ## Step 1: Triage Report
-            Post a comment (prefixed "Triage:") that classifies this issue:
-            - TRIVIAL: fix confined to ≤5 files, no API/interface changes, deterministic fix, no new dependencies
-            - NON-TRIVIAL: design decisions needed, multiple subsystems, new abstractions required
+            ## Step 1: Relevance Check
+            Read the issue title and body. If the issue is NOT obviously about a code change
+            (e.g. "run experiment X", "suggest an alternative backend for Y", "benchmark Z",
+            "investigate performance of W", feature discussions, research questions, or operational requests),
+            then exit immediately without posting any comment.
 
-            Include a brief Research section (2-3 sentences: root cause, relevant code links).
+            ## Step 2: Scope Assessment
+            Investigate the codebase to understand the issue. Determine whether the fix is
+            small and self-contained (e.g. a bug fix, adding a small feature, changing styles,
+            config tweaks) or whether it requires broader design work.
 
-            ## Step 2: If TRIVIAL
-            Use the fix-issue skill: create branch agent/YYYYMMDD-fix-{issue_number},
-            If applicable, write a test-case first validate it fails.
-            Implement fix, run ./infra/pre-commit.py --all-files --fix
-            Run appropriate tests, validate your fix.
-            Open PR
+            ## Step 3a: Small Fix
+            If the change is small and self-contained:
+            - Create branch agent/YYYYMMDD-fix-{issue_number}
+            - If applicable, write a failing test first
+            - Implement the fix, run ./infra/pre-commit.py --all-files --fix
+            - Run appropriate tests, validate your fix
+            - Find the right reviewer using git log to identify editors of affected files
+            - Open a PR tagging that reviewer via `gh pr create --reviewer <username>`
+            - Post a brief comment on the issue summarizing your fix and linking the PR
 
-            Find the right reviewer using git log or similar to find editors of affected files.
-            Use `gh` if git log isn't working for you.
-            Tag that person as reviewer via `gh pr create --reviewer <username>`.
-
-            ## Step 3: If NON-TRIVIAL
-            Post only the triage report. Do not attempt implementation.
+            ## Step 3b: Research Report
+            If the change is larger or needs design input:
+            - Analyze the codebase: identify affected files, modules, and interfaces
+            - Use web search if the issue involves external libraries or standards
+            - Post a comment (prefixed "🤖 Research Report:") covering:
+              * Affected files and modules
+              * Viable design directions with trade-offs
+              * Your recommended approach
+            - Do not attempt implementation
           claude_args: |
             --model claude-sonnet-4-6
             --max-turns 100
