@@ -130,6 +130,18 @@ def test_append_profile_env_supports_attention_only_flag() -> None:
 
 
 @pytest.mark.parametrize(
+    ("cluster", "expected"),
+    [
+        ("us-east5-a", "gs://marin-us-east5"),
+        ("us-east5", "gs://marin-us-east5"),
+        ("marin-us-central1", "gs://marin-us-central1"),
+    ],
+)
+def test_default_marin_prefix_uses_bucket_mapping(cluster: str, expected: str) -> None:
+    assert gdnctl._default_marin_prefix(cluster) == expected
+
+
+@pytest.mark.parametrize(
     "item",
     [
         "MISSING_EQUALS",

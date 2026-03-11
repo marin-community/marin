@@ -6925,3 +6925,168 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Take coverage slot `T` next and measure the throughput penalty per GDN layer fraction directly (`gdn_layers_per_block in {0,1,2,3}` with `gdn_block_size=4` and CE fixed).
   - If a future `S` refresh is needed, extend the trace parser to pull the hybrid-only decoder-layer shell categories into the tracked boundary rather than spending another iteration on same-boundary GDN math.
+
+### Iteration 86 - Coverage Slot T / fixed-CE `gdn_layers_per_block` sweep on the current head (validated, measurement-only)
+
+- Coverage slot: `T`
+- Change class: `model boundary`
+- Why this is mainline-worthy now:
+  - Iteration 85 refreshed the hybrid-vs-attention accounting and showed the tracked train path still explained only `37.27%` of the current gap.
+  - The next mainline question was therefore model boundary, not another same-boundary GDN shell/tape tweak: how much end-to-end cost comes from using more GDN layers at all when CE is already fixed.
+  - This sweep holds TPU family, benchmark family, CE backend, CE backward mode, batch shape, and profile window fixed while varying only `gdn_layers_per_block` with `gdn_block_size=4`.
+
+- Codex loop iteration: `3 / 10`
+- Date: `2026-03-11T18:52:00Z`
+- Starting commit: `cd8e2c3cc37b8c7cbf529b6f6e213911c3d8b344`
+- Commit: `cd8e2c3cc37b8c7cbf529b6f6e213911c3d8b344`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion: `70a947614d96e9c4f008e09b359e5b13409d536f`
+  - `throughput/mfu=6.090697`
+  - `throughput/tokens_per_second=197032.897899`
+  - `throughput/duration=0.166307253 s`
+  - `step_duration=166.307253 ms`
+  - Standing attention-only upper-bound reference: `57.860499 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot T (selected):** fixed-CE `gdn_layers_per_block in {0,1,2,3}` sweep at `gdn_block_size=4` to measure the throughput penalty per actual GDN fraction (`highest product information`, `medium infra/time risk`).
+  2. **Coverage slot S:** widen the attribution boundary to absorb decoder-layer shell categories into tracked budget once the current fraction sweep is recorded (`high information`, `lower priority than finishing T coverage`).
+  3. **Coverage slot U:** bounded CE side-arm only if the fresh sweep made residual `while` attribution ambiguous again (`bounded upside`, `lower mainline value while model-boundary slope is still unresolved`).
+
+- Selected slot rationale:
+  - `S` is already validated on the current head. The next uncovered mainline slot was `T`, and the sweep directly answers whether model boundary is a stronger lever than another same-boundary GDN kernel rewrite.
+
+- CE hygiene:
+  - CE backend selected: `pallas_tpu`
+  - CE bwd mode: `pallas`
+  - Why CE stayed fixed:
+    - This was not a CE A/B slot. All successful sweep points requested and selected the same deployable CE setting.
+
+- Expected effect on `step_duration_ms`:
+  - No iteration-level speedup target. Per-fraction expectation was monotonic slowdown as reported GDN fraction rises, with `0/4` near the attention-only ceiling and `3/4` near the current hybrid regime.
+- Expected effect on `train_path_budget_ms`:
+  - Up with GDN fraction as more decoder layers hit the tracked GDN closed-call path.
+- Expected effect on `remainder_budget_ms`:
+  - Also up with GDN fraction, because Iteration 85 already showed a large shell/scaffolding remainder outside the tracked closed-call core.
+- Expected effect on `upper_bound_gap_ms`:
+  - Near zero at `0/4`, then widening as reported GDN fraction rises.
+- Reject if `step_duration_ms` does not improve? **No for iteration validity; yes for promotion.**
+  - This is a measurement-first `T` slot, not a fresh champion attempt.
+- Reject if `remainder_budget_ms` grows? **No for iteration validity; yes for promotion.**
+  - Remainder growth is one of the primary outputs of this sweep, but it disqualifies a point as a speedup candidate.
+
+- Change summary:
+  - Restored zonal-cluster `MARIN_PREFIX` resolution in `scripts/gdn/gdnctl.py` so `dev-tpu-profile --cluster us-east5-a` uses `gs://marin-us-east5` instead of the invalid zonal bucket name.
+  - Added unit coverage for the cluster-to-bucket mapping in `scripts/gdn/tests/test_gdnctl_profile_env.py`.
+  - No GDN kernel or benchmark-model math changes.
+
+- Correctness checks:
+  - Local tooling slice:
+    - `uv run python -m pytest -o addopts='' scripts/gdn/tests/test_gdnctl_profile_env.py -q`
+    - result: `19 passed, 1 warning in 0.06s`
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync`
+    - result: `88 passed, 2 skipped in 230.26s (0:03:50)`
+
+- Profile sweep (CE fixed to `pallas_tpu` + `pallas`):
+  - `gdn_layers_per_block=0`
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 0 --run-name-prefix gdn_t_sweep_i03_g0 --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_t_sweep_i03_g0_gdn0of4_130m_ch128_seg16_20steps-edb739`
+  - `gdn_layers_per_block=1`
+    - first attempt with prefix `gdn_t_sweep_i03_g1` failed before train execution with a transient JAX distributed port-bind error (`Failed to add port to server: No address added out of total 1 resolved for '[::]:8476'`) followed by a Python segfault, so it was rejected as infra noise.
+    - successful rerun:
+      - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 1 --run-name-prefix gdn_t_sweep_i03_g1r --profile-env WANDB_DISABLE_CODE=true --no-sync`
+      - run: `https://wandb.ai/marin-community/marin/runs/gdn_t_sweep_i03_g1r_gdn1of4_130m_ch128_seg16_20steps-2434f5`
+  - `gdn_layers_per_block=2`
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 2 --run-name-prefix gdn_t_sweep_i03_g2 --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_t_sweep_i03_g2_gdn2of4_130m_ch128_seg16_20steps-1cff38`
+  - `gdn_layers_per_block=3`
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --gdn-block-size 4 --gdn-layers-per-block 3 --run-name-prefix gdn_t_sweep_i03_g3 --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_t_sweep_i03_g3_gdn3of4_130m_ch128_seg16_20steps-1f8453`
+
+- Sweep summary:
+  - The benchmark-reported `gdn_layer_fraction` values for this run were `0.000000`, `0.333333`, `0.666667`, and `0.833333` for `gdn_layers_per_block=0,1,2,3`.
+  - Fresh attention-only control: `57.462505 ms`, which reproduces the standing `57.860499 ms` ceiling within `-0.397994 ms`.
+
+| `gdn_layers_per_block` | `gdn_layer_fraction` | `throughput/mfu` | `throughput/tokens_per_second` | `step_duration_ms` | `train_path_budget_ms` | `remainder_budget_ms` | `upper_bound_gap_ms` | `gap_explained_by_train_path` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `0` | `0.000000` | `21.232375` | `570250.113532` | `57.462505` | `8.583514` | `48.878991` | `0.000000` | `0.00%` |
+| `1` | `0.333333` | `8.586743` | `247421.632965` | `132.437894` | `26.510574` | `105.927320` | `74.975389` | `35.36%` |
+| `2` | `0.666667` | `6.806103` | `211524.977928` | `154.913147` | `36.927965` | `117.985182` | `97.450642` | `37.89%` |
+| `3` | `0.833333` | `6.098887` | `197297.819469` | `166.083944` | `42.721348` | `123.362596` | `108.621439` | `39.33%` |
+
+- Delta vs the fresh `0/4` attention-only control:
+  - `1/4`:
+    - `throughput/mfu -59.56%`
+    - `step_duration_ms +74.975389`
+    - `train_path_budget_ms +17.927060`
+    - `remainder_budget_ms +57.048329`
+  - `2/4`:
+    - `throughput/mfu -67.94%`
+    - `step_duration_ms +97.450642`
+    - `train_path_budget_ms +28.344451`
+    - `remainder_budget_ms +69.106191`
+  - `3/4`:
+    - `throughput/mfu -71.28%`
+    - `step_duration_ms +108.621439`
+    - `train_path_budget_ms +34.137834`
+    - `remainder_budget_ms +74.483605`
+
+- Interpretation:
+  - Throughput still degrades monotonically as reported GDN fraction rises:
+    - `21.232375 -> 8.586743 -> 6.806103 -> 6.098887 MFU`
+    - `57.462505 -> 132.437894 -> 154.913147 -> 166.083944 ms`
+  - The fresh `3/4` point lands almost exactly on the current deployable hybrid regime:
+    - `throughput/mfu=6.098887` vs champion `6.090697` (`+0.13%`)
+    - `step_duration=166.083944 ms` vs champion `166.307253 ms` (`-0.223309 ms`)
+    - below the `+0.25%` promotion bar, so this is a reproduced boundary measurement, not a new champion.
+  - More than half of the full-step gap remains outside the tracked train path at every nonzero GDN fraction:
+    - `gap_explained_by_train_path = 35.36% | 37.89% | 39.33%`
+  - The largest remainder categories at the heavier fractions are still shell and CE buckets outside the tracked GDN closed-call core:
+    - CE backward `dot_general` inside the CE `while`
+    - `HackableDecoderLayer/shard_map/pallas_call`
+    - `HackableDecoderLayer/closed_call/shard_map`
+    - CE backward `dynamic_update_slice`
+    - CE forward `pallas_call`
+  - Mainline conclusion:
+    - The model boundary is still a stronger lever than another same-boundary GDN kernel tweak. Raising GDN fraction hurts end-to-end throughput roughly monotonically, and the added cost is still mostly not explained by the currently tracked train-path budget.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both --no-sync` -> `88 passed, 2 skipped in 230.26s (0:03:50)`
+  - Perf:
+    - `CE backend selected: pallas_tpu` on all four sweep points
+    - `CE bwd mode: pallas` on all four sweep points
+    - `CE-attributed while: 8.582336 | 8.863053 | 8.864900 | 8.927646 ms`
+    - `gdn_layer_fraction: 0.000000 | 0.333333 | 0.666667 | 0.833333`
+    - `Forward closed-call: 0.000000 | 12.394975 | 17.562400 | 20.663902 ms`
+    - `Backward closed-call: 0.000000 | 5.251289 | 10.499205 | 13.128435 ms`
+    - `while: 8.582336 | 8.863053 | 8.864900 | 8.927646 ms`
+    - `conditional: 0.001178 | 0.001256 | 0.001460 | 0.001365 ms`
+    - `Kernel budget: 0.000000 | 17.646264 | 28.061605 | 33.792337 ms`
+    - `Control budget: 8.583514 | 8.864309 | 8.866360 | 8.929011 ms`
+    - `Train-path budget: 8.583514 | 26.510574 | 36.927965 | 42.721348 ms`
+    - `Step duration: 57.462505 | 132.437894 | 154.913147 | 166.083944 ms`
+    - `Remainder budget: 48.878991 | 105.927320 | 117.985182 | 123.362596 ms`
+    - `Upper-bound gap: 0.000000 | 74.975389 | 97.450642 | 108.621439 ms`
+    - `Gap explained by train-path: 0.00% | 35.36% | 37.89% | 39.33%`
+    - `Remainder top-k:`
+      - `0/4`: `CE backward dot_general 5.789851 ms`; attention backward `splash_mha_dkv 3.618685 ms`; attention forward `splash_mha_fwd_segmented_residuals 2.773001 ms`; CE backward `dynamic_update_slice 2.772078 ms`; CE forward `pallas_call 2.703012 ms`
+      - `1/4`: `CE backward dot_general 6.001184 ms`; `HackableDecoderLayer/shard_map/pallas_call 3.139363 ms`; CE backward `dynamic_update_slice 2.841562 ms`; attention forward `splash_mha_fwd_segmented_residuals 2.784488 ms`; CE forward `pallas_call 2.703614 ms`
+      - `2/4`: `CE backward dot_general 6.021125 ms`; `HackableDecoderLayer/closed_call/shard_map 4.527520 ms`; `HackableDecoderLayer/shard_map/pallas_call 4.175737 ms`; CE backward `dynamic_update_slice 2.823514 ms`; CE forward `pallas_call 2.703735 ms`
+      - `3/4`: `CE backward dot_general 6.049107 ms`; `HackableDecoderLayer/shard_map/pallas_call 5.216541 ms`; `HackableDecoderLayer/closed_call/shard_map 4.522822 ms`; CE backward `dynamic_update_slice 2.858256 ms`; CE forward `pallas_call 2.703079 ms`
+    - `throughput/mfu: 21.232375 | 8.586743 | 6.806103 | 6.098887`
+    - `throughput/tokens_per_second: 570250.113532 | 247421.632965 | 211524.977928 | 197297.819469`
+    - `throughput/duration: 0.057462505 s | 0.132437894 s | 0.154913147 s | 0.166083944 s`
+  - Governance:
+    - This is a validated `T` slot and is measurement-only, so it is not judged as a promotion candidate.
+    - CE stayed fixed at `pallas_tpu` + `pallas` throughout.
+    - The sweep answers the mainline product question directly:
+      - higher reported GDN fraction drives lower MFU and longer steps,
+      - the tracked train path still explains only a minority of the added gap,
+      - the unexplained remainder stays large and shell/CE-heavy.
+
+- Assessment: **validated, informative, and mainline-worthy**. The fixed-CE sweep shows a strong monotonic throughput penalty as reported GDN fraction rises, while the tracked train path still explains only about `35-39%` of the added full-step gap. The mainline problem remains model boundary plus remainder attribution, not another same-boundary GDN closed-call hillclimb.
+- Next bold hypothesis:
+  - Stay on `S`/`T` mainline work and widen the attribution boundary so decoder-layer shell buckets (`shard_map`, `closed_call/shard_map`) and the CE backward matmul shell stop landing in undifferentiated remainder.
+  - If a product-side tradeoff is allowed, evaluate whether the lower-GDN regime is acceptable, because the `1/4` setting is materially faster than the current `3/4` regime without any new kernel rewrite.
