@@ -55,8 +55,9 @@ class Chunk(Protocol):
     def __iter__(self) -> Iterator: ...
 
 
-ZEPHYR_TARGET_SHARD_COL = "__zephyr_target_shard__"
-ZEPHYR_CHUNK_IDX_COL = "__zephyr_chunk_idx__"
+_ZEPHYR_SHARD_IDX_COL = "shard_idx"
+_ZEPHYR_CHUNK_IDX_COL = "chunk_idx"
+_ZEPHYR_ITEM_COL = "item"
 
 
 @dataclass(frozen=True)
@@ -108,9 +109,14 @@ class VortexDiskChunk:
     """Slice of a shared Vortex Scatter file, filtered by target shard and chunk.
 
     Multiple VortexDiskChunk instances share the same file path but filter
-    for different (target_shard, chunk_idx) pairs. Each chunk is pre-sorted
+    for different (shard_idx, chunk_idx) pairs. Each chunk is pre-sorted
     by key, preserving the invariant needed for k-way merge in Reduce.
 
+    Items are stored wrapped in an envelope struct with routing metadata::
+
+        {"shard_idx": int, "chunk_idx": int, "item": <user_data>}
+
+    The ``read`` method filters by shard/chunk and unwraps the ``item`` field.
     Predicate pushdown in Vortex skips irrelevant row groups, so each
     reducer reads only its own data efficiently.
     """
@@ -119,21 +125,21 @@ class VortexDiskChunk:
     filter_shard: int
     filter_chunk: int
     count: int
-    columns: list[str]
 
     def __iter__(self) -> Iterator:
         return iter(self.read())
 
     def read(self) -> list:
-        """Load filtered chunk data from a Vortex file."""
+        """Load filtered chunk data from a Vortex file, unwrapping envelope."""
         vf = vortex.open(self.path)
         dataset = vf.to_dataset()
         table = dataset.to_table(
-            columns=self.columns,
-            filter=(pc.field(ZEPHYR_TARGET_SHARD_COL) == self.filter_shard)
-            & (pc.field(ZEPHYR_CHUNK_IDX_COL) == self.filter_chunk),
+            columns=[_ZEPHYR_ITEM_COL],
+            filter=(pc.field(_ZEPHYR_SHARD_IDX_COL) == self.filter_shard)
+            & (pc.field(_ZEPHYR_CHUNK_IDX_COL) == self.filter_chunk),
         )
-        return table.to_pylist()
+        # Unwrap: each row is {"item": {...user data...}} → extract the struct
+        return table.column(_ZEPHYR_ITEM_COL).to_pylist()
 
 
 @dataclass
