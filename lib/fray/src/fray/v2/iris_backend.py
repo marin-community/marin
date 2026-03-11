@@ -13,9 +13,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
+
+import cloudpickle
 
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
@@ -52,16 +53,6 @@ from fray.v2.types import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Shared thread pool for async actor RPC calls
-_shared_executor: ThreadPoolExecutor | None = None
-
-
-def _get_shared_executor() -> ThreadPoolExecutor:
-    global _shared_executor
-    if _shared_executor is None:
-        _shared_executor = ThreadPoolExecutor(max_workers=32)
-    return _shared_executor
 
 
 def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
@@ -266,8 +257,53 @@ class IrisActorHandle:
         return _IrisActorMethod(self, method_name)
 
 
+class OperationFuture:
+    """Polling-based future backed by an Iris long-running operation.
+
+    Satisfies the ``ActorFuture`` protocol. Each call to ``result()`` polls
+    the server via short ``GetOperation`` RPCs until the operation completes,
+    fails, or the caller's timeout expires.
+    """
+
+    def __init__(self, client: ActorClient, operation_id: str, poll_interval: float = 1.0):
+        self._client = client
+        self._op_id = operation_id
+        self._poll_interval = poll_interval
+
+    def result(self, timeout: float | None = None) -> Any:
+        from iris.rpc import actor_pb2
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            op = self._client.get_operation(self._op_id)
+
+            if op.state == actor_pb2.Operation.SUCCEEDED:
+                return cloudpickle.loads(op.serialized_result)
+
+            if op.state == actor_pb2.Operation.FAILED:
+                if op.error.serialized_exception:
+                    raise cloudpickle.loads(op.error.serialized_exception)
+                raise RuntimeError(f"{op.error.error_type}: {op.error.message}")
+
+            if op.state == actor_pb2.Operation.CANCELLED:
+                raise RuntimeError(f"Operation {self._op_id} was cancelled")
+
+            if deadline is not None and time.monotonic() >= deadline:
+                self._client.cancel_operation(self._op_id)
+                raise TimeoutError(f"Operation {self._op_id} timed out after {timeout}s")
+
+            time.sleep(self._poll_interval)
+
+
 class _IrisActorMethod:
-    """Wraps a method on an Iris actor. remote() dispatches via thread pool."""
+    """Wraps a method on an Iris actor.
+
+    ``remote()`` uses long-running operations: a fast ``StartOperation`` RPC
+    returns an operation ID, and ``OperationFuture.result()`` polls via
+    ``GetOperation``. No client-side thread pool is needed.
+
+    ``__call__()`` uses the existing blocking ``Call`` RPC for simplicity.
+    """
 
     def __init__(self, handle: IrisActorHandle, method_name: str):
         self._handle = handle
@@ -275,9 +311,8 @@ class _IrisActorMethod:
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
-        executor = _get_shared_executor()
-        future = executor.submit(lambda: getattr(client, self._method)(*args, **kwargs))
-        return future
+        op_id = client.start_operation(self._method, *args, **kwargs)
+        return OperationFuture(client, op_id)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         client = self._handle._resolve()
