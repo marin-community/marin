@@ -35,7 +35,7 @@ function levelPriority(lvl: string | undefined): number {
 const useRpc = props.source === 'worker' ? useWorkerRpc : useControllerRpc
 
 const taskLogState = props.taskId
-  ? useRpc<GetTaskLogsResponse>('GetTaskLogs', { id: props.taskId, maxTotalLines: tailLines.value })
+  ? useRpc<GetTaskLogsResponse>('GetTaskLogs', { id: props.taskId, maxTotalLines: tailLines.value, attemptId: -1 })
   : null
 
 const processLogState = !props.taskId
