@@ -278,7 +278,6 @@ def test_task_prepares_and_cleans_up_runtime_workdir(worker, mock_runtime):
     mock_runtime.cleanup_workdir.assert_called_once_with(task.workdir)
 
 
-
 def test_task_with_ports(worker):
     """Test task with port allocation."""
     request = create_run_task_request(ports=["http", "grpc"])
