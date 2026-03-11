@@ -23,7 +23,6 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.types import parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
@@ -988,7 +987,7 @@ def create_autoscaler(
     label_prefix: str,
     base_worker_config: config_pb2.WorkerConfig | None = None,
     threads: ThreadContainer | None = None,
-    db: ControllerDB | None = None,
+    db: "ControllerDB | None" = None,  # noqa: F821, UP037 — circular import
 ):
     """Create autoscaler from Platform and explicit config.
 
