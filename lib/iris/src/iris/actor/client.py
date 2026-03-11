@@ -22,6 +22,7 @@ Custom backoff behavior:
 """
 
 import logging
+import time
 from typing import Any
 
 import cloudpickle
@@ -143,20 +144,34 @@ class ActorClient:
         )
         return op.operation_id
 
-    def get_operation(self, operation_id: str) -> actor_pb2.Operation:
-        """Poll the state of a long-running operation."""
+    def poll_operation_status(self, operation_id: str) -> actor_pb2.Operation:
+        """Single-shot poll of a long-running operation's state."""
         req = actor_pb2.OperationId(operation_id=operation_id)
 
         def do_call():
             return self.rpc_client().get_operation(req)
 
         return call_with_retry(
-            f"{self._name}.get_operation({operation_id[:8]})",
+            f"{self._name}.poll_operation_status({operation_id[:8]})",
             do_call,
             on_retry=self._clear_connection,
             max_attempts=self._max_call_attempts,
             backoff=self._backoff,
         )
+
+    def get_operation(
+        self,
+        operation_id: str,
+        poll_backoff: ExponentialBackoff | None = None,
+    ) -> actor_pb2.Operation:
+        """Poll a long-running operation until it completes, using exponential backoff."""
+        if poll_backoff is None:
+            poll_backoff = ExponentialBackoff(initial=0.1, maximum=10.0, factor=2.0, jitter=0.25)
+        while True:
+            op = self.poll_operation_status(operation_id)
+            if op.state != actor_pb2.Operation.RUNNING:
+                return op
+            time.sleep(poll_backoff.next_interval())
 
     def cancel_operation(self, operation_id: str) -> actor_pb2.Operation:
         """Cancel a long-running operation."""

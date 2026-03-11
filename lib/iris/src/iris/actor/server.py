@@ -37,9 +37,6 @@ logger = logging.getLogger(__name__)
 # Type aliases
 ActorId = NewType("ActorId", str)
 
-# Completed operations are evicted after this many seconds.
-_OPERATION_TTL_SECONDS = 3600.0
-
 
 @dataclass
 class RegisteredActor:
@@ -141,27 +138,13 @@ class ActorServer:
 
     async def call(self, request: actor_pb2.ActorCall, ctx: RequestContext) -> actor_pb2.ActorResponse:
         """Handle actor RPC call."""
-        actor_name = request.actor_name or next(iter(self._actors), "")
-        actor = self._actors.get(actor_name)
-        if not actor:
-            error = actor_pb2.ActorError(
-                error_type="NotFound",
-                message=f"Actor '{actor_name}' not found",
-            )
-            return actor_pb2.ActorResponse(error=error)
-
-        method = actor.methods.get(request.method_name)
-        if not method:
-            error = actor_pb2.ActorError(
-                error_type="NotFound",
-                message=f"Method '{request.method_name}' not found",
-            )
+        try:
+            method, args, kwargs = self._resolve_method(request)
+        except ConnectError as e:
+            error = actor_pb2.ActorError(error_type="NotFound", message=e.message)
             return actor_pb2.ActorResponse(error=error)
 
         try:
-            args = cloudpickle.loads(request.serialized_args) if request.serialized_args else ()
-            kwargs = cloudpickle.loads(request.serialized_kwargs) if request.serialized_kwargs else {}
-
             # Run the method in our dedicated thread pool to avoid blocking the event loop.
             # This allows actors to make outgoing RPC calls without deadlocking.
             # We use our own executor instead of asyncio.to_thread() to avoid issues
@@ -262,17 +245,6 @@ class ActorServer:
         finally:
             op.completed_at = time.monotonic()
 
-    def _evict_expired_operations(self) -> None:
-        """Remove completed operations older than the TTL."""
-        now = time.monotonic()
-        expired = [
-            op_id
-            for op_id, op in self._operations.items()
-            if op.completed_at is not None and (now - op.completed_at) > _OPERATION_TTL_SECONDS
-        ]
-        for op_id in expired:
-            del self._operations[op_id]
-
     async def start_operation(self, request: actor_pb2.ActorCall, ctx: RequestContext) -> actor_pb2.Operation:
         """Start a long-running actor method call. Returns immediately with an operation ID."""
         method, args, kwargs = self._resolve_method(request)
@@ -281,7 +253,6 @@ class ActorServer:
         op = OperationState(operation_id=op_id, future=Future())
 
         with self._operations_lock:
-            self._evict_expired_operations()
             self._operations[op_id] = op
 
         # Submit to thread pool. _run_operation fills in result/error on the

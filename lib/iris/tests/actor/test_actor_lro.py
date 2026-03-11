@@ -42,13 +42,8 @@ def test_lro_basic():
         op_id = client.start_operation("add", 2, 3)
         assert isinstance(op_id, str)
 
-        # Poll until done
-        for _ in range(50):
-            op = client.get_operation(op_id)
-            if op.state == actor_pb2.Operation.SUCCEEDED:
-                break
-            time.sleep(0.05)
-
+        # get_operation auto-polls until done
+        op = client.get_operation(op_id)
         assert op.state == actor_pb2.Operation.SUCCEEDED
         import cloudpickle
 
@@ -67,12 +62,7 @@ def test_lro_failure():
         client = _make_client(port)
         op_id = client.start_operation("fail")
 
-        for _ in range(50):
-            op = client.get_operation(op_id)
-            if op.state != actor_pb2.Operation.RUNNING:
-                break
-            time.sleep(0.05)
-
+        op = client.get_operation(op_id)
         assert op.state == actor_pb2.Operation.FAILED
         assert "intentional failure" in op.error.message
     finally:
@@ -95,14 +85,8 @@ def test_lro_cancel():
         # State may still be RUNNING (cooperative cancellation)
         assert op.state in (actor_pb2.Operation.RUNNING, actor_pb2.Operation.CANCELLED)
 
-        # Wait for the operation to finish (it should complete since cancellation is cooperative)
-        for _ in range(100):
-            op = client.get_operation(op_id)
-            if op.state != actor_pb2.Operation.RUNNING:
-                break
-            time.sleep(0.1)
-
-        # Should be CANCELLED since the cancelled flag was set before completion
+        # get_operation auto-polls until completion; should be CANCELLED
+        op = client.get_operation(op_id)
         assert op.state == actor_pb2.Operation.CANCELLED
     finally:
         server.stop()
@@ -119,6 +103,6 @@ def test_lro_not_found():
         from connectrpc.errors import ConnectError
 
         with pytest.raises(ConnectError, match="not found"):
-            client.get_operation("nonexistent")
+            client.poll_operation_status("nonexistent")
     finally:
         server.stop()
