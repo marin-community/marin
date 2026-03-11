@@ -33,7 +33,7 @@ _WRITE_BLOCK_SIZE = 64 * 1024 * 1024
 DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
 
 # Clamp auto-calculated batch sizes to this range.
-_MIN_BATCH_SIZE = 1_000
+_MIN_BATCH_SIZE = 1
 _MAX_BATCH_SIZE = 1_000_000
 
 
