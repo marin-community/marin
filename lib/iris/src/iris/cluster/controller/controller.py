@@ -73,8 +73,8 @@ from iris.cluster.controller.transitions import (
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.types import (
     JobName,
-    VmWorkerStatus,
-    VmWorkerStatusMap,
+    WorkerStatus,
+    WorkerStatusMap,
     WorkerId,
 )
 from iris.logging import slow_log
@@ -1338,19 +1338,19 @@ class Controller:
                     fail_count += 1
                     failed_workers.append(snapshot.worker_id)
                     self.stub_factory.evict(snapshot.worker_address)
-                    if self._autoscaler and snapshot.vm_address:
-                        # Terminate the slice and get sibling VM addresses.
+                    if self._autoscaler:
+                        # Terminate the slice and get sibling worker IDs.
                         # All workers on the same slice must be failed immediately
                         # so their tasks (including reservation holders) are cascaded
                         # rather than waiting for heartbeat timeouts.
                         # TODO(#3425): This prunes sibling workers before their in-flight
                         # heartbeat results are processed, causing complete_heartbeat() to
                         # silently drop any logs/states those workers reported this round.
-                        sibling_vms = self._autoscaler.notify_worker_failed(snapshot.vm_address)
-                        if sibling_vms:
-                            sibling_failed = self._transitions.fail_workers_by_vm_addresses(
-                                sibling_vms,
-                                reason=f"sibling worker at VM {snapshot.vm_address} failed, slice terminated",
+                        sibling_worker_ids = self._autoscaler.notify_worker_failed(str(snapshot.worker_id))
+                        if sibling_worker_ids:
+                            sibling_failed = self._transitions.fail_workers_by_ids(
+                                sibling_worker_ids,
+                                reason=f"sibling worker {snapshot.worker_id} failed, slice terminated",
                             )
                             for _wid, addr in sibling_failed:
                                 self.stub_factory.evict(addr)
@@ -1432,8 +1432,8 @@ class Controller:
         if not self._autoscaler:
             return
 
-        vm_status_map = self._build_vm_status_map()
-        self._autoscaler.refresh(vm_status_map)
+        worker_status_map = self._build_worker_status_map()
+        self._autoscaler.refresh(worker_status_map)
         workers = healthy_active_workers_with_attributes(self._db)
         demand_entries = compute_demand_entries(
             self._db,
@@ -1443,29 +1443,15 @@ class Controller:
         )
         self._autoscaler.update(demand_entries)
 
-    def _build_vm_status_map(self) -> VmWorkerStatusMap:
-        """Build a map of VM address to worker status for autoscaler.
-
-        The autoscaler needs to look up worker status by VM address (not worker_id)
-        because RemoteWorkerHandle only exposes the VM's IP address, not the worker's
-        self-assigned ID. Workers self-discover their vm_address at startup via
-        socket probe (env_probe.py).
-        """
-        result: VmWorkerStatusMap = {}
+    def _build_worker_status_map(self) -> WorkerStatusMap:
+        """Build a map of worker_id to worker status for autoscaler idle tracking."""
+        result: WorkerStatusMap = {}
         with self._db.snapshot() as snapshot:
             workers = snapshot.select(WORKERS, where=WORKERS.c.active == 1)
         running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in workers})
         for worker in workers:
-            vm_addr = worker.metadata.vm_address
-            if not vm_addr:
-                logger.warning(
-                    "Worker %s has no vm_address in metadata, skipping for autoscaler",
-                    worker.worker_id,
-                )
-                continue
-
-            result[vm_addr] = VmWorkerStatus(
-                vm_address=vm_addr,
+            result[worker.worker_id] = WorkerStatus(
+                worker_id=worker.worker_id,
                 running_task_ids=frozenset(tid.to_wire() for tid in running_by_worker.get(worker.worker_id, set())),
             )
         return result

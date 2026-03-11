@@ -48,6 +48,7 @@ from iris.cluster.platform.bootstrap import build_worker_bootstrap_script
 from iris.cluster.platform.remote_exec import (
     DirectSshRemoteExec,
 )
+from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2
 from iris.time_utils import Duration, Timestamp
 
@@ -166,11 +167,11 @@ class ManualSliceHandle:
             return SliceStatus(state=CloudSliceState.DELETING, worker_count=0)
         workers = [
             ManualWorkerHandle(
-                _vm_id=f"{self._slice_id}-{host.replace('.', '-').replace(':', '-')}",
+                _vm_id=construct_worker_id(self._slice_id, i),
                 _internal_address=host,
                 _remote_exec=ssh,
             )
-            for host, ssh in zip(self._hosts, self._ssh_connections, strict=True)
+            for i, (host, ssh) in enumerate(zip(self._hosts, self._ssh_connections, strict=True))
         ]
 
         # Composite state: if bootstrap was requested, reflect its progress
@@ -348,7 +349,10 @@ class ManualPlatform:
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
                 if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
                     raise PlatformError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-                script = build_worker_bootstrap_script(worker_config)
+                per_worker_config = config_pb2.WorkerConfig()
+                per_worker_config.CopyFrom(worker_config)
+                per_worker_config.worker_id = worker.worker_id
+                script = build_worker_bootstrap_script(per_worker_config)
                 worker.bootstrap(script)
             except Exception as e:
                 errors.append((worker.worker_id, e))

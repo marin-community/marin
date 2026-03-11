@@ -31,7 +31,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.types import (
-    VmWorkerStatusMap,
+    WorkerStatusMap,
     get_gpu_count,
     get_tpu_count,
 )
@@ -111,13 +111,13 @@ class SliceState:
 
     Consolidates the slice handle with its associated tracking state
     (idle timeout, lifecycle) into a single structure.
-    lifecycle and vm_addresses are populated eagerly by the bootstrap thread.
+    lifecycle and worker_ids are populated eagerly by the bootstrap thread.
     """
 
     handle: SliceHandle
     last_active: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
-    vm_addresses: list[str] = field(default_factory=list)
+    worker_ids: list[str] = field(default_factory=list)
     error_message: str = ""
 
 
@@ -194,13 +194,12 @@ def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = No
         created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
         vms=[
             vm_pb2.VmInfo(
-                vm_id=f"{state.handle.slice_id}-vm-{i}",
+                vm_id=worker_id,
                 state=vm_state,
-                address=addr,
                 created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
                 state_changed_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
             )
-            for i, addr in enumerate(state.vm_addresses)
+            for worker_id in state.worker_ids
         ],
         error_message=state.error_message,
         last_active=state.last_active.to_proto(),
@@ -291,13 +290,13 @@ class ScalingGroup:
         with self._db.transaction() as cur:
             cur.execute(
                 "INSERT OR REPLACE INTO slices "
-                "(slice_id, scale_group, lifecycle, vm_addresses, created_at_ms, last_active_ms, error_message) "
+                "(slice_id, scale_group, lifecycle, worker_ids, created_at_ms, last_active_ms, error_message) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     slice_id,
                     self.name,
                     state.lifecycle.value,
-                    json.dumps(list(state.vm_addresses)),
+                    json.dumps(list(state.worker_ids)),
                     state.handle.created_at.epoch_ms(),
                     state.last_active.epoch_ms(),
                     state.error_message,
@@ -455,8 +454,8 @@ class ScalingGroup:
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
 
-    def mark_slice_ready(self, slice_id: str, vm_addresses: list[str], timestamp: Timestamp | None = None) -> None:
-        """Mark a slice as READY with its VM addresses. Called after successful bootstrap.
+    def mark_slice_ready(self, slice_id: str, worker_ids: list[str], timestamp: Timestamp | None = None) -> None:
+        """Mark a slice as READY with its worker IDs. Called after successful bootstrap.
 
         Initializes last_active to prevent the slice from appearing idle since epoch(0),
         which would make it immediately eligible for scaledown.
@@ -466,7 +465,7 @@ class ScalingGroup:
             state = self._slices.get(slice_id)
             if state is not None:
                 state.lifecycle = SliceLifecycleState.READY
-                state.vm_addresses = vm_addresses
+                state.worker_ids = worker_ids
                 state.last_active = timestamp
         if state is not None:
             self._db_upsert_slice(slice_id, state)
@@ -628,7 +627,7 @@ class ScalingGroup:
     # Avoids one transaction per active slice per autoscaler tick for stable workloads.
     _ACTIVITY_WRITE_THRESHOLD_MS: int = 30_000
 
-    def update_slice_activity(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp) -> None:
+    def update_slice_activity(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp) -> None:
         """Update activity timestamps for all slices based on worker status.
 
         For each slice, if any worker has running tasks, update its last_active timestamp.
@@ -638,11 +637,11 @@ class ScalingGroup:
             snapshot = list(self._slices.items())
 
         # Determine which slices are active and whether they need a DB write.
-        # _slice_has_active_workers is called outside the lock (reads vm_status_map, not _slices).
+        # _slice_has_active_workers is called outside the lock (reads worker_status_map, not _slices).
         active_slice_ids: list[str] = []
         needs_db_write: list[str] = []
         for slice_id, state in snapshot:
-            if not self._slice_has_active_workers(state, vm_status_map):
+            if not self._slice_has_active_workers(state, worker_status_map):
                 continue
             active_slice_ids.append(slice_id)
             elapsed_ms = timestamp.epoch_ms() - state.last_active.epoch_ms()
@@ -670,23 +669,23 @@ class ScalingGroup:
             for slice_id, state in to_write:
                 cur.execute(
                     "INSERT OR REPLACE INTO slices "
-                    "(slice_id, scale_group, lifecycle, vm_addresses, created_at_ms, last_active_ms, error_message) "
+                    "(slice_id, scale_group, lifecycle, worker_ids, created_at_ms, last_active_ms, error_message) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         slice_id,
                         self.name,
                         state.lifecycle.value,
-                        json.dumps(list(state.vm_addresses)),
+                        json.dumps(list(state.worker_ids)),
                         state.handle.created_at.epoch_ms(),
                         state.last_active.epoch_ms(),
                         state.error_message,
                     ),
                 )
 
-    def _slice_has_active_workers(self, state: SliceState, vm_status_map: VmWorkerStatusMap) -> bool:
-        """Check if any worker in a slice has running tasks (lookup by VM address)."""
-        for vm_address in self._get_slice_vm_addresses(state):
-            status = vm_status_map.get(vm_address)
+    def _slice_has_active_workers(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
+        """Check if any worker in a slice has running tasks."""
+        for worker_id in self._get_slice_worker_ids(state):
+            status = worker_status_map.get(worker_id)
             if status is not None and not status.is_idle:
                 return True
         return False
@@ -723,7 +722,7 @@ class ScalingGroup:
 
     def scale_down_if_idle(
         self,
-        vm_status_map: VmWorkerStatusMap,
+        worker_status_map: WorkerStatusMap,
         target_capacity: int,
         timestamp: Timestamp,
     ) -> list[SliceHandle]:
@@ -739,7 +738,7 @@ class ScalingGroup:
         3. Find eligible idle slices and terminate them (up to the token budget)
 
         Args:
-            vm_status_map: Map of VM address to worker status
+            worker_status_map: Map of worker_id to worker status
             target_capacity: Target number of slices (typically max(demand, min_slices))
             timestamp: Current timestamp for idle calculation
 
@@ -747,7 +746,7 @@ class ScalingGroup:
             List of terminated slice handles (may be empty).
         """
         # Update activity tracking
-        self.update_slice_activity(vm_status_map, timestamp)
+        self.update_slice_activity(worker_status_map, timestamp)
 
         # Use ready + pending for capacity check to prevent churn during boot
         counts = self.slice_state_counts()
@@ -785,7 +784,7 @@ class ScalingGroup:
                 logger.info("Scale group %s: scale down rate-limited after %d terminations", self.name, len(terminated))
                 break
 
-            if self._verify_slice_idle(slice_state, vm_status_map):
+            if self._verify_slice_idle(slice_state, worker_status_map):
                 with self._slices_lock:
                     state = self._slices.get(slice_state.handle.slice_id)
                 last_active = state.last_active if state else Timestamp.from_ms(0)
@@ -808,16 +807,16 @@ class ScalingGroup:
 
         return terminated
 
-    def _verify_slice_idle(self, state: SliceState, vm_status_map: VmWorkerStatusMap) -> bool:
-        """Verify all workers in a slice are idle before termination (lookup by VM address).
+    def _verify_slice_idle(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
+        """Verify all workers in a slice are idle before termination.
 
         Requires at least one known worker to be idle. If no workers are known at all
-        (none in vm_status_map), returns False — the slice may still be booting.
+        (none in worker_status_map), returns False -- the slice may still be booting.
         Zombie slices where workers have disappeared are handled by worker heartbeat timeouts.
         """
         has_known_worker = False
-        for vm_address in self._get_slice_vm_addresses(state):
-            status = vm_status_map.get(vm_address)
+        for worker_id in self._get_slice_worker_ids(state):
+            status = worker_status_map.get(worker_id)
             if status is None:
                 continue
             has_known_worker = True
@@ -1028,26 +1027,26 @@ class ScalingGroup:
             GroupAvailability.REQUESTING,
         }
 
-    def _get_slice_vm_addresses(self, state: SliceState) -> list[str]:
-        """Get VM addresses for a slice."""
-        return state.vm_addresses
+    def _get_slice_worker_ids(self, state: SliceState) -> list[str]:
+        """Get worker IDs for a slice."""
+        return state.worker_ids
 
-    def find_slice_for_vm(self, vm_address: str) -> str | None:
-        """Find slice_id containing a VM with the given address."""
+    def find_slice_for_worker(self, worker_id: str) -> str | None:
+        """Find slice_id containing a worker with the given ID."""
         with self._slices_lock:
             snapshot = list(self._slices.items())
         for slice_id, state in snapshot:
-            if vm_address in self._get_slice_vm_addresses(state):
+            if worker_id in self._get_slice_worker_ids(state):
                 return slice_id
         return None
 
-    def get_slice_vm_addresses(self, slice_id: str) -> list[str]:
-        """Get all VM addresses for a slice. Returns empty list if not found."""
+    def get_slice_worker_ids(self, slice_id: str) -> list[str]:
+        """Get all worker IDs for a slice. Returns empty list if not found."""
         with self._slices_lock:
             state = self._slices.get(slice_id)
         if state is None:
             return []
-        return list(self._get_slice_vm_addresses(state))
+        return list(self._get_slice_worker_ids(state))
 
     def terminate_all(self) -> None:
         """Terminate all slices in this scale group."""
@@ -1130,7 +1129,7 @@ class SliceSnapshot:
     slice_id: str
     scale_group: str
     lifecycle: str
-    vm_addresses: list[str] = field(default_factory=list)
+    worker_ids: list[str] = field(default_factory=list)
     created_at_ms: int = 0
     last_active_ms: int = 0
     error_message: str = ""
@@ -1206,7 +1205,7 @@ def restore_scaling_group(
         result.slices[slice_id] = SliceState(
             handle=cloud_handle,
             lifecycle=lifecycle,
-            vm_addresses=list(slice_snap.vm_addresses),
+            worker_ids=list(slice_snap.worker_ids),
             last_active=Timestamp.from_ms(slice_snap.last_active_ms),
             error_message=slice_snap.error_message,
         )

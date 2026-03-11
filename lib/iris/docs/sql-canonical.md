@@ -100,7 +100,7 @@ Key method groups:
 | Group | Methods |
 |-------|---------|
 | Job lifecycle | `submit_job`, `cancel_job`, `remove_finished_job` |
-| Worker lifecycle | `register_worker`, `fail_workers_by_vm_addresses`, `remove_worker` |
+| Worker lifecycle | `register_worker`, `fail_workers_by_ids`, `remove_worker` |
 | Heartbeat | `begin_heartbeat`, `apply_heartbeat`, `fail_heartbeat` |
 | Assignment & dispatch | `queue_assignments`, `drain_dispatch`, `requeue_dispatch` |
 | Endpoints | `add_endpoint`, `remove_endpoint`, `remove_endpoints_for_job` |

@@ -2440,16 +2440,14 @@ def test_worker_failed_from_building_counts_as_preemption(job_request, worker_me
     assert _query_task(state, task.task_id).failure_count == 0
 
 
-def test_fail_workers_by_vm_addresses_cascades_tasks(job_request, worker_metadata):
-    """fail_workers_by_vm_addresses fails sibling workers and cascades their tasks."""
+def test_fail_workers_by_ids_cascades_tasks(job_request, worker_metadata):
+    """fail_workers_by_ids fails sibling workers and cascades their tasks."""
     state = _make_state()
 
     meta1 = worker_metadata()
-    meta1.vm_address = "10.0.1.0"
     w1 = register_worker(state, "w1", "host1:8080", meta1)
 
     meta2 = worker_metadata()
-    meta2.vm_address = "10.0.1.1"
     w2 = register_worker(state, "w2", "host2:8080", meta2)
 
     tasks1 = submit_job(state, "j1", job_request("job1"))
@@ -2461,7 +2459,7 @@ def test_fail_workers_by_vm_addresses_cascades_tasks(job_request, worker_metadat
     assert _query_task(state, tasks1[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
     assert _query_task(state, tasks2[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
 
-    failed = state.fail_workers_by_vm_addresses(["10.0.1.1"], reason="slice terminated")
+    failed = state.fail_workers_by_ids(["w2"], reason="slice terminated")
 
     assert len(failed) == 1
     assert failed[0][0] == w2
@@ -2475,14 +2473,13 @@ def test_fail_workers_by_vm_addresses_cascades_tasks(job_request, worker_metadat
     assert _query_worker(state, w2) is None
 
 
-def test_fail_workers_by_vm_addresses_skips_unknown(worker_metadata):
-    """fail_workers_by_vm_addresses returns empty for unknown VM addresses."""
+def test_fail_workers_by_ids_skips_unknown(worker_metadata):
+    """fail_workers_by_ids returns empty for unknown worker IDs."""
     state = _make_state()
     meta = worker_metadata()
-    meta.vm_address = "10.0.1.0"
     register_worker(state, "w1", "host1:8080", meta)
 
-    failed = state.fail_workers_by_vm_addresses(["10.0.99.99"], reason="unknown")
+    failed = state.fail_workers_by_ids(["w-unknown"], reason="unknown")
     assert failed == []
 
     w = _query_worker(state, WorkerId("w1"))
