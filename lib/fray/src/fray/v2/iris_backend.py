@@ -275,7 +275,7 @@ class OperationFuture:
 
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
-            op = self._client.get_operation(self._op_id)
+            op = self._client.poll_operation_status(self._op_id)
 
             if op.state == actor_pb2.Operation.SUCCEEDED:
                 return cloudpickle.loads(op.serialized_result)

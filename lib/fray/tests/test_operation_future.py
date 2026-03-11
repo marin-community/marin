@@ -59,7 +59,7 @@ def test_operation_future_timeout():
             future.result(timeout=0.3)
 
         # Verify the operation was cancelled server-side
-        op = client.get_operation(op_id)
+        op = client.poll_operation_status(op_id)
         # May still be RUNNING briefly, but cancelled flag is set
         assert op.state in (actor_pb2.Operation.RUNNING, actor_pb2.Operation.CANCELLED)
     finally:
