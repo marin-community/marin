@@ -35,6 +35,7 @@ __all__ = [
     "JEEBENCH",
     "LIVECODEBENCH",
     "LIVECODEBENCH_V5_OFFICIAL",
+    "LIVECODEBENCH_V6_OFFICIAL",
     "MATH500",
     "MBPP_PLUS",
     "OLYMPIADBENCH",
@@ -69,6 +70,9 @@ LIVECODEBENCH = EvalTaskConfig(
 LIVECODEBENCH_V5_OFFICIAL = EvalTaskConfig(
     name="LiveCodeBenchv5_official", num_fewshot=0, task_alias="LiveCodeBenchv5_official", task_kwargs={"n_repeat": 1}
 )
+LIVECODEBENCH_V6_OFFICIAL = EvalTaskConfig(
+    name="LiveCodeBenchv6_official", num_fewshot=0, task_alias="LiveCodeBenchv6_official", task_kwargs={"n_repeat": 1}
+)
 BIGCODEBENCH = EvalTaskConfig(name="BigCodeBench", num_fewshot=0, task_alias="BigCodeBench")
 CODEFORCES = EvalTaskConfig(name="CodeForces", num_fewshot=0, task_alias="CodeForces", task_kwargs={"n_repeat": 1})
 CODEELO = EvalTaskConfig(name="CodeElo", num_fewshot=0, task_alias="CodeElo", task_kwargs={"n_repeat": 1})
@@ -96,6 +100,7 @@ EVALCHEMY_CODE_TASKS = (
     MBPP_PLUS,
     LIVECODEBENCH,
     LIVECODEBENCH_V5_OFFICIAL,
+    LIVECODEBENCH_V6_OFFICIAL,
     BIGCODEBENCH,
     CODEFORCES,
     CODEELO,

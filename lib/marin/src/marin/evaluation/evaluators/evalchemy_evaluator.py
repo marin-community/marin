@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 # Evalchemy git repo and commit to use
 EVALCHEMY_REPO = "https://github.com/teetone/evalchemy.git"
-EVALCHEMY_COMMIT = "e813933"  # OlympiadBench: single eval, output accuracy (not accuracy_avg)
+EVALCHEMY_COMMIT = "666f5ca"  # 2026-03-10
 
 
 # Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
@@ -60,6 +60,7 @@ N_REPEAT_BENCHMARK_PATHS = {
     "HMMT": "eval/chat_benchmarks/HMMT/eval_instruct.py",
     "LiveCodeBench": "eval/chat_benchmarks/LiveCodeBench/eval_instruct.py",
     "LiveCodeBenchv5_official": "eval/chat_benchmarks/LiveCodeBenchv5_official/eval_instruct.py",
+    "LiveCodeBenchv6_official": "eval/chat_benchmarks/LiveCodeBenchv6_official/eval_instruct.py",
     "CodeForces": "eval/chat_benchmarks/CodeForces/eval_instruct.py",
     "CodeElo": "eval/chat_benchmarks/CodeElo/eval_instruct.py",
     "GPQADiamond": "eval/chat_benchmarks/GPQADiamond/eval_instruct.py",

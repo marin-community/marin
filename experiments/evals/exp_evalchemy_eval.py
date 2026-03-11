@@ -24,6 +24,7 @@ from experiments.evals.evalchemy_task_configs import (
     JEEBENCH,
     LIVECODEBENCH,
     LIVECODEBENCH_V5_OFFICIAL,
+    LIVECODEBENCH_V6_OFFICIAL,
     MATH500,
     OLYMPIADBENCH,
 )
@@ -71,7 +72,7 @@ SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
 ]
 
 CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
-    ([LIVECODEBENCH, LIVECODEBENCH_V5_OFFICIAL], SEEDS[:6]),
+    ([LIVECODEBENCH, LIVECODEBENCH_V5_OFFICIAL, LIVECODEBENCH_V6_OFFICIAL], SEEDS[:6]),
     ([CODEFORCES, CODEELO], SEEDS[:3]),
 ]
 
