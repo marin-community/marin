@@ -349,6 +349,20 @@ message DefaultsConfig {
 }
 
 // ============================================================================
+// AUTHENTICATION CONFIGURATION
+// ============================================================================
+
+message GcpAuthConfig {
+  string audience = 1;  // Expected audience for GCP ID token verification
+}
+
+message AuthConfig {
+  oneof provider {
+    GcpAuthConfig gcp = 1;
+  }
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
@@ -364,4 +378,7 @@ message IrisClusterConfig {
 
   // Scale groups (name -> config)
   map<string, ScaleGroupConfig> scale_groups = 50;
+
+  // Authentication (optional — when absent, no auth is required)
+  AuthConfig auth = 60;
 }

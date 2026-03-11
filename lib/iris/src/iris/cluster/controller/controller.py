@@ -79,6 +79,7 @@ from iris.cluster.types import (
 from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
+from iris.rpc.auth import TokenVerifier
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
@@ -686,6 +687,9 @@ class ControllerConfig:
     log_dir: Path | None = None
     """Persistent directory for task log files. When None, uses a temp dir."""
 
+    auth_verifier: TokenVerifier | None = None
+    """When set, all RPC calls require a valid bearer token verified by this verifier."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -771,6 +775,7 @@ class Controller:
             self._service,
             host=config.host,
             port=config.port,
+            auth_verifier=config.auth_verifier,
         )
 
         # Ingest process logs into the LogStore so they are available via FetchLogs.

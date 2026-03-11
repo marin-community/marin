@@ -16,9 +16,24 @@ from iris.cluster.controller.controller import Controller, ControllerConfig, Rpc
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
+from iris.rpc.auth import GcpTokenVerifier, TokenVerifier
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
+
+
+def create_auth_verifier(auth_config) -> TokenVerifier | None:
+    """Create a TokenVerifier from the auth config proto, or None if auth is disabled."""
+    if not auth_config.HasField("provider"):
+        return None
+    provider = auth_config.WhichOneof("provider")
+    if provider == "gcp":
+        audience = auth_config.gcp.audience
+        if not audience:
+            raise ValueError("GCP auth config requires an audience")
+        logger.info("Auth enabled: GCP ID token verification (audience=%s)", audience)
+        return GcpTokenVerifier(audience=audience)
+    raise ValueError(f"Unknown auth provider: {provider}")
 
 
 def default_bundle_prefix() -> str:
@@ -155,6 +170,13 @@ def serve(
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
+    # Create auth verifier from cluster config if present
+    auth_verifier = None
+    if cluster_config and cluster_config.HasField("auth"):
+        auth_verifier = create_auth_verifier(cluster_config.auth)
+    if auth_verifier is None:
+        logger.info("Authentication disabled (no auth config)")
+
     config = ControllerConfig(
         host=host,
         port=port,
@@ -163,6 +185,7 @@ def serve(
         heartbeat_failure_threshold=heartbeat_failure_threshold,
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
         log_dir=Path("/tmp/iris/controller-logs"),
+        auth_verifier=auth_verifier,
     )
 
     try:

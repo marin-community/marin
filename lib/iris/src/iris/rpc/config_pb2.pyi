@@ -418,8 +418,20 @@ class DefaultsConfig(_message.Message):
     worker: WorkerConfig
     def __init__(self, ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerConfig, _Mapping]] = ...) -> None: ...
 
+class GcpAuthConfig(_message.Message):
+    __slots__ = ("audience",)
+    AUDIENCE_FIELD_NUMBER: _ClassVar[int]
+    audience: str
+    def __init__(self, audience: _Optional[str] = ...) -> None: ...
+
+class AuthConfig(_message.Message):
+    __slots__ = ("gcp",)
+    GCP_FIELD_NUMBER: _ClassVar[int]
+    gcp: GcpAuthConfig
+    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ...) -> None: ...
+
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("platform", "defaults", "storage", "controller", "scale_groups")
+    __slots__ = ("platform", "defaults", "storage", "controller", "scale_groups", "auth")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -432,9 +444,11 @@ class IrisClusterConfig(_message.Message):
     STORAGE_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUPS_FIELD_NUMBER: _ClassVar[int]
+    AUTH_FIELD_NUMBER: _ClassVar[int]
     platform: PlatformConfig
     defaults: DefaultsConfig
     storage: StorageConfig
     controller: ControllerVmConfig
     scale_groups: _containers.MessageMap[str, ScaleGroupConfig]
-    def __init__(self, platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ...) -> None: ...
+    auth: AuthConfig
+    def __init__(self, platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ...) -> None: ...

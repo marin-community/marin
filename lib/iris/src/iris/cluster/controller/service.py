@@ -19,6 +19,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.rpc.auth import get_verified_user
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
@@ -537,6 +538,13 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
 
         job_id = JobName.from_wire(request.name)
+
+        # When auth is active, override the user segment with the verified identity.
+        # This ensures users can't impersonate each other. Only override for
+        # root-level submissions; child jobs inherit the parent's user.
+        verified_user = get_verified_user()
+        if verified_user is not None and job_id.is_root:
+            job_id = JobName.root(verified_user, job_id.name)
 
         # Reject submissions if the parent job has already terminated
         if job_id.parent:
