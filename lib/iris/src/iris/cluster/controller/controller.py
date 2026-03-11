@@ -33,7 +33,7 @@ from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     maybe_periodic_checkpoint,
-    restore_from_checkpoint,
+    restore_db_from_checkpoint,
     write_checkpoint,
 )
 from iris.cluster.controller.db import (
@@ -907,7 +907,7 @@ class Controller:
     def _atexit_checkpoint(self) -> None:
         """Best-effort checkpoint at interpreter shutdown for post-mortem analysis."""
         try:
-            path, _result = write_checkpoint(self._transitions, self._db, self._config.bundle_prefix)
+            path, _result = write_checkpoint(self._db, self._config.bundle_prefix)
             logger.info("atexit checkpoint written: %s", path)
         except Exception:
             logger.exception("atexit checkpoint failed")
@@ -933,7 +933,6 @@ class Controller:
             # is only started when an autoscaler is present.
             if self._autoscaler is None:
                 maybe_periodic_checkpoint(
-                    self._transitions,
                     self._db,
                     self._config.bundle_prefix,
                     self._periodic_checkpoint_limiter,
@@ -955,7 +954,6 @@ class Controller:
                 logger.exception("Autoscaler loop iteration failed")
 
             maybe_periodic_checkpoint(
-                self._transitions,
                 self._db,
                 self._config.bundle_prefix,
                 self._periodic_checkpoint_limiter,
@@ -1483,7 +1481,7 @@ class Controller:
         try:
             # Wait for any in-flight heartbeat round to complete.
             with self._heartbeat_lock:
-                path, result = write_checkpoint(self._transitions, self._db, self._config.bundle_prefix)
+                path, result = write_checkpoint(self._db, self._config.bundle_prefix)
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,
@@ -1497,13 +1495,10 @@ class Controller:
 
     def restore_from_checkpoint(self, checkpoint_path: str | None = None) -> bool:
         """Restore full controller state from a checkpoint SQLite copy."""
-        return restore_from_checkpoint(
-            self._transitions,
-            self._db,
-            self._autoscaler,
-            self._config.bundle_prefix,
-            checkpoint_path,
-        )
+        restored = restore_db_from_checkpoint(self._db, self._config.bundle_prefix, checkpoint_path)
+        if restored and self._autoscaler is not None:
+            self._autoscaler.restore_from_db(self._db)
+        return restored
 
     def launch_job(
         self,

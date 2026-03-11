@@ -11,12 +11,11 @@ leaks) or lost slice inventory (capacity gaps).
 
 import pytest
 
-from iris.cluster.controller.scaling_group import SliceLifecycleState
 from iris.cluster.controller.checkpoint import (
     ScalingGroupSnapshotData,
     SliceSnapshotData,
-    restore_scaling_group,
 )
+from iris.cluster.controller.scaling_group import SliceLifecycleState, restore_scaling_group
 from iris.cluster.platform.base import Labels
 from iris.rpc import config_pb2
 from iris.time_utils import Timestamp

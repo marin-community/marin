@@ -46,7 +46,6 @@ def test_periodic_checkpoint_writes_local_and_uploads(tmp_path):
 
     with patch("iris.cluster.controller.checkpoint.upload_checkpoint_to_remote", side_effect=track_upload):
         maybe_periodic_checkpoint(
-            controller._transitions,
             controller._db,
             "gs://test-bucket/bundles",
             limiter,
@@ -125,7 +124,6 @@ def test_no_upload_for_local_bundle_prefix(tmp_path):
     limiter._last_run = 0
 
     maybe_periodic_checkpoint(
-        controller._transitions,
         controller._db,
         "file:///tmp/local-bundles",
         limiter,
