@@ -147,6 +147,9 @@ class TrackedWorker:
 # Slices that die within this time of creation trigger backoff (preemption detection)
 SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
 
+# After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
+DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
 
 class ScalingAction(Enum):
     """Type of scaling action."""
@@ -738,6 +741,7 @@ class Autoscaler:
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
+        unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -749,12 +753,14 @@ class Autoscaler:
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
             db: Optional DB handle for write-through persistence of tracked workers.
+            unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
         """
         self._groups = scale_groups
         self._platform = platform
         self._db = db
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
+        self._unresolvable_timeout = unresolvable_timeout
 
         # Centralized per-worker state indexed by worker_id
         self._workers: dict[str, TrackedWorker] = {}
@@ -1153,6 +1159,27 @@ class Autoscaler:
                         reason=reason,
                         status="failed",
                     )
+                elif status.state == CloudSliceState.UNKNOWN:
+                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
+                    if age >= self._unresolvable_timeout:
+                        group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
+                        group.scale_down(slice_id)
+                        self._unregister_slice_workers(slice_id)
+                        group.record_failure()
+                        self._log_action(
+                            "slice_failed",
+                            group.name,
+                            slice_id,
+                            reason=f"TPU unresolvable for {age}",
+                            status="failed",
+                        )
+                    else:
+                        logger.debug(
+                            "Slice %s UNKNOWN (age %s < timeout %s); will retry",
+                            slice_id,
+                            age,
+                            self._unresolvable_timeout,
+                        )
 
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)

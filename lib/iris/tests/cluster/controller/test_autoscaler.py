@@ -16,6 +16,7 @@ import pytest
 from iris.cluster.controller.autoscaler import (
     AdditiveReq,
     Autoscaler,
+    DEFAULT_UNRESOLVABLE_TIMEOUT,
     DemandEntry,
     ScalingAction,
     ScalingDecision,
@@ -3733,3 +3734,78 @@ class TestCheckCoschedulingFeasibility:
         """Returns None when there are no groups (no validation possible)."""
         autoscaler = make_autoscaler({})
         assert autoscaler.check_coscheduling_feasibility(8, []) is None
+
+
+class TestAutoscalerUnresolvableTimeout:
+    """Tests for UNKNOWN slice → FAILED after timeout behavior."""
+
+    def _make_group_with_unknown_slice(
+        self, scale_group_config: config_pb2.ScaleGroupConfig, created_at_ms: int
+    ) -> tuple[Autoscaler, ScalingGroup, MagicMock]:
+        """Set up a group with one BOOTING slice that reports UNKNOWN state."""
+        handle = make_mock_slice_handle("slice-001", created_at_ms=created_at_ms)
+        handle.describe.return_value = SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[])
+
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        short_timeout = Duration.from_minutes(15)
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=short_timeout,
+        )
+        return autoscaler, group, handle
+
+    def test_unknown_before_timeout_stays_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice in UNKNOWN state before the timeout remains tracked (BOOTING)."""
+        created_at_ms = 0
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms)
+
+        # Refresh at 5 min — well under 15 min timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))
+
+        assert group.slice_count() == 1
+        assert group.ready_slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_unknown_after_timeout_triggers_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice in UNKNOWN state past the timeout is failed and removed."""
+        created_at_ms = 0
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms)
+
+        # Refresh at 16 min — past the 15 min timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(16 * 60 * 1000))
+
+        assert group.slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_unknown_then_ready_before_timeout_recovers(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice that was UNKNOWN but becomes READY before timeout is marked ready."""
+        created_at_ms = 0
+        handle = make_mock_slice_handle("slice-001", created_at_ms=created_at_ms)
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=DEFAULT_UNRESOLVABLE_TIMEOUT,
+        )
+
+        # First refresh: UNKNOWN at 5 min → should stay BOOTING
+        handle.describe.return_value = SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[])
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))
+        assert group.slice_count() == 1
+
+        # Second refresh: READY before timeout
+        worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
+        handle.describe.return_value = SliceStatus(state=CloudSliceState.READY, worker_count=1, workers=[worker])
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(10 * 60 * 1000))
+
+        assert group.ready_slice_count() == 1
+        autoscaler.shutdown()
