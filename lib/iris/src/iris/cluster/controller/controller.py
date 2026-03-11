@@ -81,7 +81,7 @@ from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -792,6 +792,18 @@ class Controller:
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
 
+        # Inject DB into autoscaler and its scaling groups for write-through persistence
+        if self._autoscaler is not None:
+            self._autoscaler._db = self._db
+            for group in self._autoscaler.groups.values():
+                group._db = self._db
+                # Ensure the scaling group row exists
+                with self._db.transaction() as cur:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO scaling_groups(name, updated_at_ms) VALUES (?, ?)",
+                        (group.name, Timestamp.now().epoch_ms()),
+                    )
+
         self._heartbeat_iteration = 0
 
         # Set to True once start() is called. Used to gate operations that
@@ -1439,18 +1451,6 @@ class Controller:
             reservation_claims=_read_reservation_claims(self._db),
         )
         self._autoscaler.update(demand_entries)
-        self._persist_autoscaler_state()
-
-    def _persist_autoscaler_state(self) -> None:
-        """Persist autoscaler state as write-through DB metadata."""
-        if self._autoscaler is None:
-            return
-        scaling_groups = [group.to_snapshot() for group in self._autoscaler.groups.values()]
-        tracked_workers = self._autoscaler.to_tracked_worker_snapshots()
-        self._transitions.persist_checkpoint_state(
-            scaling_groups=scaling_groups,
-            tracked_workers=tracked_workers,
-        )
 
     def _build_vm_status_map(self) -> VmWorkerStatusMap:
         """Build a map of VM address to worker status for autoscaler.
