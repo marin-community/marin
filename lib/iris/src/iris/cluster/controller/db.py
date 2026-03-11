@@ -67,6 +67,12 @@ def _decode_json_dict(value: Any) -> dict[str, Any]:
     return json.loads(str(value))
 
 
+def _decode_json_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    return json.loads(str(value))
+
+
 def _proto_decoder(proto_factory: Callable[[], T]) -> Callable[[Any], T]:
     def decode(value: Any) -> T:
         proto = proto_factory()
@@ -793,13 +799,31 @@ RESERVATION_CLAIMS = Table[tuple[str, str]](
         "entry_idx": Column("rc", "entry_idx", _decode_int),
     },
 )
-SCALING_GROUPS = Table[tuple[str, bytes]](
+SCALING_GROUPS = Table(
     sql_name="scaling_groups",
     alias="sg",
     columns={
         "name": Column("sg", "name", _decode_str),
-        "snapshot_proto": Column("sg", "snapshot_proto", _identity),
+        "consecutive_failures": Column("sg", "consecutive_failures", _decode_int),
+        "backoff_until_ms": Column("sg", "backoff_until_ms", _decode_timestamp_ms),
+        "last_scale_up_ms": Column("sg", "last_scale_up_ms", _decode_timestamp_ms),
+        "last_scale_down_ms": Column("sg", "last_scale_down_ms", _decode_timestamp_ms),
+        "quota_exceeded_until_ms": Column("sg", "quota_exceeded_until_ms", _decode_timestamp_ms),
+        "quota_reason": Column("sg", "quota_reason", _decode_str),
         "updated_at_ms": Column("sg", "updated_at_ms", _decode_timestamp_ms),
+    },
+)
+SLICES = Table(
+    sql_name="slices",
+    alias="sl",
+    columns={
+        "slice_id": Column("sl", "slice_id", _decode_str),
+        "scale_group": Column("sl", "scale_group", _decode_str),
+        "lifecycle": Column("sl", "lifecycle", _decode_str),
+        "vm_addresses": Column("sl", "vm_addresses", _decode_json_list),
+        "created_at_ms": Column("sl", "created_at_ms", _decode_timestamp_ms),
+        "last_active_ms": Column("sl", "last_active_ms", _decode_timestamp_ms),
+        "error_message": Column("sl", "error_message", _decode_str),
     },
 )
 TRACKED_WORKERS = Table[tuple[str, str]](
@@ -1090,6 +1114,7 @@ class ControllerDB:
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
+        self.apply_migrations()
 
     # SQL-canonical read access is exposed through ``snapshot()`` and typed table
     # metadata at module scope. Legacy list/get/count helper methods were removed

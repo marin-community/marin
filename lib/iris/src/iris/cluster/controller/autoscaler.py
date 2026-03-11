@@ -44,13 +44,14 @@ from iris.cluster.constraints import (
     get_device_type_enum,
     routing_constraints,
 )
-from iris.cluster.controller.checkpoint import TrackedWorkerSnapshotData, deserialize_scaling_group
-from iris.cluster.controller.db import SCALING_GROUPS, TRACKED_WORKERS, ControllerDB
+from iris.cluster.controller.db import SCALING_GROUPS, SLICES, TRACKED_WORKERS, ControllerDB
 from iris.cluster.types import VmWorkerStatusMap
 from iris.cluster.controller.scaling_group import (
     GroupAvailability,
+    GroupSnapshot,
     ScalingGroup,
     SliceLifecycleState,
+    SliceSnapshot,
     restore_scaling_group,
 )
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -107,15 +108,25 @@ class _RestoredWorkerHandle:
         raise NotImplementedError("RestoredWorkerHandle does not support reboot")
 
 
-def _restore_tracked_workers(snapshots: list[TrackedWorkerSnapshotData]) -> dict[str, TrackedWorker]:
-    """Restore tracked workers from checkpoint snapshot data."""
+@dataclass(frozen=True)
+class _TrackedWorkerRow:
+    """Lightweight record for a tracked worker read from the DB."""
+
+    worker_id: str
+    slice_id: str
+    scale_group: str
+    internal_address: str
+
+
+def _restore_tracked_workers(rows: list[_TrackedWorkerRow]) -> dict[str, TrackedWorker]:
+    """Restore tracked workers from DB rows."""
     workers: dict[str, TrackedWorker] = {}
-    for snap in snapshots:
-        handle = _RestoredWorkerHandle(worker_id=snap.worker_id, internal_address=snap.internal_address)
+    for row in rows:
+        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=row.internal_address)
         tw = TrackedWorker(
-            worker_id=snap.worker_id,
-            slice_id=snap.slice_id,
-            scale_group=snap.scale_group,
+            worker_id=row.worker_id,
+            slice_id=row.slice_id,
+            scale_group=row.scale_group,
             handle=handle,
         )
         workers[tw.worker_id] = tw
@@ -726,6 +737,7 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
+        db: ControllerDB | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -736,9 +748,11 @@ class Autoscaler:
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
+            db: Optional DB handle for write-through persistence of tracked workers.
         """
         self._groups = scale_groups
         self._platform = platform
+        self._db = db
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
 
@@ -763,6 +777,7 @@ class Autoscaler:
         platform: Platform,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
+        db: ControllerDB | None = None,
     ) -> Autoscaler:
         """Create autoscaler from proto config.
 
@@ -772,6 +787,7 @@ class Autoscaler:
             platform: Platform instance for shutdown lifecycle
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
+            db: Optional DB handle for write-through persistence.
 
         Returns:
             Configured Autoscaler instance
@@ -782,6 +798,7 @@ class Autoscaler:
             platform=platform,
             threads=threads,
             base_worker_config=base_worker_config,
+            db=db,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -1083,12 +1100,23 @@ class Autoscaler:
                 handle=worker,
                 bootstrap_log=worker.bootstrap_log,
             )
+            if self._db is not None:
+                with self._db.transaction() as cur:
+                    cur.execute(
+                        "INSERT OR REPLACE INTO tracked_workers(worker_id, slice_id, scale_group, internal_address) "
+                        "VALUES (?, ?, ?, ?)",
+                        (worker.worker_id, slice_id, scale_group, worker.internal_address),
+                    )
 
     def _unregister_slice_workers(self, slice_id: str) -> None:
         """Remove all TrackedWorker entries belonging to a slice."""
         to_remove = [wid for wid, tw in self._workers.items() if tw.slice_id == slice_id]
         for wid in to_remove:
             del self._workers[wid]
+        if self._db is not None and to_remove:
+            with self._db.transaction() as cur:
+                for wid in to_remove:
+                    cur.execute("DELETE FROM tracked_workers WHERE worker_id = ?", (wid,))
 
     def refresh(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp | None = None) -> None:
         """State-read phase: scale down idle slices from currently tracked state."""
@@ -1166,18 +1194,6 @@ class Autoscaler:
         self.refresh(vm_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
-    def to_tracked_worker_snapshots(self) -> list[TrackedWorkerSnapshotData]:
-        """Serialize tracked worker state for checkpointing."""
-        return [
-            TrackedWorkerSnapshotData(
-                worker_id=tw.worker_id,
-                slice_id=tw.slice_id,
-                scale_group=tw.scale_group,
-                internal_address=tw.handle.internal_address,
-            )
-            for tw in self._workers.values()
-        ]
-
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
@@ -1185,14 +1201,34 @@ class Autoscaler:
     def restore_from_db(self, db: ControllerDB) -> None:
         """Reconcile DB-checkpointed autoscaler state against live cloud.
 
-        Reads scaling group snapshots and tracked workers from the DB,
+        Reads scaling group and slice rows from proper DB tables,
         reconciles each group against the cloud in parallel, and restores
         tracked workers. Call at startup before loops begin.
         """
         with db.snapshot() as snapshot:
             scaling_rows = snapshot.select(
                 SCALING_GROUPS,
-                columns=(SCALING_GROUPS.c.name, SCALING_GROUPS.c.snapshot_proto),
+                columns=(
+                    SCALING_GROUPS.c.name,
+                    SCALING_GROUPS.c.consecutive_failures,
+                    SCALING_GROUPS.c.backoff_until_ms,
+                    SCALING_GROUPS.c.last_scale_up_ms,
+                    SCALING_GROUPS.c.last_scale_down_ms,
+                    SCALING_GROUPS.c.quota_exceeded_until_ms,
+                    SCALING_GROUPS.c.quota_reason,
+                ),
+            )
+            slice_rows = snapshot.select(
+                SLICES,
+                columns=(
+                    SLICES.c.slice_id,
+                    SLICES.c.scale_group,
+                    SLICES.c.lifecycle,
+                    SLICES.c.vm_addresses,
+                    SLICES.c.created_at_ms,
+                    SLICES.c.last_active_ms,
+                    SLICES.c.error_message,
+                ),
             )
             tracked_rows = snapshot.select(
                 TRACKED_WORKERS,
@@ -1204,12 +1240,36 @@ class Autoscaler:
                 ),
             )
 
-        scaling_groups = {}
-        for row in scaling_rows:
-            scaling_groups[row.name] = deserialize_scaling_group(row.snapshot_proto)
+        # Build GroupSnapshot objects from DB rows
+        slices_by_group: dict[str, list[SliceSnapshot]] = {}
+        for row in slice_rows:
+            slices_by_group.setdefault(row.scale_group, []).append(
+                SliceSnapshot(
+                    slice_id=row.slice_id,
+                    scale_group=row.scale_group,
+                    lifecycle=row.lifecycle,
+                    vm_addresses=row.vm_addresses,
+                    created_at_ms=row.created_at_ms.epoch_ms(),
+                    last_active_ms=row.last_active_ms.epoch_ms(),
+                    error_message=row.error_message,
+                )
+            )
 
-        tracked_worker_snapshots: list[TrackedWorkerSnapshotData] = [
-            TrackedWorkerSnapshotData(
+        group_snapshots: dict[str, GroupSnapshot] = {}
+        for row in scaling_rows:
+            group_snapshots[row.name] = GroupSnapshot(
+                name=row.name,
+                slices=slices_by_group.get(row.name, []),
+                consecutive_failures=row.consecutive_failures,
+                backoff_until_ms=row.backoff_until_ms.epoch_ms(),
+                last_scale_up_ms=row.last_scale_up_ms.epoch_ms(),
+                last_scale_down_ms=row.last_scale_down_ms.epoch_ms(),
+                quota_exceeded_until_ms=row.quota_exceeded_until_ms.epoch_ms(),
+                quota_reason=row.quota_reason,
+            )
+
+        tracked_worker_rows = [
+            _TrackedWorkerRow(
                 worker_id=row.worker_id,
                 slice_id=row.slice_id,
                 scale_group=row.scale_group,
@@ -1220,7 +1280,7 @@ class Autoscaler:
 
         # Restore scaling groups (parallelized -- each calls platform.list_slices())
         groups_to_restore = []
-        for group_snap in scaling_groups.values():
+        for group_snap in group_snapshots.values():
             group = self._groups.get(group_snap.name)
             if group is None:
                 logger.warning(
@@ -1251,7 +1311,7 @@ class Autoscaler:
         # Workers from discarded slices remain in the DB as healthy.
         # They will naturally fail heartbeat checks and be pruned once
         # consecutive failures exceed the threshold.
-        restored_workers = _restore_tracked_workers(tracked_worker_snapshots)
+        restored_workers = _restore_tracked_workers(tracked_worker_rows)
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 
