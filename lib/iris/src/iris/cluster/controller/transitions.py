@@ -28,11 +28,6 @@ from iris.cluster.controller.db import (
     ENDPOINT_TASKS,
     endpoint_query_predicate,
 )
-from iris.cluster.controller.checkpoint import (
-    ScalingGroupSnapshotData,
-    TrackedWorkerSnapshotData,
-    serialize_scaling_group,
-)
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
     JobName,
@@ -335,33 +330,6 @@ class ControllerTransitions:
                 cur.execute(
                     "INSERT INTO reservation_claims(worker_id, job_id, entry_idx) VALUES (?, ?, ?)",
                     (str(worker_id), claim.job_id, claim.entry_idx),
-                )
-
-    def persist_checkpoint_state(
-        self,
-        scaling_groups: list[ScalingGroupSnapshotData],
-        tracked_workers: list[TrackedWorkerSnapshotData],
-    ) -> None:
-        """Persist checkpoint metadata rows into the controller DB."""
-
-        with self._db.transaction() as cur:
-            cur.execute("DELETE FROM scaling_groups")
-            for group in scaling_groups:
-                cur.execute(
-                    "INSERT INTO scaling_groups(name, snapshot_proto, updated_at_ms) VALUES (?, ?, ?)",
-                    (
-                        group.name,
-                        serialize_scaling_group(group),
-                        Timestamp.now().epoch_ms(),
-                    ),
-                )
-
-            cur.execute("DELETE FROM tracked_workers")
-            for worker in tracked_workers:
-                cur.execute(
-                    "INSERT INTO tracked_workers(worker_id, slice_id, scale_group, internal_address) "
-                    "VALUES (?, ?, ?, ?)",
-                    (worker.worker_id, worker.slice_id, worker.scale_group, worker.internal_address),
                 )
 
     # =========================================================================
