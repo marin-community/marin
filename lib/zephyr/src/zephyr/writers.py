@@ -13,7 +13,10 @@ from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 import itertools
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 from iris.marin_fs import open_url, url_to_fs
 import msgspec
@@ -23,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 # 64 MB write blocks — controls S3 multipart upload part size.
 _WRITE_BLOCK_SIZE = 64 * 1024 * 1024
+
+# Default target buffer size for writer batching. Writers accumulate
+# micro-batches until accumulated nbytes reaches this threshold, then yield
+# a single concatenated table.
+DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
+
+# Number of records converted to PyArrow at a time. Small enough that
+# ``pa.Table.from_pylist`` is fast; large enough to amortise per-call overhead.
+_MICRO_BATCH_SIZE = 8
+
+# Fixed batch size for Levanter cache writes (2^14).
+_LEVANTER_BATCH_SIZE = 16384
 
 
 def unique_temp_path(output_path: str) -> str:
@@ -115,16 +130,64 @@ def infer_arrow_schema(records: list[dict[str, Any]]) -> Any:
     return pa.Table.from_pylist(records).schema
 
 
+def batchify(batch: Iterable, n: int = 1024) -> Iterable:
+    iterator = iter(batch)
+    while batch := tuple(itertools.islice(iterator, n)):
+        yield batch
+
+
+def _accumulate_tables(
+    records: Iterable,
+    *,
+    schema: pa.Schema | None = None,
+    target_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
+) -> Iterable[pa.Table]:
+    """Yield PyArrow tables of approximately ``target_bytes`` each.
+
+    Converts records to PyArrow in micro-batches of ``_MICRO_BATCH_SIZE``,
+    tracks byte size incrementally, and yields a single ``concat_tables``
+    result each time the threshold is reached.
+    """
+    import pyarrow as pa
+
+    chunks: list[pa.Table] = []
+    bytesize = 0
+    convert: Callable | None = None
+
+    for micro_batch in batchify(records, n=_MICRO_BATCH_SIZE):
+        if convert is None:
+            convert = asdict if is_dataclass(micro_batch[0]) else (lambda x: x)
+        dicts = [convert(r) for r in micro_batch]
+        if schema is None:
+            # NOTE: the _MICRO_BATCH_SIZE is fairly small, here we hope it's enough to infer "real" schema
+            schema = infer_arrow_schema(dicts)
+        table = pa.Table.from_pylist(dicts, schema=schema)
+        chunks.append(table)
+        bytesize += table.nbytes
+        if bytesize >= target_bytes:
+            yield pa.concat_tables(chunks)
+            chunks = []
+            bytesize = 0
+
+    if chunks:
+        yield pa.concat_tables(chunks)
+
+
 def write_parquet_file(
-    records: Iterable, output_path: str, *, schema: object | None = None, batch_size: int = 1000
+    records: Iterable,
+    output_path: str,
+    *,
+    schema: pa.Schema | None = None,
+    target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
 ) -> dict:
     """Write records to a Parquet file.
 
     Args:
         records: Records to write (iterable of dicts)
         output_path: Path to output file
-        schema: PyArrow schema (optional, will be inferred from first record if None)
-        batch_size: Number of records per batch (default: 1000)
+        schema: PyArrow schema (optional, will be inferred from first batch if None)
+        target_buffer_bytes: Target buffer size in bytes for accumulating records
+            before flushing to the writer.
 
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
@@ -133,48 +196,33 @@ def write_parquet_file(
     import pyarrow.parquet as pq
 
     ensure_parent_dir(output_path)
+    count = 0
 
-    record_iter = iter(records)
-
-    first_record = None
-    try:
-        first_record = next(record_iter)
-    except StopIteration:
-        # Empty dataset case - write directly without temp file
-        actual_schema = schema or pa.schema([])
-        table = pa.Table.from_pylist([], schema=actual_schema)
-        pq.write_table(table, output_path)
-        return {"path": output_path, "count": 0}
-
-    maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
-
-    # Collect first batch and infer schema from multiple records so that
-    # None/optional values are resolved from non-None values in the batch.
-    first_batch = [maybe_map_to_dict(first_record)]
-    for record in itertools.islice(record_iter, batch_size - 1):
-        first_batch.append(maybe_map_to_dict(record))
-    actual_schema = schema or infer_arrow_schema(first_batch)
-
-    count = len(first_batch)
     with atomic_rename(output_path) as temp_path:
-        with pq.ParquetWriter(temp_path, actual_schema) as writer:
-            writer.write_table(pa.Table.from_pylist(first_batch, schema=actual_schema))
-            batch = []
-            for record in record_iter:
-                batch.append(maybe_map_to_dict(record))
-                count += 1
-                if len(batch) >= batch_size:
-                    writer.write_table(pa.Table.from_pylist(batch, schema=actual_schema))
-                    batch = []
+        writer: pq.ParquetWriter | None = None
+        try:
+            for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
+                if writer is None:
+                    writer = pq.ParquetWriter(temp_path, table.schema)
+                writer.write_table(table)
+                count += len(table)
+        finally:
+            if writer is not None:
+                writer.close()
 
-            if batch:
-                writer.write_table(pa.Table.from_pylist(batch, schema=actual_schema))
+        if writer is None:
+            actual_schema = schema or pa.schema([])
+            pq.write_table(pa.Table.from_pylist([], schema=actual_schema), temp_path)
 
     return {"path": output_path, "count": count}
 
 
 def write_vortex_file(
-    records: Iterable, output_path: str, *, schema: object | None = None, batch_size: int = 32_000
+    records: Iterable,
+    output_path: str,
+    *,
+    schema: pa.Schema | None = None,
+    target_buffer_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
 ) -> dict:
     """Write records to a Vortex file using streaming writes.
 
@@ -182,7 +230,8 @@ def write_vortex_file(
         records: Records to write (iterable of dicts)
         output_path: Path to output .vortex file
         schema: PyArrow schema (optional, will be inferred from first batch if None)
-        batch_size: Number of records per batch
+        target_buffer_bytes: Target buffer size in bytes for accumulating records
+            before flushing to the writer.
 
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
@@ -192,41 +241,27 @@ def write_vortex_file(
 
     ensure_parent_dir(output_path)
 
-    record_iter = iter(records)
+    table_iter = _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes)
+    first_table = next(table_iter, None)
 
-    try:
-        first_record = next(record_iter)
-    except StopIteration:
-        # Empty case - write empty vortex file
+    if first_table is None:
         actual_schema = schema or pa.schema([])
         empty_table = pa.Table.from_pylist([], schema=actual_schema)
         with atomic_rename(output_path) as temp_path:
             vortex.io.write(empty_table, temp_path)
         return {"path": output_path, "count": 0}
 
-    maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
-
-    first_batch = [maybe_map_to_dict(first_record)]
-    for record in itertools.islice(record_iter, batch_size - 1):
-        first_batch.append(maybe_map_to_dict(record))
-    actual_schema = schema or infer_arrow_schema(first_batch)
+    actual_schema = first_table.schema
     dtype = vortex.DType.from_arrow(actual_schema, non_nullable=True)
-
     count = 0
 
     def _array_batches():
         nonlocal count
-        count += len(first_batch)
-        yield vortex.Array.from_arrow(pa.Table.from_pylist(first_batch, schema=actual_schema))
-        batch = []
-        for record in record_iter:
-            batch.append(maybe_map_to_dict(record))
-            count += 1
-            if len(batch) >= batch_size:
-                yield vortex.Array.from_arrow(pa.Table.from_pylist(batch, schema=actual_schema))
-                batch = []
-        if batch:
-            yield vortex.Array.from_arrow(pa.Table.from_pylist(batch, schema=actual_schema))
+        count += len(first_table)
+        yield vortex.Array.from_arrow(first_table)
+        for table in table_iter:
+            count += len(table)
+            yield vortex.Array.from_arrow(table)
 
     array_iter = vortex.ArrayIterator.from_iter(dtype, _array_batches())
 
@@ -234,12 +269,6 @@ def write_vortex_file(
         vortex.io.write(array_iter, temp_path)
 
     return {"path": output_path, "count": count}
-
-
-def batchify(batch: Iterable, n: int = 1024) -> Iterable:
-    iterator = iter(batch)
-    while batch := tuple(itertools.islice(iterator, n)):
-        yield batch
 
 
 _SENTINEL = object()
@@ -322,9 +351,18 @@ class ThreadedBatchWriter:
 
 
 def write_levanter_cache(
-    records: Iterable[dict[str, Any]], output_path: str, *, metadata: dict[str, Any], batch_size: int = 1024
+    records: Iterable[dict[str, Any]],
+    output_path: str,
+    *,
+    metadata: dict[str, Any],
 ) -> dict:
-    """Write tokenized records to Levanter cache format."""
+    """Write tokenized records to Levanter cache format.
+
+    Args:
+        records: Tokenized records (iterable of dicts with array values)
+        output_path: Path to output cache directory
+        metadata: Metadata for the cache
+    """
     from levanter.store.cache import CacheMetadata, SerialCacheWriter
 
     ensure_parent_dir(output_path)
@@ -335,8 +373,8 @@ def write_levanter_cache(
     except StopIteration:
         return {"path": output_path, "count": 0}
 
-    count = 1
-    logger.info("write_levanter_cache: starting write to %s", output_path)
+    count = 0
+    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, _LEVANTER_BATCH_SIZE)
 
     with atomic_rename(output_path) as tmp_path:
         with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
@@ -347,7 +385,8 @@ def write_levanter_cache(
 
             with ThreadedBatchWriter(_drain_batches) as threaded:
                 threaded.submit([exemplar])
-                for batch in batchify(record_iter, n=batch_size):
+                count += 1
+                for batch in batchify(record_iter, n=_LEVANTER_BATCH_SIZE):
                     threaded.submit(batch)
                     count += len(batch)
                     logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
