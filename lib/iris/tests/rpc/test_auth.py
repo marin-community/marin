@@ -166,3 +166,65 @@ def test_gcp_token_provider_propagates_errors():
     with patch("google.oauth2.id_token.fetch_id_token", side_effect=Exception("metadata server unreachable")):
         with pytest.raises(Exception, match="metadata server unreachable"):
             provider.get_token()
+
+
+def test_cli_gcp_token_provider_sdk_success():
+    """When the SDK returns a token, gcloud CLI is never called."""
+    from unittest.mock import patch
+
+    from iris.rpc.auth import CliGcpTokenProvider
+
+    provider = CliGcpTokenProvider(audience="https://my-audience")
+    with (
+        patch("google.oauth2.id_token.fetch_id_token", return_value="sdk-token") as mock_sdk,
+        patch("subprocess.run") as mock_subprocess,
+    ):
+        token = provider.get_token()
+
+    assert token == "sdk-token"
+    mock_sdk.assert_called_once()
+    mock_subprocess.assert_not_called()
+
+
+def test_cli_gcp_token_provider_falls_back_to_gcloud():
+    """When SDK raises DefaultCredentialsError, falls back to gcloud CLI."""
+    from subprocess import CompletedProcess
+    from unittest.mock import patch
+
+    from google.auth.exceptions import DefaultCredentialsError
+
+    from iris.rpc.auth import CliGcpTokenProvider
+
+    provider = CliGcpTokenProvider(audience="https://my-audience")
+    with (
+        patch("google.oauth2.id_token.fetch_id_token", side_effect=DefaultCredentialsError("no creds")),
+        patch(
+            "subprocess.run",
+            return_value=CompletedProcess(args=[], returncode=0, stdout="gcloud-token\n", stderr=""),
+        ) as mock_subprocess,
+    ):
+        token = provider.get_token()
+
+    assert token == "gcloud-token"
+    mock_subprocess.assert_called_once()
+
+
+def test_cli_gcp_token_provider_all_fail():
+    """When both SDK and gcloud fail, raises RuntimeError."""
+    from subprocess import CompletedProcess
+    from unittest.mock import patch
+
+    from google.auth.exceptions import DefaultCredentialsError
+
+    from iris.rpc.auth import CliGcpTokenProvider
+
+    provider = CliGcpTokenProvider(audience="https://my-audience")
+    with (
+        patch("google.oauth2.id_token.fetch_id_token", side_effect=DefaultCredentialsError("no creds")),
+        patch(
+            "subprocess.run",
+            return_value=CompletedProcess(args=[], returncode=1, stdout="", stderr="gcloud error"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="gcloud auth failed"):
+            provider.get_token()

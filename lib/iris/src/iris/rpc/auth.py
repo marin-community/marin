@@ -62,12 +62,13 @@ class GcpTokenVerifier:
         self._audience = audience
 
     def verify(self, token: str) -> str:
+        from google.auth import exceptions as google_auth_exceptions
         from google.auth.transport import requests as google_requests
         from google.oauth2 import id_token
 
         try:
             info = id_token.verify_oauth2_token(token, google_requests.Request(), self._audience)
-        except Exception as exc:
+        except (ValueError, google_auth_exceptions.GoogleAuthError) as exc:
             raise ValueError(f"GCP token verification failed: {exc}") from exc
         email = info.get("email")
         if not email:

@@ -530,6 +530,21 @@ def test_terminate_job_rejected_for_non_owner(service, job_request):
     assert status.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
+def test_launch_child_job_rejected_for_non_owner(service, job_request):
+    """Cannot submit a child job under another user's hierarchy."""
+    from iris.rpc.auth import _verified_user
+
+    service.launch_job(job_request("/alice/parent-job"), None)
+
+    token = _verified_user.set("bob")
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            service.launch_job(job_request("/alice/parent-job/sneaky-child"), None)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_user.reset(token)
+
+
 def test_terminate_job_allowed_when_auth_disabled(service, job_request):
     """When auth is disabled (no verified user), anyone can terminate."""
     service.launch_job(job_request("/alice/my-job"), None)

@@ -560,6 +560,10 @@ class ControllerServiceImpl:
         if verified_user is not None and job_id.is_root:
             job_id = JobName.root(verified_user, job_id.name)
 
+        # For non-root jobs, verify the caller owns the parent hierarchy
+        if verified_user is not None and not job_id.is_root:
+            self._authorize_job_owner(job_id)
+
         # Reject submissions if the parent job has already terminated
         if job_id.parent:
             parent_job = _read_job(self._db, job_id.parent)
