@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS slices (
     slice_id       TEXT PRIMARY KEY,
     scale_group    TEXT NOT NULL,
     lifecycle      TEXT NOT NULL,
-    vm_addresses   TEXT NOT NULL DEFAULT '[]',
+    worker_ids     TEXT NOT NULL DEFAULT '[]',
     created_at_ms  INTEGER NOT NULL DEFAULT 0,
     last_active_ms INTEGER NOT NULL DEFAULT 0,
     error_message  TEXT NOT NULL DEFAULT ''

@@ -820,7 +820,7 @@ SLICES = Table(
         "slice_id": Column("sl", "slice_id", _decode_str),
         "scale_group": Column("sl", "scale_group", _decode_str),
         "lifecycle": Column("sl", "lifecycle", _decode_str),
-        "vm_addresses": Column("sl", "vm_addresses", _decode_json_list),
+        "worker_ids": Column("sl", "worker_ids", _decode_json_list),
         "created_at_ms": Column("sl", "created_at_ms", _decode_timestamp_ms),
         "last_active_ms": Column("sl", "last_active_ms", _decode_timestamp_ms),
         "error_message": Column("sl", "error_message", _decode_str),

@@ -47,6 +47,14 @@ IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _build_dashboard():
+    """Build the Vue dashboard once per test session so dashboard tests can render."""
+    from iris.cli.build import _ensure_dashboard_dist
+
+    _ensure_dashboard_dist()
+
+
 def pytest_addoption(parser):
     """Cloud mode CLI options for running smoke tests against remote clusters."""
     parser.addoption("--iris-config", default=None, help="Path to cluster config YAML for cloud mode")

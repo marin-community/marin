@@ -146,6 +146,10 @@ class LocalController:
 
     Runs Controller + Autoscaler(LocalPlatform) in the current process.
     Workers are threads, not VMs. No Docker, no GCS, no SSH.
+
+    A single instance can be stopped and restarted via restart(). The controller
+    DB lives in a persistent _db_dir created at construction time, so checkpoints
+    written before stop() are found and restored on the next start().
     """
 
     def __init__(
@@ -160,6 +164,8 @@ class LocalController:
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
         self._stopped = threading.Event()
+        # Persistent across stop()/start() so checkpoints survive restart().
+        self._db_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_db_")
 
     def start(self) -> str:
         self._stopped = threading.Event()
@@ -191,6 +197,7 @@ class LocalController:
                 bundle_prefix=self._config.storage.bundle_prefix or f"file://{bundle_dir}",
                 heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
+                log_dir=Path(self._db_dir.name),
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,
@@ -214,6 +221,11 @@ class LocalController:
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None
+
+    def close(self) -> None:
+        """Stop the controller and release all resources including the DB dir."""
+        self.stop()
+        self._db_dir.cleanup()
 
     def wait(self) -> None:
         """Block until stop() is called."""
