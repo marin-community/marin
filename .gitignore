@@ -228,6 +228,7 @@ scr/*
 
 /scratch
 
+.forge
 .claude
 !.claude/skills
 .agents/tmp/
