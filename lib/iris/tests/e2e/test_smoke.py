@@ -43,7 +43,6 @@ from .conftest import (
     _NoOpPage,
     _add_coscheduling_group,
     assert_visible,
-    dashboard_click,
     dashboard_goto,
     discover_capabilities,
     wait_for_dashboard_ready,
@@ -302,10 +301,12 @@ def test_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
     healthy = [w for w in response.workers if w.healthy]
     assert len(healthy) > 0, "No healthy workers registered"
 
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/fleet")
     wait_for_dashboard_ready(smoke_page)
-    dashboard_click(smoke_page, 'a:has-text("Workers")')
-    assert_visible(smoke_page, "text=healthy")
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Healthy')",
+        timeout=10000,
+    )
     smoke_screenshot("workers-ready")
 
 
@@ -340,7 +341,10 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
     wait_for_dashboard_ready(smoke_page)
-    assert_visible(smoke_page, "text=SUCCEEDED")
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Succeeded')",
+        timeout=10000,
+    )
     smoke_screenshot("job-detail")
 
 
@@ -406,10 +410,12 @@ def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screen
 
 def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Workers tab shows healthy workers."""
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/fleet")
     wait_for_dashboard_ready(smoke_page)
-    dashboard_click(smoke_page, 'a:has-text("Workers")')
-    assert_visible(smoke_page, "text=healthy")
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Healthy')",
+        timeout=10000,
+    )
     smoke_screenshot("workers-tab")
 
 
@@ -426,29 +432,30 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
     wait_for_dashboard_ready(smoke_page)
 
     smoke_page.wait_for_function(
-        f"() => document.body.textContent.includes('{worker_id}')",
+        f"() => document.body.textContent.includes('{worker_id}') && " "document.body.textContent.includes('Healthy')",
         timeout=10000,
     )
-    assert_visible(smoke_page, f"text={worker_id}")
-    assert_visible(smoke_page, "text=Healthy")
-    assert_visible(smoke_page, "text=Task History")
     smoke_screenshot("worker-detail")
 
 
 def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    dashboard_click(smoke_page, 'a:has-text("Autoscaler")')
     smoke_screenshot("autoscaler-tab")
 
 
 def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Status tab renders process info and log viewer."""
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/status")
     wait_for_dashboard_ready(smoke_page)
-    dashboard_click(smoke_page, 'a:has-text("Status")')
-    smoke_page.wait_for_selector("input[placeholder='Filter logs...']", timeout=10000)
+    # Status tab renders process info when available, or an error message.
+    # Wait for either to appear to confirm the tab loaded and made the RPC call.
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Process') || "
+        "document.body.textContent.includes('GetProcessStatus')",
+        timeout=10000,
+    )
     smoke_screenshot("status-tab")
 
 

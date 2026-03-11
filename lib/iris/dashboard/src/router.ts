@@ -30,17 +30,17 @@ const routes = [
     component: () => import('./components/controller/UsersTab.vue'),
   },
   {
-    path: '/job/:jobId',
-    component: () => import('./components/controller/JobDetail.vue'),
-    props: true,
-  },
-  {
-    path: '/job/:jobId/task/:taskId',
+    path: '/job/:jobId(.+)/task/:taskId(.+)',
     component: () => import('./components/controller/TaskDetail.vue'),
     props: true,
   },
   {
-    path: '/worker/:workerId',
+    path: '/job/:jobId(.+)',
+    component: () => import('./components/controller/JobDetail.vue'),
+    props: true,
+  },
+  {
+    path: '/worker/:workerId(.+)',
     component: () => import('./components/controller/WorkerDetail.vue'),
     props: true,
   },
