@@ -23,15 +23,19 @@ import difflib
 import logging
 import math
 from collections import deque
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.platform.base import (
     CloudSliceState,
     CloudWorkerState,
+    CommandResult,
     Platform,
     QuotaExhaustedError,
     RemoteWorkerHandle,
+    WorkerStatus,
 )
 from iris.cluster.constraints import (
     ConstraintIndex,
@@ -40,13 +44,82 @@ from iris.cluster.constraints import (
     get_device_type_enum,
     routing_constraints,
 )
+from iris.cluster.controller.checkpoint import TrackedWorkerSnapshotData, deserialize_scaling_group
+from iris.cluster.controller.db import SCALING_GROUPS, TRACKED_WORKERS, ControllerDB
 from iris.cluster.types import VmWorkerStatusMap
-from iris.cluster.controller.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
+from iris.cluster.controller.scaling_group import (
+    GroupAvailability,
+    ScalingGroup,
+    SliceLifecycleState,
+    restore_scaling_group,
+)
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, config_pb2, snapshot_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+
+class _RestoredWorkerHandle:
+    """Minimal handle placeholder used for restored tracked workers.
+
+    Provides just enough of the RemoteWorkerHandle interface to let restored
+    workers participate in the autoscaler until they are replaced by real
+    handles from the platform or pruned by heartbeat failures.
+    """
+
+    def __init__(self, worker_id: str, internal_address: str) -> None:
+        self._worker_id = worker_id
+        self._internal_address = internal_address
+
+    @property
+    def worker_id(self) -> str:
+        return self._worker_id
+
+    @property
+    def vm_id(self) -> str:
+        return self._worker_id
+
+    @property
+    def internal_address(self) -> str:
+        return self._internal_address
+
+    @property
+    def external_address(self) -> str | None:
+        return None
+
+    @property
+    def bootstrap_log(self) -> str:
+        return ""
+
+    def status(self) -> WorkerStatus:
+        return WorkerStatus(state=CloudWorkerState.RUNNING)
+
+    def run_command(
+        self,
+        command: str,
+        timeout: Duration | None = None,
+        on_line: Callable[[str], None] | None = None,
+    ) -> CommandResult:
+        raise NotImplementedError("RestoredWorkerHandle does not support run_command")
+
+    def reboot(self) -> None:
+        raise NotImplementedError("RestoredWorkerHandle does not support reboot")
+
+
+def _restore_tracked_workers(snapshots: list[TrackedWorkerSnapshotData]) -> dict[str, TrackedWorker]:
+    """Restore tracked workers from checkpoint snapshot data."""
+    workers: dict[str, TrackedWorker] = {}
+    for snap in snapshots:
+        handle = _RestoredWorkerHandle(worker_id=snap.worker_id, internal_address=snap.internal_address)
+        tw = TrackedWorker(
+            worker_id=snap.worker_id,
+            slice_id=snap.slice_id,
+            scale_group=snap.scale_group,
+            handle=handle,
+        )
+        workers[tw.worker_id] = tw
+    return workers
 
 
 @dataclass
@@ -1093,11 +1166,10 @@ class Autoscaler:
         self.refresh(vm_status_map, timestamp)
         return self.update(demand_entries, timestamp)
 
-    def to_tracked_worker_snapshots(self) -> list[snapshot_pb2.TrackedWorkerSnapshot]:
+    def to_tracked_worker_snapshots(self) -> list[TrackedWorkerSnapshotData]:
         """Serialize tracked worker state for checkpointing."""
-
         return [
-            snapshot_pb2.TrackedWorkerSnapshot(
+            TrackedWorkerSnapshotData(
                 worker_id=tw.worker_id,
                 slice_id=tw.slice_id,
                 scale_group=tw.scale_group,
@@ -1109,6 +1181,79 @@ class Autoscaler:
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
+
+    def restore_from_db(self, db: ControllerDB) -> None:
+        """Reconcile DB-checkpointed autoscaler state against live cloud.
+
+        Reads scaling group snapshots and tracked workers from the DB,
+        reconciles each group against the cloud in parallel, and restores
+        tracked workers. Call at startup before loops begin.
+        """
+        with db.snapshot() as snapshot:
+            scaling_rows = snapshot.select(
+                SCALING_GROUPS,
+                columns=(SCALING_GROUPS.c.name, SCALING_GROUPS.c.snapshot_proto),
+            )
+            tracked_rows = snapshot.select(
+                TRACKED_WORKERS,
+                columns=(
+                    TRACKED_WORKERS.c.worker_id,
+                    TRACKED_WORKERS.c.slice_id,
+                    TRACKED_WORKERS.c.scale_group,
+                    TRACKED_WORKERS.c.internal_address,
+                ),
+            )
+
+        scaling_groups = {}
+        for row in scaling_rows:
+            scaling_groups[row.name] = deserialize_scaling_group(row.snapshot_proto)
+
+        tracked_worker_snapshots: list[TrackedWorkerSnapshotData] = [
+            TrackedWorkerSnapshotData(
+                worker_id=row.worker_id,
+                slice_id=row.slice_id,
+                scale_group=row.scale_group,
+                internal_address=row.internal_address,
+            )
+            for row in tracked_rows
+        ]
+
+        # Restore scaling groups (parallelized -- each calls platform.list_slices())
+        groups_to_restore = []
+        for group_snap in scaling_groups.values():
+            group = self._groups.get(group_snap.name)
+            if group is None:
+                logger.warning(
+                    "Checkpoint references scaling group %s which does not exist in config, skipping",
+                    group_snap.name,
+                )
+                continue
+            groups_to_restore.append((group_snap, group))
+
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            futures = {
+                executor.submit(restore_scaling_group, gs, g.platform, g.config, g.label_prefix): (gs, g)
+                for gs, g in groups_to_restore
+            }
+            for future in as_completed(futures):
+                group_snap, group = futures[future]
+                restore_result = future.result()
+                group.restore_from_snapshot(
+                    slices=restore_result.slices,
+                    consecutive_failures=restore_result.consecutive_failures,
+                    last_scale_up=restore_result.last_scale_up,
+                    last_scale_down=restore_result.last_scale_down,
+                    backoff_until=restore_result.backoff_until,
+                    quota_exceeded_until=restore_result.quota_exceeded_until,
+                    quota_reason=restore_result.quota_reason,
+                )
+
+        # Workers from discarded slices remain in the DB as healthy.
+        # They will naturally fail heartbeat checks and be pruned once
+        # consecutive failures exceed the threshold.
+        restored_workers = _restore_tracked_workers(tracked_worker_snapshots)
+        self.restore_tracked_workers(restored_workers)
+        logger.info("Restored %d tracked workers", len(restored_workers))
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get VM info by platform worker ID from the centralized worker registry."""

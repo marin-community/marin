@@ -3,19 +3,18 @@
 
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
+import atexit
 import logging
 import queue
 import sys
 import tempfile
 import threading
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import sleep
 from typing import Protocol
 
-import fsspec.core
 import uvicorn
 
 from iris.chaos import chaos
@@ -31,14 +30,18 @@ from iris.cluster.constraints import (
     merge_constraints,
 )
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
+from iris.cluster.controller.checkpoint import (
+    CheckpointResult,
+    maybe_periodic_checkpoint,
+    restore_db_from_checkpoint,
+    write_checkpoint,
+)
 from iris.cluster.controller.db import (
     ATTEMPTS,
     JOBS,
     RESERVATION_CLAIMS,
-    SCALING_GROUPS,
     TASKS,
     TERMINAL_TASK_STATES,
-    TRACKED_WORKERS,
     WORKERS,
     ControllerDB,
     Join,
@@ -58,7 +61,6 @@ from iris.cluster.controller.scheduler import (
     WorkerSnapshot,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.snapshot import restore_scaling_group, restore_tracked_workers
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
     RESERVATION_HOLDER_JOB_NAME,
@@ -77,9 +79,9 @@ from iris.cluster.types import (
 )
 from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import cluster_pb2, snapshot_pb2
+from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +91,6 @@ _UNLIMITED = sys.maxsize
 _SLOW_HEARTBEAT_MS = 5000
 
 
-def _fsspec_copy(src: str, dst: str) -> None:
-    """Copy a file using fsspec so either path can be remote (e.g. GCS)."""
-    with fsspec.core.open(src, "rb") as f_src, fsspec.core.open(dst, "wb") as f_dst:
-        f_dst.write(f_src.read())
-
-
 _HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
@@ -102,16 +98,6 @@ _HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
 # for this key; reservation jobs do not, so they naturally prefer claimed
 # workers (which appear first in the worker list).
 RESERVATION_TAINT_KEY = "reservation-job"
-
-
-@dataclass(frozen=True)
-class CheckpointResult:
-    """Metadata returned after a checkpoint DB copy is written."""
-
-    created_at: Timestamp
-    job_count: int
-    task_count: int
-    worker_count: int
 
 
 def job_requirements_from_job(job: Job) -> JobRequirements:
@@ -812,6 +798,7 @@ class Controller:
         # Checkpoint coordination flag. When set, scheduling and autoscaler
         # loops skip their work so the snapshot captures a quiescent state.
         self._checkpoint_in_progress = False
+        self._atexit_registered = False
 
         # Serializes heartbeat rounds against checkpoint snapshots so that
         # begin_checkpoint cannot fire while dispatches from begin_heartbeat()
@@ -867,6 +854,11 @@ class Controller:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
+        # Register atexit hook to capture final state for post-mortem analysis.
+        # Unregistered in stop() so it doesn't fire against a closed DB.
+        self._atexit_registered = True
+        atexit.register(self._atexit_checkpoint)
+
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server is not None and self._server.started,
@@ -877,10 +869,15 @@ class Controller:
         """Stop all background components gracefully.
 
         Shutdown ordering:
-        1. Stop scheduling/heartbeat/autoscaler loops so no new work is triggered.
-        2. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
-        3. Stop remaining threads (server) and executors.
+        1. Unregister atexit hook so it doesn't fire against a closed DB.
+        2. Stop scheduling/heartbeat/autoscaler loops so no new work is triggered.
+        3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
+        4. Stop remaining threads (server) and executors.
         """
+        # Unregister atexit hook before closing DB connections.
+        if self._atexit_registered:
+            atexit.unregister(self._atexit_checkpoint)
+            self._atexit_registered = False
         self._wake_event.set()
         self._heartbeat_event.set()
         join_timeout = Duration.from_seconds(5.0)
@@ -907,6 +904,14 @@ class Controller:
         self._transitions.close()
         self._bundle_store.close()
 
+    def _atexit_checkpoint(self) -> None:
+        """Best-effort checkpoint at interpreter shutdown for post-mortem analysis."""
+        try:
+            path, _result = write_checkpoint(self._db, self._config.bundle_prefix)
+            logger.info("atexit checkpoint written: %s", path)
+        except Exception:
+            logger.exception("atexit checkpoint failed")
+
     def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
         """Scheduling loop: task assignment and worker timeout checks only."""
         limiter = RateLimiter(interval_seconds=self._config.scheduler_interval.to_seconds())
@@ -923,6 +928,17 @@ class Controller:
 
             self._run_scheduling()
 
+            # Run periodic checkpoints here when autoscaler is not configured,
+            # since _run_autoscaler_loop (which normally drives checkpoints)
+            # is only started when an autoscaler is present.
+            if self._autoscaler is None:
+                maybe_periodic_checkpoint(
+                    self._db,
+                    self._config.bundle_prefix,
+                    self._periodic_checkpoint_limiter,
+                    self._checkpoint_in_progress,
+                )
+
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
         don't stall scheduling or heartbeats."""
@@ -937,7 +953,12 @@ class Controller:
             except Exception:
                 logger.exception("Autoscaler loop iteration failed")
 
-            self._maybe_periodic_checkpoint()
+            maybe_periodic_checkpoint(
+                self._db,
+                self._config.bundle_prefix,
+                self._periodic_checkpoint_limiter,
+                self._checkpoint_in_progress,
+            )
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
@@ -1454,63 +1475,13 @@ class Controller:
             )
         return result
 
-    @property
-    def _checkpoint_dir(self) -> Path:
-        return self._transitions.db_path.parent / "controller-checkpoints"
-
-    @property
-    def _latest_checkpoint_path(self) -> Path:
-        return self._checkpoint_dir / "latest.sqlite3"
-
-    def _collect_checkpoint_result(self, created_at: Timestamp) -> CheckpointResult:
-        with self._db.snapshot() as snapshot:
-            job_count = snapshot.count(JOBS)
-            task_count = snapshot.count(TASKS)
-            worker_count = snapshot.count(WORKERS)
-        return CheckpointResult(
-            created_at=created_at,
-            job_count=job_count,
-            task_count=task_count,
-            worker_count=worker_count,
-        )
-
-    def _maybe_periodic_checkpoint(self) -> None:
-        """Write a best-effort periodic checkpoint DB copy."""
-        if self._periodic_checkpoint_limiter is None:
-            return
-        if self._checkpoint_in_progress:
-            return
-        if not self._periodic_checkpoint_limiter.should_run():
-            return
-        try:
-            created_at = Timestamp.now()
-            self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
-            self._transitions.backup_to(path)
-            _fsspec_copy(str(path), str(self._latest_checkpoint_path))
-            result = self._collect_checkpoint_result(created_at)
-            logger.info(
-                "Periodic checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
-                path,
-                result.job_count,
-                result.task_count,
-                result.worker_count,
-            )
-        except Exception:
-            logger.exception("Periodic checkpoint failed")
-
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
         """Pause loops and write a consistent SQLite checkpoint copy."""
         self._checkpoint_in_progress = True
         try:
             # Wait for any in-flight heartbeat round to complete.
             with self._heartbeat_lock:
-                created_at = Timestamp.now()
-                self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
-                path = self._checkpoint_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
-                self._transitions.backup_to(path)
-                _fsspec_copy(str(path), str(self._latest_checkpoint_path))
-                result = self._collect_checkpoint_result(created_at)
+                path, result = write_checkpoint(self._db, self._config.bundle_prefix)
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,
@@ -1524,89 +1495,10 @@ class Controller:
 
     def restore_from_checkpoint(self, checkpoint_path: str | None = None) -> bool:
         """Restore full controller state from a checkpoint SQLite copy."""
-        source = str(Path(checkpoint_path)) if checkpoint_path else str(self._latest_checkpoint_path)
-        fs, fs_path = fsspec.core.url_to_fs(source)
-        if not fs.exists(fs_path):
-            logger.info("No checkpoint DB found at %s, starting fresh", source)
-            return False
-
-        self._transitions.restore_from(source)
-        logger.info("Restored checkpoint DB from %s", source)
-
-        with self._db.snapshot() as snapshot:
-            scaling_rows = snapshot.select(
-                SCALING_GROUPS,
-                columns=(SCALING_GROUPS.c.name, SCALING_GROUPS.c.snapshot_proto),
-            )
-            tracked_rows = snapshot.select(
-                TRACKED_WORKERS,
-                columns=(
-                    TRACKED_WORKERS.c.worker_id,
-                    TRACKED_WORKERS.c.slice_id,
-                    TRACKED_WORKERS.c.scale_group,
-                    TRACKED_WORKERS.c.internal_address,
-                ),
-            )
-        scaling_groups: dict[str, snapshot_pb2.ScalingGroupSnapshot] = {}
-        for row in scaling_rows:
-            snap = snapshot_pb2.ScalingGroupSnapshot()
-            snap.ParseFromString(row.snapshot_proto)
-            scaling_groups[row.name] = snap
-
-        tracked_workers: dict[str, snapshot_pb2.TrackedWorkerSnapshot] = {}
-        for row in tracked_rows:
-            tracked_workers[row.worker_id] = snapshot_pb2.TrackedWorkerSnapshot(
-                worker_id=row.worker_id,
-                slice_id=row.slice_id,
-                scale_group=row.scale_group,
-                internal_address=row.internal_address,
-            )
-
-        # Restore autoscaler scaling groups (parallelized — each calls platform.list_slices())
-        if self._autoscaler is not None:
-            groups_to_restore = []
-            for group_snap in scaling_groups.values():
-                group = self._autoscaler.groups.get(group_snap.name)
-                if group is None:
-                    logger.warning(
-                        "Checkpoint references scaling group %s which does not exist in config, skipping",
-                        group_snap.name,
-                    )
-                    continue
-                groups_to_restore.append((group_snap, group))
-
-            with ThreadPoolExecutor(max_workers=16) as executor:
-                futures = {
-                    executor.submit(restore_scaling_group, gs, g.platform, g.config, g.label_prefix): (gs, g)
-                    for gs, g in groups_to_restore
-                }
-                for future in as_completed(futures):
-                    group_snap, group = futures[future]
-                    restore_result = future.result()
-                    group.restore_from_snapshot(
-                        slices=restore_result.slices,
-                        consecutive_failures=restore_result.consecutive_failures,
-                        last_scale_up=restore_result.last_scale_up,
-                        last_scale_down=restore_result.last_scale_down,
-                        backoff_until=restore_result.backoff_until,
-                        quota_exceeded_until=restore_result.quota_exceeded_until,
-                        quota_reason=restore_result.quota_reason,
-                    )
-
-            # Workers from discarded slices remain in ControllerTransitions as healthy.
-            # They will naturally fail heartbeat checks and be pruned once
-            # consecutive failures exceed the threshold. This is intentional:
-            # the heartbeat failure path handles cleanup of stale workers
-            # including task reassignment and resource release.
-
-            # Restore tracked workers into the autoscaler.
-            tracked_proto = snapshot_pb2.ControllerSnapshot()
-            tracked_proto.tracked_workers.extend(tracked_workers.values())
-            restored_workers = restore_tracked_workers(tracked_proto)
-            self._autoscaler.restore_tracked_workers(restored_workers)
-            logger.info("Restored %d tracked workers", len(restored_workers))
-
-        return True
+        restored = restore_db_from_checkpoint(self._db, self._config.bundle_prefix, checkpoint_path)
+        if restored and self._autoscaler is not None:
+            self._autoscaler.restore_from_db(self._db)
+        return restored
 
     def launch_job(
         self,
