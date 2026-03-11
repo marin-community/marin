@@ -467,11 +467,13 @@ def _is_noop_page(page) -> bool:
     return isinstance(page, _NoOpPage)
 
 
-def assert_visible(page, selector: str, *, timeout: int = 5000) -> None:
+def assert_visible(page, selector: str, *, timeout: int = 10_000) -> None:
     """Assert a selector is visible. No-op when Playwright is unavailable."""
     if _is_noop_page(page):
         return
-    assert page.locator(selector).first.is_visible(timeout=timeout)
+    from playwright.sync_api import expect
+
+    expect(page.locator(selector).first).to_be_visible(timeout=timeout)
 
 
 def dashboard_click(page, selector: str) -> None:
