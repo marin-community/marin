@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -54,6 +55,10 @@ class GrugTrainerConfig:
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
     train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
+    loader_max_buffered_batches: int | None = 64
+    loader_prefetch_size: int = 32
+    synthetic_data: bool = False
+    synthetic_seed: int = 0
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
@@ -86,6 +91,31 @@ class GrugRunConfig:
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
 
 
+class SyntheticTokenGrugDataset(AsyncDataset[GrugLmExample]):
+    """Infinite synthetic token stream for perf debugging without storage/input dependencies."""
+
+    def __init__(self, *, vocab_size: int, seq_len: int, seed: int):
+        self.vocab_size = vocab_size
+        self.seq_len = seq_len
+        self.seed = seed
+
+    async def async_len(self) -> int:
+        raise ValueError("SyntheticTokenGrugDataset is infinite")
+
+    def is_finite(self) -> bool:
+        return False
+
+    async def get_batch(self, indices) -> list[GrugLmExample]:
+        examples: list[GrugLmExample] = []
+        for index in indices:
+            rng = np.random.default_rng(np.uint64(self.seed) ^ np.uint64(index + 1))
+            tokens = jnp.asarray(rng.integers(0, self.vocab_size, size=self.seq_len, dtype=np.int32))
+            # Use a dense loss mask to isolate model/runtime perf from any prompt or EOS masking logic.
+            loss_weight = jnp.ones(self.seq_len, dtype=jnp.float32)
+            examples.append(GrugLmExample(tokens=tokens, loss_weight=loss_weight))
+        return examples
+
+
 def build_train_dataset(
     data_config: LmDataConfig,
     *,
@@ -110,12 +140,26 @@ def build_train_dataset(
     )
 
 
+def build_synthetic_train_dataset(
+    *,
+    model_config: GrugModelConfig,
+    seed: int,
+) -> AsyncDataset[GrugLmExample]:
+    return SyntheticTokenGrugDataset(
+        vocab_size=model_config.vocab_size,
+        seq_len=model_config.max_seq_len,
+        seed=seed,
+    )
+
+
 def build_train_loader(
     dataset: AsyncDataset[GrugLmExample],
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
     batch_pspec: P = P(("data", "expert")),
+    max_buffered_batches: int | None = 64,
+    prefetch_size: int = 32,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
@@ -125,6 +169,8 @@ def build_train_loader(
         mesh=mesh,
         axis_resources={"__BATCH__": axis_resource},
         batch_axis_name="__BATCH__",
+        max_buffered_batches=max_buffered_batches,
+        prefetch_size=prefetch_size,
         allow_nondivisible_batch_size=False,
     )
 
@@ -185,6 +231,7 @@ def _compute_flops(
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
+        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
@@ -352,17 +399,25 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         mesh = trainer.device_mesh
         batch_schedule = trainer.batch_schedule
 
-        train_dataset = build_train_dataset(
-            config.data,
-            max_seq_len=config.model.max_seq_len,
-            batch_schedule=batch_schedule,
-            key=data_key,
-        )
+        if config.trainer.synthetic_data:
+            train_dataset = build_synthetic_train_dataset(
+                model_config=config.model,
+                seed=config.trainer.synthetic_seed,
+            )
+        else:
+            train_dataset = build_train_dataset(
+                config.data,
+                max_seq_len=config.model.max_seq_len,
+                batch_schedule=batch_schedule,
+                key=data_key,
+            )
         train_loader = build_train_loader(
             train_dataset,
             batch_schedule=batch_schedule,
             mesh=mesh,
             batch_pspec=config.trainer.train_batch_pspec,
+            max_buffered_batches=config.trainer.loader_max_buffered_batches,
+            prefetch_size=config.trainer.loader_prefetch_size,
         )
 
         @jax.jit
@@ -442,7 +497,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ),
                 every=1,
             )
-        state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        if isinstance(train_dataset, MixtureDataset):
+            state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
@@ -459,8 +515,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        completed_any_step = False
 
         # Main optimization loop.
+        failed = False
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
@@ -475,6 +533,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                completed_any_step = True
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -497,12 +556,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
+        except BaseException:
+            failed = True
+            raise
         finally:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
-                checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
-                checkpointer.wait_until_finished()
+            if completed_any_step:
+                # Mirror classic trainer behavior: force callbacks on the last completed step.
+                state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+                if checkpointer is not None and not failed:
+                    checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
+                    checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
 

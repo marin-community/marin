@@ -11,26 +11,77 @@ grug copy-first workflow in `.agents/skills/change-grug/`.
 import dataclasses
 
 from dataclasses import dataclass
+from typing import Literal
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
-from haliax.jax_utils import named_call
+from haliax.jax_utils import named_call, tree_checkpoint_name
 from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
-from levanter.grug.grug_moe import MoeActivation, moe_mlp
+from levanter.grug.grug_moe import (
+    MOE_DISPATCH_INPUT_CKPT,
+    MOE_DISPATCH_OUTPUT_CKPT,
+    MOE_EXPERT_HIDDEN_CKPT,
+    MoeActivation,
+    moe_mlp,
+)
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pvocab, unshard
+from levanter.kernels.pallas.fused_cross_entropy_loss import BlockSizes
 from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
+_BLOCK_MLP_INPUT_CKPT = "grug_moe_block_mlp_input"
+_BLOCK_MLP_OUTPUT_CKPT = "grug_moe_block_mlp_output"
+BlockRematMode = Literal[
+    "full",
+    "off",
+    "save_moe_input",
+    "save_moe_hidden",
+    "save_moe_output",
+    "save_moe_inputs_outputs",
+    "save_moe",
+    "save_mlp_inputs",
+    "save_mlp_outputs",
+    "save_mlp",
+    "offload_moe_input",
+    "offload_moe_hidden",
+    "offload_moe_output",
+    "offload_moe_inputs_outputs",
+    "offload_moe",
+    "offload_mlp_inputs",
+    "offload_mlp_outputs",
+    "offload_mlp",
+]
+CrossEntropyImplementation = Literal["pallas_tpu", "xla", "reference"]
+_VALID_BLOCK_REMAT_MODES: set[BlockRematMode] = {
+    "full",
+    "off",
+    "save_moe_input",
+    "save_moe_hidden",
+    "save_moe_output",
+    "save_moe_inputs_outputs",
+    "save_moe",
+    "save_mlp_inputs",
+    "save_mlp_outputs",
+    "save_mlp",
+    "offload_moe_input",
+    "offload_moe_hidden",
+    "offload_moe_output",
+    "offload_moe_inputs_outputs",
+    "offload_moe",
+    "offload_mlp_inputs",
+    "offload_mlp_outputs",
+    "offload_mlp",
+}
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -41,6 +92,47 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 def _batch_spec() -> P:
     return P(("data", "expert"))
+
+
+def _checkpointed_block_call(block: "Block", cfg: "GrugModelConfig"):
+    if cfg.block_remat == "off":
+        return block
+    if cfg.block_remat == "full":
+        return eqx.filter_checkpoint(block)
+
+    names_to_save: list[str] = []
+    names_to_offload: list[str] = []
+    if cfg.block_remat in {"save_moe_input", "save_moe_inputs_outputs", "save_moe"}:
+        names_to_save.append(MOE_DISPATCH_INPUT_CKPT)
+    if cfg.block_remat in {"save_moe_hidden", "save_moe"}:
+        names_to_save.append(MOE_EXPERT_HIDDEN_CKPT)
+    if cfg.block_remat in {"save_moe_output", "save_moe_inputs_outputs", "save_moe"}:
+        names_to_save.append(MOE_DISPATCH_OUTPUT_CKPT)
+    if cfg.block_remat in {"save_mlp_inputs", "save_mlp"}:
+        names_to_save.append(_BLOCK_MLP_INPUT_CKPT)
+    if cfg.block_remat in {"save_mlp_outputs", "save_mlp"}:
+        names_to_save.append(_BLOCK_MLP_OUTPUT_CKPT)
+    if cfg.block_remat in {"offload_moe_input", "offload_moe_inputs_outputs", "offload_moe"}:
+        names_to_offload.append(MOE_DISPATCH_INPUT_CKPT)
+    if cfg.block_remat in {"offload_moe_hidden", "offload_moe"}:
+        names_to_offload.append(MOE_EXPERT_HIDDEN_CKPT)
+    if cfg.block_remat in {"offload_moe_output", "offload_moe_inputs_outputs", "offload_moe"}:
+        names_to_offload.append(MOE_DISPATCH_OUTPUT_CKPT)
+    if cfg.block_remat in {"offload_mlp_inputs", "offload_mlp"}:
+        names_to_offload.append(_BLOCK_MLP_INPUT_CKPT)
+    if cfg.block_remat in {"offload_mlp_outputs", "offload_mlp"}:
+        names_to_offload.append(_BLOCK_MLP_OUTPUT_CKPT)
+
+    if names_to_offload:
+        policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+            names_which_can_be_saved=names_to_save,
+            names_which_can_be_offloaded=names_to_offload,
+            offload_src="device",
+            offload_dst="pinned_host",
+        )
+    else:
+        policy = jax.checkpoint_policies.save_only_these_names(*names_to_save)
+    return eqx.filter_checkpoint(block, policy=policy)
 
 
 @dataclass(frozen=True)
@@ -62,6 +154,11 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     load_balancing_loss_coef: float | None = 0.01
     router_z_loss_coef: float | None = 0.001
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
+    block_remat: BlockRematMode = "full"
+    report_capacity_overflow: bool = False
+    cross_entropy_implementation: tuple[CrossEntropyImplementation, ...] | None = None
+    cross_entropy_block_sizes: BlockSizes | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -84,6 +181,18 @@ class GrugModelConfig:
             raise ValueError("load_balancing_loss_coef must be non-negative when set")
         if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
             raise ValueError("router_z_loss_coef must be non-negative when set")
+        if self.capacity_factor <= 0:
+            raise ValueError("capacity_factor must be positive")
+        if self.block_remat not in _VALID_BLOCK_REMAT_MODES:
+            raise ValueError(f"block_remat must be one of {sorted(_VALID_BLOCK_REMAT_MODES)}")
+        if self.cross_entropy_block_sizes is not None:
+            for dim_name, value in (
+                ("b_block_size", self.cross_entropy_block_sizes.b_block_size),
+                ("h_block_size", self.cross_entropy_block_sizes.h_block_size),
+                ("v_block_size", self.cross_entropy_block_sizes.v_block_size),
+            ):
+                if value <= 0:
+                    raise ValueError(f"cross_entropy_block_sizes.{dim_name} must be positive")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -189,6 +298,7 @@ def _routing_stats(
     *,
     num_experts: int,
     num_experts_per_token: int,
+    capacity_overflow_count: jax.Array | None = None,
 ) -> dict[str, jax.Array]:
     router_probs_f = router_probs.astype(jnp.float32)
     router_logits_f = router_logits.astype(jnp.float32)
@@ -205,12 +315,17 @@ def _routing_stats(
     z = jsp.special.logsumexp(router_logits_f, axis=-1)
     router_z_loss = jnp.mean(z**2)
 
-    return {
+    stats = {
         "routing_counts": expert_counts,
         "routing_entropy": routing_entropy,
         "load_balancing_loss": load_balancing_loss,
         "router_z_loss": router_z_loss,
     }
+    if capacity_overflow_count is not None:
+        overflow_count = jnp.asarray(capacity_overflow_count, dtype=jnp.float32)
+        stats["capacity_overflow_count"] = overflow_count
+        stats["capacity_overflow_fraction"] = overflow_count / total_assignments
+    return stats
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | Histogram]:
@@ -218,6 +333,8 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
+    capacity_overflow_count = router_metrics.get("capacity_overflow_count_per_layer")
+    capacity_overflow_fraction = router_metrics.get("capacity_overflow_fraction_per_layer")
     num_layers = int(routing_entropy.shape[0])
     aux_loss_per_layer = load_balancing_loss + router_z_loss
 
@@ -230,11 +347,17 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         # Keep aux loss as a per-step aggregate while exposing mean terms above.
         "train/router/aux_loss": jnp.sum(aux_loss_per_layer),
     }
+    if capacity_overflow_count is not None and capacity_overflow_fraction is not None:
+        out["train/router/capacity_overflow_count_total"] = jnp.sum(capacity_overflow_count)
+        out["train/router/capacity_overflow_fraction_mean"] = jnp.mean(capacity_overflow_fraction)
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
+        if capacity_overflow_count is not None and capacity_overflow_fraction is not None:
+            out[f"train/router/layer_{i}/capacity_overflow_count"] = capacity_overflow_count[i]
+            out[f"train/router/layer_{i}/capacity_overflow_fraction"] = capacity_overflow_fraction[i]
     return out
 
 
@@ -303,15 +426,7 @@ class MoEMLP(eqx.Module):
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
         combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
-        router_stats = _routing_stats(
-            selected_experts,
-            router_probs,
-            router_logits,
-            num_experts=self.cfg.num_experts,
-            num_experts_per_token=self.cfg.num_experts_per_token,
-        )
-
-        routed_flat = moe_mlp(
+        moe_result = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
@@ -319,7 +434,21 @@ class MoEMLP(eqx.Module):
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),
-            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            capacity_factor=self.cfg.capacity_factor,
+            report_capacity_overflow=self.cfg.report_capacity_overflow,
+        )
+        if self.cfg.report_capacity_overflow:
+            routed_flat, dropped_assignments = moe_result
+        else:
+            routed_flat = moe_result
+            dropped_assignments = None
+        router_stats = _routing_stats(
+            selected_experts,
+            router_probs,
+            router_logits,
+            num_experts=self.cfg.num_experts,
+            num_experts_per_token=self.cfg.num_experts_per_token,
+            capacity_overflow_count=dropped_assignments,
         )
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -359,8 +488,9 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = x + self.attn(self.rms_attn(x), mask)
-        mlp_in = self.rms_mlp(x)
+        mlp_in = tree_checkpoint_name(self.rms_mlp(x), _BLOCK_MLP_INPUT_CKPT)
         mlp_out, router_stats = self.mlp(mlp_in)
+        mlp_out = tree_checkpoint_name(mlp_out, _BLOCK_MLP_OUTPUT_CKPT)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
@@ -403,7 +533,7 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         all_router_stats: list[dict[str, jax.Array]] = []
         for block in self.blocks:
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, mask)
+            hidden, router_stats = _checkpointed_block_call(block, self.config)(hidden, mask)
             all_router_stats.append(router_stats)
 
         router_metrics = {
@@ -412,6 +542,15 @@ class Transformer(eqx.Module):
             "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in all_router_stats], axis=0),
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in all_router_stats], axis=0),
         }
+        if "capacity_overflow_count" in all_router_stats[0]:
+            router_metrics["capacity_overflow_count_per_layer"] = jnp.stack(
+                [s["capacity_overflow_count"] for s in all_router_stats],
+                axis=0,
+            )
+            router_metrics["capacity_overflow_fraction_per_layer"] = jnp.stack(
+                [s["capacity_overflow_fraction"] for s in all_router_stats],
+                axis=0,
+            )
         return self.final_norm(hidden), router_metrics
 
     @named_call
@@ -447,6 +586,8 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation=self.config.cross_entropy_implementation,
+            block_sizes=self.config.cross_entropy_block_sizes,
         )
         # Keep router metrics raw and apply coefficients only at the final
         # objective composition step (same separation as MaxText/Megatron).

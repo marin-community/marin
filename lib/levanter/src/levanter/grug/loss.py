@@ -13,6 +13,7 @@ from jax.sharding import PartitionSpec as P
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 
@@ -57,6 +58,8 @@ def fused_linear_softmax_cross_entropy_loss(
     logsumexp_weight: float | None = None,
     dtype: jnp.dtype = jnp.float32,
     precision: jax.lax.PrecisionLike = None,
+    implementation: str | tuple[str, ...] | None = None,
+    block_sizes: BlockSizes | None = None,
 ) -> jax.Array:
     """Compute cross-entropy loss via the fused kernel path.
 
@@ -112,8 +115,8 @@ def fused_linear_softmax_cross_entropy_loss(
             dtype=dtype,
             logit_soft_cap=None,
             precision=precision,
-            # implementation="reference"
-            # implementation="xla"
+            implementation=implementation,
+            block_sizes=block_sizes,
         )
 
         if reduction_mode is None:

@@ -452,6 +452,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_step_duration = 0.0
 
         # Main optimization loop.
+        failed = False
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
@@ -480,10 +481,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree={"train_state": state}, step=int(state.step))
+        except BaseException:
+            failed = True
+            raise
         finally:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if checkpointer is not None:
+            if checkpointer is not None and not failed:
                 checkpointer.on_step(tree={"train_state": state}, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 

@@ -49,6 +49,8 @@ from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_DOCKER_API_VERSION = "1.43"
+
 # Substrings that indicate a docker/registry infrastructure problem rather than
 # a user-code error.  Checked case-insensitively against stderr from docker
 # create/start/pull.
@@ -70,6 +72,32 @@ def _is_docker_infra_error(stderr: str) -> bool:
     """Return True if *stderr* matches a known infrastructure failure pattern."""
     stderr_lower = stderr.lower()
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
+
+
+def _docker_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Build environment for Docker CLI calls.
+
+    Some TPU workers run an older Docker daemon that rejects the client's default
+    negotiated API version. Pinning the CLI to a compatible version keeps worker-
+    side image pull/create flows functional without requiring job-specific env.
+    """
+    docker_env = dict(os.environ)
+    if env:
+        docker_env.update(env)
+    docker_env.setdefault("DOCKER_API_VERSION", _DEFAULT_DOCKER_API_VERSION)
+    return docker_env
+
+
+def _docker_run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """Run a Docker CLI command with a worker-compatible environment."""
+    env = kwargs.pop("env", None)
+    return subprocess.run(cmd, env=_docker_env(env), **kwargs)
+
+
+def _docker_popen(cmd: list[str], **kwargs) -> subprocess.Popen:
+    """Spawn a Docker CLI command with a worker-compatible environment."""
+    env = kwargs.pop("env", None)
+    return subprocess.Popen(cmd, env=_docker_env(env), **kwargs)
 
 
 def _build_device_flags(config: ContainerConfig) -> list[str]:
@@ -175,7 +203,7 @@ def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogL
         cmd.extend(["--since", since.as_formatted_date()])
     cmd.append(container_id)
 
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = _docker_run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         return []
 
@@ -409,7 +437,7 @@ exec {quoted_cmd}
         return result.stdout.encode("utf-8")
 
     def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-        return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
+        return _docker_run(["docker", "exec", container_id, *cmd], **kwargs)
 
     def _docker_read_file(self, container_id: str, path: str) -> bytes:
         result = self._docker_exec(container_id, ["cat", path], capture_output=True, timeout=5)
@@ -564,7 +592,7 @@ exec {quoted_cmd}
         logger.info("Creating container: %s", " ".join(cmd[:20]))
         logger.debug("Full docker create command: %s", cmd)
 
-        result = subprocess.run(
+        result = _docker_run(
             cmd,
             capture_output=True,
             text=True,
@@ -580,7 +608,7 @@ exec {quoted_cmd}
 
     def _docker_start(self, container_id: str) -> None:
         """Start a Docker container."""
-        result = subprocess.run(
+        result = _docker_run(
             ["docker", "start", container_id],
             capture_output=True,
             text=True,
@@ -594,7 +622,7 @@ exec {quoted_cmd}
 
     def _docker_inspect(self, container_id: str) -> ContainerStatus:
         """Inspect container status."""
-        result = subprocess.run(
+        result = _docker_run(
             [
                 "docker",
                 "inspect",
@@ -637,7 +665,7 @@ exec {quoted_cmd}
 
     def _docker_stats(self, container_id: str) -> ContainerStats:
         """Get container stats."""
-        result = subprocess.run(
+        result = _docker_run(
             ["docker", "stats", "--no-stream", "--format", "{{json .}}", container_id],
             capture_output=True,
             text=True,
@@ -685,7 +713,7 @@ exec {quoted_cmd}
             return
 
         signal = "SIGKILL" if force else "SIGTERM"
-        result = subprocess.run(
+        result = _docker_run(
             ["docker", "kill", f"--signal={signal}", container_id],
             capture_output=True,
             text=True,
@@ -696,7 +724,7 @@ exec {quoted_cmd}
 
     def _docker_remove(self, container_id: str) -> None:
         """Remove container."""
-        result = subprocess.run(
+        result = _docker_run(
             ["docker", "rm", "-f", container_id],
             capture_output=True,
             text=True,
@@ -739,7 +767,7 @@ class DockerRuntime:
                 return
 
             # Fast path: image already on disk
-            inspect = subprocess.run(
+            inspect = _docker_run(
                 ["docker", "image", "inspect", image],
                 capture_output=True,
                 check=False,
@@ -749,7 +777,7 @@ class DockerRuntime:
                 return
 
             logger.info("Pulling image %s", image)
-            result = subprocess.run(
+            result = _docker_run(
                 ["docker", "pull", image],
                 capture_output=True,
                 text=True,
@@ -804,7 +832,7 @@ class DockerRuntime:
         cmd = ["docker", "ps", "-q", "--filter", "label=iris.managed=true"]
         if all_states:
             cmd.append("-a")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = _docker_run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             return []
         return [cid for cid in result.stdout.strip().split("\n") if cid]
@@ -815,7 +843,7 @@ class DockerRuntime:
         if not container_ids:
             return 0
 
-        subprocess.run(
+        _docker_run(
             ["docker", "rm", "-f", *container_ids],
             capture_output=True,
             check=False,
@@ -830,7 +858,7 @@ class DockerRuntime:
 
         # Also clean up any containers that weren't cleaned up via handles
         for cid in list(self._created_containers):
-            subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
+            _docker_run(["docker", "rm", "-f", cid], capture_output=True, check=False)
         self._created_containers.clear()
 
 
@@ -865,9 +893,9 @@ class DockerImageBuilder:
             context_dir,
         ]
 
-        proc = subprocess.Popen(
+        proc = _docker_popen(
             cmd,
-            env={**os.environ, "DOCKER_BUILDKIT": "1"},
+            env={"DOCKER_BUILDKIT": "1"},
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -890,7 +918,7 @@ class DockerImageBuilder:
             raise RuntimeError(f"Docker build failed with exit code {returncode}")
 
     def exists(self, tag: str) -> bool:
-        result = subprocess.run(
+        result = _docker_run(
             ["docker", "image", "inspect", tag],
             capture_output=True,
             check=False,
@@ -898,14 +926,14 @@ class DockerImageBuilder:
         return result.returncode == 0
 
     def remove(self, tag: str) -> None:
-        subprocess.run(
+        _docker_run(
             ["docker", "rmi", tag],
             capture_output=True,
             check=False,
         )
 
     def list_images(self, pattern: str) -> list[ImageInfo]:
-        result = subprocess.run(
+        result = _docker_run(
             [
                 "docker",
                 "images",

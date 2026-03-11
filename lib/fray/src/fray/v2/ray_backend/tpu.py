@@ -869,18 +869,26 @@ def run_on_pod_ray(
                     )
                 else:
                     logger.warning(f"Preempted {num_preemptions} times. Continuing to retry.", exc_info=problem)
+                logger.info("Draining entire TPU actor pool before retry to avoid mixing launch groups.")
+                slice_pool_manager.drain_actor_pool()
                 continue
             elif any_failed:
                 problem = problems[0] if problems else RuntimeError("TPU job failed")
                 num_failures += 1
                 logger.warning(f"Failed {num_failures} times. Continuing to retry.", exc_info=problem)
+                logger.info("Draining entire TPU actor pool before retry to avoid mixing launch groups.")
+                slice_pool_manager.drain_actor_pool()
                 continue
             elif any_cancelled:
                 logger.info("A slice's task was cancelled, probably due to another slice's failure. Retrying.")
+                logger.info("Draining entire TPU actor pool before retry to avoid mixing launch groups.")
+                slice_pool_manager.drain_actor_pool()
                 continue
             elif should_scale_up_multislice:
                 logger.info("Additional slices are available. Increasing the number of slices and retrying.")
                 num_preemptions += 1
+                logger.info("Draining entire TPU actor pool before retry to avoid mixing launch groups.")
+                slice_pool_manager.drain_actor_pool()
                 continue
             else:
                 logger.info("All slices succeeded. Returning results.")
