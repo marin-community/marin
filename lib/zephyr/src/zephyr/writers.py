@@ -159,6 +159,7 @@ def _accumulate_tables(
             convert = asdict if is_dataclass(micro_batch[0]) else (lambda x: x)
         dicts = [convert(r) for r in micro_batch]
         if schema is None:
+            # NOTE: the _MICRO_BATCH_SIZE is fairly small, here we hope it's enough to infer "real" schema
             schema = infer_arrow_schema(dicts)
         table = pa.Table.from_pylist(dicts, schema=schema)
         chunks.append(table)
