@@ -140,3 +140,29 @@ def test_different_users_get_different_identities(interceptor):
     interceptor.intercept_unary_sync(capture_handler, "request", ctx_bob)
 
     assert users == ["alice", "bob"]
+
+
+def test_gcp_token_provider_uses_id_token():
+    """Verify GcpTokenProvider calls fetch_id_token, not credentials.token."""
+    from unittest.mock import patch
+
+    from iris.rpc.auth import GcpTokenProvider
+
+    provider = GcpTokenProvider(audience="https://my-audience")
+    with patch("google.oauth2.id_token.fetch_id_token", return_value="fake-id-token") as mock_fetch:
+        token = provider.get_token()
+    assert token == "fake-id-token"
+    mock_fetch.assert_called_once()
+    assert mock_fetch.call_args[0][1] == "https://my-audience"
+
+
+def test_gcp_token_provider_propagates_errors():
+    """Verify GcpTokenProvider does NOT swallow exceptions."""
+    from unittest.mock import patch
+
+    from iris.rpc.auth import GcpTokenProvider
+
+    provider = GcpTokenProvider(audience="https://my-audience")
+    with patch("google.oauth2.id_token.fetch_id_token", side_effect=Exception("metadata server unreachable")):
+        with pytest.raises(Exception, match="metadata server unreachable"):
+            provider.get_token()

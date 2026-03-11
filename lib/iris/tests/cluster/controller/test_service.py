@@ -488,6 +488,60 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
     assert parent_status.job.state == cluster_pb2.JOB_STATE_KILLED
 
 
+# =============================================================================
+# Authorization Tests
+# =============================================================================
+
+
+def test_terminate_job_allowed_by_owner(service, job_request):
+    """Job owner can terminate their own job."""
+    from iris.rpc.auth import _verified_user
+
+    service.launch_job(job_request("/alice/my-job"), None)
+
+    token = _verified_user.set("alice")
+    try:
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+        service.terminate_job(request, None)
+    finally:
+        _verified_user.reset(token)
+
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_terminate_job_rejected_for_non_owner(service, job_request):
+    """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
+    from iris.rpc.auth import _verified_user
+
+    service.launch_job(job_request("/alice/my-job"), None)
+
+    token = _verified_user.set("bob")
+    try:
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+        with pytest.raises(ConnectError) as exc_info:
+            service.terminate_job(request, None)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_user.reset(token)
+
+    # Job should still be running
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_terminate_job_allowed_when_auth_disabled(service, job_request):
+    """When auth is disabled (no verified user), anyone can terminate."""
+    service.launch_job(job_request("/alice/my-job"), None)
+
+    # No _verified_user set => auth disabled
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+    service.terminate_job(request, None)
+
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_KILLED
+
+
 def test_parent_job_failure_cascades_to_children(service, state, job_request):
     """Verify when a parent job fails, all children are automatically cancelled."""
     # Launch parent and children via RPC

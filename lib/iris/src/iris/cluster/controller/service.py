@@ -524,6 +524,20 @@ class ControllerServiceImpl:
             return {}
         return build_job_pending_hints(status.last_routing_decision)
 
+    def _authorize_job_owner(self, job_id: JobName) -> None:
+        """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
+
+        When auth is disabled (get_verified_user() returns None), all access is allowed.
+        """
+        verified_user = get_verified_user()
+        if verified_user is None:
+            return
+        if job_id.user != verified_user:
+            raise ConnectError(
+                Code.PERMISSION_DENIED,
+                f"User '{verified_user}' cannot modify job {job_id} owned by '{job_id.user}'",
+            )
+
     def launch_job(
         self,
         request: cluster_pb2.Controller.LaunchJobRequest,
@@ -693,11 +707,13 @@ class ControllerServiceImpl:
         Cascade termination is performed depth-first: all children are
         terminated before the parent. All tasks within each job are killed.
         """
-        job = _read_job(self._db, JobName.from_wire(request.job_id))
+        job_id = JobName.from_wire(request.job_id)
+        job = _read_job(self._db, job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        self._terminate_job_tree(JobName.from_wire(request.job_id))
+        self._authorize_job_owner(job_id)
+        self._terminate_job_tree(job_id)
         return cluster_pb2.Empty()
 
     def _terminate_job_tree(self, job_id: JobName) -> None:

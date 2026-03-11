@@ -138,24 +138,54 @@ class StaticTokenProvider:
 
 
 class GcpTokenProvider:
-    """Acquires GCP identity tokens using application default credentials."""
+    """Acquires GCP OIDC identity tokens for server-side verification.
+
+    Works on GCE instances, Cloud Run, and with service account credentials.
+    For user credentials (e.g. developer laptops), use CliGcpTokenProvider instead.
+    """
 
     def __init__(self, audience: str):
         self._audience = audience
 
     def get_token(self) -> str | None:
-        import google.auth
-        import google.auth.transport.requests
-
-        credentials, _project = google.auth.default()
-        # For ID tokens, we need to use IDTokenCredentials
         from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token
+
+        request = google_requests.Request()
+        return id_token.fetch_id_token(request, self._audience)
+
+
+class CliGcpTokenProvider:
+    """Acquires GCP ID tokens, falling back to gcloud CLI for user credentials.
+
+    On GCE/service accounts, uses the metadata server via google-auth SDK.
+    On developer workstations with user ADC credentials, falls back to
+    `gcloud auth print-identity-token` since user credentials cannot mint
+    ID tokens via the SDK.
+    """
+
+    def __init__(self, audience: str):
+        self._audience = audience
+
+    def get_token(self) -> str | None:
+        import subprocess
+
+        from google.auth import exceptions as google_auth_exceptions
+        from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token
 
         try:
-            # Use the compute metadata service or service account to get an ID token
             request = google_requests.Request()
-            credentials.refresh(request)
-            return credentials.token
-        except Exception:
-            logger.warning("Failed to acquire GCP token", exc_info=True)
-            return None
+            return id_token.fetch_id_token(request, self._audience)
+        except google_auth_exceptions.DefaultCredentialsError:
+            pass
+
+        result = subprocess.run(
+            ["gcloud", "auth", "print-identity-token", f"--audiences={self._audience}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"gcloud auth failed: {result.stderr.strip()}")
+        return result.stdout.strip()
