@@ -595,6 +595,7 @@ def test_list_workers_returns_all(service, worker_metadata):
         request = cluster_pb2.Controller.RegisterRequest(
             address=f"host{i}:8080",
             metadata=worker_metadata(),
+            worker_id=f"worker-{i}",
         )
         service.register(request, None)
 

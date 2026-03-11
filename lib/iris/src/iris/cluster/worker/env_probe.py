@@ -304,13 +304,22 @@ def construct_worker_id(slice_id: str, worker_index: int) -> str:
     return f"{slice_id}-worker-{worker_index}"
 
 
-def infer_worker_id(hardware: HardwareProbe) -> str | None:
-    """Infer worker_id from GCP metadata probes.
+IRIS_WORKER_ID_ENV = "IRIS_WORKER_ID"
 
-    For TPU VMs: combines tpu_name (the slice name) with the TPU worker index.
-    For standalone GCE VMs: uses the instance name as slice_id with worker index 0.
-    Returns None when not running on a recognized cloud VM.
+
+def infer_worker_id(hardware: HardwareProbe) -> str | None:
+    """Infer worker_id from environment or GCP metadata probes.
+
+    Priority:
+    1. IRIS_WORKER_ID env var (set by all platforms via WorkerConfig or pod env).
+    2. TPU metadata: combines tpu_name (the slice name) with the TPU worker index.
+    3. GCE instance name: uses the instance name as slice_id with worker index 0.
+
+    Returns None when not running on a recognized cloud VM and no env var is set.
     """
+    env_worker_id = os.environ.get(IRIS_WORKER_ID_ENV)
+    if env_worker_id:
+        return env_worker_id
     if hardware.tpu_name:
         worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
         return construct_worker_id(hardware.tpu_name, worker_index)

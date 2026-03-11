@@ -480,7 +480,6 @@ class LocalPlatform:
                 preemptible=preemptible,
                 worker_attributes=extra_attrs,
             )
-            metadata.vm_address = f"127.0.0.1:{worker_port}"
 
             env_provider = FixedEnvironmentProvider(metadata)
 

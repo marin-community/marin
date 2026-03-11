@@ -928,7 +928,13 @@ class ControllerServiceImpl:
 
         Worker registers once, then waits for heartbeats from the controller.
         """
-        worker_id = WorkerId(request.worker_id or request.address)
+        if not request.worker_id:
+            logger.error("Worker at %s registered without worker_id", request.address)
+            return cluster_pb2.Controller.RegisterResponse(
+                worker_id="",
+                accepted=False,
+            )
+        worker_id = WorkerId(request.worker_id)
 
         self._transitions.register_or_refresh_worker(
             worker_id=worker_id,

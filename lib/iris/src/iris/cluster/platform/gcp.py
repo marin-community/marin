@@ -72,6 +72,7 @@ from iris.cluster.platform.remote_exec import (
     GcloudRemoteExec,
 )
 from iris.cluster.types import get_tpu_topology
+from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, Timestamp
 
@@ -869,7 +870,7 @@ class GcpPlatform:
         )
 
         return GcpStandaloneWorkerHandle(
-            _vm_id=config.name,
+            _vm_id=construct_worker_id(config.name, 0),
             _internal_address=internal_ip,
             _external_address=external_ip,
             _zone=zone,
@@ -1005,10 +1006,10 @@ class GcpPlatform:
         labels[self._iris_labels.iris_slice_id] = slice_id
 
         # Pre-render the bootstrap script so we can bake it into VM metadata.
-        # The worker discovers its own VM address at runtime via socket probe.
         startup_script: str | None = None
         if worker_config:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
+            worker_config.worker_id = construct_worker_id(slice_id, 0)
             startup_script = build_worker_bootstrap_script(worker_config)
 
         cmd = [
@@ -1411,7 +1412,7 @@ class GcpPlatform:
                 )
                 handles.append(
                     GcpStandaloneWorkerHandle(
-                        _vm_id=name,
+                        _vm_id=construct_worker_id(name, 0),
                         _internal_address=internal_ip,
                         _external_address=external_ip,
                         _zone=instance_zone,
