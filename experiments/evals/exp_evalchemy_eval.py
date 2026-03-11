@@ -73,7 +73,7 @@ SCIENCE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
 
 CODE_TASK_SEED_GROUPS: list[tuple[list, list[int]]] = [
     ([LIVECODEBENCH, LIVECODEBENCH_V5_OFFICIAL, LIVECODEBENCH_V6_OFFICIAL], SEEDS[:6]),
-    ([CODEFORCES, CODEELO], SEEDS[:3]),
+    # ([CODEFORCES, CODEELO], SEEDS[:3]),
 ]
 
 SUITE_TO_TASK_SEED_GROUPS: dict[str, list[tuple[list, list[int]]]] = {
