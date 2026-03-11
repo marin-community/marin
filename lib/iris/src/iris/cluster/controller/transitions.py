@@ -31,7 +31,7 @@ from iris.cluster.controller.db import (
     ENDPOINT_TASKS,
     endpoint_query_predicate,
 )
-from iris.cluster.controller.checkpoint_data import (
+from iris.cluster.controller.checkpoint import (
     ScalingGroupSnapshotData,
     TrackedWorkerSnapshotData,
     serialize_scaling_group,

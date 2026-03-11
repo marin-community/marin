@@ -28,7 +28,7 @@ from iris.cluster.constraints import (
     evaluate_constraint,
     is_cpu_device_type_constraint,
 )
-from iris.cluster.controller.checkpoint_data import ScalingGroupSnapshotData, SliceSnapshotData
+from iris.cluster.controller.checkpoint import ScalingGroupSnapshotData, SliceSnapshotData
 from iris.cluster.types import (
     VmWorkerStatusMap,
     get_gpu_count,

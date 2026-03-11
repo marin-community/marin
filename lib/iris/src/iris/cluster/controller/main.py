@@ -11,7 +11,8 @@ from pathlib import Path
 
 import click
 
-from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory, _is_remote_path
+from iris.cluster.controller.checkpoint import is_remote_path
+from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
@@ -140,7 +141,7 @@ def serve(
     # Default to hourly checkpointing when bundle_prefix is remote (GCS/S3)
     # so controller state is periodically uploaded for post-mortem analysis.
     _HOURLY_CHECKPOINT_SECONDS = 3600.0
-    if checkpoint_interval is None and _is_remote_path(bundle_prefix):
+    if checkpoint_interval is None and is_remote_path(bundle_prefix):
         checkpoint_interval = _HOURLY_CHECKPOINT_SECONDS
         logger.info("Defaulting to hourly checkpointing (remote bundle_prefix detected)")
 

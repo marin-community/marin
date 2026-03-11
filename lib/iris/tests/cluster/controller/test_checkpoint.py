@@ -4,13 +4,18 @@
 """Tests for controller checkpoint upload to remote storage."""
 
 from pathlib import Path
+from unittest.mock import patch
 
+from iris.cluster.controller.checkpoint import (
+    is_remote_path,
+    maybe_periodic_checkpoint,
+    remote_checkpoint_prefix,
+)
 from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
-    _is_remote_path,
 )
-from iris.time_utils import Duration
+from iris.time_utils import Duration, RateLimiter
 
 
 class FakeStubFactory:
@@ -27,29 +32,23 @@ def _make_controller(bundle_prefix: str = "file:///tmp/iris-test", **kwargs) -> 
 
 
 def test_is_remote_path():
-    assert _is_remote_path("gs://bucket/path")
-    assert _is_remote_path("s3://bucket/path")
-    assert not _is_remote_path("file:///tmp/local")
-    assert not _is_remote_path("/tmp/local")
-    assert not _is_remote_path("relative/path")
+    assert is_remote_path("gs://bucket/path")
+    assert is_remote_path("s3://bucket/path")
+    assert not is_remote_path("file:///tmp/local")
+    assert not is_remote_path("/tmp/local")
+    assert not is_remote_path("relative/path")
 
 
 def test_remote_checkpoint_prefix_none_for_local():
-    controller = _make_controller(bundle_prefix="file:///tmp/iris-test")
-    assert controller._remote_checkpoint_prefix is None
-    controller._transitions.close()
+    assert remote_checkpoint_prefix("file:///tmp/iris-test") is None
 
 
 def test_remote_checkpoint_prefix_set_for_gcs():
-    controller = _make_controller(bundle_prefix="gs://my-bucket/iris/bundles")
-    assert controller._remote_checkpoint_prefix == "gs://my-bucket/iris/bundles/controller-state"
-    controller._transitions.close()
+    assert remote_checkpoint_prefix("gs://my-bucket/iris/bundles") == "gs://my-bucket/iris/bundles/controller-state"
 
 
 def test_remote_checkpoint_prefix_strips_trailing_slash():
-    controller = _make_controller(bundle_prefix="gs://my-bucket/iris/bundles/")
-    assert controller._remote_checkpoint_prefix == "gs://my-bucket/iris/bundles/controller-state"
-    controller._transitions.close()
+    assert remote_checkpoint_prefix("gs://my-bucket/iris/bundles/") == "gs://my-bucket/iris/bundles/controller-state"
 
 
 def test_periodic_checkpoint_writes_local_and_uploads(tmp_path):
@@ -59,19 +58,22 @@ def test_periodic_checkpoint_writes_local_and_uploads(tmp_path):
         checkpoint_interval=Duration.from_seconds(0),  # always eligible
         log_dir=tmp_path,
     )
-    # Force the rate limiter to allow a run
-    controller._periodic_checkpoint_limiter._last_run = 0
+    limiter = RateLimiter(interval_seconds=0)
+    limiter._last_run = 0
 
     uploaded = []
 
-    def track_upload(local_path, created_at):
+    def track_upload(local_path, created_at, bundle_prefix):
         uploaded.append((str(local_path), created_at))
-        # Don't actually upload to GCS, just track the call
-        # (the real fsspec copy would fail without GCS credentials)
 
-    controller._upload_checkpoint_to_remote = track_upload
-
-    controller._maybe_periodic_checkpoint()
+    with patch("iris.cluster.controller.checkpoint.upload_checkpoint_to_remote", side_effect=track_upload):
+        maybe_periodic_checkpoint(
+            controller._transitions,
+            controller._db,
+            "gs://test-bucket/bundles",
+            limiter,
+            checkpoint_in_progress=False,
+        )
 
     # Local checkpoint should exist
     checkpoint_dir = tmp_path / "controller-checkpoints"
@@ -95,12 +97,11 @@ def test_begin_checkpoint_uploads_to_remote(tmp_path):
 
     uploaded = []
 
-    def track_upload(local_path, created_at):
+    def track_upload(local_path, created_at, bundle_prefix):
         uploaded.append((str(local_path), created_at))
 
-    controller._upload_checkpoint_to_remote = track_upload
-
-    path, _result = controller.begin_checkpoint()
+    with patch("iris.cluster.controller.checkpoint.upload_checkpoint_to_remote", side_effect=track_upload):
+        path, _result = controller.begin_checkpoint()
 
     # Local checkpoint should exist
     assert Path(path).exists()
@@ -121,12 +122,11 @@ def test_atexit_checkpoint_writes_and_uploads(tmp_path):
 
     uploaded = []
 
-    def track_upload(local_path, created_at):
+    def track_upload(local_path, created_at, bundle_prefix):
         uploaded.append((str(local_path), created_at))
 
-    controller._upload_checkpoint_to_remote = track_upload
-
-    controller._atexit_checkpoint()
+    with patch("iris.cluster.controller.checkpoint.upload_checkpoint_to_remote", side_effect=track_upload):
+        controller._atexit_checkpoint()
 
     checkpoint_dir = tmp_path / "controller-checkpoints"
     checkpoints = list(checkpoint_dir.glob("checkpoint-*.sqlite3"))
@@ -143,9 +143,16 @@ def test_no_upload_for_local_bundle_prefix(tmp_path):
         checkpoint_interval=Duration.from_seconds(0),
         log_dir=tmp_path,
     )
-    controller._periodic_checkpoint_limiter._last_run = 0
+    limiter = RateLimiter(interval_seconds=0)
+    limiter._last_run = 0
 
-    controller._maybe_periodic_checkpoint()
+    maybe_periodic_checkpoint(
+        controller._transitions,
+        controller._db,
+        "file:///tmp/local-bundles",
+        limiter,
+        checkpoint_in_progress=False,
+    )
 
     # Local checkpoint should exist
     checkpoint_dir = tmp_path / "controller-checkpoints"
