@@ -151,23 +151,19 @@ def push_to_ghcr(
 
 
 def _ensure_dashboard_dist() -> None:
-    """Build Vue dashboard assets if the dist directory is missing.
+    """Build Vue dashboard assets.
 
     Called automatically before building controller/worker images so that
-    ``COPY dashboard/dist`` in the Dockerfile always has something to copy.
+    ``COPY dashboard/dist`` in the Dockerfile always has fresh assets.
     """
     iris_root = find_iris_root()
-    dist_dir = iris_root / "dashboard" / "dist"
-    if dist_dir.is_dir():
-        return
     dashboard_dir = iris_root / "dashboard"
     if not (dashboard_dir / "package.json").exists():
         raise click.ClickException(
             f"Dashboard source not found at {dashboard_dir}. " "Cannot build dashboard assets for Docker image."
         )
-    click.echo("Dashboard dist missing — building frontend assets first...")
-    if not (dashboard_dir / "node_modules").exists():
-        subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
+    click.echo("Building frontend assets...")
+    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
     result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
     if result.returncode != 0:
         click.echo(result.stderr, err=True)
