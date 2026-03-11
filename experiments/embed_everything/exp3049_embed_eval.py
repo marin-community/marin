@@ -12,13 +12,14 @@ Step DAG:
     sample_topic   → ┬─ oracle_topic  ─┐
                      └─ embed_topic   ─┤→ eval_topic
 
-All steps run on CPU via Iris (@remote). Intermediate data is stored in
-temp buckets (gs://marin-tmp-*/ttl=7d/embed-everything/).
+All steps run on CPU via Iris (@remote). Output goes to temp buckets
+(gs://marin-tmp-*/ttl=7d/embed-everything/).
 """
 
 import logging
 
 from fray.v2 import ResourceConfig
+from iris.marin_fs import marin_prefix, marin_temp_bucket
 
 from experiments.embed_everything.embed import LUXICAL_MODEL, embed_documents
 from experiments.embed_everything.evaluate import evaluate_quality_probe, evaluate_topic_clusters
@@ -30,7 +31,10 @@ from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
-EXPERIMENT_PREFIX = "embed_everything/exp3049"
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
 EMBEDDING_MODEL = LUXICAL_MODEL
 N_PER_BUCKET = 25
 N_PER_SOURCE = 25
@@ -38,28 +42,21 @@ N_TOPIC_CLUSTERS = 15
 ORACLE_BACKEND = OracleBackend.CLAUDE
 PROMPT_VERSION = "v1"
 
-# Resolve the Nemotron CC and Dolma base paths from existing pipeline definitions.
-# These are InputName objects that resolve to GCS paths at runtime.
-# We import them lazily at module level so the DAG can be inspected without
-# triggering heavy imports.
-from experiments.pretraining_datasets.nemotron import _nemotron_cc_path  # noqa: E402
-from experiments.pretraining_datasets.dolma import _DOLMA_V1_7_PATH  # noqa: E402
+# Input data: concrete GCS paths for Nemotron CC and Dolma 1.7 on the primary bucket.
+_PREFIX = marin_prefix()
+NEMOTRON_BASE_PATH = f"{_PREFIX}/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl"
+DOLMA_BASE_PATH = f"{_PREFIX}/raw/dolma/v1.7"
 
-# For StepSpec, we need concrete string paths. These InputName objects resolve
-# to strings via the executor framework, but for StepSpec we hardcode the
-# known GCS paths that the executor would resolve to.
-# The nemotron path is: {MARIN_PREFIX}/raw/nemotro-cc-{hash}/contrib/Nemotron/Nemotron-CC/data-jsonl/
-# The dolma path is: {MARIN_PREFIX}/raw/dolma/v1.7
-# We use the InputName string representations at runtime.
-NEMOTRON_BASE_PATH = str(_nemotron_cc_path)
-DOLMA_BASE_PATH = str(_DOLMA_V1_7_PATH)
+# Output: temp bucket with 7-day TTL
+_OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="embed-everything")
 
 # ---------------------------------------------------------------------------
 # Step 1: Sample documents
 # ---------------------------------------------------------------------------
 
 sample_quality = StepSpec(
-    name=f"{EXPERIMENT_PREFIX}/sample_quality",
+    name="sample_quality",
+    output_path_prefix=_OUTPUT_PREFIX,
     hash_attrs={"n_per_bucket": N_PER_BUCKET, "seed": 42},
     fn=remote(
         lambda output_path: sample_quality_documents(
@@ -72,7 +69,8 @@ sample_quality = StepSpec(
 )
 
 sample_topic = StepSpec(
-    name=f"{EXPERIMENT_PREFIX}/sample_topic",
+    name="sample_topic",
+    output_path_prefix=_OUTPUT_PREFIX,
     hash_attrs={"n_per_source": N_PER_SOURCE, "seed": 42},
     fn=remote(
         lambda output_path: sample_topic_documents(
@@ -89,7 +87,8 @@ sample_topic = StepSpec(
 # ---------------------------------------------------------------------------
 
 oracle_quality = StepSpec(
-    name=f"{EXPERIMENT_PREFIX}/oracle_quality",
+    name="oracle_quality",
+    output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_quality],
     hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION},
     fn=remote(
@@ -103,7 +102,8 @@ oracle_quality = StepSpec(
 )
 
 oracle_topic = StepSpec(
-    name=f"{EXPERIMENT_PREFIX}/oracle_topic",
+    name="oracle_topic",
+    output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_topic],
     hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION},
     fn=remote(
@@ -121,7 +121,8 @@ oracle_topic = StepSpec(
 # ---------------------------------------------------------------------------
 
 embed_quality = StepSpec(
-    name=f"{EXPERIMENT_PREFIX}/embed_quality",
+    name="embed_quality",
+    output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_quality],
     hash_attrs={"model": EMBEDDING_MODEL},
     fn=remote(
@@ -139,7 +140,8 @@ embed_quality = StepSpec(
 )
 
 embed_topic = StepSpec(
-    name=f"{EXPERIMENT_PREFIX}/embed_topic",
+    name="embed_topic",
+    output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_topic],
     hash_attrs={"model": EMBEDDING_MODEL},
     fn=remote(
@@ -161,7 +163,8 @@ embed_topic = StepSpec(
 # ---------------------------------------------------------------------------
 
 eval_quality = StepSpec(
-    name=f"{EXPERIMENT_PREFIX}/eval_quality",
+    name="eval_quality",
+    output_path_prefix=_OUTPUT_PREFIX,
     deps=[embed_quality, oracle_quality],
     fn=remote(
         lambda output_path: evaluate_quality_probe(
@@ -174,7 +177,8 @@ eval_quality = StepSpec(
 )
 
 eval_topic = StepSpec(
-    name=f"{EXPERIMENT_PREFIX}/eval_topic",
+    name="eval_topic",
+    output_path_prefix=_OUTPUT_PREFIX,
     deps=[embed_topic, oracle_topic],
     hash_attrs={"n_clusters": N_TOPIC_CLUSTERS},
     fn=remote(
