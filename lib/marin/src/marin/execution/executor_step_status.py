@@ -228,7 +228,10 @@ def distributed_lock(fn: Callable[[str], T], *, force_run_failed: bool = True) -
 
         def _heartbeat():
             while not stop_event.wait(HEARTBEAT_INTERVAL):
-                status_file.refresh_lock()
+                try:
+                    status_file.refresh_lock()
+                except Exception:
+                    logger.warning("Lock refresh failed for %s, will retry next interval", output_path, exc_info=True)
 
         heartbeat_thread = Thread(target=_heartbeat, daemon=True)
         heartbeat_thread.start()

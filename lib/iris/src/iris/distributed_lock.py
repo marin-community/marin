@@ -101,6 +101,7 @@ class DistributedLock:
         return (bucket, blob_path)
 
     def _read_gcs(self) -> tuple[int, Lease | None]:
+        from google.api_core.exceptions import NotFound
         from google.cloud import storage
 
         client = storage.Client()
@@ -109,7 +110,12 @@ class DistributedLock:
         blob = bucket.get_blob(blob_path)
         if blob is None:
             return (0, None)
-        data = json.loads(blob.download_as_string())
+        try:
+            data = json.loads(blob.download_as_string())
+        except NotFound:
+            # Blob was deleted between get_blob and download_as_string
+            logger.debug("[%s] Lock blob %s disappeared during read (race)", self.worker_id, self.lock_path)
+            return (0, None)
         return (blob.generation, Lease(**data))
 
     def _write_gcs(self, lease: Lease, if_generation_match: int) -> None:
@@ -122,13 +128,18 @@ class DistributedLock:
         blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
 
     def _delete_gcs(self) -> None:
+        from google.api_core.exceptions import NotFound
         from google.cloud import storage
 
         client = storage.Client()
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_path)
-        blob.delete()
+        try:
+            blob.delete()
+        except NotFound:
+            # Already deleted by another worker — not an error
+            logger.debug("Lock blob %s already deleted", self.lock_path)
 
     # -- Local backend --------------------------------------------------------
 
@@ -232,14 +243,23 @@ class DistributedLock:
         return True
 
     def refresh(self) -> None:
-        """Refresh a lock held by the current holder."""
+        """Refresh a lock held by the current holder.
+
+        Raises ``ValueError`` if the lock is held by a different worker.
+        If the lock has disappeared entirely (e.g. deleted by a concurrent
+        release), re-acquires it instead of crashing.
+        """
         generation, lock_data = self._read_lock_with_generation()
         if lock_data and lock_data.worker_id == self.worker_id:
             self._write_lock(Lease(self.worker_id, time.time()), generation)
+        elif lock_data is None:
+            # Lock disappeared (e.g. concurrent release/delete). Re-acquire
+            # by writing a fresh lease with generation=0 (create-if-absent).
+            logger.warning("[%s] Lock %s disappeared during refresh, re-acquiring", self.worker_id, self.lock_path)
+            self._write_lock(Lease(self.worker_id, time.time()), generation)
         else:
-            current_holder = lock_data.worker_id if lock_data else "unknown"
             raise ValueError(
-                f"Cannot refresh: lock at {self.lock_path} held by {current_holder}, expected {self.worker_id}"
+                f"Cannot refresh: lock at {self.lock_path} held by {lock_data.worker_id}, expected {self.worker_id}"
             )
 
     def release(self) -> None:
@@ -257,8 +277,20 @@ class DistributedLock:
                 logger.debug("[%s] Released lock %s", self.worker_id, self.lock_path)
         except FileNotFoundError:
             pass
+        except Exception as e:
+            # GCS raises google.api_core.exceptions.NotFound, not FileNotFoundError.
+            # Treat any NotFound as the lock already being gone.
+            if "NotFound" in type(e).__name__:
+                logger.debug("[%s] Lock %s already gone during release", self.worker_id, self.lock_path)
+            else:
+                raise
 
     def has_active_holder(self) -> bool:
         """Check if any holder has an active (non-stale) lock."""
-        _, lock_data = self._read_lock_with_generation()
+        try:
+            _, lock_data = self._read_lock_with_generation()
+        except Exception as e:
+            if "NotFound" in type(e).__name__:
+                return False
+            raise
         return lock_data is not None and not lock_data.is_stale()

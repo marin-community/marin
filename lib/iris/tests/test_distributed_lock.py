@@ -113,3 +113,42 @@ def test_same_holder_can_reacquire(tmp_path):
     assert lock.try_acquire()
     assert lock.try_acquire()  # idempotent
     lock.release()
+
+
+def test_refresh_reacquires_when_lock_disappears(tmp_path):
+    """Refresh should re-acquire the lock if it was deleted externally."""
+    lock_path = str(tmp_path / "test.lock")
+    lock = DistributedLock(lock_path, worker_id="holder-a")
+    assert lock.try_acquire()
+
+    # Simulate another worker deleting the lock file
+    os.remove(lock_path)
+
+    # Refresh should re-acquire instead of crashing
+    lock.refresh()
+
+    # Lock should exist again with the same holder
+    with open(lock_path) as f:
+        data = json.loads(f.read())
+    assert data["worker_id"] == "holder-a"
+    lock.release()
+
+
+def test_release_idempotent_when_lock_already_gone(tmp_path):
+    """Release should not crash if the lock file was already deleted."""
+    lock_path = str(tmp_path / "test.lock")
+    lock = DistributedLock(lock_path, worker_id="holder-a")
+    assert lock.try_acquire()
+
+    # Delete manually
+    os.remove(lock_path)
+
+    # Release should not raise
+    lock.release()
+
+
+def test_has_active_holder_when_lock_missing(tmp_path):
+    """has_active_holder should return False if lock file doesn't exist."""
+    lock_path = str(tmp_path / "nonexistent.lock")
+    lock = DistributedLock(lock_path, worker_id="holder-a")
+    assert not lock.has_active_holder()
