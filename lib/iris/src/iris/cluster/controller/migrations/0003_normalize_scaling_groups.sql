@@ -25,3 +25,5 @@ CREATE TABLE IF NOT EXISTS slices (
     last_active_ms INTEGER NOT NULL DEFAULT 0,
     error_message  TEXT NOT NULL DEFAULT ''
 );
+
+CREATE INDEX IF NOT EXISTS idx_slices_scale_group ON slices(scale_group);

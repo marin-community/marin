@@ -281,6 +281,19 @@ class ScalingGroup:
                     (self.name, Timestamp.now().epoch_ms()),
                 )
 
+    def set_db(self, db: ControllerDB) -> None:
+        """Attach a DB handle for write-through persistence.
+
+        Called after construction when the DB is available (e.g. from the controller).
+        Ensures the scaling_groups row exists for future updates.
+        """
+        self._db = db
+        with db.transaction() as cur:
+            cur.execute(
+                "INSERT OR IGNORE INTO scaling_groups(name, updated_at_ms) VALUES (?, ?)",
+                (self.name, Timestamp.now().epoch_ms()),
+            )
+
     # -----------------------------------------------------------------------
     # DB write-through helpers
     # -----------------------------------------------------------------------
@@ -624,17 +637,50 @@ class ScalingGroup:
         )
         return check_resource_fit(available, required)
 
+    # Minimum elapsed time before a last_active change is flushed to the DB.
+    # Avoids one transaction per active slice per autoscaler tick for stable workloads.
+    _ACTIVITY_WRITE_THRESHOLD_MS: int = 30_000
+
     def update_slice_activity(self, vm_status_map: VmWorkerStatusMap, timestamp: Timestamp) -> None:
         """Update activity timestamps for all slices based on worker status.
 
         For each slice, if any worker has running tasks, update its last_active timestamp.
+        All DB writes are batched into a single transaction.
         """
         with self._slices_lock:
             snapshot = list(self._slices.items())
+
+        to_persist: list[tuple[str, SliceState]] = []
         for slice_id, state in snapshot:
-            if self._slice_has_active_workers(state, vm_status_map):
+            if not self._slice_has_active_workers(state, vm_status_map):
+                continue
+            elapsed_ms = timestamp.epoch_ms() - state.last_active.epoch_ms()
+            if elapsed_ms < self._ACTIVITY_WRITE_THRESHOLD_MS:
+                # Update in-memory state but skip the DB write — we'll catch up
+                # on the next tick that crosses the threshold.
                 state.last_active = timestamp
-                self._db_upsert_slice(slice_id, state)
+                continue
+            state.last_active = timestamp
+            to_persist.append((slice_id, state))
+
+        if not to_persist or self._db is None:
+            return
+        with self._db.transaction() as cur:
+            for slice_id, state in to_persist:
+                cur.execute(
+                    "INSERT OR REPLACE INTO slices "
+                    "(slice_id, scale_group, lifecycle, vm_addresses, created_at_ms, last_active_ms, error_message) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        slice_id,
+                        self.name,
+                        state.lifecycle.value,
+                        json.dumps(list(state.vm_addresses)),
+                        state.handle.created_at.epoch_ms(),
+                        state.last_active.epoch_ms(),
+                        state.error_message,
+                    ),
+                )
 
     def _slice_has_active_workers(self, state: SliceState, vm_status_map: VmWorkerStatusMap) -> bool:
         """Check if any worker in a slice has running tasks (lookup by VM address)."""

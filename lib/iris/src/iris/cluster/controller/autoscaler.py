@@ -801,6 +801,15 @@ class Autoscaler:
             db=db,
         )
 
+    def set_db(self, db: ControllerDB) -> None:
+        """Attach a DB handle and propagate it to all scaling groups.
+
+        Called after construction when the DB is available (e.g. from the controller).
+        """
+        self._db = db
+        for group in self._groups.values():
+            group.set_db(db)
+
     def _wait_for_inflight(self) -> None:
         """Wait for in-flight scale-ups to complete without terminating anything.
 
@@ -1197,17 +1206,6 @@ class Autoscaler:
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._workers.update(workers)
-
-    def _persist_tracked_workers(self, db: ControllerDB) -> None:
-        """Write the current tracked-worker registry into the DB."""
-        with db.transaction() as cur:
-            cur.execute("DELETE FROM tracked_workers")
-            for tw in self._workers.values():
-                cur.execute(
-                    "INSERT INTO tracked_workers(worker_id, slice_id, scale_group, internal_address) "
-                    "VALUES (?, ?, ?, ?)",
-                    (tw.worker_id, tw.slice_id, tw.scale_group, tw.handle.internal_address),
-                )
 
     def restore_from_db(self, db: ControllerDB) -> None:
         """Reconcile DB-checkpointed autoscaler state against live cloud.

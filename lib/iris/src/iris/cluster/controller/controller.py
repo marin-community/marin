@@ -81,7 +81,7 @@ from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -792,17 +792,11 @@ class Controller:
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
 
-        # Inject DB into autoscaler and its scaling groups for write-through persistence
+        # Wire DB into autoscaler and its scaling groups for write-through persistence.
+        # The DB is created above; autoscalers are typically constructed before the
+        # controller (in local.py / main.py) so db is injected here via set_db().
         if self._autoscaler is not None:
-            self._autoscaler._db = self._db
-            for group in self._autoscaler.groups.values():
-                group._db = self._db
-                # Ensure the scaling group row exists
-                with self._db.transaction() as cur:
-                    cur.execute(
-                        "INSERT OR IGNORE INTO scaling_groups(name, updated_at_ms) VALUES (?, ?)",
-                        (group.name, Timestamp.now().epoch_ms()),
-                    )
+            self._autoscaler.set_db(self._db)
 
         self._heartbeat_iteration = 0
 
