@@ -594,15 +594,19 @@ class LocalPlatform:
         return address
 
     def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
-        raise NotImplementedError("restart_controller not supported for local clusters")
+        from iris.cluster.controller.local import LocalController
+
+        assert self._local_controller is not None, "restart_controller called before start_controller"
+        assert isinstance(self._local_controller, LocalController)
+        return self._local_controller.restart()
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
-        """Stop the in-process LocalController."""
+        """Stop the in-process LocalController and release all resources."""
         from iris.cluster.controller.local import LocalController
 
         if self._local_controller is not None:
             assert isinstance(self._local_controller, LocalController)
-            self._local_controller.stop()
+            self._local_controller.close()
             self._local_controller = None
 
     def stop_all(
