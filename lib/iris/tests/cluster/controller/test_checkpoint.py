@@ -62,7 +62,7 @@ def test_periodic_checkpoint_writes_local_and_uploads(tmp_path):
     assert len(uploaded) == 1
     assert uploaded[0][0] == str(checkpoints[0])
 
-    controller._transitions.close()
+    controller._db.close()
 
 
 def test_begin_checkpoint_uploads_to_remote(tmp_path):
@@ -87,7 +87,7 @@ def test_begin_checkpoint_uploads_to_remote(tmp_path):
     assert len(uploaded) == 1
     assert uploaded[0][0] == path
 
-    controller._transitions.close()
+    controller._db.close()
 
 
 def test_atexit_checkpoint_writes_and_uploads(tmp_path):
@@ -110,7 +110,7 @@ def test_atexit_checkpoint_writes_and_uploads(tmp_path):
     assert len(checkpoints) == 1
     assert len(uploaded) == 1
 
-    controller._transitions.close()
+    controller._db.close()
 
 
 def test_no_upload_for_local_bundle_prefix(tmp_path):
@@ -136,4 +136,4 @@ def test_no_upload_for_local_bundle_prefix(tmp_path):
     checkpoints = list(checkpoint_dir.glob("checkpoint-*.sqlite3"))
     assert len(checkpoints) == 1
 
-    controller._transitions.close()
+    controller._db.close()
