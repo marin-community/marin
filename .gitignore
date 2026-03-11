@@ -231,5 +231,6 @@ scr/*
 .claude
 !.claude/skills
 .agents/tmp/
+.agents/logbooks/
 .codex
 .entire
