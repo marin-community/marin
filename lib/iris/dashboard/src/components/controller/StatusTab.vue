@@ -3,7 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { GetProcessStatusResponse, ProcessInfo } from '@/types/rpc'
-import { formatBytes } from '@/utils/formatting'
+import { formatBytes, formatUptime } from '@/utils/formatting'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
@@ -14,19 +14,6 @@ useAutoRefresh(refresh, 10_000)
 onMounted(refresh)
 
 const info = computed<ProcessInfo | null>(() => data.value?.processInfo ?? null)
-
-function formatUptime(uptimeMs?: string): string {
-  if (!uptimeMs) return '-'
-  const ms = parseInt(uptimeMs, 10)
-  if (!ms) return '-'
-  const seconds = Math.floor(ms / 1000)
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-  const hours = Math.floor(seconds / 3600)
-  const mins = Math.floor((seconds % 3600) / 60)
-  if (hours < 24) return `${hours}h ${mins}m`
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`
-}
 
 const rssBytes = computed(() => {
   const raw = info.value?.memoryRssBytes

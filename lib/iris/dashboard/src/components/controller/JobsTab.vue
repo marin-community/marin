@@ -282,7 +282,7 @@ function sortIndicator(field: SortField): string {
         type="text"
         placeholder="Filter by name..."
         class="w-52 px-3 py-1.5 text-sm border border-surface-border rounded
-               bg-white placeholder:text-text-muted
+               bg-surface placeholder:text-text-muted
                focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
       />
       <button

@@ -18,7 +18,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <nav class="border-b border-surface-border bg-white">
+  <nav class="border-b border-surface-border bg-surface">
     <div class="max-w-7xl mx-auto px-6 flex items-center">
       <div class="flex gap-0">
         <RouterLink

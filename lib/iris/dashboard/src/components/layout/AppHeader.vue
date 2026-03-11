@@ -5,7 +5,7 @@ defineProps<{
 </script>
 
 <template>
-  <header class="border-b border-surface-border bg-white">
+  <header class="border-b border-surface-border bg-surface">
     <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
       <h1 class="text-lg font-semibold text-text font-sans tracking-tight">
         {{ title }}

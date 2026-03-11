@@ -24,7 +24,7 @@ function valueClass(): string {
 </script>
 
 <template>
-  <div class="rounded-lg border border-surface-border bg-white px-4 py-3">
+  <div class="rounded-lg border border-surface-border bg-surface px-4 py-3">
     <div :class="['text-2xl font-semibold font-mono tabular-nums', valueClass()]">
       {{ value }}
     </div>

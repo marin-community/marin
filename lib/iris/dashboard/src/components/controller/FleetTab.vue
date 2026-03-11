@@ -4,7 +4,7 @@ import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { ListWorkersResponse, WorkerHealthStatus } from '@/types/rpc'
-import { timestampMs, formatRelativeTime, formatBytes } from '@/utils/formatting'
+import { timestampMs, formatRelativeTime, formatBytes, formatWorkerDevice } from '@/utils/formatting'
 
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -13,19 +13,6 @@ const { data, loading, error, refresh } = useControllerRpc<ListWorkersResponse>(
 
 useAutoRefresh(refresh, 10_000)
 onMounted(refresh)
-
-function formatDevice(w: WorkerHealthStatus): string {
-  const md = w.metadata
-  if (!md) return 'CPU'
-  if (md.gpuCount && md.gpuCount > 0) {
-    const name = md.gpuName || 'GPU'
-    const mem = md.gpuMemoryMb ? ` (${Math.round(md.gpuMemoryMb / 1024)}GB)` : ''
-    return `GPU: ${md.gpuCount}x ${name}${mem}`
-  }
-  if (md.device?.tpu) return `TPU: ${md.device.tpu.variant || 'unknown'}`
-  if (md.device?.gpu) return `GPU: ${md.device.gpu.count || 1}x ${md.device.gpu.variant || 'unknown'}`
-  return 'CPU'
-}
 
 const workers = computed<WorkerHealthStatus[]>(() => data.value?.workers ?? [])
 
@@ -65,7 +52,7 @@ const columns: Column[] = [
       message="No workers registered"
     />
 
-    <div v-else class="rounded-lg border border-surface-border bg-white overflow-hidden">
+    <div v-else class="rounded-lg border border-surface-border bg-surface overflow-hidden">
       <DataTable
         :columns="columns"
         :rows="workers"
@@ -87,7 +74,7 @@ const columns: Column[] = [
         </template>
 
         <template #cell-device="{ row }">
-          <span class="text-xs">{{ formatDevice(row as WorkerHealthStatus) }}</span>
+          <span class="text-xs">{{ formatWorkerDevice((row as WorkerHealthStatus).metadata) }}</span>
         </template>
 
         <template #cell-zone="{ row }">

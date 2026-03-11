@@ -10,7 +10,7 @@ import type {
   WorkerResourceSnapshot,
   LogEntry,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
 
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -30,19 +30,6 @@ const {
   error,
   refresh: fetchWorker,
 } = useControllerRpc<GetWorkerStatusResponse>('GetWorkerStatus', () => ({ id: props.workerId }))
-
-function formatDevice(): string {
-  const md = data.value?.worker?.metadata
-  if (!md) return 'CPU'
-  if (md.gpuCount && md.gpuCount > 0) {
-    const name = md.gpuName || 'GPU'
-    const mem = md.gpuMemoryMb ? ` (${Math.round(md.gpuMemoryMb / 1024)}GB)` : ''
-    return `GPU: ${md.gpuCount}x ${name}${mem}`
-  }
-  if (md.device?.tpu) return `TPU: ${md.device.tpu.variant || 'unknown'}`
-  if (md.device?.gpu) return `GPU: ${md.device.gpu.count || 1}x ${md.device.gpu.variant || 'unknown'}`
-  return 'CPU'
-}
 
 const worker = computed(() => data.value?.worker)
 const vm = computed(() => data.value?.vm)
@@ -85,25 +72,6 @@ const taskColumns: Column[] = [
 
 useAutoRefresh(fetchWorker, 5_000)
 onMounted(fetchWorker)
-
-function logLevelClass(level: string | undefined): string {
-  const lvl = (level ?? 'info').toLowerCase()
-  switch (lvl) {
-    case 'warning':
-      return 'text-status-warning'
-    case 'error':
-    case 'critical':
-      return 'text-status-danger'
-    default:
-      return 'text-text'
-  }
-}
-
-function formatLogTime(ts?: { epochMs: string }): string {
-  const ms = timestampMs(ts)
-  if (!ms) return ''
-  return new Date(ms).toLocaleTimeString()
-}
 
 function attributeDisplay(val: { stringValue?: string; intValue?: string; floatValue?: string }): string {
   if (val.stringValue !== undefined) return val.stringValue
@@ -170,7 +138,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         />
         <MetricCard :value="cpuDisplay" label="CPU Usage" />
         <MetricCard :value="memoryDisplay" label="Memory" />
-        <MetricCard :value="formatDevice()" label="Accelerator" />
+        <MetricCard :value="formatWorkerDevice(worker?.metadata)" label="Accelerator" />
       </div>
 
       <!-- Identity + Health section -->
@@ -225,7 +193,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             </span>
           </InfoRow>
           <InfoRow label="Accelerator">
-            {{ formatDevice() }}
+            {{ formatWorkerDevice(worker?.metadata) }}
           </InfoRow>
           <InfoRow v-if="worker?.consecutiveFailures" label="Consecutive Failures">
             <span class="text-status-danger font-mono">{{ worker.consecutiveFailures }}</span>
@@ -246,14 +214,14 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
       <div v-if="resourceHistory.length > 1" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Live Utilization</h3>
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div class="rounded-lg border border-surface-border bg-white p-3">
+          <div class="rounded-lg border border-surface-border bg-surface p-3">
             <div class="text-xs text-text-secondary mb-2">CPU %</div>
             <Sparkline :data="cpuHistory" :width="200" :height="40" color="var(--color-accent, #2563eb)" />
             <div class="text-xs font-mono text-text-muted mt-1">
               {{ cpuDisplay }}
             </div>
           </div>
-          <div class="rounded-lg border border-surface-border bg-white p-3">
+          <div class="rounded-lg border border-surface-border bg-surface p-3">
             <div class="text-xs text-text-secondary mb-2">Memory</div>
             <Sparkline :data="memoryHistory" :width="200" :height="40" color="var(--color-status-purple, #8b5cf6)" />
             <div class="text-xs font-mono text-text-muted mt-1">
@@ -262,7 +230,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           </div>
           <div
             v-if="resourceHistory.some((s) => s.netRecvBps)"
-            class="rounded-lg border border-surface-border bg-white p-3"
+            class="rounded-lg border border-surface-border bg-surface p-3"
           >
             <div class="text-xs text-text-secondary mb-2">Network Recv</div>
             <Sparkline
@@ -277,7 +245,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           </div>
           <div
             v-if="resourceHistory.some((s) => s.netSentBps)"
-            class="rounded-lg border border-surface-border bg-white p-3"
+            class="rounded-lg border border-surface-border bg-surface p-3"
           >
             <div class="text-xs text-text-secondary mb-2">Network Sent</div>
             <Sparkline
@@ -296,7 +264,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
       <!-- Task history -->
       <div v-if="recentTasks.length > 0" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Task History</h3>
-        <div class="rounded-lg border border-surface-border bg-white overflow-hidden">
+        <div class="rounded-lg border border-surface-border bg-surface overflow-hidden">
           <DataTable
             :columns="taskColumns"
             :rows="recentTasks"
@@ -339,7 +307,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
       <div v-if="workerLogEntries.length > 0" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Worker Daemon Logs</h3>
         <div
-          class="overflow-y-auto rounded-lg border border-surface-border bg-white"
+          class="overflow-y-auto rounded-lg border border-surface-border bg-surface"
           style="max-height: 40vh"
         >
           <div
@@ -350,7 +318,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
               logLevelClass(entry.level),
             ]"
           >
-            <span class="text-text-muted mr-2">{{ formatLogTime(entry.timestamp) }}</span>
+            <span class="text-text-muted mr-2">{{ formatLogTime(timestampMs(entry.timestamp)) }}</span>
             <span class="whitespace-pre-wrap break-all">{{ entry.data }}</span>
           </div>
         </div>
@@ -360,7 +328,7 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
       <div v-if="data.bootstrapLogs" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Bootstrap Logs</h3>
         <pre
-          class="overflow-auto rounded-lg border border-surface-border bg-white p-4 font-mono text-xs text-text leading-relaxed"
+          class="overflow-auto rounded-lg border border-surface-border bg-surface p-4 font-mono text-xs text-text leading-relaxed"
           style="max-height: 40vh"
         >{{ data.bootstrapLogs }}</pre>
       </div>

@@ -7,9 +7,9 @@ import { stateToName, stateDisplayName, statusColors } from '@/types/status'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest,
   GetJobStatusResponse, ListTasksResponse,
-  DeviceConfig, ResourceUsage,
+  ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatBytes } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatBytes, formatDeviceConfig } from '@/utils/formatting'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -85,23 +85,6 @@ function taskDuration(t: TaskStatus): string {
   return formatDuration(started, ended)
 }
 
-function formatDevice(device: DeviceConfig | undefined): string | null {
-  if (!device) return null
-  if (device.tpu) {
-    let s = device.tpu.variant ?? 'tpu'
-    if (device.tpu.topology) s += ` (${device.tpu.topology})`
-    if (device.tpu.count) s += ` x${device.tpu.count}`
-    return s
-  }
-  if (device.gpu) {
-    let s = device.gpu.variant ?? 'gpu'
-    if (device.gpu.count) s += ` x${device.gpu.count}`
-    return s
-  }
-  if (device.cpu) return 'cpu'
-  return null
-}
-
 function formatMemMb(usage: ResourceUsage | undefined): string {
   if (!usage?.memoryMb) return '-'
   const mb = parseInt(usage.memoryMb, 10)
@@ -151,8 +134,8 @@ const taskCounts = computed(() => {
 const acceleratorDisplay = computed(() => {
   const j = job.value
   const req = jobRequest.value
-  const base = formatDevice(j?.resources?.device)
-    ?? formatDevice(req?.resources?.device)
+  const base = formatDeviceConfig(j?.resources?.device)
+    ?? formatDeviceConfig(req?.resources?.device)
   return base ?? '-'
 })
 
@@ -239,7 +222,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         class="mb-4 px-4 py-3 bg-status-warning-bg border border-status-warning-border rounded-lg"
       >
         <span class="font-semibold text-status-warning text-sm">Scheduling Diagnostic:</span>
-        <pre class="mt-2 p-3 bg-white rounded text-xs font-mono whitespace-pre-wrap">{{ job.pendingReason }}</pre>
+        <pre class="mt-2 p-3 bg-surface rounded text-xs font-mono whitespace-pre-wrap">{{ job.pendingReason }}</pre>
       </div>
 
       <!-- Info cards -->
@@ -284,7 +267,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       <!-- Constraints -->
       <div
         v-if="jobRequest?.constraints && jobRequest.constraints.length > 0"
-        class="mb-6 rounded-lg border border-surface-border bg-white px-4 py-3"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
       >
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
           Constraints

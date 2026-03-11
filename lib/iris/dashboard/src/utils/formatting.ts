@@ -65,3 +65,60 @@ export function formatLogTime(epochMs: number): string {
   const ms = String(d.getMilliseconds()).padStart(3, '0')
   return `${hh}:${mm}:${ss}.${ms}`
 }
+
+/** Format an uptime duration in milliseconds as a human-readable string. */
+export function formatUptime(uptimeMs?: string): string {
+  if (!uptimeMs) return '-'
+  const ms = parseInt(uptimeMs, 10)
+  if (!ms) return '-'
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  const hours = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  if (hours < 24) return `${hours}h ${mins}m`
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`
+}
+
+/** CSS class for a log level string. */
+export function logLevelClass(level: string | undefined): string {
+  const lvl = (level ?? 'info').toLowerCase()
+  switch (lvl) {
+    case 'debug': return 'text-text-muted'
+    case 'warning': return 'text-status-warning'
+    case 'error':
+    case 'critical': return 'text-status-danger'
+    default: return 'text-text'
+  }
+}
+
+/** Format a worker's device metadata as a human-readable string. */
+export function formatWorkerDevice(metadata: { gpuCount?: number; gpuName?: string; gpuMemoryMb?: number; device?: { tpu?: { variant?: string }; gpu?: { count?: number; variant?: string } } } | null | undefined): string {
+  if (!metadata) return 'CPU'
+  if (metadata.gpuCount && metadata.gpuCount > 0) {
+    const name = metadata.gpuName || 'GPU'
+    const mem = metadata.gpuMemoryMb ? ` (${Math.round(metadata.gpuMemoryMb / 1024)}GB)` : ''
+    return `GPU: ${metadata.gpuCount}x ${name}${mem}`
+  }
+  if (metadata.device?.tpu) return `TPU: ${metadata.device.tpu.variant || 'unknown'}`
+  if (metadata.device?.gpu) return `GPU: ${metadata.device.gpu.count || 1}x ${metadata.device.gpu.variant || 'unknown'}`
+  return 'CPU'
+}
+
+/** Format a DeviceConfig proto as a human-readable string. */
+export function formatDeviceConfig(device: { tpu?: { variant?: string; topology?: string; count?: number }; gpu?: { variant?: string; count?: number; memoryGb?: number } } | null | undefined): string | null {
+  if (!device) return null
+  if (device.tpu) {
+    let s = device.tpu.variant ?? 'tpu'
+    if (device.tpu.topology) s += ` (${device.tpu.topology})`
+    if (device.tpu.count) s += ` x${device.tpu.count}`
+    return s
+  }
+  if (device.gpu) {
+    let s = device.gpu.variant ?? 'gpu'
+    if (device.gpu.count) s += ` x${device.gpu.count}`
+    if (device.gpu.memoryGb) s += ` (${device.gpu.memoryGb}GB)`
+    return s
+  }
+  return null
+}

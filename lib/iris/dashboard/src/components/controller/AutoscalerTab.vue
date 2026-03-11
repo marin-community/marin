@@ -681,7 +681,7 @@ function idleThresholdMs(groupName: string): number {
         No recent actions
       </div>
 
-      <div v-else class="rounded-lg border border-surface-border bg-white divide-y divide-surface-border-subtle">
+      <div v-else class="rounded-lg border border-surface-border bg-surface divide-y divide-surface-border-subtle">
         <div
           v-for="(action, i) in actions"
           :key="i"

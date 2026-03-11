@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useControllerRpc, useWorkerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { FetchLogsResponse, GetTaskLogsResponse, LogEntry } from '@/types/rpc'
-import { timestampMs } from '@/utils/formatting'
+import { timestampMs, logLevelClass, formatLogTime } from '@/utils/formatting'
 
 const props = withDefaults(defineProps<{
   taskId?: string
@@ -78,22 +78,7 @@ const filteredLogs = computed(() => {
   })
 })
 
-function logLevelClass(entryLevel: string | undefined): string {
-  const lvl = (entryLevel ?? 'info').toLowerCase()
-  switch (lvl) {
-    case 'debug': return 'text-text-muted'
-    case 'warning': return 'text-status-warning'
-    case 'error':
-    case 'critical': return 'text-status-danger'
-    default: return 'text-text'
-  }
-}
 
-function formatLogTime(timestamp: { epochMs: string } | undefined): string {
-  const ms = timestampMs(timestamp)
-  if (!ms) return ''
-  return new Date(ms).toLocaleTimeString()
-}
 </script>
 
 <template>
@@ -136,7 +121,7 @@ function formatLogTime(timestamp: { epochMs: string } | undefined): string {
     </div>
 
     <div
-      class="overflow-y-auto rounded-lg border border-surface-border bg-white"
+      class="overflow-y-auto rounded-lg border border-surface-border bg-surface"
       :style="{ maxHeight: maxHeight }"
     >
       <div
@@ -159,7 +144,7 @@ function formatLogTime(timestamp: { epochMs: string } | undefined): string {
           logLevelClass(entry.level),
         ]"
       >
-        <span class="text-text-muted mr-2">{{ formatLogTime(entry.timestamp) }}</span>
+        <span class="text-text-muted mr-2">{{ formatLogTime(timestampMs(entry.timestamp)) }}</span>
         <span class="whitespace-pre-wrap break-all">{{ entry.data }}</span>
       </div>
     </div>
