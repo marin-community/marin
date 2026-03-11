@@ -67,9 +67,6 @@ _ZEPHYR_SHUFFLE_ITEM_COL = "item"
 class PickleDiskChunk:
     """Reference to a pickle chunk stored on disk.
 
-    Fallback serialization for non-Scatter inter-stage data. Scatter uses
-    VortexDiskChunk instead for columnar storage with predicate pushdown.
-
     Each write goes to a UUID-unique path to avoid collisions when multiple
     workers race on the same shard.  No coordinator-side rename is needed;
     the winning result's paths are used directly and the entire execution
@@ -1128,9 +1125,6 @@ class ZephyrWorker:
             total_shards=task.total_shards,
             chunk_size=task.chunk_size,
             aux_shards=task.aux_shards,
-            chunk_prefix=self._chunk_prefix,
-            execution_id=self._execution_id,
-            stage_name=task.stage_name,
         )
 
         vortex_path = None

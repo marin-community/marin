@@ -570,7 +570,7 @@ def make_windows(
 class StageResultChunk:
     source_shard: int
     target_shard: int
-    chunk: list | Iterator[Any]
+    chunk: Iterable[Any]
 
 
 def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator[StageResultChunk]:
@@ -746,9 +746,6 @@ class StageContext:
         total_shards: Total number of shards
         chunk_size: Number of items per output chunk
         aux_shards: Auxiliary shards for joins, keyed by op index
-        chunk_prefix: Storage prefix for intermediate chunks
-        execution_id: Unique ID for this execution
-        stage_name: Name of the current stage
     """
 
     shard: Iterable[Any]
@@ -756,9 +753,6 @@ class StageContext:
     total_shards: int
     chunk_size: int
     aux_shards: dict[int, Iterable[Any]] = field(default_factory=dict)
-    chunk_prefix: str = ""
-    execution_id: str = ""
-    stage_name: str = ""
 
     def get_right_shard(self, op_index: int) -> Iterable[Any]:
         """Get right shard for join at given op index.
