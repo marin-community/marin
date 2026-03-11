@@ -139,7 +139,7 @@ def worker_job_entrypoint(pool_id: str) -> None:
     """Job entrypoint that starts a TaskExecutor actor.
 
     This function runs inside each task of the co-scheduled worker pool job.
-    It uses IRIS_JOB_ID (task name) from the environment to determine which
+    It uses IRIS_TASK_ID (task identity) from the environment to determine which
     worker index this task represents.
 
     Args:

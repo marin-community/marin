@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
-from iris.cluster.types import JobName, TaskName
+from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -54,9 +54,9 @@ class JobInfo:
     """Explicit job constraints for child job inheritance."""
 
     @property
-    def task_name(self) -> TaskName:
+    def task_attempt(self) -> TaskAttempt:
         """Get the structured task identity (task_id + attempt_id)."""
-        return TaskName(task_id=self.task_id, attempt_id=self.attempt_id)
+        return TaskAttempt(task_id=self.task_id, attempt_id=self.attempt_id)
 
     @property
     def job_id(self) -> JobName:
@@ -86,18 +86,12 @@ def get_job_info() -> JobInfo | None:
         return info
 
     # Fall back to environment variables.
-    # Prefer IRIS_TASK_NAME (canonical task_id:attempt_id), fall back to IRIS_JOB_ID.
-    raw_task_name = os.environ.get("IRIS_TASK_NAME")
-    raw_task_id = os.environ.get("IRIS_JOB_ID")
-    if raw_task_name or raw_task_id:
+    raw_task_id = os.environ.get("IRIS_TASK_ID")
+    if raw_task_id:
         try:
-            if raw_task_name:
-                parsed = TaskName.from_wire(raw_task_name)
-                task_id = parsed.task_id
-                attempt_id = parsed.attempt_id or int(os.environ.get("IRIS_ATTEMPT_ID", "0"))
-            else:
-                task_id = JobName.from_wire(raw_task_id)  # type: ignore[arg-type]
-                attempt_id = int(os.environ.get("IRIS_ATTEMPT_ID", "0"))
+            parsed = TaskAttempt.from_wire(raw_task_id)
+            task_id = parsed.task_id
+            attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
             task_id.require_task()
         except ValueError:
             return None

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from iris.cluster.log_store import LogStore, task_log_key
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import logging_pb2
 
 
@@ -32,7 +32,7 @@ def log_store():
 
 
 TASK_ID = JobName.from_wire("/job/test/task/0")
-KEY = task_log_key(TASK_ID, 0)
+KEY = task_log_key(TaskAttempt(task_id=TASK_ID, attempt_id=0))
 
 
 # =============================================================================
@@ -170,7 +170,7 @@ def test_has_logs_no_known_attempts(tmp_path: Path):
 
     store2 = LogStore(log_dir=log_dir)
     assert store2.has_logs(KEY)
-    assert not store2.has_logs(task_log_key(TASK_ID, 99))
+    assert not store2.has_logs(task_log_key(TaskAttempt(task_id=TASK_ID, attempt_id=99)))
     store2.close()
 
 
@@ -196,9 +196,9 @@ def test_get_logs_by_prefix_returns_all_matching(log_store: LogStore):
     t0 = JobName.from_wire("/job/test/task/0")
     t1 = JobName.from_wire("/job/test/task/1")
 
-    log_store.append(task_log_key(t0, 0), [_make_entry("t0-a0-line0", epoch_ms=1)])
-    log_store.append(task_log_key(t0, 1), [_make_entry("t0-a1-line0", epoch_ms=2)])
-    log_store.append(task_log_key(t1, 0), [_make_entry("t1-a0-line0", epoch_ms=3)])
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry("t0-a0-line0", epoch_ms=1)])
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=1)), [_make_entry("t0-a1-line0", epoch_ms=2)])
+    log_store.append(task_log_key(TaskAttempt(task_id=t1, attempt_id=0)), [_make_entry("t1-a0-line0", epoch_ms=3)])
 
     result = log_store.get_logs_by_prefix("/job/test/")
     assert len(result.entries) == 3
@@ -210,7 +210,9 @@ def test_get_logs_by_prefix_returns_all_matching(log_store: LogStore):
 def test_get_logs_by_prefix_cursor_continuation(log_store: LogStore):
     """Cursor-based continuation with prefix returns no duplicates."""
     t0 = JobName.from_wire("/job/test/task/0")
-    log_store.append(task_log_key(t0, 0), [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)])
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry(f"line-{i}", epoch_ms=i) for i in range(5)]
+    )
 
     result1 = log_store.get_logs_by_prefix("/job/test/", max_lines=3)
     assert len(result1.entries) == 3
@@ -225,8 +227,8 @@ def test_get_logs_by_prefix_isolation(log_store: LogStore):
     t_test = JobName.from_wire("/job/test/task/0")
     t_testing = JobName.from_wire("/job/testing/task/0")
 
-    log_store.append(task_log_key(t_test, 0), [_make_entry("test-line")])
-    log_store.append(task_log_key(t_testing, 0), [_make_entry("testing-line")])
+    log_store.append(task_log_key(TaskAttempt(task_id=t_test, attempt_id=0)), [_make_entry("test-line")])
+    log_store.append(task_log_key(TaskAttempt(task_id=t_testing, attempt_id=0)), [_make_entry("testing-line")])
 
     result = log_store.get_logs_by_prefix("/job/test/")
     assert len(result.entries) == 1
@@ -240,8 +242,8 @@ def test_get_logs_by_prefix_shallow_excludes_children(log_store: LogStore):
     # Child job task: /job/parent/child/0
     child_t0 = JobName.from_wire("/job/parent/child/0")
 
-    log_store.append(task_log_key(t0, 0), [_make_entry("parent-line", epoch_ms=1)])
-    log_store.append(task_log_key(child_t0, 0), [_make_entry("child-line", epoch_ms=2)])
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry("parent-line", epoch_ms=1)])
+    log_store.append(task_log_key(TaskAttempt(task_id=child_t0, attempt_id=0)), [_make_entry("child-line", epoch_ms=2)])
 
     # Without shallow: both are returned
     result_all = log_store.get_logs_by_prefix("/job/parent/")
@@ -259,8 +261,13 @@ def test_get_logs_by_prefix_tail_returns_last_n(log_store: LogStore):
     t1 = JobName.from_wire("/job/test/task/1")
 
     # Insert 10 entries total: 5 per task
-    log_store.append(task_log_key(t0, 0), [_make_entry(f"t0-line-{i}", epoch_ms=i) for i in range(5)])
-    log_store.append(task_log_key(t1, 0), [_make_entry(f"t1-line-{i}", epoch_ms=10 + i) for i in range(5)])
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry(f"t0-line-{i}", epoch_ms=i) for i in range(5)]
+    )
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=t1, attempt_id=0)),
+        [_make_entry(f"t1-line-{i}", epoch_ms=10 + i) for i in range(5)],
+    )
 
     result = log_store.get_logs_by_prefix("/job/test/", max_lines=3, tail=True)
     assert len(result.entries) == 3
@@ -273,7 +280,7 @@ def test_get_logs_by_prefix_tail_with_substring_filter(log_store: LogStore):
     t0 = JobName.from_wire("/job/test/task/0")
 
     entries = [_make_entry(f"{'ERROR' if i % 3 == 0 else 'INFO'}: msg-{i}", epoch_ms=i) for i in range(12)]
-    log_store.append(task_log_key(t0, 0), entries)
+    log_store.append(task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), entries)
 
     result = log_store.get_logs_by_prefix("/job/test/", max_lines=2, tail=True, substring_filter="ERROR")
     assert len(result.entries) == 2
@@ -285,8 +292,13 @@ def test_get_logs_by_prefix_tail_with_shallow(log_store: LogStore):
     t0 = JobName.from_wire("/job/parent/0")
     child_t0 = JobName.from_wire("/job/parent/child/0")
 
-    log_store.append(task_log_key(t0, 0), [_make_entry(f"parent-{i}", epoch_ms=i) for i in range(5)])
-    log_store.append(task_log_key(child_t0, 0), [_make_entry(f"child-{i}", epoch_ms=10 + i) for i in range(5)])
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=t0, attempt_id=0)), [_make_entry(f"parent-{i}", epoch_ms=i) for i in range(5)]
+    )
+    log_store.append(
+        task_log_key(TaskAttempt(task_id=child_t0, attempt_id=0)),
+        [_make_entry(f"child-{i}", epoch_ms=10 + i) for i in range(5)],
+    )
 
     result = log_store.get_logs_by_prefix("/job/parent/", max_lines=2, tail=True, shallow=True)
     assert len(result.entries) == 2

@@ -54,7 +54,7 @@ from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.proto_utils import job_state_name, task_state_name
@@ -1140,7 +1140,7 @@ class ControllerServiceImpl:
         if job_name.is_task and requested_attempt_id >= 0:
             # Exact key: single task + single attempt
             log_result = log_store.get_logs(
-                task_log_key(job_name, requested_attempt_id),
+                task_log_key(TaskAttempt(task_id=job_name, attempt_id=requested_attempt_id)),
                 since_ms=request.since_ms,
                 cursor=cursor,
                 substring_filter=substring_filter,

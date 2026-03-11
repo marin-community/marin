@@ -21,7 +21,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from iris.cluster.types import TaskName
+from iris.cluster.types import TaskAttempt
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -229,16 +229,16 @@ def is_system_target(target: str) -> bool:
     return target == SYSTEM_PROCESS_TARGET
 
 
-def parse_profile_target(target: str) -> TaskName:
-    """Parse a task target string into a TaskName.
+def parse_profile_target(target: str) -> TaskAttempt:
+    """Parse a task target string into a TaskAttempt.
 
     Examples:
         >>> parse_profile_target("/alice/job/0")
-        TaskName('/alice/job/0')
+        TaskAttempt('/alice/job/0')
         >>> parse_profile_target("/alice/job/0:3")
-        TaskName('/alice/job/0:3')
+        TaskAttempt('/alice/job/0:3')
     """
-    return TaskName.from_wire(target)
+    return TaskAttempt.from_wire(target)
 
 
 def _check_tool(name: str) -> None:
