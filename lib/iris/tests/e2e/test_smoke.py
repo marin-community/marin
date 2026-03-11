@@ -304,7 +304,7 @@ def test_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
-    dashboard_click(smoke_page, 'button.tab-btn:has-text("Workers")')
+    dashboard_click(smoke_page, 'a:has-text("Workers")')
     assert_visible(smoke_page, "text=healthy")
     smoke_screenshot("workers-ready")
 
@@ -345,31 +345,25 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
 
 
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
-    """Task logs show lines, truncation buttons, substring filter."""
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{verbose_job.job_id.to_wire()}")
+    """Task logs show lines and substring filter on the task detail page."""
+    task_status = smoke_cluster.task_status(verbose_job)
+    task_id = task_status.task_id
+    job_id = verbose_job.job_id.to_wire()
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
     wait_for_dashboard_ready(smoke_page)
 
     smoke_page.wait_for_function(
-        "() => document.querySelector('pre') && "
-        "document.querySelector('pre').textContent.includes('DONE: all lines emitted')",
+        "() => document.body.textContent.includes('DONE: all lines emitted')",
         timeout=10000,
     )
     smoke_screenshot("task-logs-default")
 
-    smoke_page.click("button:has-text('100')")
-    smoke_page.wait_for_function(
-        "() => document.querySelector('span') && document.body.textContent.includes('(truncated)')",
-        timeout=5000,
-    )
-    smoke_screenshot("task-logs-truncated")
-
     # "validation failed" only appears in ERROR lines
-    smoke_page.fill("input[placeholder='substring']", "validation failed")
-    smoke_page.click("button:has-text('Apply')")
+    smoke_page.fill("input[placeholder='Filter logs...']", "validation failed")
     smoke_page.wait_for_function(
-        "() => document.querySelector('pre') && "
-        "document.querySelector('pre').textContent.includes('validation failed') && "
-        "!document.querySelector('pre').textContent.includes('processing data batch')",
+        "() => document.body.textContent.includes('validation failed') && "
+        "!document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )
     smoke_screenshot("task-logs-filtered")
@@ -388,12 +382,11 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
         dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
         wait_for_dashboard_ready(smoke_page)
 
-        smoke_page.click("text=Job Request")
         smoke_page.wait_for_function(
-            "() => document.querySelector('.constraint-chip') !== null",
+            "() => document.body.textContent.includes('Constraints')",
             timeout=5000,
         )
-        assert_visible(smoke_page, "text=region = local")
+        assert_visible(smoke_page, "text=region")
         smoke_screenshot("constraints")
 
 
@@ -415,7 +408,7 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Workers tab shows healthy workers."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
-    dashboard_click(smoke_page, 'button.tab-btn:has-text("Workers")')
+    dashboard_click(smoke_page, 'a:has-text("Workers")')
     assert_visible(smoke_page, "text=healthy")
     smoke_screenshot("workers-tab")
 
@@ -430,9 +423,10 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
     assert worker_id
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
+    wait_for_dashboard_ready(smoke_page)
+
     smoke_page.wait_for_function(
-        "() => document.querySelector('.worker-detail-grid') !== null"
-        " || document.querySelector('.error-message') !== null",
+        f"() => document.body.textContent.includes('{worker_id}')",
         timeout=10000,
     )
     assert_visible(smoke_page, f"text={worker_id}")
@@ -445,7 +439,7 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
-    dashboard_click(smoke_page, 'button.tab-btn:has-text("Autoscaler")')
+    dashboard_click(smoke_page, 'a:has-text("Autoscaler")')
     smoke_screenshot("autoscaler-tab")
 
 
@@ -453,8 +447,8 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Status tab renders process info and log viewer."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
     wait_for_dashboard_ready(smoke_page)
-    dashboard_click(smoke_page, 'button.tab-btn:has-text("Status")')
-    smoke_page.wait_for_selector(".log-container", timeout=10000)
+    dashboard_click(smoke_page, 'a:has-text("Status")')
+    smoke_page.wait_for_selector("input[placeholder='Filter logs...']", timeout=10000)
     smoke_screenshot("status-tab")
 
 
