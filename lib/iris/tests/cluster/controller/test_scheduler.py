@@ -18,6 +18,7 @@ from iris.cluster.controller.scheduler import (
 
 from iris.cluster.controller.db import (
     ATTEMPTS,
+    ControllerDB,
     JOBS,
     TASKS,
     TERMINAL_TASK_STATES,
@@ -29,6 +30,7 @@ from iris.cluster.controller.db import (
     _decode_attribute_rows,
     _tasks_with_attempts,
 )
+from iris.cluster.log_store import LogStore
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import JobName, WorkerId
@@ -54,7 +56,7 @@ def _job_requirements_from_job(job) -> JobRequirements:
 
 
 def _schedulable_tasks(state: ControllerTransitions):
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         tasks = q.select(
             TASKS,
             where=TASKS.c.state.not_null() & ~TASKS.c.state.in_(list(TERMINAL_TASK_STATES)),
@@ -71,7 +73,7 @@ def _schedulable_tasks(state: ControllerTransitions):
 def _worker_capacities(state: ControllerTransitions):
     from dataclasses import replace as _replace
 
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         workers = q.select(WORKERS, where=(WORKERS.c.healthy == 1) & (WORKERS.c.active == 1))
         if not workers:
             return []
@@ -92,7 +94,7 @@ def _worker_capacities(state: ControllerTransitions):
 
 
 def _building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
-    with state.db.snapshot() as snapshot:
+    with state._db.snapshot() as snapshot:
         rows = snapshot.raw(
             "SELECT a.worker_id, COUNT(*) as c FROM tasks t "
             "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
@@ -110,7 +112,7 @@ def _building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
 
 def _task_by_id_with_attempts(state: ControllerTransitions, task_id: JobName) -> Task | None:
     wire = task_id.to_wire()
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         tasks = q.select(TASKS, where=TASKS.c.task_id == wire)
         attempts = q.select(
             ATTEMPTS,
@@ -122,27 +124,27 @@ def _task_by_id_with_attempts(state: ControllerTransitions, task_id: JobName) ->
 
 
 def _query_job(state: ControllerTransitions, job_id: JobName) -> Job | None:
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
 
 
 def _query_task(state: ControllerTransitions, task_id: JobName) -> Task | None:
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         return q.one(TASKS, where=TASKS.c.task_id == task_id.to_wire())
 
 
 def _query_worker(state: ControllerTransitions, worker_id: WorkerId) -> Worker | None:
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
 
 
 def _query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[Task]:
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         return q.select(TASKS, where=TASKS.c.job_id == job_id.to_wire())
 
 
 def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
-    with state.db.snapshot() as q:
+    with state._db.snapshot() as q:
         rows = q.select(
             WORKER_ATTRIBUTES,
             columns=(
@@ -441,9 +443,15 @@ def worker_metadata():
 
 
 @pytest.fixture
-def state():
+def state(tmp_path):
     """Create a fresh ControllerTransitions for each test."""
-    return ControllerTransitions()
+    db_path = tmp_path / "controller.sqlite3"
+    db = ControllerDB(db_path=db_path)
+    log_store = LogStore(db_path=db_path)
+    s = ControllerTransitions(db=db, log_store=log_store)
+    yield s
+    log_store.close()
+    db.close()
 
 
 @pytest.fixture
