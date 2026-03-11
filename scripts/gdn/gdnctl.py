@@ -35,6 +35,8 @@ import threading
 import time
 from pathlib import Path
 
+from marin.cluster.config import CONFIGS, find_config_by_region
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAY_RUN = ["uv", "run", "lib/marin/src/marin/run/ray_run.py"]
 CLUSTER_CLI = ["uv", "run", "scripts/ray/cluster.py"]
@@ -2286,6 +2288,31 @@ def _normalize_ce_bwd_mode(mode: str | None) -> str:
     )
 
 
+def _default_marin_prefix(cluster: str) -> str:
+    normalized = cluster if cluster.startswith("marin-") else f"marin-{cluster}"
+    config = CONFIGS.get(normalized)
+    if isinstance(config, dict):
+        bucket = config.get("BUCKET")
+        if isinstance(bucket, str) and bucket:
+            return f"gs://{bucket}"
+
+    try:
+        config_path = find_config_by_region(cluster)
+    except FileNotFoundError:
+        return f"gs://marin-{cluster}"
+
+    config_name = Path(config_path).stem
+    config = CONFIGS.get(config_name)
+    if isinstance(config, dict):
+        bucket = config.get("BUCKET")
+        if isinstance(bucket, str) and bucket:
+            return f"gs://{bucket}"
+
+    if config_name.startswith("marin-"):
+        return f"gs://{config_name}"
+    return f"gs://marin-{cluster}"
+
+
 def _configured_gdn_profile_metadata(args: argparse.Namespace) -> dict[str, object]:
     all_transformer = bool(getattr(args, "all_transformer", False))
     gdn_layers_per_block = getattr(args, "gdn_layers_per_block", None)
@@ -2413,7 +2440,7 @@ def cmd_dev_tpu_profile(args: argparse.Namespace) -> int:
     if args.marin_prefix:
         marin_prefix = args.marin_prefix
     else:
-        marin_prefix = f"gs://marin-{args.cluster}"
+        marin_prefix = _default_marin_prefix(args.cluster)
     cmd += ["-e", f"MARIN_PREFIX={marin_prefix}"]
     if args.no_sync:
         cmd.append("--no-sync")
@@ -3060,7 +3087,7 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
             if dev_profile_args.marin_prefix:
                 marin_prefix = dev_profile_args.marin_prefix
             else:
-                marin_prefix = f"gs://marin-{dev_profile_args.cluster}"
+                marin_prefix = _default_marin_prefix(dev_profile_args.cluster)
             cmd += ["-e", f"MARIN_PREFIX={marin_prefix}"]
             if dev_profile_args.no_sync:
                 cmd.append("--no-sync")
@@ -3262,7 +3289,7 @@ def _run_validation_profile_once(args: argparse.Namespace, *, iteration: int) ->
                 if dev_profile_args.marin_prefix:
                     marin_prefix = dev_profile_args.marin_prefix
                 else:
-                    marin_prefix = f"gs://marin-{dev_profile_args.cluster}"
+                    marin_prefix = _default_marin_prefix(dev_profile_args.cluster)
                 cmd += ["-e", f"MARIN_PREFIX={marin_prefix}"]
                 if dev_profile_args.no_sync:
                     cmd.append("--no-sync")
