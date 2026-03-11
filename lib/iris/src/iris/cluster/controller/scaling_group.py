@@ -281,19 +281,6 @@ class ScalingGroup:
                     (self.name, Timestamp.now().epoch_ms()),
                 )
 
-    def set_db(self, db: ControllerDB) -> None:
-        """Attach a DB handle for write-through persistence.
-
-        Called after construction when the DB is available (e.g. from the controller).
-        Ensures the scaling_groups row exists for future updates.
-        """
-        self._db = db
-        with db.transaction() as cur:
-            cur.execute(
-                "INSERT OR IGNORE INTO scaling_groups(name, updated_at_ms) VALUES (?, ?)",
-                (self.name, Timestamp.now().epoch_ms()),
-            )
-
     # -----------------------------------------------------------------------
     # DB write-through helpers
     # -----------------------------------------------------------------------
@@ -650,23 +637,37 @@ class ScalingGroup:
         with self._slices_lock:
             snapshot = list(self._slices.items())
 
-        to_persist: list[tuple[str, SliceState]] = []
+        # Determine which slices are active and whether they need a DB write.
+        # _slice_has_active_workers is called outside the lock (reads vm_status_map, not _slices).
+        active_slice_ids: list[str] = []
+        needs_db_write: list[str] = []
         for slice_id, state in snapshot:
             if not self._slice_has_active_workers(state, vm_status_map):
                 continue
+            active_slice_ids.append(slice_id)
             elapsed_ms = timestamp.epoch_ms() - state.last_active.epoch_ms()
-            if elapsed_ms < self._ACTIVITY_WRITE_THRESHOLD_MS:
-                # Update in-memory state but skip the DB write — we'll catch up
-                # on the next tick that crosses the threshold.
-                state.last_active = timestamp
-                continue
-            state.last_active = timestamp
-            to_persist.append((slice_id, state))
+            if elapsed_ms >= self._ACTIVITY_WRITE_THRESHOLD_MS:
+                needs_db_write.append(slice_id)
 
-        if not to_persist or self._db is None:
+        if not active_slice_ids:
             return
+
+        # Mutate last_active under the lock so readers see a consistent value.
+        with self._slices_lock:
+            for slice_id in active_slice_ids:
+                if slice_id in self._slices:
+                    self._slices[slice_id].last_active = timestamp
+
+        if not needs_db_write or self._db is None:
+            return
+
+        # Snapshot state under lock before opening the transaction to avoid
+        # holding _slices_lock and _db._lock simultaneously.
+        with self._slices_lock:
+            to_write = [(sid, self._slices[sid]) for sid in needs_db_write if sid in self._slices]
+
         with self._db.transaction() as cur:
-            for slice_id, state in to_persist:
+            for slice_id, state in to_write:
                 cur.execute(
                     "INSERT OR REPLACE INTO slices "
                     "(slice_id, scale_group, lifecycle, vm_addresses, created_at_ms, last_active_ms, error_message) "

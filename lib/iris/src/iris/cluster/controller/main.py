@@ -72,6 +72,7 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.controller.db import ControllerDB
     from iris.cluster.config import load_config, create_autoscaler
     from iris.cluster.platform.factory import create_platform
     from iris.rpc import config_pb2
@@ -83,6 +84,7 @@ def serve(
     # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
     cluster_config = None
+    db: ControllerDB | None = None
     if config_file:
         logger.info("Loading cluster config from %s", config_file)
         try:
@@ -96,6 +98,10 @@ def serve(
         if bundle_prefix is None and cluster_config.storage.bundle_prefix:
             bundle_prefix = cluster_config.storage.bundle_prefix
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
+
+        _CONTROLLER_LOG_DIR = Path("/tmp/iris/controller-logs")
+        _CONTROLLER_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        db = ControllerDB(db_path=_CONTROLLER_LOG_DIR / "controller.sqlite3")
 
         try:
             platform = create_platform(
@@ -118,6 +124,7 @@ def serve(
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
                 base_worker_config=base_worker_config,
+                db=db,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
@@ -163,6 +170,7 @@ def serve(
             config=config,
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=autoscaler,
+            db=db,
         )
         logger.info("Controller instance created")
     except Exception as e:

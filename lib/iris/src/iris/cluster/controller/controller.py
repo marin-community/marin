@@ -727,6 +727,7 @@ class Controller:
         worker_stub_factory: WorkerStubFactory,
         autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
+        db: ControllerDB | None = None,
     ):
         if not config.bundle_prefix:
             raise ValueError(
@@ -737,13 +738,16 @@ class Controller:
         self._config = config
         self.stub_factory = worker_stub_factory
 
-        if config.log_dir is not None:
+        if db is not None:
+            self._db = db
+        elif config.log_dir is not None:
             db_path = config.log_dir / "controller.sqlite3"
+            self._db = ControllerDB(db_path=db_path)
         else:
             tmp = Path(tempfile.mkdtemp(prefix="iris_controller_state_"))
             db_path = tmp / "controller.sqlite3"
-        self._db = ControllerDB(db_path=db_path)
-        self._log_store = LogStore(db_path=db_path)
+            self._db = ControllerDB(db_path=db_path)
+        self._log_store = LogStore(db_path=self._db.db_path)
         self._transitions = ControllerTransitions(
             db=self._db,
             log_store=self._log_store,
@@ -789,14 +793,7 @@ class Controller:
             prefix="dispatch",
         )
 
-        # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
-
-        # Wire DB into autoscaler and its scaling groups for write-through persistence.
-        # The DB is created above; autoscalers are typically constructed before the
-        # controller (in local.py / main.py) so db is injected here via set_db().
-        if self._autoscaler is not None:
-            self._autoscaler.set_db(self._db)
 
         self._heartbeat_iteration = 0
 

@@ -801,15 +801,6 @@ class Autoscaler:
             db=db,
         )
 
-    def set_db(self, db: ControllerDB) -> None:
-        """Attach a DB handle and propagate it to all scaling groups.
-
-        Called after construction when the DB is available (e.g. from the controller).
-        """
-        self._db = db
-        for group in self._groups.values():
-            group.set_db(db)
-
     def _wait_for_inflight(self) -> None:
         """Wait for in-flight scale-ups to complete without terminating anything.
 

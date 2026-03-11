@@ -23,6 +23,7 @@ import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.types import parse_memory_string
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
@@ -987,6 +988,7 @@ def create_autoscaler(
     label_prefix: str,
     base_worker_config: config_pb2.WorkerConfig | None = None,
     threads: ThreadContainer | None = None,
+    db: ControllerDB | None = None,
 ):
     """Create autoscaler from Platform and explicit config.
 
@@ -998,6 +1000,7 @@ def create_autoscaler(
         base_worker_config: Base worker configuration passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
         threads: Thread container for background threads. Uses global default if not provided.
+        db: Optional DB handle for write-through persistence.
 
     Returns:
         Configured Autoscaler instance
@@ -1029,6 +1032,7 @@ def create_autoscaler(
             scale_up_cooldown=scale_up_delay,
             scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
+            db=db,
         )
         resources = group_config.resources
         worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}
@@ -1052,4 +1056,5 @@ def create_autoscaler(
         config=autoscaler_config,
         platform=platform,
         base_worker_config=base_worker_config,
+        db=db,
     )
