@@ -1478,7 +1478,7 @@ def test_reservation_match_user_variant_override():
 # =============================================================================
 
 
-def test_holder_task_worker_death_no_failure_record():
+def test_holder_task_worker_death_no_failure_record(make_transitions):
     """Holder tasks return to PENDING with no WORKER_FAILED record when their worker dies.
 
     Holder tasks are virtual (never dispatched). When a worker dies, they must
@@ -1486,7 +1486,7 @@ def test_holder_task_worker_death_no_failure_record():
     that they can survive an arbitrary number of worker cycles without leaking
     memory or eventually going terminal.
     """
-    state = ControllerTransitions()
+    state = make_transitions()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1527,7 +1527,7 @@ def test_holder_task_worker_death_no_failure_record():
         assert holder_task.can_be_scheduled(), "holder task must be schedulable again"
 
 
-def test_holder_task_removed_from_worker_when_parent_succeeds():
+def test_holder_task_removed_from_worker_when_parent_succeeds(make_transitions):
     """Holder task is cleaned from worker.running_tasks when the parent job succeeds.
 
     PATH A (task-driven termination): a parent task succeeds → on_task_transition
@@ -1538,7 +1538,7 @@ def test_holder_task_removed_from_worker_when_parent_succeeds():
     Previously untested; the existing cancel test only covers PATH B
     (explicit JobCancelledEvent), not this completion-driven path.
     """
-    state = ControllerTransitions()
+    state = make_transitions()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1585,7 +1585,7 @@ def test_holder_task_removed_from_worker_when_parent_succeeds():
     assert holder_task.task_id not in _worker_running_tasks(state, wid_holder)
 
 
-def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already_terminal():
+def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already_terminal(make_transitions):
     """Holder is cleaned even when JobCancelledEvent arrives after all parent tasks finished.
 
     The gap: _on_job_cancelled's task loop skips all terminal tasks, so
@@ -1595,7 +1595,7 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     the holder task would stay in worker.running_tasks indefinitely, making the
     worker appear busy and blocking scale-down idle detection.
     """
-    state = ControllerTransitions()
+    state = make_transitions()
     request = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_cpu_device())])
     parent_job_id = _submit_job(state, "res-job", request)
     holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
@@ -1665,14 +1665,14 @@ def _region_constraint(region: str) -> cluster_pb2.Constraint:
     return Constraint(key="region", op=ConstraintOp.EQ, value=region).to_proto()
 
 
-def test_holder_task_gets_device_constraints_from_tpu_entry():
+def test_holder_task_gets_device_constraints_from_tpu_entry(make_transitions):
     """Holder task for a TPU reservation entry must have device-type constraints.
 
     When an entry has explicit constraints (e.g. region) but no device-type,
     the holder job must still get auto-injected device constraints from the
     entry's resource spec. Without this, the holder could land on a CPU worker.
     """
-    state = ControllerTransitions()
+    state = make_transitions()
 
     # Entry has TPU resources + region constraint, but NO device-type constraint.
     entry = _make_reservation_entry(
@@ -1696,14 +1696,14 @@ def test_holder_task_gets_device_constraints_from_tpu_entry():
     assert "region" in constraint_keys, "holder job should still have the explicit region constraint"
 
 
-def test_holder_task_not_scheduled_on_wrong_device_type():
+def test_holder_task_not_scheduled_on_wrong_device_type(make_transitions):
     """Holder task for a TPU entry must not be assigned to a CPU worker.
 
     End-to-end test: submit a reservation with a TPU entry that has only a
     region constraint (no device-type), register both a TPU and CPU worker,
     and verify the scheduler assigns the holder to the TPU worker only.
     """
-    state = ControllerTransitions()
+    state = make_transitions()
 
     entry = _make_reservation_entry(
         device=_tpu_device("v5p-64", count=4),

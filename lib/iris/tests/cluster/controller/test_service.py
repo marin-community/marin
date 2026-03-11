@@ -157,9 +157,9 @@ def worker_metadata():
 
 
 @pytest.fixture
-def state():
+def state(make_transitions):
     """Create a fresh ControllerTransitions for each test."""
-    return ControllerTransitions()
+    return make_transitions()
 
 
 class MockSchedulerWake:

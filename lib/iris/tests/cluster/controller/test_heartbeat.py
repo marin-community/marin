@@ -9,7 +9,6 @@ import pytest
 from iris.cluster.controller.db import TASKS, WORKERS
 from iris.cluster.controller.transitions import (
     Assignment,
-    ControllerTransitions,
     HeartbeatAction,
     HeartbeatApplyRequest,
     DispatchBatch,
@@ -22,8 +21,8 @@ from iris.time_utils import Duration, Timestamp
 
 
 @pytest.fixture
-def state():
-    return ControllerTransitions()
+def state(make_transitions):
+    return make_transitions()
 
 
 @pytest.fixture
@@ -110,9 +109,9 @@ def test_fail_heartbeat_below_threshold(state, worker_metadata):
     assert worker.consecutive_failures == 1
 
 
-def test_fail_heartbeat_at_threshold(worker_metadata):
+def test_fail_heartbeat_at_threshold(worker_metadata, make_transitions):
     """RPC failures at threshold return WORKER_FAILED and prune the worker."""
-    state = ControllerTransitions(heartbeat_failure_threshold=3)
+    state = make_transitions(heartbeat_failure_threshold=3)
     _register_worker(state, "worker1", worker_metadata)
     snapshot = _make_snapshot("worker1")
 
@@ -143,13 +142,13 @@ def test_complete_heartbeat_unhealthy_worker_increments_failures(state, worker_m
         assert q.exists(WORKERS, where=WORKERS.c.worker_id == "worker1")
 
 
-def test_unhealthy_worker_cascades_to_tasks():
+def test_unhealthy_worker_cascades_to_tasks(make_transitions):
     """An unhealthy worker's running tasks are marked WORKER_FAILED after threshold.
 
     complete_heartbeat resets consecutive_failures before checking health, so we
     use heartbeat_failure_threshold=1 to trigger removal on the first unhealthy report.
     """
-    state = ControllerTransitions(heartbeat_failure_threshold=1)
+    state = make_transitions(heartbeat_failure_threshold=1)
     worker_metadata = cluster_pb2.WorkerMetadata(
         hostname="test-host",
         ip_address="192.168.1.1",

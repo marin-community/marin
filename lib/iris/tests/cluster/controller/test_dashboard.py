@@ -125,8 +125,8 @@ def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: in
 
 
 @pytest.fixture
-def state():
-    return ControllerTransitions()
+def state(make_transitions):
+    return make_transitions()
 
 
 @pytest.fixture

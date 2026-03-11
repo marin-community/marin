@@ -237,8 +237,13 @@ class ControllerTransitions:
         log_dir: Path | None = None,
         db_path: Path | None = None,
         db: ControllerDB | None = None,
+        log_store: LogStore | None = None,
     ):
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
+        # When db/log_store are injected, the caller (Controller) owns them.
+        # When created here (tests, standalone), we own them and close on close().
+        self._owns_db = db is None
+        self._owns_log_store = log_store is None
         if db is not None:
             self._db = db
         else:
@@ -249,7 +254,7 @@ class ControllerTransitions:
                     tmp = Path(tempfile.mkdtemp(prefix="iris_controller_state_"))
                     db_path = tmp / "controller.sqlite3"
             self._db = ControllerDB(db_path=db_path)
-        self._log_store = LogStore(db_path=self._db.db_path)
+        self._log_store = log_store if log_store is not None else LogStore(db_path=self._db.db_path)
 
     @property
     def log_store(self) -> LogStore:
@@ -264,8 +269,10 @@ class ControllerTransitions:
         return self._db.db_path
 
     def close(self) -> None:
-        self._log_store.close()
-        self._db.close()
+        if self._owns_log_store:
+            self._log_store.close()
+        if self._owns_db:
+            self._db.close()
 
     def backup_to(self, destination: Path) -> None:
         self._db.backup_to(destination)

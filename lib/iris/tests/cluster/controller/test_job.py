@@ -39,8 +39,8 @@ def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
 
 
 @pytest.fixture
-def state() -> ControllerTransitions:
-    return ControllerTransitions()
+def state(make_transitions) -> ControllerTransitions:
+    return make_transitions()
 
 
 @pytest.fixture

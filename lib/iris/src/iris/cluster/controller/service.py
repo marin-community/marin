@@ -51,7 +51,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.pending_diagnostics import build_job_pending_hints
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
@@ -501,11 +501,13 @@ class ControllerServiceImpl:
         db: ControllerDB,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
+        log_store: "LogStore | None" = None,
     ):
         self._transitions = transitions
         self._db = db
         self._controller = controller
         self._bundle_store = bundle_store
+        self._log_store = log_store if log_store is not None else transitions.log_store
         self._timer = Timer()
 
     def bundle_zip(self, bundle_id: str) -> bytes:
@@ -1112,7 +1114,7 @@ class ControllerServiceImpl:
         job_name = JobName.from_wire(request.id)
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
-        log_store = self._transitions.log_store
+        log_store = self._log_store
 
         # Collect child job statuses when requested (for streaming UI).
         child_job_statuses: list[cluster_pb2.JobStatus] = []
@@ -1337,7 +1339,7 @@ class ControllerServiceImpl:
             return stub.fetch_logs(forwarded, timeout_ms=10000)
 
         max_lines = request.max_lines if request.max_lines > 0 else 1000
-        result = self._transitions.log_store.get_logs(
+        result = self._log_store.get_logs(
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
