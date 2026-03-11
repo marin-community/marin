@@ -58,9 +58,9 @@ class Chunk(Protocol):
     def __iter__(self) -> Iterator: ...
 
 
-_ZEPHYR_SHARD_IDX_COL = "shard_idx"
-_ZEPHYR_CHUNK_IDX_COL = "chunk_idx"
-_ZEPHYR_ITEM_COL = "item"
+_ZEPHYR_SHUFFLE_SHARD_IDX_COL = "shard_idx"
+_ZEPHYR_SHUFFLE_CHUNK_IDX_COL = "chunk_idx"
+_ZEPHYR_SHUFFLE_ITEM_COL = "item"
 
 
 @dataclass(frozen=True)
@@ -137,12 +137,12 @@ class VortexDiskChunk:
         vf = vortex.open(self.path)
         dataset = vf.to_dataset()
         table = dataset.to_table(
-            columns=[_ZEPHYR_ITEM_COL],
-            filter=(pc.field(_ZEPHYR_SHARD_IDX_COL) == self.filter_shard)
-            & (pc.field(_ZEPHYR_CHUNK_IDX_COL) == self.filter_chunk),
+            columns=[_ZEPHYR_SHUFFLE_ITEM_COL],
+            filter=(pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.filter_shard)
+            & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.filter_chunk),
         )
         # Unwrap: each row is {"item": {...user data...}} → extract the struct
-        return table.column(_ZEPHYR_ITEM_COL).to_pylist()
+        return table.column(_ZEPHYR_SHUFFLE_ITEM_COL).to_pylist()
 
 
 @dataclass
@@ -268,9 +268,9 @@ def _write_stage_chunks(
         try:
             first_envelope = [
                 {
-                    _ZEPHYR_SHARD_IDX_COL: first_result.target_shard,
-                    _ZEPHYR_CHUNK_IDX_COL: first_cidx,
-                    _ZEPHYR_ITEM_COL: item,
+                    _ZEPHYR_SHUFFLE_SHARD_IDX_COL: first_result.target_shard,
+                    _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: first_cidx,
+                    _ZEPHYR_SHUFFLE_ITEM_COL: item,
                 }
                 for item in first_items
             ]
@@ -294,7 +294,11 @@ def _write_stage_chunks(
                     cidx = chunk_idx_per_shard[target]
                     chunk_idx_per_shard[target] += 1
                     envelope = [
-                        {_ZEPHYR_SHARD_IDX_COL: target, _ZEPHYR_CHUNK_IDX_COL: cidx, _ZEPHYR_ITEM_COL: item}
+                        {
+                            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target,
+                            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: cidx,
+                            _ZEPHYR_SHUFFLE_ITEM_COL: item,
+                        }
                         for item in items
                     ]
                     chunk_records.append((target, cidx, len(items)))
