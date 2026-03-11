@@ -25,6 +25,7 @@ Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/ski
 - [add-pallas-kernel](.agents/skills/add-pallas-kernel/SKILL.md) — TPU Pallas kernel development
 - [archive-experiments](.agents/skills/archive-experiments/SKILL.md) — retiring legacy experiments
 - [architecture](.agents/skills/architecture/SKILL.md) — codebase architecture reference
+- [scrub-experiment-issue-tldrs](.agents/skills/scrub-experiment-issue-tldrs/SKILL.md) — scheduled experiment issue summary maintenance
 
 ## Development
 
