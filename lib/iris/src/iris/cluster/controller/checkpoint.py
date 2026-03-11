@@ -122,14 +122,7 @@ def is_remote_path(path: str) -> bool:
     return "://" in path and not path.startswith("file://")
 
 
-def checkpoint_dir(db_path: Path) -> Path:
-    """Local directory for checkpoint copies, derived from the DB path."""
-    return db_path.parent / "controller-checkpoints"
-
-
-def latest_checkpoint_path(db_path: Path) -> Path:
-    """Path to the ``latest.sqlite3`` symlink/copy."""
-    return checkpoint_dir(db_path) / "latest.sqlite3"
+CHECKPOINT_DIR_NAME = "controller-checkpoints"
 
 
 def remote_checkpoint_prefix(bundle_prefix: str) -> str | None:
@@ -168,11 +161,11 @@ def write_checkpoint(
     from iris.cluster.controller.db import JOBS, TASKS, WORKERS
 
     created_at = Timestamp.now()
-    ckpt_dir = checkpoint_dir(transitions.db_path)
+    ckpt_dir = transitions.db_path.parent / CHECKPOINT_DIR_NAME
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     path = ckpt_dir / f"checkpoint-{created_at.epoch_ms()}.sqlite3"
     transitions.backup_to(path)
-    _fsspec_copy(str(path), str(latest_checkpoint_path(transitions.db_path)))
+    _fsspec_copy(str(path), str(ckpt_dir / "latest.sqlite3"))
     upload_checkpoint_to_remote(path, created_at, bundle_prefix)
     with db.snapshot() as snapshot:
         job_count = snapshot.count(JOBS)
@@ -278,20 +271,6 @@ class ScalingGroupRestoreResult:
     quota_exceeded_until: Deadline | None = None
 
 
-def restore_tracked_worker(snap: TrackedWorkerSnapshotData) -> TrackedWorker:
-    """Restore a single tracked worker from snapshot data."""
-    # Local import to break circular dependency (autoscaler imports checkpoint types).
-    from iris.cluster.controller.autoscaler import TrackedWorker
-
-    handle = _RestoredWorkerHandle(worker_id=snap.worker_id, internal_address=snap.internal_address)
-    return TrackedWorker(
-        worker_id=snap.worker_id,
-        slice_id=snap.slice_id,
-        scale_group=snap.scale_group,
-        handle=handle,
-    )
-
-
 def restore_tracked_workers(snapshots: list[TrackedWorkerSnapshotData]) -> dict[str, TrackedWorker]:
     """Restore tracked workers from checkpoint data."""
     # Local import to break circular dependency (autoscaler imports checkpoint types).
@@ -299,16 +278,15 @@ def restore_tracked_workers(snapshots: list[TrackedWorkerSnapshotData]) -> dict[
 
     workers: dict[str, TrackedWorker] = {}
     for snap in snapshots:
-        tw = restore_tracked_worker(snap)
+        handle = _RestoredWorkerHandle(worker_id=snap.worker_id, internal_address=snap.internal_address)
+        tw = TrackedWorker(
+            worker_id=snap.worker_id,
+            slice_id=snap.slice_id,
+            scale_group=snap.scale_group,
+            handle=handle,
+        )
         workers[tw.worker_id] = tw
     return workers
-
-
-def _wall_clock_to_deadline(wall_clock_ts: Timestamp) -> Deadline | None:
-    """Convert a wall-clock timestamp from checkpoint into a deadline."""
-    if wall_clock_ts.epoch_ms() == 0:
-        return None
-    return Deadline.after(wall_clock_ts, Duration.from_ms(0))
 
 
 def restore_scaling_group(
@@ -365,17 +343,15 @@ def restore_scaling_group(
         result.slices[slice_id] = SliceState(handle=cloud_handle, lifecycle=SliceLifecycleState.BOOTING)
         result.adopted_count += 1
 
-    backoff_ts = Timestamp.from_ms(group_snapshot.backoff_until_ms)
-    if backoff_ts.epoch_ms() > 0:
-        result.backoff_until = _wall_clock_to_deadline(backoff_ts)
-        result.backoff_active = result.backoff_until is not None and not result.backoff_until.expired()
+    if group_snapshot.backoff_until_ms > 0:
+        backoff_ts = Timestamp.from_ms(group_snapshot.backoff_until_ms)
+        result.backoff_until = Deadline.after(backoff_ts, Duration.from_ms(0))
+        result.backoff_active = not result.backoff_until.expired()
 
-    quota_ts = Timestamp.from_ms(group_snapshot.quota_exceeded_until_ms)
-    if quota_ts.epoch_ms() > 0:
-        result.quota_exceeded_until = _wall_clock_to_deadline(quota_ts)
-        result.quota_exceeded_active = (
-            result.quota_exceeded_until is not None and not result.quota_exceeded_until.expired()
-        )
+    if group_snapshot.quota_exceeded_until_ms > 0:
+        quota_ts = Timestamp.from_ms(group_snapshot.quota_exceeded_until_ms)
+        result.quota_exceeded_until = Deadline.after(quota_ts, Duration.from_ms(0))
+        result.quota_exceeded_active = not result.quota_exceeded_until.expired()
         result.quota_reason = group_snapshot.quota_reason
 
     if group_snapshot.last_scale_up_ms > 0:
@@ -414,7 +390,7 @@ def restore_from_checkpoint(
     source = (
         str(Path(checkpoint_path))
         if checkpoint_path
-        else str(latest_checkpoint_path(transitions.db_path))
+        else str(transitions.db_path.parent / CHECKPOINT_DIR_NAME / "latest.sqlite3")
     )
     fs, fs_path = fsspec.core.url_to_fs(source)
     if not fs.exists(fs_path):

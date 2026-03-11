@@ -33,7 +33,6 @@ from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     maybe_periodic_checkpoint,
-    remote_checkpoint_prefix,
     restore_from_checkpoint,
     write_checkpoint,
 )
@@ -1477,12 +1476,6 @@ class Controller:
                 running_task_ids=frozenset(tid.to_wire() for tid in running_by_worker.get(worker.worker_id, set())),
             )
         return result
-
-    @property
-    @property
-    def _remote_checkpoint_prefix(self) -> str | None:
-        """Remote fsspec path for checkpoint uploads, or None for local-only."""
-        return remote_checkpoint_prefix(self._config.bundle_prefix)
 
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
         """Pause loops and write a consistent SQLite checkpoint copy."""

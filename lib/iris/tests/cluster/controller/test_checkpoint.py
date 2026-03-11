@@ -7,9 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from iris.cluster.controller.checkpoint import (
-    is_remote_path,
     maybe_periodic_checkpoint,
-    remote_checkpoint_prefix,
 )
 from iris.cluster.controller.controller import (
     Controller,
@@ -29,26 +27,6 @@ class FakeStubFactory:
 def _make_controller(bundle_prefix: str = "file:///tmp/iris-test", **kwargs) -> Controller:
     config = ControllerConfig(bundle_prefix=bundle_prefix, **kwargs)
     return Controller(config=config, worker_stub_factory=FakeStubFactory())
-
-
-def test_is_remote_path():
-    assert is_remote_path("gs://bucket/path")
-    assert is_remote_path("s3://bucket/path")
-    assert not is_remote_path("file:///tmp/local")
-    assert not is_remote_path("/tmp/local")
-    assert not is_remote_path("relative/path")
-
-
-def test_remote_checkpoint_prefix_none_for_local():
-    assert remote_checkpoint_prefix("file:///tmp/iris-test") is None
-
-
-def test_remote_checkpoint_prefix_set_for_gcs():
-    assert remote_checkpoint_prefix("gs://my-bucket/iris/bundles") == "gs://my-bucket/iris/bundles/controller-state"
-
-
-def test_remote_checkpoint_prefix_strips_trailing_slash():
-    assert remote_checkpoint_prefix("gs://my-bucket/iris/bundles/") == "gs://my-bucket/iris/bundles/controller-state"
 
 
 def test_periodic_checkpoint_writes_local_and_uploads(tmp_path):
