@@ -9,7 +9,7 @@ import uuid
 
 from iris.cluster.client.protocol import TaskStateLogger
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, adjust_tpu_replicas, is_job_finished
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from connectrpc.errors import ConnectError
@@ -252,16 +252,15 @@ class RemoteClusterClient:
         self,
         name: str,
         address: str,
-        task_id: JobName,
-        attempt_id: int = 0,
+        task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
     ) -> str:
         endpoint_id = str(uuid.uuid4())
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
-            task_id=task_id.to_wire(),
-            attempt_id=attempt_id,
+            task_id=task_attempt.task_id.to_wire(),
+            attempt_id=task_attempt.attempt_id if task_attempt.attempt_id is not None else 0,
             metadata=metadata or {},
             endpoint_id=endpoint_id,
         )

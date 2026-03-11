@@ -5,7 +5,7 @@
 
 from typing import Protocol
 
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, JobName, TaskAttempt
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
@@ -81,8 +81,7 @@ class ClusterClient(Protocol):
         self,
         name: str,
         address: str,
-        task_id: JobName,
-        attempt_id: int = 0,
+        task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
     ) -> str: ...
 

@@ -31,6 +31,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.log_store import LogStore, task_log_key
 from iris.cluster.types import (
     JobName,
+    TaskAttempt,
     WorkerId,
     get_gpu_count,
     get_tpu_count,
@@ -795,7 +796,12 @@ class ControllerTransitions:
                     continue
                 worker_id = attempt_row["worker_id"]
                 if update.log_entries and self._log_store is not None:
-                    pending_logs.append((task_log_key(update.task_id, update.attempt_id), update.log_entries))
+                    pending_logs.append(
+                        (
+                            task_log_key(TaskAttempt(task_id=update.task_id, attempt_id=update.attempt_id)),
+                            update.log_entries,
+                        )
+                    )
                 usage_payload = update.resource_usage.SerializeToString() if update.resource_usage is not None else None
                 if usage_payload is not None:
                     cur.execute(

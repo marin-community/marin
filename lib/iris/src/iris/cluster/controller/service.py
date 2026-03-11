@@ -54,7 +54,7 @@ from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.proto_utils import job_state_name, task_state_name
@@ -1137,7 +1137,7 @@ class ControllerServiceImpl:
         if job_name.is_task and requested_attempt_id >= 0:
             # Exact key: single task + single attempt
             log_result = log_store.get_logs(
-                task_log_key(job_name, requested_attempt_id),
+                task_log_key(TaskAttempt(task_id=job_name, attempt_id=requested_attempt_id)),
                 since_ms=request.since_ms,
                 cursor=cursor,
                 substring_filter=substring_filter,
@@ -1239,12 +1239,11 @@ class ControllerServiceImpl:
 
         # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
-            parsed = parse_profile_target(request.target)
-            task_name = JobName.from_wire(parsed.task_id)
-            task_name.require_task()
+            target = parse_profile_target(request.target)
+            target.task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
-        task = _read_task_with_attempts(self._db, task_name)
+        task = _read_task_with_attempts(self._db, target.task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 

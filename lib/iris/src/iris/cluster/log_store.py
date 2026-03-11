@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
-from iris.cluster.types import JobName
+from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 
@@ -50,9 +50,10 @@ def _escape_like(s: str) -> str:
 PROCESS_LOG_KEY = "/system/process"
 
 
-def task_log_key(task_id: JobName, attempt_id: int) -> str:
+def task_log_key(task_attempt: TaskAttempt) -> str:
     """Build a hierarchical key for task attempt logs."""
-    return f"{task_id.to_wire()}:{attempt_id}"
+    task_attempt.require_attempt()
+    return task_attempt.to_wire()
 
 
 @dataclass
@@ -268,13 +269,12 @@ class LogStore:
         max_id = max((r[0] for r in rows), default=cursor)
         entries = []
         for r in rows:
-            # Parse attempt_id from key: key format is "task_wire:attempt_id"
+            # Parse attempt_id from key using TaskAttempt wire format: "/user/job/0:attempt_id"
             key = r[1]
-            colon = key.rfind(":")
-            attempt_id = int(key[colon + 1 :]) if colon >= 0 else 0
+            parsed = TaskAttempt.from_wire(key)
             entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
             entry.timestamp.epoch_ms = r[4]
-            entry.attempt_id = attempt_id
+            entry.attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
             entries.append(entry)
 
         return LogReadResult(entries=entries, cursor=max_id)

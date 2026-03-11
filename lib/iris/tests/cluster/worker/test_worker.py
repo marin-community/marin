@@ -618,7 +618,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     """Job-level env vars win over default_task_env, which wins over iris system vars.
 
     The merge order in _create_container is:
-      1. iris system vars (IRIS_JOB_ID, etc.)
+      1. iris system vars (IRIS_TASK_ID, etc.)
       2. default_task_env (worker-level defaults, overrides iris vars)
       3. job-level env_vars (from the request, wins over everything user-visible)
 
@@ -664,7 +664,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     # Job-only key propagates.
     assert env["JOB_ONLY"] == "from_job"
     # Iris system vars are always injected.
-    assert "IRIS_JOB_ID" in env
+    assert "IRIS_TASK_ID" in env
 
 
 def test_task_failure_error_appears_in_logs(worker):
