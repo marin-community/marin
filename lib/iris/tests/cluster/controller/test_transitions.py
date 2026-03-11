@@ -1552,9 +1552,10 @@ def test_log_entries_accumulated_in_log_store(job_request, worker_metadata):
     state.complete_heartbeat(snapshot, response)
 
     from iris.cluster.log_store import task_log_key
+    from iris.cluster.types import TaskAttempt
 
     log_result = state._log_store.get_logs(
-        task_log_key(task.task_id, _query_task(state, task.task_id).current_attempt_id)
+        task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=_query_task(state, task.task_id).current_attempt_id))
     )
     assert len(log_result.entries) == 1
     assert log_result.entries[0].data == "hello world"
@@ -1590,9 +1591,10 @@ def test_log_entries_accumulated_across_heartbeats(job_request, worker_metadata)
         state.complete_heartbeat(snapshot, response)
 
     from iris.cluster.log_store import task_log_key
+    from iris.cluster.types import TaskAttempt
 
     log_result = state._log_store.get_logs(
-        task_log_key(task.task_id, _query_task(state, task.task_id).current_attempt_id)
+        task_log_key(TaskAttempt(task_id=task.task_id, attempt_id=_query_task(state, task.task_id).current_attempt_id))
     )
     assert len(log_result.entries) == 3
     assert [e.data for e in log_result.entries] == ["line 0", "line 1", "line 2"]

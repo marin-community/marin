@@ -48,7 +48,7 @@ Resolution order:
 3. Local OS user via `getpass.getuser()`
 
 No separate `IRIS_USER` environment variable is needed because the user is
-already encoded in `IRIS_JOB_ID`.
+already encoded in `IRIS_TASK_ID`.
 
 ## Client And CLI Changes
 

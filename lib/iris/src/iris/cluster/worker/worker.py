@@ -16,7 +16,7 @@ from iris.chaos import chaos
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, LogStoreHandler
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerRuntime
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, TaskAttempt as TaskAttemptId
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
@@ -446,9 +446,8 @@ class Worker:
         # workdir creation, log sink init) is deferred to TaskAttempt.run() so
         # the heartbeat RPC returns quickly.
         config = TaskAttemptConfig(
-            task_id=task_id,
+            task_attempt=TaskAttemptId(task_id=task_id, attempt_id=attempt_id),
             num_tasks=request.num_tasks,
-            attempt_id=attempt_id,
             request=request,
             cache_dir=self._cache_dir,
             storage_prefix=self._config.storage_prefix,
