@@ -51,7 +51,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.pending_diagnostics import build_job_pending_hints
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
-from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
 from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.types import JobName, WorkerId
@@ -493,6 +493,7 @@ class ControllerServiceImpl:
         db: Query interface for direct DB reads
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
+        log_store: Log store for task and process logs.
     """
 
     def __init__(
@@ -501,11 +502,13 @@ class ControllerServiceImpl:
         db: ControllerDB,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
+        log_store: LogStore,
     ):
         self._transitions = transitions
         self._db = db
         self._controller = controller
         self._bundle_store = bundle_store
+        self._log_store = log_store
         self._timer = Timer()
 
     def bundle_zip(self, bundle_id: str) -> bytes:
@@ -1112,7 +1115,7 @@ class ControllerServiceImpl:
         job_name = JobName.from_wire(request.id)
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
-        log_store = self._transitions.log_store
+        log_store = self._log_store
 
         # Collect child job statuses when requested (for streaming UI).
         child_job_statuses: list[cluster_pb2.JobStatus] = []
@@ -1191,7 +1194,7 @@ class ControllerServiceImpl:
 
     def _resolve_worker_stub(self, worker_id_str: str) -> WorkerServiceClientSync:
         """Resolve a worker ID to a healthy stub, raising ConnectError on failure."""
-        worker = self._state.get_worker(WorkerId(worker_id_str))
+        worker = self._transitions.get_worker(WorkerId(worker_id_str))
         if not worker:
             raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
         if not worker.healthy:
@@ -1337,7 +1340,7 @@ class ControllerServiceImpl:
             return stub.fetch_logs(forwarded, timeout_ms=10000)
 
         max_lines = request.max_lines if request.max_lines > 0 else 1000
-        result = self._transitions.log_store.get_logs(
+        result = self._log_store.get_logs(
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
@@ -1441,14 +1444,14 @@ class ControllerServiceImpl:
         """
         target = request.target
         if not target or target == "/system/process":
-            return get_process_status(request, self._state.log_store, self._timer)
+            return get_process_status(request, self._log_store, self._timer)
 
         # Parse /system/worker/<worker_id>
         worker_id = _parse_worker_target(target)
         if worker_id is None:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
 
-        worker = self._state.get_worker(WorkerId(worker_id))
+        worker = self._transitions.get_worker(WorkerId(worker_id))
         if not worker:
             raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
         if not worker.healthy:

@@ -9,9 +9,6 @@ Read-only queries do NOT belong here — callers use db.snapshot() directly.
 import enum
 import json
 import logging
-import tempfile
-from pathlib import Path
-
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -233,45 +230,13 @@ class ControllerTransitions:
 
     def __init__(
         self,
+        db: ControllerDB,
+        log_store: LogStore,
         heartbeat_failure_threshold: int = HEARTBEAT_FAILURE_THRESHOLD,
-        log_dir: Path | None = None,
-        db_path: Path | None = None,
-        db: ControllerDB | None = None,
     ):
+        self._db = db
+        self._log_store = log_store
         self._heartbeat_failure_threshold = heartbeat_failure_threshold
-        if db is not None:
-            self._db = db
-        else:
-            if db_path is None:
-                if log_dir is not None:
-                    db_path = log_dir / "controller.sqlite3"
-                else:
-                    tmp = Path(tempfile.mkdtemp(prefix="iris_controller_state_"))
-                    db_path = tmp / "controller.sqlite3"
-            self._db = ControllerDB(db_path=db_path)
-        self._log_store = LogStore(db_path=self._db.db_path)
-
-    @property
-    def log_store(self) -> LogStore:
-        return self._log_store
-
-    @property
-    def db(self) -> ControllerDB:
-        return self._db
-
-    @property
-    def db_path(self) -> Path:
-        return self._db.db_path
-
-    def close(self) -> None:
-        self._log_store.close()
-        self._db.close()
-
-    def backup_to(self, destination: Path) -> None:
-        self._db.backup_to(destination)
-
-    def restore_from(self, source: str | Path) -> None:
-        self._db.replace_from(source)
 
     def _record_transaction(
         self,
