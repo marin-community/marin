@@ -29,7 +29,7 @@ from typing import Any, Protocol
 import cloudpickle
 import pyarrow as pa
 import pyarrow.compute as pc
-import vortex
+import pyarrow.parquet as pq
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from iris.marin_fs import marin_temp_bucket
@@ -105,10 +105,10 @@ class PickleDiskChunk:
 
 
 @dataclass(frozen=True)
-class VortexDiskChunk:
-    """Slice of a shared Vortex Scatter file, filtered by target shard and chunk.
+class ParquetDiskChunk:
+    """Slice of a shared Parquet scatter file, filtered by target shard and chunk.
 
-    Multiple VortexDiskChunk instances share the same file path but filter
+    Multiple ParquetDiskChunk instances share the same file path but filter
     for different (shard_idx, chunk_idx) pairs. Each chunk is pre-sorted
     by key, preserving the invariant needed for k-way merge in Reduce.
 
@@ -117,7 +117,7 @@ class VortexDiskChunk:
         {"shard_idx": int, "chunk_idx": int, "item": <user_data>}
 
     The ``read`` method filters by shard/chunk and unwraps the ``item`` field.
-    Predicate pushdown in Vortex skips irrelevant row groups, so each
+    Predicate pushdown in Parquet skips irrelevant row groups, so each
     reducer reads only its own data efficiently.
     """
 
@@ -130,15 +130,15 @@ class VortexDiskChunk:
         return iter(self.read())
 
     def read(self) -> list:
-        """Load filtered chunk data from a Vortex file, unwrapping envelope."""
-        vf = vortex.open(self.path)
-        dataset = vf.to_dataset()
-        table = dataset.to_table(
+        """Load filtered chunk data from a Parquet file, unwrapping envelope."""
+        table = pq.read_table(
+            self.path,
             columns=[_ZEPHYR_SHUFFLE_ITEM_COL],
-            filter=(pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.filter_shard)
-            & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.filter_chunk),
+            filters=(
+                (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.filter_shard)
+                & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.filter_chunk)
+            ),
         )
-        # Unwrap: each row is {"item": {...user data...}} → extract the struct
         return table.column(_ZEPHYR_SHUFFLE_ITEM_COL).to_pylist()
 
 
@@ -226,29 +226,138 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
             logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
 
 
+def _make_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]:
+    return [
+        {
+            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
+            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
+            _ZEPHYR_SHUFFLE_ITEM_COL: item,
+        }
+        for item in items
+    ]
+
+
+def _segment_path(base_path: str, seg_idx: int) -> str:
+    """Return the file path for a given segment index.
+
+    ``shard-0000.parquet`` → ``shard-0000-seg0000.parquet``
+    """
+    stem, ext = os.path.splitext(base_path)
+    return f"{stem}-seg{seg_idx:04d}{ext}"
+
+
+def _write_parquet_scatter(
+    first_batch: pa.RecordBatch,
+    first_target: int,
+    first_cidx: int,
+    first_count: int,
+    stage_gen: Iterator[StageResultChunk],
+    chunk_idx_per_shard: dict[int, int],
+    source_shard: int,
+    parquet_path: str,
+) -> list[ResultChunk]:
+    """Stream scatter chunks into Parquet files as row groups.
+
+    Writes batches to a Parquet file until a schema mismatch is detected
+    (e.g. a field evolves from null to a concrete type). On mismatch the
+    current file is closed, the schema is unified via ``pa.unify_schemas``,
+    and a new segment file is opened with the evolved schema.
+    """
+    chunk_records: list[tuple[str, int, int, int]] = []  # (path, target, cidx, count)
+    n_chunks = 0
+    seg_idx = 0
+    schema = first_batch.schema
+
+    seg_file = _segment_path(parquet_path, seg_idx)
+    ensure_parent_dir(seg_file)
+    writer = pq.ParquetWriter(seg_file, schema)
+
+    pending_batch = first_batch
+    pending_record = (first_target, first_cidx, first_count)
+
+    def _flush_batch():
+        nonlocal n_chunks
+        writer.write_batch(pending_batch)
+        chunk_records.append((seg_file, *pending_record))
+        n_chunks += 1
+        if n_chunks % 10 == 0:
+            logger.info(
+                "[shard %d, segment %d] Wrote %d parquet row groups so far (latest: %d items)",
+                source_shard,
+                seg_idx,
+                n_chunks,
+                pending_record[2],
+            )
+
+    for result in stage_gen:
+        items = list(result.chunk)
+        target = result.target_shard
+        cidx = chunk_idx_per_shard[target]
+        chunk_idx_per_shard[target] += 1
+        envelope = _make_envelope(items, target, cidx)
+        batch = pa.RecordBatch.from_pylist(envelope)
+
+        if batch.schema != schema:
+            # Flush the pending batch to the current segment, then start a new segment
+            _flush_batch()
+            writer.close()
+
+            schema = pa.unify_schemas([schema, batch.schema])
+            seg_idx += 1
+            seg_file = _segment_path(parquet_path, seg_idx)
+            ensure_parent_dir(seg_file)
+            writer = pq.ParquetWriter(seg_file, schema)
+            logger.info(
+                "[shard %d] Schema evolved after %d chunks; starting segment %d",
+                source_shard,
+                n_chunks,
+                seg_idx,
+            )
+            # Cast the new batch to the unified schema
+            batch = batch.cast(schema)
+        else:
+            _flush_batch()
+
+        pending_batch = batch
+        pending_record = (target, cidx, len(items))
+
+    # Flush final pending batch
+    _flush_batch()
+    writer.close()
+
+    return [
+        ResultChunk(
+            source_shard=source_shard,
+            target_shard=target,
+            data=ParquetDiskChunk(path=path, filter_shard=target, filter_chunk=cidx, count=count),
+        )
+        for path, target, cidx, count in chunk_records
+    ]
+
+
 def _write_stage_chunks(
     stage_gen: Iterator[StageResultChunk],
     source_shard: int,
     chunk_path_fn: Callable[[int], str],
-    vortex_path: str | None = None,
+    parquet_path: str | None = None,
 ) -> list[ResultChunk]:
     """Write stage output chunks to disk.
 
-    For scatter stages (``vortex_path`` provided), attempts to stream all
-    chunks into a single Vortex file with envelope wrapping. Falls back to
-    pickle if Arrow/Vortex conversion fails on the first chunk.
+    For scatter stages (``parquet_path`` provided), attempts to stream all
+    chunks into a single Parquet file with envelope wrapping. Falls back to
+    pickle if Arrow conversion fails on the first chunk.
 
-    For non-scatter stages (``vortex_path`` is None), writes each chunk as
+    For non-scatter stages (``parquet_path`` is None), writes each chunk as
     a PickleDiskChunk.
 
     Args:
         stage_gen: Generator of StageResultChunks from run_stage
         source_shard: Source shard index
         chunk_path_fn: Function from chunk_idx to pickle file path
-        vortex_path: Target path for Vortex file (scatter only), or None for pickle
+        parquet_path: Target path for Parquet file (scatter only), or None for pickle
 
     Returns:
-        List of ResultChunks with VortexDiskChunk or PickleDiskChunk data
+        List of ResultChunks with ParquetDiskChunk or PickleDiskChunk data
     """
     first_result = next(stage_gen, None)
     if first_result is None:
@@ -256,76 +365,35 @@ def _write_stage_chunks(
 
     first_items = list(first_result.chunk)
 
-    # Attempt Vortex streaming write for scatter stages
-    if vortex_path is not None:
+    # Attempt Parquet columnar write for scatter stages
+    if parquet_path is not None:
         chunk_idx_per_shard: dict[int, int] = defaultdict(int)
         first_cidx = chunk_idx_per_shard[first_result.target_shard]
         chunk_idx_per_shard[first_result.target_shard] += 1
 
         try:
-            first_envelope = [
-                {
-                    _ZEPHYR_SHUFFLE_SHARD_IDX_COL: first_result.target_shard,
-                    _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: first_cidx,
-                    _ZEPHYR_SHUFFLE_ITEM_COL: item,
-                }
-                for item in first_items
-            ]
-            first_arr = vortex.array(pa.RecordBatch.from_pylist(first_envelope).to_struct_array())
+            first_envelope = _make_envelope(first_items, first_result.target_shard, first_cidx)
+            first_batch = pa.RecordBatch.from_pylist(first_envelope)
         except Exception:
             logger.warning(
-                "Vortex scatter serialization failed for shard %d; "
+                "Arrow scatter serialization failed for shard %d; "
                 "falling back to pickle. Performance will be degraded.",
                 source_shard,
                 exc_info=True,
             )
         else:
-            # First chunk converted — stream remaining chunks to Vortex
-            chunk_records: list[tuple[int, int, int]] = [(first_result.target_shard, first_cidx, len(first_items))]
+            return _write_parquet_scatter(
+                first_batch=first_batch,
+                first_target=first_result.target_shard,
+                first_cidx=first_cidx,
+                first_count=len(first_items),
+                stage_gen=stage_gen,
+                chunk_idx_per_shard=chunk_idx_per_shard,
+                source_shard=source_shard,
+                parquet_path=parquet_path,
+            )
 
-            def _remaining_arrays():
-                n_chunks = 1  # first chunk already processed
-                for result in stage_gen:
-                    items = list(result.chunk)
-                    target = result.target_shard
-                    cidx = chunk_idx_per_shard[target]
-                    chunk_idx_per_shard[target] += 1
-                    envelope = [
-                        {
-                            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target,
-                            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: cidx,
-                            _ZEPHYR_SHUFFLE_ITEM_COL: item,
-                        }
-                        for item in items
-                    ]
-                    chunk_records.append((target, cidx, len(items)))
-                    n_chunks += 1
-                    if n_chunks % 10 == 0:
-                        logger.info(
-                            "[shard %d] Wrote %d vortex chunks so far (latest: %d items)",
-                            source_shard,
-                            n_chunks,
-                            len(items),
-                        )
-                    yield vortex.array(pa.RecordBatch.from_pylist(envelope).to_struct_array())
-
-            def _all_arrays():
-                yield first_arr
-                yield from _remaining_arrays()
-
-            ensure_parent_dir(vortex_path)
-            vortex.io.write(vortex.ArrayIterator.from_iter(first_arr.dtype, _all_arrays()), vortex_path)
-
-            return [
-                ResultChunk(
-                    source_shard=source_shard,
-                    target_shard=target,
-                    data=VortexDiskChunk(path=vortex_path, filter_shard=target, filter_chunk=cidx, count=count),
-                )
-                for target, cidx, count in chunk_records
-            ]
-
-    # Pickle path (non-scatter stages, or Vortex conversion failed)
+    # Pickle path (non-scatter stages, or Arrow conversion failed)
     results: list[ResultChunk] = []
     pidx = 0
     chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), first_items)
@@ -1127,10 +1195,10 @@ class ZephyrWorker:
             aux_shards=task.aux_shards,
         )
 
-        vortex_path = None
+        parquet_path = None
         if any(isinstance(op, Scatter) for op in task.operations):
-            vortex_path = (
-                f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}" f"/shard-{task.shard_idx:04d}.vortex"
+            parquet_path = (
+                f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}" f"/shard-{task.shard_idx:04d}.parquet"
             )
 
         def chunk_path_fn(idx: int) -> str:
@@ -1140,7 +1208,7 @@ class ZephyrWorker:
             run_stage(stage_ctx, task.operations),
             source_shard=task.shard_idx,
             chunk_path_fn=chunk_path_fn,
-            vortex_path=vortex_path,
+            parquet_path=parquet_path,
         )
         logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, len(results))
         return TaskResult(chunks=results)

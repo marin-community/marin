@@ -359,3 +359,26 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     assert len(results) == 2
     assert results[0] == {"key": "a", "value": frozenset([1, 2, 3, 4])}
     assert results[1] == {"key": "b", "value": frozenset([2])}
+
+
+def test_group_by_schema_evolution(zephyr_ctx):
+    """Schema evolution: a field that is null in some chunks gains a type in others."""
+    data = []
+    # First batch of items: score is None (Arrow infers Null type)
+    for i in range(20):
+        data.append({"id": i, "cat": f"g{i % 5}", "score": None})
+    # Second batch: score is int (Arrow infers int64)
+    for i in range(20, 40):
+        data.append({"id": i, "cat": f"g{i % 5}", "score": i})
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)},
+    )
+
+    results = list(zephyr_ctx.execute(ds))
+    results = sorted(results, key=lambda x: x["cat"])
+
+    assert len(results) == 5
+    for r in results:
+        assert r["count"] == 8  # 4 with None score + 4 with int score
