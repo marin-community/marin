@@ -674,10 +674,7 @@ def _scatter_to_vortex(
 
         {"shard_idx": int, "chunk_idx": int, "item": <original_item>}
 
-    This avoids column-name collisions with user data and removes the
-    requirement that items are dicts (any Arrow-serializable value works).
-
-    Items are hashed by key to determine their target shard, sorted by key
+    Items are hashed by key to determine their target shard, sorted by key/secondary sort key
     within each batch, wrapped, and streamed into a Vortex file via
     ``ArrayIterator``.
 
