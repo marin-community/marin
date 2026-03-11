@@ -12,11 +12,9 @@ import json
 import logging
 import os
 import random
-from dataclasses import dataclass
 
 from iris.marin_fs import open_url, url_to_fs
 
-from marin.execution import THIS_OUTPUT_PATH
 from marin.processing.classification.dataset_utils import read_dataset_streaming
 
 logger = logging.getLogger(__name__)
@@ -51,6 +49,25 @@ DOLMA_SOURCES = [
 
 TRAIN_FRACTION = 0.8
 RANDOM_SEED = 42
+
+# Mapping from Dolma source names to their file glob patterns
+DOLMA_SOURCE_PATTERNS: dict[str, list[str]] = {
+    "algebraic-stack": ["algebraic-stack-train-*.json.gz"],
+    "arxiv": ["arxiv-*.json.gz"],
+    "gutenberg": ["books-*.json.gz"],
+    "c4": ["c4-*.json.gz"],
+    "cc": ["cc_en_head-*.json.gz", "cc_en_middle-*.json.gz", "cc_en_tail-*.json.gz"],
+    "cc-news": ["cc_news_head-*.json.gz", "cc_news_middle-*.json.gz", "cc_news_tail-*.json.gz"],
+    "falcon": ["falcon-*.json.gz"],
+    "megawika": ["megawika-*.json.gz"],
+    "open-web-math": ["open-web-math-train-*.json.gz"],
+    "pes2o": ["pes2o-*.json.gz"],
+    "reddit": ["reddit-*.json.gz"],
+    "stackexchange": ["stackexchange-*.json.gz"],
+    "starcoder": ["starcoder-*.json.gz"],
+    "flan": ["tulu_flan-*.json.gz"],
+    "wiki": ["wiki-*.json.gz"],
+}
 
 
 def _stable_doc_id(text: str, source: str) -> str:
@@ -129,106 +146,74 @@ def _write_jsonl(docs: list[dict], output_path: str) -> None:
             f.write(json.dumps(doc) + "\n")
 
 
-@dataclass(frozen=True)
-class SampleQualityConfig:
-    """Config for sampling documents from Nemotron CC quality buckets."""
-
-    nemotron_base_path: str
-    output_path: str = THIS_OUTPUT_PATH
-    n_per_bucket: int = 25
-    seed: int = RANDOM_SEED
-    train_fraction: float = TRAIN_FRACTION
-
-
-def sample_quality_documents(config: SampleQualityConfig) -> None:
+def sample_quality_documents(
+    output_path: str,
+    nemotron_base_path: str,
+    n_per_bucket: int = 25,
+    seed: int = RANDOM_SEED,
+    train_fraction: float = TRAIN_FRACTION,
+) -> None:
     """Sample documents from each Nemotron CC quality bucket."""
     all_docs: list[dict] = []
 
     for bucket_name, bucket_path in NEMOTRON_QUALITY_BUCKETS.items():
-        pattern = os.path.join(config.nemotron_base_path, bucket_path, "**/*.jsonl.gz")
+        pattern = os.path.join(nemotron_base_path, bucket_path, "**/*.jsonl.gz")
         docs = _sample_from_files(
             file_patterns=[pattern],
-            n_per_stratum=config.n_per_bucket,
+            n_per_stratum=n_per_bucket,
             label=bucket_name,
             label_field="quality_bucket",
-            seed=config.seed + hash(bucket_name),
+            seed=seed + hash(bucket_name),
         )
         all_docs.extend(docs)
 
-    train, test = _train_test_split(all_docs, config.train_fraction, config.seed)
+    train, test = _train_test_split(all_docs, train_fraction, seed)
 
-    os.makedirs(config.output_path, exist_ok=True)
-    _write_jsonl(train + test, os.path.join(config.output_path, "quality_samples.jsonl"))
-    _write_jsonl(train, os.path.join(config.output_path, "quality_train.jsonl"))
-    _write_jsonl(test, os.path.join(config.output_path, "quality_test.jsonl"))
+    _write_jsonl(train + test, os.path.join(output_path, "quality_samples.jsonl"))
+    _write_jsonl(train, os.path.join(output_path, "quality_train.jsonl"))
+    _write_jsonl(test, os.path.join(output_path, "quality_test.jsonl"))
 
     logger.info(
         "Sampled %d quality documents (%d train, %d test) to %s",
         len(all_docs),
         len(train),
         len(test),
-        config.output_path,
+        output_path,
     )
 
 
-@dataclass(frozen=True)
-class SampleTopicConfig:
-    """Config for sampling documents from Dolma source splits."""
-
-    dolma_base_path: str
-    output_path: str = THIS_OUTPUT_PATH
-    n_per_source: int = 25
-    seed: int = RANDOM_SEED
-    train_fraction: float = TRAIN_FRACTION
-
-
-# Mapping from Dolma source names to their file glob patterns
-DOLMA_SOURCE_PATTERNS: dict[str, list[str]] = {
-    "algebraic-stack": ["algebraic-stack-train-*.json.gz"],
-    "arxiv": ["arxiv-*.json.gz"],
-    "gutenberg": ["books-*.json.gz"],
-    "c4": ["c4-*.json.gz"],
-    "cc": ["cc_en_head-*.json.gz", "cc_en_middle-*.json.gz", "cc_en_tail-*.json.gz"],
-    "cc-news": ["cc_news_head-*.json.gz", "cc_news_middle-*.json.gz", "cc_news_tail-*.json.gz"],
-    "falcon": ["falcon-*.json.gz"],
-    "megawika": ["megawika-*.json.gz"],
-    "open-web-math": ["open-web-math-train-*.json.gz"],
-    "pes2o": ["pes2o-*.json.gz"],
-    "reddit": ["reddit-*.json.gz"],
-    "stackexchange": ["stackexchange-*.json.gz"],
-    "starcoder": ["starcoder-*.json.gz"],
-    "flan": ["tulu_flan-*.json.gz"],
-    "wiki": ["wiki-*.json.gz"],
-}
-
-
-def sample_topic_documents(config: SampleTopicConfig) -> None:
+def sample_topic_documents(
+    output_path: str,
+    dolma_base_path: str,
+    n_per_source: int = 25,
+    seed: int = RANDOM_SEED,
+    train_fraction: float = TRAIN_FRACTION,
+) -> None:
     """Sample documents from each Dolma source split for topic evaluation."""
     all_docs: list[dict] = []
 
     for source_name in DOLMA_SOURCES:
         patterns = DOLMA_SOURCE_PATTERNS[source_name]
-        full_patterns = [os.path.join(config.dolma_base_path, p) for p in patterns]
+        full_patterns = [os.path.join(dolma_base_path, p) for p in patterns]
         docs = _sample_from_files(
             file_patterns=full_patterns,
-            n_per_stratum=config.n_per_source,
+            n_per_stratum=n_per_source,
             label=source_name,
             label_field="source_label",
-            seed=config.seed + hash(source_name),
+            seed=seed + hash(source_name),
         )
         all_docs.extend(docs)
 
-    train, test = _train_test_split(all_docs, config.train_fraction, config.seed)
+    train, test = _train_test_split(all_docs, train_fraction, seed)
 
-    os.makedirs(config.output_path, exist_ok=True)
-    _write_jsonl(train + test, os.path.join(config.output_path, "topic_samples.jsonl"))
-    _write_jsonl(train, os.path.join(config.output_path, "topic_train.jsonl"))
-    _write_jsonl(test, os.path.join(config.output_path, "topic_test.jsonl"))
+    _write_jsonl(train + test, os.path.join(output_path, "topic_samples.jsonl"))
+    _write_jsonl(train, os.path.join(output_path, "topic_train.jsonl"))
+    _write_jsonl(test, os.path.join(output_path, "topic_test.jsonl"))
 
     logger.info(
         "Sampled %d topic documents (%d train, %d test) to %s",
         len(all_docs),
         len(train),
         len(test),
-        config.output_path,
+        output_path,
     )

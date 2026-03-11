@@ -11,12 +11,9 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
 from enum import StrEnum
 
 from iris.marin_fs import open_url
-
-from marin.execution import THIS_OUTPUT_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +35,10 @@ Score the following document on a 0-5 scale based on its educational and informa
 Scoring rubric:
 0 - Unintelligible, spam, or purely navigational content with no informational value.
 1 - Low quality: mostly ads, SEO content, or very shallow content with minimal useful information.
-2 - Below average: some useful information but poorly written, disorganized, or mostly redundant with common knowledge.
+2 - Below average: some useful information but poorly written, disorganized, or mostly redundant.
 3 - Average: reasonably informative content that covers a topic adequately but without depth or insight.
 4 - Good: well-written, informative content that provides useful knowledge or analysis on a topic.
-5 - Excellent: high-quality, educational content with depth, clarity, and insight. Could serve as reference material.
+5 - Excellent: high-quality, educational content with depth, clarity, and insight.
 
 Respond with ONLY a JSON object: {{"score": <int>, "reasoning": "<brief explanation>"}}
 
@@ -159,21 +156,15 @@ def _write_jsonl(docs: list[dict], path: str) -> None:
             f.write(json.dumps(doc) + "\n")
 
 
-@dataclass(frozen=True)
-class LabelQualityConfig:
-    """Config for oracle quality labeling."""
-
-    input_path: str
-    output_path: str = THIS_OUTPUT_PATH
-    backend: OracleBackend = OracleBackend.CLAUDE
-    prompt_version: str = "v1"
-
-
-def label_quality(config: LabelQualityConfig) -> None:
+def label_quality(
+    output_path: str,
+    input_path: str,
+    backend: OracleBackend = OracleBackend.CLAUDE,
+) -> None:
     """Score each document on a 0-5 quality rubric using an LLM oracle."""
-    input_file = os.path.join(config.input_path, "quality_samples.jsonl")
+    input_file = os.path.join(input_path, "quality_samples.jsonl")
     docs = _read_jsonl(input_file)
-    logger.info("Labeling %d documents for quality with backend=%s", len(docs), config.backend)
+    logger.info("Labeling %d documents for quality with backend=%s", len(docs), backend)
 
     labeled: list[dict] = []
     for i, doc in enumerate(docs):
@@ -181,46 +172,42 @@ def label_quality(config: LabelQualityConfig) -> None:
         prompt = QUALITY_PROMPT.format(text=truncated)
 
         try:
-            response = _call_llm(prompt, config.backend)
+            response = _call_llm(prompt, backend)
             parsed = _parse_json_response(response)
             doc["oracle_quality_score"] = int(parsed["score"])
             doc["oracle_quality_reasoning"] = parsed.get("reasoning", "")
-            doc["oracle_backend"] = str(config.backend)
+            doc["oracle_backend"] = str(backend)
         except Exception:
             logger.exception("Failed to label document %s", doc.get("doc_id", i))
             doc["oracle_quality_score"] = -1
             doc["oracle_quality_reasoning"] = "labeling_failed"
-            doc["oracle_backend"] = str(config.backend)
+            doc["oracle_backend"] = str(backend)
 
         labeled.append(doc)
 
         if (i + 1) % 10 == 0:
             logger.info("Quality labeling progress: %d/%d", i + 1, len(docs))
 
-    os.makedirs(config.output_path, exist_ok=True)
-    _write_jsonl(labeled, os.path.join(config.output_path, "quality_labeled.jsonl"))
+    _write_jsonl(labeled, os.path.join(output_path, "quality_labeled.jsonl"))
 
     failed = sum(1 for d in labeled if d["oracle_quality_score"] == -1)
     logger.info("Quality labeling complete: %d labeled, %d failed", len(labeled) - failed, failed)
 
 
-@dataclass(frozen=True)
-class LabelTopicConfig:
-    """Config for oracle topic labeling."""
-
-    input_path: str
-    output_path: str = THIS_OUTPUT_PATH
-    backend: OracleBackend = OracleBackend.CLAUDE
-    prompt_version: str = "v1"
-    taxonomy: list[str] = field(default_factory=lambda: list(TOPIC_TAXONOMY))
-
-
-def label_topics(config: LabelTopicConfig) -> None:
+def label_topics(
+    output_path: str,
+    input_path: str,
+    backend: OracleBackend = OracleBackend.CLAUDE,
+    taxonomy: list[str] | None = None,
+) -> None:
     """Assign a topic label from a fixed taxonomy to each document using an LLM oracle."""
-    input_file = os.path.join(config.input_path, "topic_samples.jsonl")
+    if taxonomy is None:
+        taxonomy = list(TOPIC_TAXONOMY)
+
+    input_file = os.path.join(input_path, "topic_samples.jsonl")
     docs = _read_jsonl(input_file)
-    topics_str = "\n".join(f"- {t}" for t in config.taxonomy)
-    logger.info("Labeling %d documents for topics with backend=%s", len(docs), config.backend)
+    topics_str = "\n".join(f"- {t}" for t in taxonomy)
+    logger.info("Labeling %d documents for topics with backend=%s", len(docs), backend)
 
     labeled: list[dict] = []
     for i, doc in enumerate(docs):
@@ -228,30 +215,29 @@ def label_topics(config: LabelTopicConfig) -> None:
         prompt = TOPIC_PROMPT.format(text=truncated, topics=topics_str)
 
         try:
-            response = _call_llm(prompt, config.backend)
+            response = _call_llm(prompt, backend)
             parsed = _parse_json_response(response)
             topic = parsed["topic"]
-            if topic not in config.taxonomy:
+            if topic not in taxonomy:
                 logger.warning(
                     "LLM returned unknown topic '%s' for doc %s, mapping to 'other'", topic, doc.get("doc_id", i)
                 )
                 topic = "other"
             doc["oracle_topic"] = topic
             doc["oracle_topic_reasoning"] = parsed.get("reasoning", "")
-            doc["oracle_backend"] = str(config.backend)
+            doc["oracle_backend"] = str(backend)
         except Exception:
             logger.exception("Failed to label document %s", doc.get("doc_id", i))
             doc["oracle_topic"] = "labeling_failed"
             doc["oracle_topic_reasoning"] = "labeling_failed"
-            doc["oracle_backend"] = str(config.backend)
+            doc["oracle_backend"] = str(backend)
 
         labeled.append(doc)
 
         if (i + 1) % 10 == 0:
             logger.info("Topic labeling progress: %d/%d", i + 1, len(docs))
 
-    os.makedirs(config.output_path, exist_ok=True)
-    _write_jsonl(labeled, os.path.join(config.output_path, "topic_labeled.jsonl"))
+    _write_jsonl(labeled, os.path.join(output_path, "topic_labeled.jsonl"))
 
     failed = sum(1 for d in labeled if d["oracle_topic"] == "labeling_failed")
     logger.info("Topic labeling complete: %d labeled, %d failed", len(labeled) - failed, failed)

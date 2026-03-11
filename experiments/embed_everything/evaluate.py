@@ -3,22 +3,19 @@
 
 """Evaluate embedding quality for downstream tasks.
 
-Quality classification: linear probe on embeddings → Spearman/Kendall correlation
+Quality classification: linear probe on embeddings -> Spearman/Kendall correlation
 with oracle quality scores.
 
-Topic clustering: K-Means on embeddings → ARI/NMI against oracle topic labels.
+Topic clustering: K-Means on embeddings -> ARI/NMI against oracle topic labels.
 """
 
 import json
 import logging
 import os
 import tempfile
-from dataclasses import dataclass
 
 import numpy as np
 from iris.marin_fs import open_url
-
-from marin.execution import THIS_OUTPUT_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -62,23 +59,14 @@ QUALITY_ORDINAL = {
 }
 
 
-@dataclass(frozen=True)
-class EvalQualityConfig:
-    """Config for quality probe evaluation."""
-
-    embeddings_path: str
-    oracle_path: str
-    output_path: str = THIS_OUTPUT_PATH
-
-
-def evaluate_quality_probe(config: EvalQualityConfig) -> None:
+def evaluate_quality_probe(
+    output_path: str,
+    embeddings_path: str,
+    oracle_path: str,
+) -> None:
     """Train a linear probe on embeddings and evaluate against oracle quality scores.
 
-    Reports:
-    - Spearman rank correlation between predicted and oracle scores
-    - Kendall's Tau between predicted and oracle scores
-    - Ridge regression R^2
-    - Per-bucket accuracy
+    Reports Spearman/Kendall correlation, Ridge R^2, and bucket-ordinal Spearman.
     """
     from scipy import stats
     from sklearn.linear_model import RidgeCV
@@ -86,14 +74,14 @@ def evaluate_quality_probe(config: EvalQualityConfig) -> None:
     from sklearn.preprocessing import StandardScaler
 
     # Load embeddings
-    emb_file = os.path.join(config.embeddings_path, "quality_embeddings.npz")
+    emb_file = os.path.join(embeddings_path, "quality_embeddings.npz")
     emb_data = _load_npz(emb_file)
     embeddings = emb_data["embeddings"]
     doc_ids = emb_data["doc_ids"].tolist()
     splits = emb_data["splits"].tolist()
 
     # Load oracle labels
-    oracle_file = os.path.join(config.oracle_path, "quality_labeled.jsonl")
+    oracle_file = os.path.join(oracle_path, "quality_labeled.jsonl")
     oracle_docs = _read_jsonl(oracle_file)
     oracle_by_id = {d["doc_id"]: d for d in oracle_docs}
 
@@ -165,27 +153,18 @@ def evaluate_quality_probe(config: EvalQualityConfig) -> None:
 
     logger.info("Quality probe results: Spearman=%.4f, Kendall=%.4f, R2=%.4f", spearman_r, kendall_tau, r2)
 
-    os.makedirs(config.output_path, exist_ok=True)
-    _write_json(results, os.path.join(config.output_path, "quality_results.json"))
+    _write_json(results, os.path.join(output_path, "quality_results.json"))
 
 
-@dataclass(frozen=True)
-class EvalTopicConfig:
-    """Config for topic clustering evaluation."""
-
-    embeddings_path: str
-    oracle_path: str
-    output_path: str = THIS_OUTPUT_PATH
-    n_clusters: int = 15
-
-
-def evaluate_topic_clusters(config: EvalTopicConfig) -> None:
+def evaluate_topic_clusters(
+    output_path: str,
+    embeddings_path: str,
+    oracle_path: str,
+    n_clusters: int = 15,
+) -> None:
     """Run K-Means on embeddings and evaluate against oracle topic labels.
 
-    Reports:
-    - Adjusted Rand Index (ARI)
-    - Normalized Mutual Information (NMI)
-    - Homogeneity, completeness, V-measure
+    Reports ARI, NMI, homogeneity, completeness, and V-measure.
     """
     from sklearn.cluster import KMeans
     from sklearn.metrics import (
@@ -198,13 +177,13 @@ def evaluate_topic_clusters(config: EvalTopicConfig) -> None:
     from sklearn.preprocessing import LabelEncoder, StandardScaler
 
     # Load embeddings
-    emb_file = os.path.join(config.embeddings_path, "topic_embeddings.npz")
+    emb_file = os.path.join(embeddings_path, "topic_embeddings.npz")
     emb_data = _load_npz(emb_file)
     embeddings = emb_data["embeddings"]
     doc_ids = emb_data["doc_ids"].tolist()
 
     # Load oracle labels
-    oracle_file = os.path.join(config.oracle_path, "topic_labeled.jsonl")
+    oracle_file = os.path.join(oracle_path, "topic_labeled.jsonl")
     oracle_docs = _read_jsonl(oracle_file)
     oracle_by_id = {d["doc_id"]: d for d in oracle_docs}
 
@@ -218,8 +197,8 @@ def evaluate_topic_clusters(config: EvalTopicConfig) -> None:
         valid_emb.append(embeddings[i])
         valid_labels.append(oracle["oracle_topic"])
 
-    if len(valid_emb) < config.n_clusters:
-        logger.error("Too few valid documents (%d) for %d clusters", len(valid_emb), config.n_clusters)
+    if len(valid_emb) < n_clusters:
+        logger.error("Too few valid documents (%d) for %d clusters", len(valid_emb), n_clusters)
         return
 
     X = np.array(valid_emb)
@@ -235,7 +214,7 @@ def evaluate_topic_clusters(config: EvalTopicConfig) -> None:
     X_scaled = scaler.fit_transform(X)
 
     # K-Means with k = number of oracle topics
-    kmeans = KMeans(n_clusters=config.n_clusters, random_state=42, n_init=10)
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     y_pred = kmeans.fit_predict(X_scaled)
 
     # Metrics
@@ -245,14 +224,13 @@ def evaluate_topic_clusters(config: EvalTopicConfig) -> None:
     completeness = completeness_score(y_true, y_pred)
     v_measure = v_measure_score(y_true, y_pred)
 
+    unique_labels, label_counts = np.unique(true_labels, return_counts=True)
     results = {
         "task": "topic_clustering",
         "n_documents": len(valid_emb),
         "n_true_clusters": int(n_true_clusters),
-        "n_kmeans_clusters": config.n_clusters,
-        "true_label_distribution": {
-            label: int(count) for label, count in zip(*np.unique(true_labels, return_counts=True), strict=True)
-        },
+        "n_kmeans_clusters": n_clusters,
+        "true_label_distribution": {label: int(count) for label, count in zip(unique_labels, label_counts, strict=True)},
         "ari": float(ari),
         "nmi": float(nmi),
         "homogeneity": float(homogeneity),
@@ -263,5 +241,4 @@ def evaluate_topic_clusters(config: EvalTopicConfig) -> None:
 
     logger.info("Topic clustering results: ARI=%.4f, NMI=%.4f, V-measure=%.4f", ari, nmi, v_measure)
 
-    os.makedirs(config.output_path, exist_ok=True)
-    _write_json(results, os.path.join(config.output_path, "topic_results.json"))
+    _write_json(results, os.path.join(output_path, "topic_results.json"))
