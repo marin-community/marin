@@ -66,6 +66,8 @@ def _perf_args(*, regression_policy: str = "revert-count-failure") -> argparse.N
         perf_min_train_path_drop_ms=1.0,
         perf_step_duration_improvement_margin_ms=0.25,
         perf_max_remainder_budget_increase_ms=2.0,
+        perf_max_decoder_layer_shell_budget_increase_ms=2.0,
+        perf_min_decoder_layer_shell_drop_ms=1.0,
         perf_control_gate_override_pct=5.0,
     )
 
@@ -481,6 +483,30 @@ def test_latest_iteration_hotspot_context_parses_step_and_remainder_metrics(tmp_
     assert current["remainder_budget_ms"] == 128.9
 
 
+def test_latest_iteration_hotspot_context_parses_decoder_shell_metrics(tmp_path: Path) -> None:
+    log_path = tmp_path / "hillclimb.md"
+    log_path.write_text(
+        "\n".join(
+            [
+                "### Iteration 14 - Candidate",
+                "- `Decoder-layer shell budget`: `61.200 ms -> 55.000 ms`",
+                "- `AD shell budget`: `18.000 ms -> 16.500 ms`",
+                "- `Sharding shell budget`: `24.000 ms -> 20.250 ms`",
+                "- `Layout shell budget`: `7.000 ms -> 5.750 ms`",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    context = gdnctl._latest_iteration_hotspot_context(log_path)
+    current = context["hotspot_metrics"]
+    assert current["decoder_layer_shell_budget_ms"] == 55.0
+    assert current["ad_shell_budget_ms"] == 16.5
+    assert current["sharding_shell_budget_ms"] == 20.25
+    assert current["layout_shell_budget_ms"] == 5.75
+
+
 def test_perf_policy_reverts_off_critical_path_candidate(tmp_path: Path) -> None:
     repo, baseline_commit = _init_repo(tmp_path)
     state_path = tmp_path / "perf_state.json"
@@ -549,6 +575,67 @@ def test_perf_policy_reverts_off_critical_path_candidate(tmp_path: Path) -> None
     reasons = last["control_gate_reasons"]
     assert isinstance(reasons, list)
     assert any("off-critical-path" in reason for reason in reasons)
+
+
+def test_perf_policy_reverts_wrong_boundary_progress_candidate(tmp_path: Path) -> None:
+    repo, baseline_commit = _init_repo(tmp_path)
+    state_path = tmp_path / "perf_state.json"
+    args = _perf_args(regression_policy="revert-count-failure")
+
+    baseline_hotspots = {
+        "train_path_budget_ms": 42.720,
+        "decoder_layer_shell_budget_ms": 64.000,
+        "step_duration_ms": 166.300,
+        "remainder_budget_ms": 123.580,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=1,
+        commit_sha=baseline_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.09, "throughput/duration": 0.1663},
+            "warnings": [],
+            "hotspot_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert not count_failure
+    assert rc == 0
+
+    candidate_commit = _commit_change(repo, "candidate\n", "candidate")
+    candidate_hotspots = {
+        "train_path_budget_ms": 40.900,
+        "decoder_layer_shell_budget_ms": 63.700,
+        "step_duration_ms": 166.420,
+        "remainder_budget_ms": 125.520,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=2,
+        commit_sha=candidate_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.08, "throughput/duration": 0.16642},
+            "warnings": [],
+            "hotspot_metrics": candidate_hotspots,
+            "hotspot_baseline_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert count_failure
+    assert rc == 0
+    assert _run_git(repo, "rev-parse", "HEAD") != candidate_commit
+
+    state = _read_state(state_path)
+    last = state["history"][-1]
+    reasons = last["control_gate_reasons"]
+    assert isinstance(reasons, list)
+    assert any("wrong-boundary progress" in reason for reason in reasons)
 
 
 def test_extract_wandb_run_url_supports_slug_with_underscore() -> None:

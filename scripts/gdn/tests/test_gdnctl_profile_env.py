@@ -409,3 +409,45 @@ def test_with_step_and_remainder_metrics_adds_upper_bound_gap() -> None:
     assert augmented["remainder_budget_ms"] == pytest.approx(123.607)
     assert augmented["upper_bound_gap_ms"] == pytest.approx(108.4465)
     assert augmented["gap_explained_by_train_path"] == pytest.approx(42.7 / 108.4465)
+
+
+def test_profile_summary_attribution_computes_decoder_layer_shell_budgets() -> None:
+    summary = {
+        "hot_ops": [
+            {
+                "tf_op_path": "HackableDecoderLayer/reshape:",
+                "total_duration": 8000,
+                "count": 2,
+            },
+            {
+                "tf_op_path": "transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map/custom:",
+                "total_duration": 6000,
+                "count": 2,
+            },
+            {
+                "tf_op_path": "HackableDecoderLayer/add_any:",
+                "total_duration": 4000,
+                "count": 2,
+            },
+        ],
+        "hierarchical_regions": [],
+    }
+
+    result = gdnctl._profile_summary_attribution(
+        summary,
+        step_duration_ms=100.0,
+        upper_bound_step_ms=50.0,
+        gdn_layer_fraction=0.75,
+        gdn_layers_per_block=3,
+        gdn_block_size=4,
+        top_k=5,
+    )
+
+    assert result["decoder_layer_shell_budget_ms"] == pytest.approx(9.0)
+    assert result["ad_shell_budget_ms"] == pytest.approx(3.0)
+    assert result["sharding_shell_budget_ms"] == pytest.approx(3.0)
+    assert result["layout_shell_budget_ms"] == pytest.approx(4.0)
+    assert result["gap_explained_by_decoder_layer_shell"] == pytest.approx(9.0 / 50.0)
+    topk = result["decoder_layer_shell_topk"]
+    assert isinstance(topk, list)
+    assert topk[0]["path"] == "HackableDecoderLayer/reshape:"

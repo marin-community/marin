@@ -72,6 +72,8 @@ SESSION_DIRECTIVE_PRESET_FILES = {
     "ejkernel-recompute-backward": REPO_ROOT / "scripts/gdn/session_directives/ejkernel-recompute-backward.md",
     "remainder-attribution-mainline": REPO_ROOT / "scripts/gdn/session_directives/remainder-attribution-mainline.md",
     "model-boundary-sweep": REPO_ROOT / "scripts/gdn/session_directives/model-boundary-sweep.md",
+    "decoder-layer-shell-mainline": REPO_ROOT / "scripts/gdn/session_directives/decoder-layer-shell-mainline.md",
+    "whole-layer-boundary-prototype": REPO_ROOT / "scripts/gdn/session_directives/whole-layer-boundary-prototype.md",
 }
 
 SUBMISSION_ID_RE = re.compile(r"Job submitted with ID:\s*([^\s]+)")
@@ -129,6 +131,15 @@ PROFILE_SUMMARY_CE_BWD_WHILE_REGION_PATH = (
     "_linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul=>while=>body=>closed_call"
 )
 PROFILE_SUMMARY_CONDITIONAL_REGION_PATH = "conditional"
+PROFILE_SUMMARY_DECODER_LAYER_PREFIXES = (
+    "HackableDecoderLayer/",
+    "jvp(HackableTransformer)/HackableDecoderLayer/",
+    "transpose(jvp(HackableTransformer))/HackableDecoderLayer/",
+)
+PROFILE_SUMMARY_AD_SHELL_PREFIXES = (
+    "jvp(HackableTransformer)/HackableDecoderLayer/",
+    "transpose(jvp(HackableTransformer))/HackableDecoderLayer/",
+)
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -750,6 +761,14 @@ def _normalize_iteration_metric_label(label: str) -> str | None:
         return "step_duration_ms"
     if normalized.startswith("remainder budget"):
         return "remainder_budget_ms"
+    if normalized.startswith("decoder-layer shell budget") or normalized.startswith("decoder layer shell budget"):
+        return "decoder_layer_shell_budget_ms"
+    if normalized.startswith("ad shell budget"):
+        return "ad_shell_budget_ms"
+    if normalized.startswith("sharding shell budget"):
+        return "sharding_shell_budget_ms"
+    if normalized.startswith("layout shell budget"):
+        return "layout_shell_budget_ms"
     if normalized.startswith("shard_map"):
         return "shard_map_ms"
     if normalized.startswith("all-gather"):
@@ -986,8 +1005,12 @@ def _evaluate_control_flow_gate(
                 f"`conditional_ms` became a new large bucket ({baseline_conditional:.3f} -> {candidate_conditional:.3f})"
             )
 
+    candidate_step = _coerce_float(candidate_hotspots.get("step_duration_ms"))
+    baseline_step = _coerce_float(baseline_hotspots.get("step_duration_ms"))
     candidate_train = _coerce_float(candidate_hotspots.get("train_path_budget_ms"))
     baseline_train = _coerce_float(baseline_hotspots.get("train_path_budget_ms"))
+    candidate_decoder_shell = _coerce_float(candidate_hotspots.get("decoder_layer_shell_budget_ms"))
+    baseline_decoder_shell = _coerce_float(baseline_hotspots.get("decoder_layer_shell_budget_ms"))
     if candidate_train is not None and baseline_train is not None:
         train_increase = candidate_train - baseline_train
         if train_increase > args.perf_max_train_path_budget_increase_ms:
@@ -996,8 +1019,6 @@ def _evaluate_control_flow_gate(
                 f"({baseline_train:.3f} -> {candidate_train:.3f})"
             )
 
-        candidate_step = _coerce_float(candidate_hotspots.get("step_duration_ms"))
-        baseline_step = _coerce_float(baseline_hotspots.get("step_duration_ms"))
         if candidate_step is not None and baseline_step is not None:
             train_drop = baseline_train - candidate_train
             step_drop = baseline_step - candidate_step
@@ -1020,6 +1041,28 @@ def _evaluate_control_flow_gate(
                 reasons.append(
                     f"`remainder_budget_ms` increased by {remainder_increase:.3f} ms "
                     f"({baseline_remainder:.3f} -> {candidate_remainder:.3f})"
+                )
+
+    if candidate_decoder_shell is not None and baseline_decoder_shell is not None:
+        decoder_shell_increase = candidate_decoder_shell - baseline_decoder_shell
+        if decoder_shell_increase > args.perf_max_decoder_layer_shell_budget_increase_ms:
+            reasons.append(
+                f"`decoder_layer_shell_budget_ms` increased by {decoder_shell_increase:.3f} ms "
+                f"({baseline_decoder_shell:.3f} -> {candidate_decoder_shell:.3f})"
+            )
+
+        if candidate_step is not None and baseline_step is not None:
+            step_drop = baseline_step - candidate_step
+            decoder_shell_drop = baseline_decoder_shell - candidate_decoder_shell
+            if (
+                step_drop < args.perf_step_duration_improvement_margin_ms
+                and decoder_shell_drop < args.perf_min_decoder_layer_shell_drop_ms
+            ):
+                reasons.append(
+                    f"`decoder_layer_shell_budget_ms` did not improve materially "
+                    f"({baseline_decoder_shell:.3f} -> {candidate_decoder_shell:.3f}) while "
+                    f"`step_duration_ms` did not improve materially ({baseline_step:.3f} -> {candidate_step:.3f}); "
+                    "classify as wrong-boundary progress"
                 )
 
     return reasons
@@ -2005,7 +2048,8 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         upper_bound_line = (
             "\n"
             f"- Attention-only upper-bound step time: `{args.perf_upper_bound_step_ms:.6f} ms`.\n"
-            "- Record `upper_bound_gap_ms` and `gap_explained_by_train_path` in every iteration writeup."
+            "- Record `upper_bound_gap_ms`, `gap_explained_by_train_path`, and "
+            "`gap_explained_by_decoder_layer_shell` in every iteration writeup."
         )
 
     return (
@@ -2025,25 +2069,36 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - `Kernel budget: <before> ms -> <after> ms`\n"
         "  - `Control budget: <before> ms -> <after> ms`\n"
         "  - `Train-path budget: <before> ms -> <after> ms`\n"
+        "  - `Decoder-layer shell budget: <before> ms -> <after> ms`\n"
+        "  - `AD shell budget: <before> ms -> <after> ms`\n"
+        "  - `Sharding shell budget: <before> ms -> <after> ms`\n"
+        "  - `Layout shell budget: <before> ms -> <after> ms`\n"
         "  - `Step duration: <before> ms -> <after> ms`\n"
         "  - `Remainder budget: <before> ms -> <after> ms`\n"
         "  - `Upper-bound gap: <before> ms -> <after> ms`\n"
         "  - `Gap explained by train-path: <before> -> <after>`\n"
+        "  - `Gap explained by decoder-layer shell: <before> -> <after>`\n"
         "  - `gdn_layer_fraction: ...`\n"
+        "  - `decoder_layer_shell_topk: ...`\n"
         "  - `remainder_topk: ...`\n"
         "- Classification is mandatory in the iteration writeup:\n"
-        "  - `Change class: attribution | model boundary | CE backend | outer control structure | inner kernel math`\n"
+        "  - `Change class: decoder shell attribution | whole-layer boundary | CE backend |\n"
+        "    diagnostic side-arm | inner kernel math`\n"
         "  - `Expected effect on step_duration_ms: ...`\n"
-        "  - `Reject if remainder_budget_ms grows? yes/no + why`\n"
+        "  - `Reject if decoder_layer_shell_budget_ms stays flat/up? yes/no + why`\n"
         "- Hard control-flow gate: reject candidates when `while_ms` grows by > "
         f"{args.perf_max_while_increase_ms:.3f} ms or `train_path_budget_ms` grows by > "
         f"{args.perf_max_train_path_budget_increase_ms:.3f} ms unless "
         f"`{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
+        "- Reject candidates when `decoder_layer_shell_budget_ms` grows by > "
+        f"{args.perf_max_decoder_layer_shell_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
         f"- Reject candidates when a new `conditional_ms` bucket >= {args.perf_new_conditional_ms:.3f} ms appears, "
         f"unless `{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
         "- Reject candidates as off-critical-path / overlap-loss when `train_path_budget_ms` drops by >= "
         f"{args.perf_min_train_path_drop_ms:.3f} ms but `step_duration_ms` does not improve by at least "
         f"{args.perf_step_duration_improvement_margin_ms:.3f} ms.\n"
+        "- Reject candidates as wrong-boundary progress when `decoder_layer_shell_budget_ms` fails to drop by at least "
+        f"{args.perf_min_decoder_layer_shell_drop_ms:.3f} ms and `step_duration_ms` does not improve materially.\n"
         "- Reject candidates when `remainder_budget_ms` grows by > "
         f"{args.perf_max_remainder_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
         f"- Validation profile CE implementation request: `{args.validation_profile_ce_implementation}`.\n"
@@ -2378,6 +2433,9 @@ def _with_upper_bound_gap_metrics(
     augmented["upper_bound_gap_ms"] = upper_bound_gap_ms
     if train_path_budget_ms is not None and upper_bound_gap_ms > 0:
         augmented["gap_explained_by_train_path"] = train_path_budget_ms / upper_bound_gap_ms
+    decoder_layer_shell_budget_ms = _coerce_float(augmented.get("decoder_layer_shell_budget_ms"))
+    if decoder_layer_shell_budget_ms is not None and upper_bound_gap_ms > 0:
+        augmented["gap_explained_by_decoder_layer_shell"] = decoder_layer_shell_budget_ms / upper_bound_gap_ms
     return augmented
 
 
@@ -2506,6 +2564,14 @@ def _profile_summary_top_buckets(
     return ranked[:top_k]
 
 
+def _profile_summary_bucket_subset(
+    buckets: dict[str, float],
+    *,
+    include_predicate,
+) -> dict[str, float]:
+    return {path: value for path, value in buckets.items() if include_predicate(path)}
+
+
 def _profile_summary_bucket_deltas(
     candidate: dict[str, float],
     baseline: dict[str, float],
@@ -2520,6 +2586,24 @@ def _profile_summary_bucket_deltas(
         deltas.append({"path": path, "ms": delta_ms})
     deltas.sort(key=lambda item: (-float(item["ms"]), str(item["path"])))
     return deltas[:top_k]
+
+
+def _is_decoder_layer_shell_bucket(path: str) -> bool:
+    return path.startswith(PROFILE_SUMMARY_DECODER_LAYER_PREFIXES)
+
+
+def _is_ad_shell_bucket(path: str) -> bool:
+    return path.startswith(PROFILE_SUMMARY_AD_SHELL_PREFIXES)
+
+
+def _is_sharding_shell_bucket(path: str) -> bool:
+    return _is_decoder_layer_shell_bucket(path) and "shard_map" in path
+
+
+def _is_layout_shell_bucket(path: str) -> bool:
+    if not _is_decoder_layer_shell_bucket(path):
+        return False
+    return any(token in path for token in ("/reshape", "/transpose", "reshape:", "transpose:"))
 
 
 def _profile_summary_attribution(
@@ -2564,12 +2648,14 @@ def _profile_summary_attribution(
     remainder_bucket_ms = _profile_summary_hot_path_buckets(
         summary,
         divisor=divisor,
-        include_predicate=lambda tf_op_path: not any(
-            tracked_path in tf_op_path
-            for tracked_path in (
-                PROFILE_SUMMARY_FORWARD_CLOSED_CALL_HOT_PATH,
-                PROFILE_SUMMARY_BACKWARD_CLOSED_CALL_HOT_PATH,
-                PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH,
+        include_predicate=lambda tf_op_path: (
+            not any(
+                tracked_path in tf_op_path
+                for tracked_path in (
+                    PROFILE_SUMMARY_FORWARD_CLOSED_CALL_HOT_PATH,
+                    PROFILE_SUMMARY_BACKWARD_CLOSED_CALL_HOT_PATH,
+                    PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH,
+                )
             )
         ),
     )
@@ -2577,6 +2663,22 @@ def _profile_summary_attribution(
         summary,
         divisor=divisor,
         include_predicate=lambda tf_op_path: PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH in tf_op_path,
+    )
+    decoder_layer_shell_bucket_ms = _profile_summary_bucket_subset(
+        remainder_bucket_ms,
+        include_predicate=_is_decoder_layer_shell_bucket,
+    )
+    ad_shell_bucket_ms = _profile_summary_bucket_subset(
+        decoder_layer_shell_bucket_ms,
+        include_predicate=_is_ad_shell_bucket,
+    )
+    sharding_shell_bucket_ms = _profile_summary_bucket_subset(
+        decoder_layer_shell_bucket_ms,
+        include_predicate=_is_sharding_shell_bucket,
+    )
+    layout_shell_bucket_ms = _profile_summary_bucket_subset(
+        decoder_layer_shell_bucket_ms,
+        include_predicate=_is_layout_shell_bucket,
     )
 
     hotspot_metrics: dict[str, object] = {
@@ -2593,6 +2695,18 @@ def _profile_summary_attribution(
         "remainder_topk": _profile_summary_top_buckets(remainder_bucket_ms, top_k=top_k),
         "ce_while_bucket_ms": ce_while_bucket_ms,
         "ce_while_topk": _profile_summary_top_buckets(ce_while_bucket_ms, top_k=top_k),
+        "decoder_layer_shell_budget_ms": sum(decoder_layer_shell_bucket_ms.values()),
+        "decoder_layer_shell_bucket_ms": decoder_layer_shell_bucket_ms,
+        "decoder_layer_shell_topk": _profile_summary_top_buckets(decoder_layer_shell_bucket_ms, top_k=top_k),
+        "ad_shell_budget_ms": sum(ad_shell_bucket_ms.values()),
+        "ad_shell_bucket_ms": ad_shell_bucket_ms,
+        "ad_shell_topk": _profile_summary_top_buckets(ad_shell_bucket_ms, top_k=top_k),
+        "sharding_shell_budget_ms": sum(sharding_shell_bucket_ms.values()),
+        "sharding_shell_bucket_ms": sharding_shell_bucket_ms,
+        "sharding_shell_topk": _profile_summary_top_buckets(sharding_shell_bucket_ms, top_k=top_k),
+        "layout_shell_budget_ms": sum(layout_shell_bucket_ms.values()),
+        "layout_shell_bucket_ms": layout_shell_bucket_ms,
+        "layout_shell_topk": _profile_summary_top_buckets(layout_shell_bucket_ms, top_k=top_k),
     }
     hotspot_metrics["train_path_budget_ms"] = float(hotspot_metrics["kernel_budget_ms"]) + float(
         hotspot_metrics["control_budget_ms"]
@@ -2883,6 +2997,19 @@ def cmd_summary_attribution(args: argparse.Namespace) -> int:
             (
                 baseline_result.get("remainder_bucket_ms", {})
                 if isinstance(baseline_result.get("remainder_bucket_ms"), dict)
+                else {}
+            ),
+            top_k=args.top_k,
+        )
+        payload["decoder_layer_shell_delta_topk"] = _profile_summary_bucket_deltas(
+            (
+                result.get("decoder_layer_shell_bucket_ms", {})
+                if isinstance(result.get("decoder_layer_shell_bucket_ms"), dict)
+                else {}
+            ),
+            (
+                baseline_result.get("decoder_layer_shell_bucket_ms", {})
+                if isinstance(baseline_result.get("decoder_layer_shell_bucket_ms"), dict)
                 else {}
             ),
             top_k=args.top_k,
@@ -3966,6 +4093,10 @@ def cmd_codex_loop(args: argparse.Namespace) -> int:
         raise SystemExit("[gdnctl] --perf-step-duration-improvement-margin-ms must be >= 0.")
     if args.perf_max_remainder_budget_increase_ms < 0:
         raise SystemExit("[gdnctl] --perf-max-remainder-budget-increase-ms must be >= 0.")
+    if args.perf_max_decoder_layer_shell_budget_increase_ms < 0:
+        raise SystemExit("[gdnctl] --perf-max-decoder-layer-shell-budget-increase-ms must be >= 0.")
+    if args.perf_min_decoder_layer_shell_drop_ms < 0:
+        raise SystemExit("[gdnctl] --perf-min-decoder-layer-shell-drop-ms must be >= 0.")
     if args.perf_control_gate_override_pct < 0:
         raise SystemExit("[gdnctl] --perf-control-gate-override-pct must be >= 0.")
     if args.perf_history_step_start < 0:
@@ -4841,6 +4972,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=2.0,
         help="Reject candidates when `remainder_budget_ms` grows by more than this unless overridden.",
+    )
+    codex_loop.add_argument(
+        "--perf-max-decoder-layer-shell-budget-increase-ms",
+        type=float,
+        default=2.0,
+        help="Reject candidates when `decoder_layer_shell_budget_ms` grows by more than this unless overridden.",
+    )
+    codex_loop.add_argument(
+        "--perf-min-decoder-layer-shell-drop-ms",
+        type=float,
+        default=1.0,
+        help="Minimum `decoder_layer_shell_budget_ms` improvement required to avoid wrong-boundary classification.",
     )
     codex_loop.add_argument(
         "--perf-control-gate-override-pct",

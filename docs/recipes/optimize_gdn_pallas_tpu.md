@@ -11,9 +11,9 @@ This recipe standardizes the loop:
 5. commit one validated optimization.
 
 Current phase goal:
-- Push MFU toward ~50% with large kernel-level wins.
-- Treat small tuning wins as secondary; prioritize architecture/kernel redesigns first.
-- Optimize training throughput first; prioritize `chunk_gated_delta_rule` hotspots over decode-only paths.
+- Improve end-to-end training throughput for the fixed `3/4` GDN regime.
+- Treat the attention-only control as a ceiling/diagnostic, not as a product recommendation.
+- Prioritize whole-layer boundary work and decoder-layer-shell elimination over same-boundary chunk-kernel hillclimbing.
 
 ## Current diagnosis (March 2026)
 
@@ -125,6 +125,50 @@ Promotion policy in this regime:
 - Reject candidates whose `step_duration_ms` does not improve, unless they are explicitly diagnostic.
 - Reject candidates whose `remainder_budget_ms` grows, unless they are explicitly diagnostic.
 - Classify `train_path_budget_ms down, step not faster` as `off-critical-path`.
+
+## Fixed-3/4 GDN regime (March 2026, post-Iteration 87)
+
+The product/model constraint changed:
+
+- `3/4` GDN is non-negotiable for the benchmark/model family under study.
+- The model-boundary sweep remains valuable, but only as diagnostic evidence that the current optimization
+  boundary is wrong.
+
+Updated interpretation:
+
+- The hybrid-vs-attention gap is still about `109 ms` on the benchmark family.
+- The tracked train path explains only about `39%` of that gap.
+- The dominant unexplained buckets are decoder-layer shell categories under:
+  - `HackableDecoderLayer/*`
+  - `jvp(HackableTransformer)/HackableDecoderLayer/*`
+  - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/*`
+- Therefore, same-boundary GDN Pallas train-path hillclimbing is fully demoted from the mainline.
+
+Mainline priorities in this regime:
+1. Widen attribution to a first-class decoder-layer shell budget.
+2. Build one specialized whole-layer design/skeleton for GDN-bearing decoder layers.
+3. Prototype a materially different whole-layer optimization boundary.
+4. Keep CE fixed unless attribution again points back to CE.
+
+Required metrics from now on:
+- `step_duration_ms`
+- `upper_bound_gap_ms`
+- `gap_explained_by_train_path`
+- `decoder_layer_shell_budget_ms`
+- `gap_explained_by_decoder_layer_shell`
+- `ad_shell_budget_ms`
+- `sharding_shell_budget_ms`
+- `layout_shell_budget_ms`
+- `decoder_layer_shell_topk`
+- `remainder_budget_ms`
+- `remainder_topk`
+- `gdn_layer_fraction`
+
+Promotion policy in this regime:
+- Reject candidates whose `step_duration_ms` does not improve, unless they are explicitly diagnostic.
+- Reject candidates whose `decoder_layer_shell_budget_ms` stays flat or grows, unless they are explicitly diagnostic.
+- Classify `train_path_budget_ms down, decoder_layer_shell_budget_ms flat/up` as `wrong-boundary progress`.
+- Treat same-boundary chunk-kernel/tape tweaks as research side-arms only.
 
 ## ejkernel / EasyDeL takeaways (March 2026)
 

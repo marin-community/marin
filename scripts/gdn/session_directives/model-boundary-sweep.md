@@ -1,34 +1,17 @@
-# Session Directive: Model-Boundary Sweep Before More Kernel Hillclimbing
+# Session Directive: Model-Boundary Sweep Is Now Reference Evidence, Not The Mainline
 
-Goal:
-- measure the throughput cost of GDN layer fraction directly,
-- decide whether the mainline problem is the current GDN implementation boundary or the cost of using
-  many GDN layers at all,
-- avoid spending more budget on kernel tweaks before quantifying the model-level tradeoff.
+Completed evidence already shows:
+- with CE fixed, throughput degrades roughly monotonically as `gdn_layers_per_block` rises,
+- the fixed `3/4` GDN regime is non-negotiable,
+- the sweep's main value is diagnostic: it proves that most of the added cost of GDN-bearing layers lands
+  outside the currently tracked train-path budget.
 
-Required sweep:
-- keep `gdn_block_size = 4`,
-- run with `gdn_layers_per_block` in `{0, 1, 2, 3}`,
-- keep CE fixed at:
-  - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`
-  - CE backward mode `pallas`
-- keep the same benchmark family, TPU family, steps, and batch shape.
+How to use this evidence now:
+- treat the existing sweep as proof that the current optimization boundary is wrong,
+- do not spend another mainline iteration repeating the same `gdn_layers_per_block` sweep unless you are
+  refreshing stale data or validating a major benchmark/config change,
+- use the sweep as reference evidence when deciding whether a candidate attacks the right boundary.
 
-Required outputs:
-- `gdn_layer_fraction`
-- `throughput/mfu`
-- `throughput/tokens_per_second`
-- `step_duration_ms`
-- `train_path_budget_ms`
-- `remainder_budget_ms`
-- `upper_bound_gap_ms`
-- per-fraction delta vs the `0/4` attention-only control
-
-Interpretation rule:
-- if throughput degrades roughly monotonically with GDN fraction, treat that as evidence that the
-  model/product boundary is a stronger lever than another same-boundary GDN kernel tweak.
-- if one fraction shows a favorable tradeoff, record it as a product-side option, not a kernel win.
-
-Guardrails:
-- this is a measurement iteration first; do not combine it with new GDN kernel changes.
-- if you must change code, restrict changes to benchmark/config plumbing or attribution support.
+Main interpretation:
+- each added GDN-bearing layer brings a large decoder-layer shell/scaffolding tax beyond the tracked kernel budget,
+- therefore the next mainline boundary is the whole GDN-bearing decoder layer, not the existing chunk-kernel train path.
