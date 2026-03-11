@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
-# dependencies = ["PyGithub>=2.3.0", "openai>=1.0.0"]
+# dependencies = ["PyGithub>=2.3.0"]
 # ///
-"""Nightly scrub that maintains newcomer-friendly TL;DR blocks on experiment issues."""
+"""Select experiment issues for agent-authored TL;DR maintenance."""
 
 from __future__ import annotations
 
@@ -16,25 +16,19 @@ import os
 import re
 from dataclasses import dataclass
 
-from github import Github, GithubException
+from github import Github
 from github.Issue import Issue
 from github.Repository import Repository
-from openai import OpenAI
 
 LOGGER = logging.getLogger(__name__)
 
 EXPERIMENT_LABEL = "experiment"
 TLDR_LABEL = "tldr"
-DOCUMENTATION_LABEL = "documentation"
-AGENT_GENERATED_LABEL = "agent-generated"
 SUMMARY_START = "<!-- experiment-tldr:start -->"
 SUMMARY_END = "<!-- experiment-tldr:end -->"
 DOC_ISSUE_MARKER_PREFIX = "<!-- experiment-tldr:doc-issue="
-DEFAULT_MODEL = "gpt-4.1-mini"
 MAX_COMMENT_COUNT = 15
-MAX_SUMMARY_WORDS = 100
-TLDR_LABEL_COLOR = "1d76db"
-TLDR_LABEL_DESCRIPTION = "Experiment issue includes a newcomer-friendly TL;DR and enough supporting context."
+MAX_SUMMARY_WORDS = 250
 BODY_BLOCK_RE = re.compile(
     rf"\n?{re.escape(SUMMARY_START)}.*?{re.escape(SUMMARY_END)}\n?",
     re.DOTALL,
@@ -44,36 +38,25 @@ URL_RE = re.compile(r"https?://[^\s>)\]]+")
 
 
 @dataclass(frozen=True)
-class IssueAnalysis:
-    """Structured LLM output for one experiment issue."""
-
+class IssueSummaryBlock:
     summary: str
-    documentation_sufficient: bool
     relevant_links: list[str]
-    needs_doc_issue: bool
-    doc_issue_title: str | None
-    doc_issue_body: str | None
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default="marin-community/marin", help="GitHub repo in owner/name form.")
-    parser.add_argument("--issue-number", type=int, help="Only scrub a single issue number.")
-    parser.add_argument("--max-issues", type=int, default=20, help="Maximum issues to inspect in one run.")
+    parser.add_argument("--issue-number", type=int, help="Only emit context for a single issue number.")
+    parser.add_argument("--max-issues", type=int, default=10, help="Maximum issues to inspect in one run.")
     parser.add_argument(
         "--refresh-existing",
         action="store_true",
-        help="Refresh issues that already have a managed TL;DR block instead of skipping them.",
+        help="Refresh issues that already have a managed TL;DR block and the `tldr` label.",
     )
     parser.add_argument(
-        "--model",
-        default=os.environ.get("OPENAI_MODEL", DEFAULT_MODEL),
-        help="Model used for summarization.",
-    )
-    parser.add_argument(
-        "--dry-run",
+        "--pretty",
         action="store_true",
-        help="Compute changes without mutating GitHub issues or labels.",
+        help="Pretty-print JSON output for humans instead of compact JSON.",
     )
     return parser.parse_args()
 
@@ -103,53 +86,6 @@ def extract_urls(text: str) -> list[str]:
     return dedupe_preserving_order(URL_RE.findall(text or ""))
 
 
-def parse_analysis(raw_text: str) -> IssueAnalysis:
-    content = raw_text.strip()
-    if content.startswith("```"):
-        content = re.sub(r"^```(?:json)?\s*", "", content)
-        content = re.sub(r"\s*```$", "", content)
-    payload = json.loads(content)
-    return IssueAnalysis(
-        summary=str(payload["summary"]).strip(),
-        documentation_sufficient=bool(payload["documentation_sufficient"]),
-        relevant_links=[str(link).strip() for link in payload.get("relevant_links", []) if str(link).strip()],
-        needs_doc_issue=bool(payload.get("needs_doc_issue", False)),
-        doc_issue_title=_optional_string(payload.get("doc_issue_title")),
-        doc_issue_body=_optional_string(payload.get("doc_issue_body")),
-    )
-
-
-def _optional_string(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def sanitize_analysis(analysis: IssueAnalysis, allowed_links: list[str]) -> IssueAnalysis:
-    if len(words(analysis.summary)) > MAX_SUMMARY_WORDS:
-        raise ValueError(f"Summary exceeds {MAX_SUMMARY_WORDS} words: {analysis.summary!r}")
-
-    allowed = set(allowed_links)
-    relevant_links = [link for link in analysis.relevant_links if link in allowed]
-    relevant_links = dedupe_preserving_order(relevant_links)
-
-    needs_doc_issue = analysis.needs_doc_issue and not analysis.documentation_sufficient
-    doc_issue_title = analysis.doc_issue_title if needs_doc_issue else None
-    doc_issue_body = analysis.doc_issue_body if needs_doc_issue else None
-    if needs_doc_issue and (not doc_issue_title or not doc_issue_body):
-        raise ValueError("Documentation gap issues require both a title and a body.")
-
-    return IssueAnalysis(
-        summary=analysis.summary,
-        documentation_sufficient=analysis.documentation_sufficient,
-        relevant_links=relevant_links,
-        needs_doc_issue=needs_doc_issue,
-        doc_issue_title=doc_issue_title,
-        doc_issue_body=doc_issue_body,
-    )
-
-
 def issue_has_managed_block(body: str | None) -> bool:
     return bool(body and SUMMARY_START in body and SUMMARY_END in body)
 
@@ -163,23 +99,17 @@ def extract_existing_doc_issue_number(body: str | None) -> int | None:
     return int(match.group(1))
 
 
-def render_tldr_block(analysis: IssueAnalysis, *, doc_issue_number: int | None) -> str:
-    lines = [SUMMARY_START, "## TL;DR", analysis.summary]
-    if analysis.relevant_links:
-        lines.append("")
-        lines.append("### Helpful links")
-        for link in analysis.relevant_links:
-            lines.append(f"- {link}")
+def render_tldr_block(block: IssueSummaryBlock, *, doc_issue_number: int | None = None) -> str:
+    if len(words(block.summary)) > MAX_SUMMARY_WORDS:
+        raise ValueError(f"Summary exceeds soft cap of {MAX_SUMMARY_WORDS} words: {block.summary!r}")
 
+    lines = [SUMMARY_START, "## Summary", "", block.summary.strip()]
+    if block.relevant_links:
+        lines.extend(["", "### Helpful links"])
+        lines.extend(f"- {link}" for link in dedupe_preserving_order(block.relevant_links))
+    if doc_issue_number is not None:
+        lines.extend(["", f"{DOC_ISSUE_MARKER_PREFIX}{doc_issue_number} -->"])
     lines.append("")
-    lines.append("### Documentation status")
-    if analysis.documentation_sufficient:
-        lines.append("- Sufficiently documented for a newcomer who knows the field but not Marin.")
-    elif doc_issue_number is not None:
-        lines.append(f"- More context is still needed. Follow-up: #{doc_issue_number}.")
-        lines.append(f"{DOC_ISSUE_MARKER_PREFIX}{doc_issue_number} -->")
-    else:
-        lines.append("- More context is still needed.")
     lines.append(SUMMARY_END)
     return "\n".join(lines)
 
@@ -214,7 +144,7 @@ def collect_issue_context(issue: Issue) -> tuple[str, list[str]]:
 
     context = "\n".join(
         [
-            f"<issue number={issue.number} state={json.dumps(issue.state)}>",
+            f"<issue number={issue.number} state={json.dumps(issue.state)} url={json.dumps(issue.html_url)}>",
             f"<title>{issue.title}</title>",
             f"<labels>{','.join(label.name for label in issue.labels)}</labels>",
             "<body>",
@@ -229,123 +159,14 @@ def collect_issue_context(issue: Issue) -> tuple[str, list[str]]:
     return context, dedupe_preserving_order(candidate_links)
 
 
-def analyze_issue(client: OpenAI, *, issue: Issue, model: str) -> IssueAnalysis:
-    issue_context, candidate_links = collect_issue_context(issue)
-    prompt = "\n".join(
-        [
-            "You maintain GitHub experiment issues for the Marin project.",
-            (
-                "Write a TL;DR aimed at a smart college junior or new research assistant "
-                "who understands the field but not this codebase."
-            ),
-            f"The TL;DR must be at most {MAX_SUMMARY_WORDS} words.",
-            "Decide whether the issue plus its linked material is sufficiently documented for that audience.",
-            "If more context is needed, draft a documentation request issue.",
-            "Only choose relevant_links from the candidate URLs provided below.",
-            (
-                'Return JSON with keys: "summary", "documentation_sufficient", '
-                '"relevant_links", "needs_doc_issue", "doc_issue_title", "doc_issue_body".'
-            ),
-            "Do not wrap the JSON in markdown fences.",
-            "",
-            "<candidate_urls>",
-            json.dumps(candidate_links, indent=2),
-            "</candidate_urls>",
-            "",
-            issue_context,
-        ]
-    )
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a precise assistant that returns compact JSON for GitHub issue maintenance.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-    )
-    raw = response.choices[0].message.content or ""
-    analysis = parse_analysis(raw)
-    return sanitize_analysis(analysis, candidate_links)
-
-
-def ensure_label(repo: Repository, name: str, *, color: str, description: str) -> None:
-    try:
-        repo.get_label(name)
-    except GithubException as exc:
-        if exc.status != 404:
-            raise
-        LOGGER.info("Creating missing label '%s'", name)
-        repo.create_label(name=name, color=color, description=description)
-
-
-def find_existing_doc_issue(repo: Repository, *, title: str) -> Issue | None:
-    try:
-        issues = repo.get_issues(state="open", labels=[repo.get_label(DOCUMENTATION_LABEL)])
-    except GithubException as exc:
-        if exc.status == 404:
-            issues = repo.get_issues(state="open")
-        else:
-            raise
-
-    for issue in issues:
-        if issue.pull_request is None and issue.title == title:
-            return issue
-    return None
-
-
-def ensure_doc_issue(repo: Repository, source_issue: Issue, analysis: IssueAnalysis, *, dry_run: bool) -> int | None:
-    if not analysis.needs_doc_issue or not analysis.doc_issue_title or not analysis.doc_issue_body:
-        return None
-
-    existing_number = extract_existing_doc_issue_number(source_issue.body)
-    if existing_number is not None:
-        return existing_number
-
-    existing = find_existing_doc_issue(repo, title=analysis.doc_issue_title)
-    if existing is not None:
-        return existing.number
-
-    if dry_run:
-        LOGGER.info("Would create documentation gap issue for #%s: %s", source_issue.number, analysis.doc_issue_title)
-        return None
-
-    doc_issue_body = f"{analysis.doc_issue_body.rstrip()}\n\nRefs #{source_issue.number}"
-    ensure_label(
-        repo,
-        DOCUMENTATION_LABEL,
-        color="0075ca",
-        description="Documentation improvements and requests.",
-    )
-    ensure_label(
-        repo,
-        AGENT_GENERATED_LABEL,
-        color="5319e7",
-        description="Created automatically by an agent.",
-    )
-    created = repo.create_issue(
-        title=analysis.doc_issue_title,
-        body=doc_issue_body,
-        labels=[DOCUMENTATION_LABEL, AGENT_GENERATED_LABEL],
-    )
-    LOGGER.info("Created documentation gap issue #%s for experiment issue #%s", created.number, source_issue.number)
-    return created.number
-
-
-def sync_tldr_label(issue: Issue, *, documentation_sufficient: bool, dry_run: bool) -> None:
-    existing_labels = {label.name for label in issue.labels}
-    if documentation_sufficient and TLDR_LABEL not in existing_labels:
-        if dry_run:
-            LOGGER.info("Would add '%s' label to issue #%s", TLDR_LABEL, issue.number)
-        else:
-            issue.add_to_labels(TLDR_LABEL)
-    if not documentation_sufficient and TLDR_LABEL in existing_labels:
-        if dry_run:
-            LOGGER.info("Would remove '%s' label from issue #%s", TLDR_LABEL, issue.number)
-        else:
-            issue.remove_from_labels(TLDR_LABEL)
+def issue_needs_summary_refresh(issue: Issue, *, refresh_existing: bool) -> bool:
+    has_managed_block = issue_has_managed_block(issue.body)
+    has_tldr_label = any(label.name == TLDR_LABEL for label in issue.labels)
+    if refresh_existing:
+        return True
+    if not has_managed_block:
+        return True
+    return not has_tldr_label
 
 
 def issue_candidates(repo: Repository, args: argparse.Namespace) -> list[Issue]:
@@ -359,7 +180,7 @@ def issue_candidates(repo: Repository, args: argparse.Namespace) -> list[Issue]:
     ):
         if issue.pull_request is not None:
             continue
-        if not args.refresh_existing and issue_has_managed_block(issue.body):
+        if not issue_needs_summary_refresh(issue, refresh_existing=args.refresh_existing):
             continue
         candidates.append(issue)
         if len(candidates) >= args.max_issues:
@@ -367,20 +188,21 @@ def issue_candidates(repo: Repository, args: argparse.Namespace) -> list[Issue]:
     return candidates
 
 
-def process_issue(repo: Repository, client: OpenAI, issue: Issue, args: argparse.Namespace) -> None:
-    LOGGER.info("Processing issue #%s: %s", issue.number, issue.title)
-    analysis = analyze_issue(client, issue=issue, model=args.model)
-    doc_issue_number = ensure_doc_issue(repo, issue, analysis, dry_run=args.dry_run)
-    block = render_tldr_block(analysis, doc_issue_number=doc_issue_number)
-    updated_body = upsert_tldr_block(issue.body, block)
-
-    if updated_body != (issue.body or ""):
-        if args.dry_run:
-            LOGGER.info("Would update issue body for #%s", issue.number)
-        else:
-            issue.edit(body=updated_body)
-
-    sync_tldr_label(issue, documentation_sufficient=analysis.documentation_sufficient, dry_run=args.dry_run)
+def serialize_issue(issue: Issue) -> dict[str, object]:
+    issue_context, candidate_links = collect_issue_context(issue)
+    labels = [label.name for label in issue.labels]
+    return {
+        "number": issue.number,
+        "title": issue.title,
+        "state": issue.state,
+        "url": issue.html_url,
+        "labels": labels,
+        "has_managed_block": issue_has_managed_block(issue.body),
+        "has_tldr_label": TLDR_LABEL in labels,
+        "existing_doc_issue_number": extract_existing_doc_issue_number(issue.body),
+        "candidate_links": candidate_links,
+        "issue_context": issue_context,
+    }
 
 
 def main() -> None:
@@ -388,21 +210,19 @@ def main() -> None:
     args = parse_args()
 
     github_token = ensure_env("GITHUB_TOKEN")
-    openai_api_key = ensure_env("OPENAI_API_KEY")
-
     github = Github(github_token)
     repo = github.get_repo(args.repo)
-    ensure_label(repo, TLDR_LABEL, color=TLDR_LABEL_COLOR, description=TLDR_LABEL_DESCRIPTION)
-
-    client = OpenAI(api_key=openai_api_key)
     candidates = issue_candidates(repo, args)
     LOGGER.info("Found %s issue(s) to inspect", len(candidates))
 
-    for issue in candidates:
-        try:
-            process_issue(repo, client, issue, args)
-        except Exception:
-            LOGGER.exception("Failed to scrub issue #%s", issue.number)
+    payload = {
+        "repo": args.repo,
+        "max_summary_words": MAX_SUMMARY_WORDS,
+        "candidate_count": len(candidates),
+        "candidates": [serialize_issue(issue) for issue in candidates],
+    }
+    indent = 2 if args.pretty else None
+    print(json.dumps(payload, indent=indent, sort_keys=bool(indent)))
 
 
 if __name__ == "__main__":

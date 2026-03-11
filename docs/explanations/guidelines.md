@@ -99,9 +99,14 @@ As the experiment progresses, bugs are fixed, and analyses are conducted:
 - Make sure issue comments are added to capture the updated thinking.
 - The issue description should be updated with a short summary at the end to
   capture a snapshot of the current status.
-- A nightly scrub maintains a short `TL;DR` block for experiment issues so a
-  newcomer can understand why the work matters and what was learned; issues that
-  also have enough supporting links get the `tldr` label.
+- A nightly agent scrub reviews up to about 10 experiment issues, including
+  closed ones, and maintains a managed summary block for issues that are missing
+  one or still do not merit the `tldr` label.
+- The managed block should explain the experimental setup, what was learned, and
+  the current conclusion or recommendation in newcomer-friendly language. Treat
+  about 250 words as a soft cap, not a hard cutoff.
+- Issues get the `tldr` label only when that summary is adequate and there are
+  enough supporting links for a newcomer to dig deeper.
 
 Keep the scope of an experiment as small as possible, so that experiments do
 not stay open for long periods of time.  Follow up experiemnts can be handled

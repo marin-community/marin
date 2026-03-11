@@ -1,13 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 from scripts.pm.scrub_experiment_issue_tldrs import (
-    IssueAnalysis,
+    IssueSummaryBlock,
     extract_existing_doc_issue_number,
+    issue_needs_summary_refresh,
     render_tldr_block,
-    sanitize_analysis,
     upsert_tldr_block,
 )
+
+
+def _issue(*, body: str | None, labels: list[str]):
+    return SimpleNamespace(
+        body=body,
+        labels=[SimpleNamespace(name=name) for name in labels],
+    )
 
 
 def test_upsert_tldr_block_appends_when_missing():
@@ -37,49 +46,32 @@ def test_upsert_tldr_block_replaces_existing_managed_block():
 
 
 def test_render_tldr_block_tracks_doc_issue_marker():
-    analysis = IssueAnalysis(
+    block = IssueSummaryBlock(
         summary="A short summary.",
-        documentation_sufficient=False,
         relevant_links=["https://example.com/doc"],
-        needs_doc_issue=True,
-        doc_issue_title="Docs gap",
-        doc_issue_body="Need more docs",
     )
 
-    block = render_tldr_block(analysis, doc_issue_number=123)
+    rendered = render_tldr_block(block, doc_issue_number=123)
 
-    assert "Follow-up: #123." in block
-    assert extract_existing_doc_issue_number(block) == 123
-
-
-def test_sanitize_analysis_filters_unknown_links():
-    analysis = IssueAnalysis(
-        summary="A short summary.",
-        documentation_sufficient=True,
-        relevant_links=["https://allowed", "https://disallowed", "https://allowed"],
-        needs_doc_issue=False,
-        doc_issue_title=None,
-        doc_issue_body=None,
-    )
-
-    sanitized = sanitize_analysis(analysis, ["https://allowed"])
-
-    assert sanitized.relevant_links == ["https://allowed"]
+    assert "## Summary" in rendered
+    assert "### Helpful links" in rendered
+    assert extract_existing_doc_issue_number(rendered) == 123
 
 
-def test_sanitize_analysis_requires_doc_issue_payload_when_needed():
-    analysis = IssueAnalysis(
-        summary="A short summary.",
-        documentation_sufficient=False,
-        relevant_links=[],
-        needs_doc_issue=True,
-        doc_issue_title="",
-        doc_issue_body=None,
-    )
+def test_issue_without_managed_block_needs_refresh():
+    assert issue_needs_summary_refresh(_issue(body="Original body", labels=["experiment"]), refresh_existing=False)
 
-    try:
-        sanitize_analysis(analysis, [])
-    except ValueError as exc:
-        assert "Documentation gap issues require" in str(exc)
-    else:
-        raise AssertionError("Expected sanitize_analysis() to reject incomplete doc issue payloads")
+
+def test_issue_with_managed_block_but_no_tldr_label_needs_refresh():
+    body = "<!-- experiment-tldr:start -->\nSummary\n<!-- experiment-tldr:end -->"
+    assert issue_needs_summary_refresh(_issue(body=body, labels=["experiment"]), refresh_existing=False)
+
+
+def test_issue_with_managed_block_and_tldr_label_is_skipped_without_refresh_existing():
+    body = "<!-- experiment-tldr:start -->\nSummary\n<!-- experiment-tldr:end -->"
+    assert not issue_needs_summary_refresh(_issue(body=body, labels=["experiment", "tldr"]), refresh_existing=False)
+
+
+def test_refresh_existing_revisits_adequately_labeled_issue():
+    body = "<!-- experiment-tldr:start -->\nSummary\n<!-- experiment-tldr:end -->"
+    assert issue_needs_summary_refresh(_issue(body=body, labels=["experiment", "tldr"]), refresh_existing=True)

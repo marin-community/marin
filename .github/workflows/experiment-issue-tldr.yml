@@ -2,7 +2,7 @@ name: Experiment Issue TL;DR Scrub
 
 on:
   schedule:
-    - cron: '0 8 * * *'  # Daily at 8 AM UTC
+    - cron: "0 8 * * *"
   workflow_dispatch:
     inputs:
       issue_number:
@@ -12,10 +12,10 @@ on:
       max_issues:
         description: "Maximum number of issues to inspect"
         required: false
-        default: "20"
+        default: "10"
         type: string
       refresh_existing:
-        description: "Refresh issues that already have a managed TL;DR block"
+        description: "Refresh issues that already have a managed TL;DR block and the tldr label"
         required: false
         default: false
         type: boolean
@@ -23,6 +23,8 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read
+  id-token: write
 
 concurrency:
   group: experiment-issue-tldr
@@ -31,10 +33,12 @@ concurrency:
 jobs:
   scrub:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -46,23 +50,52 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Scrub experiment issues
+      - name: Select candidate issues
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: gpt-4.1-mini
         run: |
-          args=()
+          args=(--repo "${{ github.repository }}" --pretty)
           if [ -n "${{ github.event.inputs.issue_number }}" ]; then
             args+=(--issue-number "${{ github.event.inputs.issue_number }}")
           fi
           if [ -n "${{ github.event.inputs.max_issues }}" ]; then
             args+=(--max-issues "${{ github.event.inputs.max_issues }}")
           fi
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            args+=(--refresh-existing)
-          fi
           if [ "${{ github.event.inputs.refresh_existing }}" = "true" ]; then
             args+=(--refresh-existing)
           fi
-          uv run --script scripts/pm/scrub_experiment_issue_tldrs.py "${args[@]}"
+          uv run --script scripts/pm/scrub_experiment_issue_tldrs.py "${args[@]}" > /tmp/experiment_issue_tldr_candidates.json
+          cat /tmp/experiment_issue_tldr_candidates.json
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: "claude[bot]"
+          additional_permissions: |
+            actions: read
+          prompt: |
+            Read AGENTS.md, [docs/explanations/guidelines.md](docs/explanations/guidelines.md), and [.github/prompts/experiment-issue-tldr.md](.github/prompts/experiment-issue-tldr.md).
+
+            The candidate discovery step wrote JSON to `/tmp/experiment_issue_tldr_candidates.json`.
+            Use that file as the source of truth for which issues to process. The script has already handled candidate selection and max-issue limits.
+
+            For each candidate issue in order:
+            1. Read the provided issue context and any linked GitHub issue/PR pages you need with `gh`.
+            2. Update the managed `<!-- experiment-tldr:start --> ... <!-- experiment-tldr:end -->` block in the issue body so it follows the prompt file guidance.
+            3. Improve existing summaries when they are inadequate, especially on issues that still do not have the `tldr` label.
+            4. Consider closed issues just as eligible as open issues.
+            5. Treat `250` words as a soft cap for the summary section.
+            6. Decide whether the issue now merits the `tldr` label; add it when the issue has an adequate newcomer-friendly summary plus enough supporting links, otherwise remove it.
+            7. After updating an issue body, add a comment tagging `@dlwh` that says what changed.
+
+            Constraints:
+            - Do not use `OPENAI_API_KEY` or any separate model API key.
+            - Do the summarization yourself inside this agent run.
+            - Use `gh issue edit`, `gh issue comment`, and `gh api` as needed.
+            - Skip issues whose body already matches the desired managed block content.
+            - If there are zero candidates, exit without mutating GitHub.
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 200
+            --allowedTools "Bash(gh:*),Bash(python:*),Bash(cat:*),Bash(jq:*),Bash(sed:*)"
