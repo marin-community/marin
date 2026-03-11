@@ -928,8 +928,13 @@ class ControllerServiceImpl:
 
         Worker registers once, then waits for heartbeats from the controller.
         """
-        # Derive worker_id from vm_address if present, otherwise from address
-        worker_id = WorkerId(request.metadata.vm_address or request.address)
+        if not request.worker_id:
+            logger.error("Worker at %s registered without worker_id", request.address)
+            return cluster_pb2.Controller.RegisterResponse(
+                worker_id="",
+                accepted=False,
+            )
+        worker_id = WorkerId(request.worker_id)
 
         self._transitions.register_or_refresh_worker(
             worker_id=worker_id,
@@ -1068,28 +1073,20 @@ class ControllerServiceImpl:
 
         status = autoscaler.get_status()
 
-        # Build a map of VM address -> worker info for enriching VmInfo
-        # Workers register with vm_address in metadata which matches VM's address
+        # Build a map of worker_id -> (worker_id, healthy) for enriching VmInfo
         workers = _worker_roster(self._db)
-        vm_address_to_worker: dict[str, tuple[str, bool]] = {}
+        worker_id_to_info: dict[str, tuple[str, bool]] = {}
         for w in workers:
-            # worker_id is derived from vm_address, use it to match
-            if w.metadata and w.metadata.vm_address:
-                vm_address_to_worker[w.metadata.vm_address] = (w.worker_id, w.healthy)
-            elif w.address:
-                # Fallback: match by worker address (without port) if no vm_address
-                host = w.address.split(":")[0] if ":" in w.address else w.address
-                vm_address_to_worker[host] = (w.worker_id, w.healthy)
+            worker_id_to_info[w.worker_id] = (w.worker_id, w.healthy)
 
-        # Enrich VmInfo objects with worker information
+        # Enrich VmInfo objects with worker information by matching vm_id to worker_id
         for group in status.groups:
             for slice_info in group.slices:
                 for vm in slice_info.vms:
-                    if vm.address:
-                        worker_info = vm_address_to_worker.get(vm.address)
-                        if worker_info:
-                            vm.worker_id = worker_info[0]
-                            vm.worker_healthy = worker_info[1]
+                    worker_info = worker_id_to_info.get(vm.vm_id)
+                    if worker_info:
+                        vm.worker_id = worker_info[0]
+                        vm.worker_healthy = worker_info[1]
 
         return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 

@@ -756,12 +756,14 @@ class Controller(_message.Message):
         workers: _containers.RepeatedCompositeFieldContainer[Controller.WorkerHealthStatus]
         def __init__(self, workers: _Optional[_Iterable[_Union[Controller.WorkerHealthStatus, _Mapping]]] = ...) -> None: ...
     class RegisterRequest(_message.Message):
-        __slots__ = ("address", "metadata")
+        __slots__ = ("address", "metadata", "worker_id")
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
+        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         address: str
         metadata: WorkerMetadata
-        def __init__(self, address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ...) -> None: ...
+        worker_id: str
+        def __init__(self, address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., worker_id: _Optional[str] = ...) -> None: ...
     class RegisterResponse(_message.Message):
         __slots__ = ("worker_id", "accepted")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]

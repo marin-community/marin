@@ -627,6 +627,66 @@ def test_profile_running_task(smoke_cluster):
 
 
 # ============================================================================
+# Checkpoint / restore
+# ============================================================================
+
+
+def test_checkpoint_restore():
+    """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
+
+    Uses a dedicated cluster (not the shared smoke_cluster). A single platform
+    instance restarts its controller between phases so the persistent DB dir
+    (held by LocalController across stop/start) preserves checkpoint state.
+    Phase 1 — run a job and write a checkpoint.
+    Phase 2 — restart the controller and verify the job is still SUCCEEDED
+              and the cluster can accept new work.
+    """
+    config = load_config(DEFAULT_CONFIG)
+    config = make_local_config(config)
+
+    platform = IrisConfig(config).platform()
+    url = platform.start_controller(config)
+    try:
+        # Phase 1: complete a job, write checkpoint, restart controller.
+        client = IrisClient.remote(url, workspace=IRIS_ROOT)
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client)
+        tc.wait_for_workers(1, timeout=30)
+
+        job = tc.submit(TestJobs.quick, "pre-restart")
+        tc.wait(job, timeout=30)
+        saved_job_id = job.job_id.to_wire()
+
+        ckpt = controller_client.begin_checkpoint(cluster_pb2.Controller.BeginCheckpointRequest())
+        assert ckpt.checkpoint_path, "begin_checkpoint returned empty path"
+        assert ckpt.job_count >= 1
+        controller_client.close()
+
+        url = platform.restart_controller(config)
+
+        # Phase 2: verify restored state and submit new work.
+        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
+        tc = IrisTestCluster(
+            url=url, client=IrisClient.remote(url, workspace=IRIS_ROOT), controller_client=controller_client
+        )
+
+        resp = controller_client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))
+        assert (
+            resp.job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+        ), f"Pre-restart job has state {resp.job.state} after restore"
+
+        tc.wait_for_workers(1, timeout=30)
+        post_job = tc.submit(TestJobs.quick, "post-restart")
+        status = tc.wait(post_job, timeout=30)
+        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+        controller_client.close()
+    finally:
+        platform.stop_controller(config)
+        platform.shutdown()
+
+
+# ============================================================================
 # Stress test
 # ============================================================================
 
@@ -697,6 +757,7 @@ def test_gpu_worker_metadata(tmp_path):
                 port=0,
                 cache_dir=cache_dir,
                 controller_address=url,
+                worker_id=f"test-gpu-worker-{uuid.uuid4().hex[:8]}",
                 poll_interval=Duration.from_seconds(0.1),
             )
             worker = Worker(

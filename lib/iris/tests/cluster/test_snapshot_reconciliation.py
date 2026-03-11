@@ -51,7 +51,7 @@ def _make_slice_snapshot(
     slice_id: str,
     scale_group: str = "tpu-group",
     lifecycle: str = "ready",
-    vm_addresses: list[str] | None = None,
+    worker_ids: list[str] | None = None,
     created_at_ms: int = 1000000,
     error_message: str = "",
 ) -> SliceSnapshot:
@@ -59,7 +59,7 @@ def _make_slice_snapshot(
         slice_id=slice_id,
         scale_group=scale_group,
         lifecycle=lifecycle,
-        vm_addresses=vm_addresses or [],
+        worker_ids=worker_ids or [],
         created_at_ms=created_at_ms,
         last_active_ms=created_at_ms,
         error_message=error_message,
@@ -70,7 +70,7 @@ def _make_fake_slice(
     slice_id: str,
     scale_group: str = "tpu-group",
     label_prefix: str = "test",
-    vm_addresses: list[str] | None = None,
+    worker_ids: list[str] | None = None,
 ) -> FakeSliceHandle:
     """Build a FakeSliceHandle with the right labels for list_slices filtering."""
     labels = Labels(label_prefix)
@@ -78,7 +78,7 @@ def _make_fake_slice(
         labels.iris_managed: "true",
         labels.iris_scale_group: scale_group,
     }
-    addrs = vm_addresses or ["10.0.0.1"]
+    addrs = worker_ids or ["10.0.0.1"]
     vms = [
         FakeWorkerHandle(
             vm_id=f"{slice_id}-vm-{i}",
@@ -113,27 +113,27 @@ class ReconciliationEnv:
         self,
         slice_id: str,
         lifecycle: str = "ready",
-        vm_addresses: list[str] | None = None,
+        worker_ids: list[str] | None = None,
         created_at_ms: int = 1000000,
     ) -> SliceSnapshot:
         return _make_slice_snapshot(
             slice_id=slice_id,
             scale_group=self.group_name,
             lifecycle=lifecycle,
-            vm_addresses=vm_addresses,
+            worker_ids=worker_ids,
             created_at_ms=created_at_ms,
         )
 
     def make_fake_slice(
         self,
         slice_id: str,
-        vm_addresses: list[str] | None = None,
+        worker_ids: list[str] | None = None,
     ) -> FakeSliceHandle:
         return _make_fake_slice(
             slice_id=slice_id,
             scale_group=self.group_name,
             label_prefix=self.label_prefix,
-            vm_addresses=vm_addresses,
+            worker_ids=worker_ids,
         )
 
 
@@ -150,8 +150,8 @@ def reconciliation_env() -> ReconciliationEnv:
 def test_restore_slice_in_checkpoint_and_cloud_preserves_lifecycle(reconciliation_env: ReconciliationEnv):
     """A READY slice in both checkpoint and cloud keeps its READY lifecycle."""
     env = reconciliation_env
-    slice_snap = env.make_slice_snapshot("slice-1", lifecycle="ready", vm_addresses=["10.0.0.1"])
-    cloud_handle = env.make_fake_slice("slice-1", vm_addresses=["10.0.0.1"])
+    slice_snap = env.make_slice_snapshot("slice-1", lifecycle="ready", worker_ids=["10.0.0.1"])
+    cloud_handle = env.make_fake_slice("slice-1", worker_ids=["10.0.0.1"])
     env.platform.inject_slice(cloud_handle)
 
     result = restore_scaling_group(
@@ -214,7 +214,7 @@ def test_restore_initializing_slice_with_cloud_ready(reconciliation_env: Reconci
 def test_restore_discards_slice_missing_from_cloud(reconciliation_env: ReconciliationEnv):
     """A checkpoint slice not in the cloud is discarded."""
     env = reconciliation_env
-    slice_snap = env.make_slice_snapshot("slice-gone", lifecycle="ready", vm_addresses=["10.0.0.99"])
+    slice_snap = env.make_slice_snapshot("slice-gone", lifecycle="ready", worker_ids=["10.0.0.99"])
 
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),

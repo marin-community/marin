@@ -57,7 +57,6 @@ def _make_snapshot(worker_id, address="host:8080", running_tasks=None):
     return DispatchBatch(
         worker_id=WorkerId(worker_id),
         worker_address=address,
-        vm_address="192.168.1.1",
         running_tasks=running_tasks or [],
         tasks_to_run=[],
         tasks_to_kill=[],

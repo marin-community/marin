@@ -21,9 +21,11 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
+    HardwareProbe,
     HostMetricsCollector,
     build_worker_metadata,
     check_worker_health,
+    infer_worker_id,
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -138,6 +140,7 @@ class Worker:
         self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Resolve worker metadata: explicit > environment_provider > hardware probe
+        hardware: HardwareProbe | None = None
         if worker_metadata is not None:
             self._worker_metadata = worker_metadata
         elif environment_provider is not None:
@@ -177,7 +180,11 @@ class Worker:
         self._threads = threads if threads is not None else get_thread_container()
         self._task_threads = self._threads.create_child("tasks")
 
-        self._worker_id: str | None = config.worker_id
+        # Resolve worker_id: config > GCP metadata inference > assigned by controller
+        worker_id = config.worker_id
+        if worker_id is None and hardware is not None:
+            worker_id = infer_worker_id(hardware)
+        self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
 
         # Heartbeat tracking for timeout detection
@@ -293,6 +300,7 @@ class Worker:
                     cluster_pb2.Controller.RegisterRequest(
                         address=address,
                         metadata=metadata,
+                        worker_id=self._worker_id or "",
                     )
                 )
                 if response.accepted:
