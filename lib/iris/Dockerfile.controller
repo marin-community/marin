@@ -3,6 +3,7 @@
 # Build from the iris directory:
 #   docker build -f Dockerfile.controller -t iris-controller:latest .
 #
+
 FROM python:3.12
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
@@ -48,6 +49,9 @@ RUN uv sync --no-install-project
 # Copy source and install the project
 COPY src/ ./src/
 RUN uv sync
+
+# Dashboard assets are pre-built by `iris build dashboard` before docker build.
+COPY dashboard/dist /app/dashboard/dist
 
 # Install profiling tools (py-spy for CPU/thread profiling, memray for memory profiling).
 # These are needed for /system/process profiling on the controller.

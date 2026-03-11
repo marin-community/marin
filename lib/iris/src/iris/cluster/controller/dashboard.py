@@ -74,13 +74,13 @@ class ControllerDashboard:
         return Starlette(routes=routes)
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Controller", "/static/controller/app.js"))
+        return HTMLResponse(html_shell("Iris Controller", "controller"))
 
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Job Detail", "/static/controller/job-detail.js"))
+        return HTMLResponse(html_shell("Job Detail", "controller"))
 
     def _worker_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Worker Detail", "/static/controller/worker-detail.js"))
+        return HTMLResponse(html_shell("Worker Detail", "controller"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
