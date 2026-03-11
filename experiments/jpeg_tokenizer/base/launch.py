@@ -52,6 +52,7 @@ class JpegTokenizerLaunchConfig:
     token_store_path: str
     output_path: str
     run_id: str
+    load_checkpoint_path: str | None = None
     resources: ResourceConfig
     steps: int
     batch_size: int
@@ -116,6 +117,7 @@ def run_jpeg_tokenizer_trial(config: JpegTokenizerLaunchConfig) -> None:
             save_interval=timedelta(minutes=config.checkpoint_minutes),
             keep=[{"every": config.checkpoint_keep_every_steps}],
         ),
+        load_checkpoint_path=config.load_checkpoint_path,
     )
 
     run_config = JpegRunConfig(
@@ -162,6 +164,9 @@ RESOLVED_HUFFMAN_EVENTS_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID = _resolve_run_id(
 )
 RESOLVED_HUFFMAN_EVENTS_WHOLE_LIBJPEG_SWA4096_RUN_ID = _resolve_run_id(
     "jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial"
+)
+RESOLVED_HUFFMAN_EVENTS_WHOLE_LIBJPEG_SWA4096_RETRY_RUN_ID = _resolve_run_id(
+    "jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial-r2"
 )
 RESOLVED_SYMBOLS_WHOLE_LIBJPEG_SWA4096_SMOKE_RUN_ID = _resolve_run_id(
     "jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke"
@@ -1200,6 +1205,65 @@ huffman_events_whole_libjpeg_swa4096_trial = ExecutorStep(
     ),
 )
 
+huffman_events_whole_libjpeg_swa4096_retry = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial-r2",
+    fn=run_jpeg_tokenizer_trial,
+    config=JpegTokenizerLaunchConfig(
+        model=versioned(
+            dataclasses.replace(
+                JPEG_TOKENIZER_V0_MODEL,
+                vocab_size=2_224,
+                max_seq_len=DEFAULT_HUFFMAN_EVENTS_WHOLE_SEQ_LEN,
+                sliding_window=DEFAULT_BYTE_WHOLE_SWA,
+            )
+        ),
+        token_store_path=str(DEFAULT_HUFFMAN_EVENTS_WHOLE_LIBJPEG_STORE_PATH),
+        output_path=this_output_path(),
+        run_id=RESOLVED_HUFFMAN_EVENTS_WHOLE_LIBJPEG_SWA4096_RETRY_RUN_ID,
+        load_checkpoint_path=versioned(
+            "gs://marin-eu-west4/tokexplore/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial-dcbebc/checkpoints"
+        ),
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        steps=versioned(2_000),
+        batch_size=versioned(8),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=_build_wandb_tracker(
+            group="tokexplore-jpeg-tokenizer-middle-ground",
+            tags=["jpeg-tokenizer", "huffman-events", "whole-image", "libjpeg", "swa4096", "baseline", "retry"],
+        ),
+        checkpoint_minutes=versioned(2),
+        checkpoint_keep_every_steps=versioned(500),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=1_000,
+            )
+        ),
+        jpeg_trainer=versioned(
+            JpegTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            JpegEvalConfig(
+                eval_batch_size=8,
+                steps_per_eval=1_000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+                compute_bpb=False,
+            )
+        ),
+    ),
+)
+
 symbols_whole_libjpeg_swa4096_smoke = ExecutorStep(
     name="tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-smoke",
     fn=run_jpeg_tokenizer_trial,
@@ -1336,6 +1400,7 @@ if __name__ == "__main__":
             scan_bytes_whole_swa4096_trial,
             huffman_events_whole_libjpeg_swa4096_smoke,
             huffman_events_whole_libjpeg_swa4096_trial,
+            huffman_events_whole_libjpeg_swa4096_retry,
             symbols_whole_libjpeg_swa4096_smoke,
             symbols_whole_libjpeg_swa4096_trial,
         ],
