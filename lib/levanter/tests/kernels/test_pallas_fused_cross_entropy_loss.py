@@ -12,6 +12,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_gpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
+from levanter.kernels.pallas.fused_cross_entropy_loss import xla as fused_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
@@ -19,6 +20,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
 from levanter.kernels.pallas.fused_cross_entropy_loss.tuned_block_sizes import infer_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss.xla import (
     _linear_softmax_cross_entropy_loss_streaming_custom_vjp,
+    infer_xla_b_block_size,
 )
 
 
@@ -231,6 +233,91 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
 
     assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
+
+
+def test_infer_xla_b_block_size_caps_large_batch_working_set():
+    b_block_size = infer_xla_b_block_size(4_194_304, 8_192)
+
+    assert b_block_size == 131_072
+    assert 4_194_304 % b_block_size == 0
+    assert b_block_size * 8_192 < 2**31
+
+
+def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    key = jax.random.PRNGKey(1)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+
+    x = jax.random.normal(key_x, (256, 32), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (32, 96), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (256,), 0, 96, dtype=jnp.int32)
+    logsumexp_weight = 0.2
+    logit_soft_cap = 1.5
+    block_size = 32
+
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 64)
+
+    def loss_custom(x_raw, w_raw):
+        loss, lse = _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
+            block_size,
+            jnp.float32,
+            logit_soft_cap,
+            None,
+            x_raw,
+            y,
+            w_raw,
+        )
+        return (loss + logsumexp_weight * (lse**2)).mean()
+
+    def loss_streaming(x_raw, w_raw):
+        loss, lse = linear_softmax_cross_entropy_loss_streaming(
+            x_raw,
+            y,
+            w_raw,
+            block_size=block_size,
+            dtype=jnp.float32,
+            logit_soft_cap=logit_soft_cap,
+        )
+        return (loss + logsumexp_weight * (lse**2)).mean()
+
+    gx_custom, gw_custom = jax.grad(loss_custom, argnums=(0, 1))(x, w)
+    gx_stream, gw_stream = jax.grad(loss_streaming, argnums=(0, 1))(x, w)
+
+    assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
+
+
+def test_fused_cross_entropy_xla_return_argmax_matches_reference_with_batch_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 2)
+
+    loss, _, argmax = fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        block_sizes=fused_api.BlockSizes(b_block_size=2, h_block_size=4, v_block_size=4),
+        dtype=jnp.float32,
+        logit_soft_cap=1.3,
+        return_argmax=True,
+    )
+
+    loss_ref, _, argmax_ref = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+        logit_soft_cap=1.3,
+        return_argmax=True,
+    )
+
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+    assert jnp.array_equal(argmax, argmax_ref)
 
 
 def test_fused_cross_entropy_pallas_requires_tpu():
