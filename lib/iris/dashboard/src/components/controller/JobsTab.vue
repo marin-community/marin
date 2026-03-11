@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
+import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, statusColors } from '@/types/status'
-import type { JobStatus, ListJobsResponse, ProtoTimestamp } from '@/types/rpc'
+import type { JobStatus, ListJobsResponse } from '@/types/rpc'
+import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
@@ -24,17 +26,29 @@ const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
 
 // -- State --
 
-const jobs = ref<JobStatus[]>([])
-const totalCount = ref(0)
-const hasMore = ref(false)
 const page = ref(0)
 const sortField = ref<SortField>('date')
 const sortDir = ref<SortDir>('desc')
 const nameFilter = ref('')
 const localFilter = ref('')
-const loading = ref(false)
-const error = ref<string | null>(null)
 const expandedJobs = ref<Set<string>>(loadExpandedJobs())
+
+const {
+  data: listResponse,
+  loading,
+  error,
+  refresh: fetchJobs,
+} = useControllerRpc<ListJobsResponse>('ListJobs', () => ({
+  offset: page.value * PAGE_SIZE,
+  limit: PAGE_SIZE,
+  sortField: SORT_FIELD_MAP[sortField.value],
+  sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
+  nameFilter: nameFilter.value || undefined,
+}))
+
+const jobs = computed(() => listResponse.value?.jobs ?? [])
+const totalCount = computed(() => listResponse.value?.totalCount ?? 0)
+const hasMore = computed(() => listResponse.value?.hasMore ?? false)
 
 // -- Session storage for expanded state --
 
@@ -52,35 +66,6 @@ function saveExpandedJobs() {
     sessionStorage.setItem(EXPANDED_JOBS_KEY, JSON.stringify([...expandedJobs.value]))
   } catch {
     // ignore
-  }
-}
-
-// -- Fetch --
-
-async function fetchJobs() {
-  loading.value = true
-  error.value = null
-  try {
-    const resp = await fetch('/iris.cluster.ControllerService/ListJobs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        offset: page.value * PAGE_SIZE,
-        limit: PAGE_SIZE,
-        sortField: SORT_FIELD_MAP[sortField.value],
-        sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
-        nameFilter: nameFilter.value || undefined,
-      }),
-    })
-    if (!resp.ok) throw new Error(`ListJobs: ${resp.status}`)
-    const data: ListJobsResponse = await resp.json()
-    jobs.value = data.jobs ?? []
-    totalCount.value = data.totalCount ?? 0
-    hasMore.value = data.hasMore ?? false
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    loading.value = false
   }
 }
 
@@ -196,39 +181,13 @@ function handleFilterClear() {
 
 // -- Formatting --
 
-function epochMs(ts: ProtoTimestamp | undefined): number {
-  if (!ts?.epochMs) return 0
-  return parseInt(ts.epochMs, 10) || 0
-}
-
-function formatDuration(startMs: number, endMs: number): string {
-  if (!startMs) return '-'
-  const diffSec = Math.floor((endMs - startMs) / 1000)
-  if (diffSec < 0) return '-'
-  if (diffSec < 60) return `${diffSec}s`
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ${diffSec % 60}s`
-  const hours = Math.floor(diffSec / 3600)
-  const mins = Math.floor((diffSec % 3600) / 60)
-  return `${hours}h ${mins}m`
-}
-
-function formatRelativeTime(ms: number): string {
-  if (!ms) return '-'
-  const seconds = Math.floor((Date.now() - ms) / 1000)
-  if (seconds < 0) return 'just now'
-  if (seconds < 60) return `${seconds}s ago`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-  return `${Math.floor(seconds / 86400)}d ago`
-}
-
 function jobDuration(job: JobStatus): string {
-  const started = epochMs(job.startedAt)
+  const started = timestampMs(job.startedAt)
   if (started) {
-    const ended = epochMs(job.finishedAt) || Date.now()
+    const ended = timestampMs(job.finishedAt) || Date.now()
     return formatDuration(started, ended)
   }
-  const submitted = epochMs(job.submittedAt)
+  const submitted = timestampMs(job.submittedAt)
   if (submitted) {
     return 'queued ' + formatRelativeTime(submitted)
   }

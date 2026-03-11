@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useWorkerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { GetProcessStatusResponse, ProcessInfo } from '@/types/rpc'
+import { formatBytes } from '@/utils/formatting'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
@@ -13,14 +14,6 @@ useAutoRefresh(refresh, 10_000)
 onMounted(refresh)
 
 const info = computed<ProcessInfo | null>(() => data.value?.processInfo ?? null)
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-}
 
 function formatUptime(uptimeMs?: string): string {
   if (!uptimeMs) return '-'

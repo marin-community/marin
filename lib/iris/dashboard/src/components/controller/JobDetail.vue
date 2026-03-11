@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
+import { controllerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName, statusColors } from '@/types/status'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest,
   GetJobStatusResponse, ListTasksResponse,
-  ProtoTimestamp, DeviceConfig, ResourceUsage,
+  DeviceConfig, ResourceUsage,
 } from '@/types/rpc'
+import { timestampMs, formatTimestamp, formatDuration, formatBytes } from '@/utils/formatting'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -35,8 +37,8 @@ async function fetchData() {
   error.value = null
   try {
     const [jobResp, tasksResp] = await Promise.all([
-      rpcCall<GetJobStatusResponse>('GetJobStatus', { jobId: props.jobId }),
-      rpcCall<ListTasksResponse>('ListTasks', { jobId: props.jobId }),
+      controllerRpcCall<GetJobStatusResponse>('GetJobStatus', { jobId: props.jobId }),
+      controllerRpcCall<ListTasksResponse>('ListTasks', { jobId: props.jobId }),
     ])
     if (!jobResp.job) {
       error.value = 'Job not found'
@@ -52,15 +54,6 @@ async function fetchData() {
   }
 }
 
-async function rpcCall<T>(method: string, body: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/iris.cluster.ControllerService/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
-  return resp.json() as Promise<T>
-}
 
 onMounted(fetchData)
 
@@ -78,48 +71,18 @@ watch(isTerminal, (terminal) => {
 
 // -- Formatting helpers --
 
-function epochMs(ts: ProtoTimestamp | undefined): number {
-  if (!ts?.epochMs) return 0
-  return parseInt(ts.epochMs, 10) || 0
-}
-
-function formatTimestamp(ts: ProtoTimestamp | undefined): string {
-  const ms = epochMs(ts)
-  if (!ms) return '-'
-  return new Date(ms).toLocaleString()
-}
-
-function formatDuration(startMs: number, endMs: number): string {
-  if (!startMs) return '-'
-  const diffSec = Math.floor((endMs - startMs) / 1000)
-  if (diffSec < 0) return '-'
-  if (diffSec < 60) return `${diffSec}s`
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ${diffSec % 60}s`
-  const hours = Math.floor(diffSec / 3600)
-  const mins = Math.floor((diffSec % 3600) / 60)
-  return `${hours}h ${mins}m`
-}
-
 function jobDuration(j: JobStatus): string {
-  const started = epochMs(j.startedAt)
+  const started = timestampMs(j.startedAt)
   if (!started) return '-'
-  const ended = epochMs(j.finishedAt) || Date.now()
+  const ended = timestampMs(j.finishedAt) || Date.now()
   return formatDuration(started, ended)
 }
 
 function taskDuration(t: TaskStatus): string {
-  const started = epochMs(t.startedAt)
+  const started = timestampMs(t.startedAt)
   if (!started) return '-'
-  const ended = epochMs(t.finishedAt) || Date.now()
+  const ended = timestampMs(t.finishedAt) || Date.now()
   return formatDuration(started, ended)
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  const val = bytes / Math.pow(1024, i)
-  return (val >= 100 ? Math.round(val) : val.toFixed(1)) + ' ' + units[i]
 }
 
 function formatDevice(device: DeviceConfig | undefined): string | null {
@@ -218,7 +181,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
   try {
     const body: Record<string, unknown> = { taskId, profilerType }
     if (format) body.format = format
-    const resp = await rpcCall<{ data?: string; filename?: string }>('ProfileTask', body)
+    const resp = await controllerRpcCall<{ data?: string; filename?: string }>('ProfileTask', body)
     if (resp.data) {
       const blob = new Blob([atob(resp.data)], { type: 'application/octet-stream' })
       const url = URL.createObjectURL(blob)

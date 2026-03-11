@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { GetTransactionsResponse, TransactionAction, ProtoTimestamp } from '@/types/rpc'
+import { timestampMs, formatLogTime } from '@/utils/formatting'
 import EmptyState from '@/components/shared/EmptyState.vue'
 
 const { data, loading, error, refresh } = useControllerRpc<GetTransactionsResponse>('GetTransactions')
@@ -16,15 +17,7 @@ const actions = computed<TransactionAction[]>(() => {
 })
 
 function formatTime(ts?: ProtoTimestamp): string {
-  if (!ts?.epochMs) return '-'
-  const ms = parseInt(ts.epochMs, 10)
-  if (!ms) return '-'
-  const d = new Date(ms)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  const ss = String(d.getSeconds()).padStart(2, '0')
-  const mmm = String(d.getMilliseconds()).padStart(3, '0')
-  return `${hh}:${mm}:${ss}.${mmm}`
+  return formatLogTime(timestampMs(ts)) || '-'
 }
 
 function parseDetails(details?: string): string {

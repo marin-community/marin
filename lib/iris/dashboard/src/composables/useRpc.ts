@@ -4,8 +4,13 @@
  * Wraps fetch() with reactive loading/error state. The caller gets back
  * { data, loading, error, refresh } and calls refresh() to trigger a fetch.
  * Initial data is null until the first successful fetch.
+ *
+ * The body parameter can be a static object or a factory function for cases
+ * where request parameters depend on reactive state (e.g. props, pagination).
  */
 import { ref, type Ref } from 'vue'
+
+export type RpcBody = Record<string, unknown> | (() => Record<string, unknown>)
 
 export interface RpcState<T> {
   data: Ref<T | null>
@@ -14,7 +19,7 @@ export interface RpcState<T> {
   refresh: () => Promise<void>
 }
 
-function useRpc<T>(service: string, method: string, body?: Record<string, unknown>): RpcState<T> {
+function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T> {
   const data = ref<T | null>(null) as Ref<T | null>
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -23,10 +28,11 @@ function useRpc<T>(service: string, method: string, body?: Record<string, unknow
     loading.value = true
     error.value = null
     try {
+      const resolvedBody = typeof body === 'function' ? body() : (body ?? {})
       const resp = await fetch(`/${service}/${method}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body ?? {}),
+        body: JSON.stringify(resolvedBody),
       })
       if (!resp.ok) {
         throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
@@ -45,7 +51,7 @@ function useRpc<T>(service: string, method: string, body?: Record<string, unknow
 /** RPC composable for ControllerService endpoints. */
 export function useControllerRpc<T>(
   method: string,
-  body?: Record<string, unknown>,
+  body?: RpcBody,
 ): RpcState<T> {
   return useRpc<T>('iris.cluster.ControllerService', method, body)
 }
@@ -53,7 +59,29 @@ export function useControllerRpc<T>(
 /** RPC composable for WorkerService endpoints. */
 export function useWorkerRpc<T>(
   method: string,
-  body?: Record<string, unknown>,
+  body?: RpcBody,
 ): RpcState<T> {
   return useRpc<T>('iris.cluster.WorkerService', method, body)
+}
+
+/** One-shot RPC call returning a Promise. For use in async functions that
+ *  need to call multiple RPCs or handle the response imperatively. */
+export async function controllerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
+  const resp = await fetch(`/iris.cluster.ControllerService/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
+  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
+  return resp.json() as Promise<T>
+}
+
+export async function workerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
+  const resp = await fetch(`/iris.cluster.WorkerService/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
+  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
+  return resp.json() as Promise<T>
 }

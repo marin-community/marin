@@ -4,14 +4,6 @@
 #   docker build -f Dockerfile.controller -t iris-controller:latest .
 #
 
-# --- Frontend build stage ---
-FROM node:22-slim AS dashboard-build
-WORKDIR /dashboard
-COPY dashboard/package.json dashboard/package-lock.json ./
-RUN npm ci
-COPY dashboard/ ./
-RUN npm run build
-
 FROM python:3.12
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
@@ -58,8 +50,8 @@ RUN uv sync --no-install-project
 COPY src/ ./src/
 RUN uv sync
 
-# Copy built dashboard assets
-COPY --from=dashboard-build /dashboard/dist /app/dashboard/dist
+# Dashboard assets are pre-built by `iris build dashboard` before docker build.
+COPY dashboard/dist /app/dashboard/dist
 
 # Install profiling tools (py-spy for CPU/thread profiling, memray for memory profiling).
 # These are needed for /system/process profiling on the controller.

@@ -6,18 +6,9 @@
  * like "5s ago", "3m ago", "2h ago", "1d ago".
  */
 import { ref, watch, onUnmounted, type Ref, toValue, type MaybeRefOrGetter } from 'vue'
+import { formatRelativeTime } from '@/utils/formatting'
 
 const UPDATE_INTERVAL_MS = 30_000
-
-function formatRelative(timestampMs: number): string {
-  if (!timestampMs) return '-'
-  const seconds = Math.floor((Date.now() - timestampMs) / 1000)
-  if (seconds < 0) return 'just now'
-  if (seconds < 60) return `${seconds}s ago`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-  return `${Math.floor(seconds / 86400)}d ago`
-}
 
 function parseTimestamp(ts: string | number | null | undefined): number {
   if (ts === null || ts === undefined) return 0
@@ -28,10 +19,10 @@ function parseTimestamp(ts: string | number | null | undefined): number {
 export function useRelativeTime(
   timestamp: MaybeRefOrGetter<string | number | null | undefined>,
 ): Ref<string> {
-  const display = ref(formatRelative(parseTimestamp(toValue(timestamp))))
+  const display = ref(formatRelativeTime(parseTimestamp(toValue(timestamp))))
 
   function update() {
-    display.value = formatRelative(parseTimestamp(toValue(timestamp)))
+    display.value = formatRelativeTime(parseTimestamp(toValue(timestamp)))
   }
 
   watch(() => toValue(timestamp), update)

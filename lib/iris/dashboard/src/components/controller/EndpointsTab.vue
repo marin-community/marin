@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
+import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { EndpointInfo, ListEndpointsResponse } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -9,30 +10,20 @@ const SHOW_ALL_THRESHOLD = 100
 
 const prefix = ref('')
 const localPrefix = ref('')
-const endpoints = ref<EndpointInfo[]>([])
-const loading = ref(false)
-const error = ref<string | null>(null)
 const showAll = ref(false)
 
-async function fetchEndpoints() {
-  loading.value = true
-  error.value = null
-  try {
-    const resp = await fetch('/iris.cluster.ControllerService/ListEndpoints', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prefix: prefix.value || undefined }),
-    })
-    if (!resp.ok) throw new Error(`ListEndpoints: ${resp.status}`)
-    const data: ListEndpointsResponse = await resp.json()
-    endpoints.value = data.endpoints ?? []
-    showAll.value = false
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    loading.value = false
-  }
-}
+const {
+  data: listResponse,
+  loading,
+  error,
+  refresh: fetchEndpoints,
+} = useControllerRpc<ListEndpointsResponse>('ListEndpoints', () => ({
+  prefix: prefix.value || undefined,
+}))
+
+const endpoints = computed(() => listResponse.value?.endpoints ?? [])
+
+watch(listResponse, () => { showAll.value = false })
 
 onMounted(fetchEndpoints)
 useAutoRefresh(fetchEndpoints, 30_000)

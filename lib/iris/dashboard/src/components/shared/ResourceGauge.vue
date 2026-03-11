@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { formatBytes } from '@/utils/formatting'
 
 const props = defineProps<{
   label: string
@@ -31,19 +32,10 @@ const TEXT_COLORS: Record<string, string> = {
   danger: 'text-status-danger',
 }
 
-const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
-
 function formatValue(value: number, unit: string): string {
   if (unit === 'bytes') return formatBytes(value)
   if (unit === 'cores') return formatCores(value)
   return String(value)
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), BYTE_UNITS.length - 1)
-  const val = bytes / Math.pow(1024, i)
-  return (val >= 100 ? Math.round(val) : val.toFixed(1)) + ' ' + BYTE_UNITS[i]
 }
 
 function formatCores(cores: number): string {

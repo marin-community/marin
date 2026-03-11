@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useWorkerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
-import type { ProtoTimestamp, TaskStatus, GetTaskStatusResponse } from '@/types/rpc'
+import type { TaskStatus, GetTaskStatusResponse } from '@/types/rpc'
+import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatTimestamp } from '@/utils/formatting'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
@@ -16,49 +18,18 @@ const props = defineProps<{
   taskId: string
 }>()
 
-const task = ref<TaskStatus | null>(null)
-const loading = ref(false)
-const error = ref<string | null>(null)
+const {
+  data: taskResponse,
+  loading,
+  error,
+  refresh: fetchTask,
+} = useWorkerRpc<GetTaskStatusResponse>('GetTaskStatus', () => ({ taskId: props.taskId }))
+
+const task = computed(() => taskResponse.value?.task ?? null)
 
 // Track resource history for sparklines (up to MAX_HISTORY_SAMPLES samples)
 const cpuHistory = ref<number[]>([])
 const memHistory = ref<number[]>([])
-
-function timestampMs(ts?: ProtoTimestamp): number {
-  if (!ts?.epochMs) return 0
-  return parseInt(ts.epochMs, 10) || 0
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-}
-
-function formatDuration(startMs: number, endMs?: number): string {
-  if (!startMs) return '-'
-  const end = endMs || Date.now()
-  const seconds = Math.floor((end - startMs) / 1000)
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
-}
-
-function formatRelativeTime(ms: number): string {
-  if (!ms) return '-'
-  const secs = Math.floor((Date.now() - ms) / 1000)
-  if (secs < 60) return `${secs}s ago`
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
-  return `${Math.floor(secs / 3600)}h ago`
-}
-
-function formatTimestamp(ts?: ProtoTimestamp): string {
-  const ms = timestampMs(ts)
-  if (!ms) return '-'
-  return new Date(ms).toLocaleString()
-}
 
 function pushSample(history: number[], value: number) {
   history.push(value)
@@ -67,33 +38,14 @@ function pushSample(history: number[], value: number) {
   }
 }
 
-async function fetchTask() {
-  loading.value = true
-  error.value = null
-  try {
-    const resp = await fetch('/iris.cluster.WorkerService/GetTaskStatus', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskId: props.taskId }),
-    })
-    if (!resp.ok) throw new Error(`GetTaskStatus: ${resp.status}`)
-    const data = (await resp.json()) as GetTaskStatusResponse
-    task.value = data.task
-
-    // Record resource snapshot for sparklines
-    const ru = data.task?.resourceUsage
-    if (ru) {
-      const cpuPct = ru.cpuPercent ?? 0
-      const memMb = ru.memoryMb ? parseFloat(ru.memoryMb) : 0
-      pushSample(cpuHistory.value, cpuPct)
-      pushSample(memHistory.value, memMb)
-    }
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    loading.value = false
+// Record resource snapshot for sparklines on each successful fetch
+watch(taskResponse, (resp) => {
+  const ru = resp?.task?.resourceUsage
+  if (ru) {
+    pushSample(cpuHistory.value, ru.cpuPercent ?? 0)
+    pushSample(memHistory.value, ru.memoryMb ? parseFloat(ru.memoryMb) : 0)
   }
-}
+})
 
 const normalizedState = computed(() => (task.value ? stateToName(task.value.state) : ''))
 

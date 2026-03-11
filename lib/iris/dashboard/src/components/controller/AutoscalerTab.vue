@@ -13,6 +13,7 @@ import type {
   AutoscalerAction,
   ProtoTimestamp,
 } from '@/types/rpc'
+import { timestampMs, formatRelativeTime } from '@/utils/formatting'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import MetricCard from '@/components/shared/MetricCard.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -42,20 +43,6 @@ function toggleSlices(name: string) {
 }
 
 // -- Helpers --
-
-function timestampMs(ts?: ProtoTimestamp): number {
-  if (!ts?.epochMs) return 0
-  return parseInt(ts.epochMs, 10) || 0
-}
-
-function formatRelativeTime(ms: number): string {
-  if (!ms) return '-'
-  const seconds = Math.floor((Date.now() - ms) / 1000)
-  if (seconds < 0) return 'just now'
-  if (seconds < 60) return `${seconds}s ago`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  return `${Math.floor(seconds / 3600)}h ago`
-}
 
 function formatActionTime(ts?: ProtoTimestamp): string {
   const ms = timestampMs(ts)

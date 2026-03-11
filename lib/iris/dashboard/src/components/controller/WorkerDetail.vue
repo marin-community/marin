@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
+import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
-  ProtoTimestamp,
   GetWorkerStatusResponse,
   TaskStatus,
   WorkerResourceSnapshot,
   LogEntry,
 } from '@/types/rpc'
+import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate } from '@/utils/formatting'
 
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -23,48 +24,12 @@ const props = defineProps<{
   workerId: string
 }>()
 
-const data = ref<GetWorkerStatusResponse | null>(null)
-const loading = ref(false)
-const error = ref<string | null>(null)
-
-function timestampMs(ts?: ProtoTimestamp): number {
-  if (!ts?.epochMs) return 0
-  return parseInt(ts.epochMs, 10) || 0
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-}
-
-function formatDuration(startMs: number, endMs?: number): string {
-  if (!startMs) return '-'
-  const end = endMs || Date.now()
-  const seconds = Math.floor((end - startMs) / 1000)
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
-}
-
-function formatRelativeTime(ms: number): string {
-  if (!ms) return '-'
-  const seconds = Math.floor((Date.now() - ms) / 1000)
-  if (seconds < 60) return `${seconds}s ago`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-  return `${Math.floor(seconds / 86400)}d ago`
-}
-
-function formatRate(bytesPerSec: number): string {
-  if (!bytesPerSec) return '0 B/s'
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
-  const i = Math.min(Math.floor(Math.log(bytesPerSec) / Math.log(1024)), units.length - 1)
-  const val = bytesPerSec / Math.pow(1024, i)
-  return (val >= 100 ? Math.round(val) : val.toFixed(1)) + ' ' + units[i]
-}
+const {
+  data,
+  loading,
+  error,
+  refresh: fetchWorker,
+} = useControllerRpc<GetWorkerStatusResponse>('GetWorkerStatus', () => ({ id: props.workerId }))
 
 function formatDevice(): string {
   const md = data.value?.worker?.metadata
@@ -77,24 +42,6 @@ function formatDevice(): string {
   if (md.device?.tpu) return `TPU: ${md.device.tpu.variant || 'unknown'}`
   if (md.device?.gpu) return `GPU: ${md.device.gpu.count || 1}x ${md.device.gpu.variant || 'unknown'}`
   return 'CPU'
-}
-
-async function fetchWorker() {
-  loading.value = true
-  error.value = null
-  try {
-    const resp = await fetch('/iris.cluster.ControllerService/GetWorkerStatus', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: props.workerId }),
-    })
-    if (!resp.ok) throw new Error(`GetWorkerStatus: ${resp.status}`)
-    data.value = (await resp.json()) as GetWorkerStatusResponse
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    loading.value = false
-  }
 }
 
 const worker = computed(() => data.value?.worker)
@@ -152,7 +99,7 @@ function logLevelClass(level: string | undefined): string {
   }
 }
 
-function formatLogTime(ts?: ProtoTimestamp): string {
+function formatLogTime(ts?: { epochMs: string }): string {
   const ms = timestampMs(ts)
   if (!ms) return ''
   return new Date(ms).toLocaleTimeString()

@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useControllerRpc, useWorkerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { FetchLogsResponse, GetTaskLogsResponse, LogEntry } from '@/types/rpc'
+import { timestampMs } from '@/utils/formatting'
 
 const props = withDefaults(defineProps<{
   taskId?: string
@@ -89,8 +90,7 @@ function logLevelClass(entryLevel: string | undefined): string {
 }
 
 function formatLogTime(timestamp: { epochMs: string } | undefined): string {
-  if (!timestamp?.epochMs) return ''
-  const ms = parseInt(timestamp.epochMs, 10)
+  const ms = timestampMs(timestamp)
   if (!ms) return ''
   return new Date(ms).toLocaleTimeString()
 }

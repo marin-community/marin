@@ -3,7 +3,8 @@ import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import type { ListWorkersResponse, WorkerHealthStatus, ProtoTimestamp } from '@/types/rpc'
+import type { ListWorkersResponse, WorkerHealthStatus } from '@/types/rpc'
+import { timestampMs, formatRelativeTime, formatBytes } from '@/utils/formatting'
 
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -12,28 +13,6 @@ const { data, loading, error, refresh } = useControllerRpc<ListWorkersResponse>(
 
 useAutoRefresh(refresh, 10_000)
 onMounted(refresh)
-
-function timestampMs(ts?: ProtoTimestamp): number {
-  if (!ts?.epochMs) return 0
-  return parseInt(ts.epochMs, 10) || 0
-}
-
-function formatRelativeTime(ms: number): string {
-  if (!ms) return '-'
-  const seconds = Math.floor((Date.now() - ms) / 1000)
-  if (seconds < 60) return `${seconds}s ago`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-  return `${Math.floor(seconds / 86400)}d ago`
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-}
 
 function formatDevice(w: WorkerHealthStatus): string {
   const md = w.metadata
