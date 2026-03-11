@@ -1,5 +1,8 @@
 -- Normalize scaling_groups: replace snapshot_proto blob with proper columns.
 -- Add a dedicated slices table for per-slice state.
+-- Idempotent: drop any leftover temp table before starting (safe to rerun after
+-- a crash between CREATE TABLE scaling_groups_new and the final RENAME).
+DROP TABLE IF EXISTS scaling_groups_new;
 
 CREATE TABLE scaling_groups_new (
     name                    TEXT PRIMARY KEY,
