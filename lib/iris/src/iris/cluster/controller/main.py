@@ -5,6 +5,7 @@
 
 import logging
 import os
+import secrets
 import signal
 import threading
 from pathlib import Path
@@ -16,7 +17,7 @@ from iris.cluster.controller.controller import Controller, ControllerConfig, Rpc
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
-from iris.rpc.auth import GcpTokenVerifier, TokenVerifier
+from iris.rpc.auth import CompositeTokenVerifier, GcpTokenVerifier, StaticTokenVerifier, TokenVerifier
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
@@ -170,10 +171,20 @@ def serve(
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
-    # Create auth verifier from cluster config if present
+    # Create auth verifier from cluster config if present.
+    # When auth is enabled, generate a shared token for worker→controller RPCs
+    # and wrap both verifiers in a CompositeTokenVerifier so the controller
+    # accepts both GCP user tokens and the static worker token.
     auth_verifier = None
     if cluster_config and cluster_config.HasField("auth"):
-        auth_verifier = create_auth_verifier(cluster_config.auth)
+        gcp_verifier = create_auth_verifier(cluster_config.auth)
+        if gcp_verifier is not None:
+            worker_token = secrets.token_urlsafe(32)
+            worker_verifier = StaticTokenVerifier({worker_token: "iris-worker"})
+            auth_verifier = CompositeTokenVerifier([worker_verifier, gcp_verifier])
+            if base_worker_config is not None:
+                base_worker_config.auth_token = worker_token
+            logger.info("Auth enabled with worker token for worker→controller RPCs")
     if auth_verifier is None:
         logger.info("Authentication disabled (no auth config)")
 

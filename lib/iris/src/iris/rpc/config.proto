@@ -267,6 +267,10 @@ message WorkerConfig {
   // Storage prefix for task artifacts (profiles). Injected by the controller
   // from the resolved bundle_prefix. Empty disables profile upload.
   string storage_prefix = 60;
+
+  // Bearer token for worker→controller authentication.
+  // Set by the controller when auth is enabled; empty when auth is disabled.
+  string auth_token = 70;
 }
 
 // SSH configuration for manual hosts

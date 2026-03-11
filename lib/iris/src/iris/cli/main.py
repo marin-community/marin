@@ -14,8 +14,25 @@ import sys
 import click
 
 from iris.logging import configure_logging
+from iris.rpc.auth import TokenProvider
 
 logger = _logging_module.getLogger(__name__)
+
+
+def create_client_token_provider(auth_config) -> TokenProvider | None:
+    """Create a TokenProvider from an AuthConfig proto for CLI usage.
+
+    Returns None when no provider is configured, so unauthenticated clusters
+    continue to work without any change in behavior.
+    """
+    provider = auth_config.WhichOneof("provider")
+    if provider is None:
+        return None
+    if provider == "gcp":
+        from iris.rpc.auth import CliGcpTokenProvider
+
+        return CliGcpTokenProvider(audience=auth_config.gcp.audience)
+    raise ValueError(f"Unknown auth provider: {provider}")
 
 
 def _configure_client_s3(config) -> None:
@@ -134,6 +151,9 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
         ctx.obj["config"] = iris_config.proto
         ctx.obj["config_file"] = config_file
         _configure_client_s3(iris_config.proto)
+
+        if iris_config.proto.HasField("auth"):
+            ctx.obj["token_provider"] = create_client_token_provider(iris_config.proto.auth)
 
     # Store direct controller URL; tunnel from config is established lazily
     # in require_controller_url() so commands like ``cluster start`` don't block.

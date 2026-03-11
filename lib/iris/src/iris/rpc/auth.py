@@ -76,6 +76,22 @@ class GcpTokenVerifier:
         return email
 
 
+class CompositeTokenVerifier:
+    """Tries multiple verifiers in order, returning the first successful result."""
+
+    def __init__(self, verifiers: list[TokenVerifier]):
+        self._verifiers = verifiers
+
+    def verify(self, token: str) -> str:
+        errors = []
+        for verifier in self._verifiers:
+            try:
+                return verifier.verify(token)
+            except ValueError as exc:
+                errors.append(str(exc))
+        raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
+
+
 class AuthInterceptor:
     """Server-side Connect RPC interceptor that enforces bearer token auth.
 

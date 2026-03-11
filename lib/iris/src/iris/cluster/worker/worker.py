@@ -36,6 +36,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import slow_log
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -64,6 +65,7 @@ class WorkerConfig:
     gpu_count: int = 0
     preemptible: bool = False
     storage_prefix: str = ""
+    auth_token: str = ""
 
 
 def worker_config_from_proto(
@@ -110,6 +112,7 @@ def worker_config_from_proto(
         gpu_count=proto.gpu_count,
         preemptible=proto.preemptible,
         storage_prefix=proto.storage_prefix,
+        auth_token=proto.auth_token,
     )
 
 
@@ -223,9 +226,13 @@ class Worker:
 
         # Create controller client if controller configured
         if self._config.controller_address:
+            interceptors = ()
+            if self._config.auth_token:
+                interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=5000,
+                interceptors=interceptors,
             )
 
             # Start lifecycle thread: register + serve + reset loop

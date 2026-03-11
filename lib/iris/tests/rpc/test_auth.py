@@ -11,6 +11,7 @@ from connectrpc.errors import ConnectError
 from iris.rpc.auth import (
     AuthInterceptor,
     AuthTokenInjector,
+    CompositeTokenVerifier,
     StaticTokenProvider,
     StaticTokenVerifier,
     get_verified_user,
@@ -228,3 +229,48 @@ def test_cli_gcp_token_provider_all_fail():
     ):
         with pytest.raises(RuntimeError, match="gcloud auth failed"):
             provider.get_token()
+
+
+def test_composite_verifier_first_match():
+    v1 = StaticTokenVerifier({"tok-a": "alice"})
+    v2 = StaticTokenVerifier({"tok-b": "bob"})
+    composite = CompositeTokenVerifier([v1, v2])
+    assert composite.verify("tok-a") == "alice"
+
+
+def test_composite_verifier_second_match():
+    v1 = StaticTokenVerifier({"tok-a": "alice"})
+    v2 = StaticTokenVerifier({"tok-b": "bob"})
+    composite = CompositeTokenVerifier([v1, v2])
+    assert composite.verify("tok-b") == "bob"
+
+
+def test_composite_verifier_all_fail():
+    v1 = StaticTokenVerifier({"tok-a": "alice"})
+    v2 = StaticTokenVerifier({"tok-b": "bob"})
+    composite = CompositeTokenVerifier([v1, v2])
+    with pytest.raises(ValueError, match="All verifiers failed"):
+        composite.verify("unknown-token")
+
+
+# ---------------------------------------------------------------------------
+# CLI token provider factory
+# ---------------------------------------------------------------------------
+
+
+def test_create_client_token_provider_gcp():
+    from iris.cli.main import create_client_token_provider
+    from iris.rpc.auth import CliGcpTokenProvider
+    from iris.rpc.config_pb2 import AuthConfig
+
+    config = AuthConfig(gcp={"audience": "https://my-controller"})
+    provider = create_client_token_provider(config)
+    assert isinstance(provider, CliGcpTokenProvider)
+
+
+def test_create_client_token_provider_none_when_no_provider():
+    from iris.cli.main import create_client_token_provider
+    from iris.rpc.config_pb2 import AuthConfig
+
+    config = AuthConfig()
+    assert create_client_token_provider(config) is None
