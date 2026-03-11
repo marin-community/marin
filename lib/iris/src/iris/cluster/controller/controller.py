@@ -740,14 +740,17 @@ class Controller:
 
         if db is not None:
             self._db = db
+            log_db_path = db.db_path.parent / "logs.sqlite3"
         elif config.log_dir is not None:
             db_path = config.log_dir / "controller.sqlite3"
             self._db = ControllerDB(db_path=db_path)
+            log_db_path = config.log_dir / "logs.sqlite3"
         else:
             tmp = Path(tempfile.mkdtemp(prefix="iris_controller_state_"))
             db_path = tmp / "controller.sqlite3"
             self._db = ControllerDB(db_path=db_path)
-        self._log_store = LogStore(db_path=self._db.db_path)
+            log_db_path = tmp / "logs.sqlite3"
+        self._log_store = LogStore(db_path=log_db_path)
         self._transitions = ControllerTransitions(
             db=self._db,
             log_store=self._log_store,
