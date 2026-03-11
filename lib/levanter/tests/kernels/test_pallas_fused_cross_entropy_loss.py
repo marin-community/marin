@@ -20,7 +20,6 @@ from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
 from levanter.kernels.pallas.fused_cross_entropy_loss.tuned_block_sizes import infer_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss.xla import (
     _linear_softmax_cross_entropy_loss_streaming_custom_vjp,
-    infer_xla_b_block_size,
 )
 
 
@@ -233,14 +232,6 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
 
     assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
-
-
-def test_infer_xla_b_block_size_caps_large_batch_working_set():
-    b_block_size = infer_xla_b_block_size(4_194_304, 8_192)
-
-    assert b_block_size == 131_072
-    assert 4_194_304 % b_block_size == 0
-    assert b_block_size * 8_192 < 2**31
 
 
 def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blocking(
