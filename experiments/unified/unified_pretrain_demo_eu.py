@@ -69,7 +69,7 @@ VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
 UNIFIED_TOKENIZER_PATH = "gs://marin-eu-west4/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2"
-VISUAL_ONLY_CACHE_PATH = "gs://marin-vlm-eu/visual_only_cache"
+VISUAL_ONLY_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2/visual_only"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm-eu/unified_eval_cache"
 TEXT_EVAL_CACHE_PATH = "gs://marin-vlm-eu/text_eval_cache"
 
@@ -328,7 +328,7 @@ def unified_data_config(
             loss_weights_key="loss_weights",
         )
         components["visual_only"] = DatasetComponent(
-            cache_dir=f"{visual_cache_path}/train",
+            cache_dir=visual_cache_path,
             format=vis_prebuilt_format,
             pack=True,
             tags=["visual"],
@@ -336,7 +336,7 @@ def unified_data_config(
         weights["visual_only"] = vis_weight
 
         components["val_visual"] = DatasetComponent(
-            cache_dir=f"{visual_cache_path}/validation",
+            cache_dir=visual_cache_path,
             format=vis_prebuilt_format,
             pack=True,
             tags=["visual"],
@@ -510,7 +510,7 @@ def visual_only_data_config(
     )
     components = {
         "visual_only": DatasetComponent(
-            cache_dir=f"{visual_cache_path}/train",
+            cache_dir=visual_cache_path,
             format=prebuilt_format,
             pack=True,
             tags=["visual"],
@@ -520,7 +520,7 @@ def visual_only_data_config(
 
     # Validation
     components["val_visual"] = DatasetComponent(
-        cache_dir=f"{visual_cache_path}/validation",
+        cache_dir=visual_cache_path,
         format=prebuilt_format,
         pack=True,
         tags=["visual"],

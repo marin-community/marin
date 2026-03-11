@@ -1,986 +1,632 @@
-(pid=, ip=10.130.0.77) I0221 04:52:31.880904  105514 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 75.12434225ms
-(pid=, ip=10.130.0.77) I0221 04:52:31.881401  105514 isa_program_util_common.cc:520] (HLO module jit__normal): Executable fingerprint:5fad3da6f15f9f07292ece355adf97bd58dc6
-(pid=, ip=10.130.0.77) I0221 04:52:31.853059  105514 2a886c8_compiler_base.cc:3026] final program bundle count: 80 note this count does not reflect cycles spent executing delays.
-(pid=, ip=10.130.0.77) I0221 04:52:31.873946  105514 2a886c8_compiler_base.cc:3444] Program divided into 2 overlays without HLO functions (700.0K).
-(pid=, ip=10.130.0.77) I0221 04:52:31.880766  105514 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__normal
-(pid=, ip=10.130.0.77) I0221 04:52:31.880771  105514 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 748.0K / 30.75G
-(pid=, ip=10.130.0.77) I0221 04:52:31.880775  105514 2a886c8_compiler_base.cc:3656] XLA::TPU program Cmem usage: 96.0K / 128.00M
-(pid=, ip=10.130.0.77) I0221 04:52:31.880777  105514 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 1.82M / 16.00M
-(pid=, ip=10.130.0.77) I0221 04:52:31.880798  105514 2a886c8_compiler_base.cc:3683] Total hbm usage >= 1.25G:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880799  105514 2a886c8_compiler_base.cc:3683]     reserved          1.25G 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880800  105514 2a886c8_compiler_base.cc:3683]     program          748.0K 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880801  105514 2a886c8_compiler_base.cc:3683]     arguments          512B 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880802  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880803  105514 2a886c8_compiler_base.cc:3683] Output size 32.00M; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:31.880803  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880804  105514 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880805  105514 2a886c8_compiler_base.cc:3683]     reserved             0B 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880805  105514 2a886c8_compiler_base.cc:3683]     program         unknown size 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880806  105514 2a886c8_compiler_base.cc:3683]     arguments            0B 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880807  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880808  105514 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:31.880808  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880809  105514 2a886c8_compiler_base.cc:3683] Total cmem usage >= 96.0K:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880810  105514 2a886c8_compiler_base.cc:3683]     reserved             0B 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880810  105514 2a886c8_compiler_base.cc:3683]     program           96.0K 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880811  105514 2a886c8_compiler_base.cc:3683]     arguments            0B 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880812  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:31.880812  105514 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:31.880878  105514 2a886c8_compiler_base.cc:3687] Program sflag requirement 280B:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880879  105514 2a886c8_compiler_base.cc:3687]     reserved           204B
-(pid=, ip=10.130.0.77) I0221 04:52:31.880879  105514 2a886c8_compiler_base.cc:3687]     scoped              76B
-(pid=, ip=10.130.0.77) I0221 04:52:31.880880  105514 2a886c8_compiler_base.cc:3687] Program hbm requirement 748.0K:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880881  105514 2a886c8_compiler_base.cc:3687]     HLO temp          48.0K (33.9% utilization: Unpadded (520B) Padded (1.5K), 96.9% fragmentation (46.5K))
-(pid=, ip=10.130.0.77) I0221 04:52:31.880881  105514 2a886c8_compiler_base.cc:3687]     overlays         700.0K
-(pid=, ip=10.130.0.77) I0221 04:52:31.880882  105514 2a886c8_compiler_base.cc:3687] Program cmem requirement 96.0K:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880883  105514 2a886c8_compiler_base.cc:3687]     HLO temp          96.0K (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (96.0K))
-(pid=, ip=10.130.0.77) I0221 04:52:31.880884  105514 2a886c8_compiler_base.cc:3687] Program vmem requirement 1.82M:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880884  105514 2a886c8_compiler_base.cc:3687]     scoped            1.82M
-(pid=, ip=10.130.0.77) I0221 04:52:31.880885  105514 2a886c8_compiler_base.cc:3687] Program smem requirement 520B:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880886  105514 2a886c8_compiler_base.cc:3687]     scoped             520B
-(pid=, ip=10.130.0.77) I0221 04:52:31.880886  105514 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
-(pid=, ip=10.130.0.77) I0221 04:52:31.880888  105514 2a886c8_compiler_base.cc:3695] XLA::TPU program SMEM usage: 888B / 1.00M (1 parameters)
-(pid=, ip=10.130.0.77) I0221 04:52:31.880904  105514 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 75.12434225ms
-(pid=, ip=10.130.0.77) I0221 04:52:31.881401  105514 isa_program_util_common.cc:520] (HLO module jit__normal): Executable fingerprint:5fad3da6f15f9f07292ece355adf97bd58dc6
-(pid=, ip=10.130.0.77) bc902e497e3d9d0ecd38b3b2ce6
-(pid=, ip=10.130.0.77) I0221 04:52:31.881404  105514 isa_program_util_common.cc:524] (HLO module jit__normal): Executable fingerprint (including data segments):0a323246cb642664e3dc6f9aa149ff52e393df44b55c7976e41db45845fbaa62
-(pid=, ip=10.130.0.77) I0221 04:52:31.881405  105514 isa_program_util_common.cc:527] (HLO module jit__normal): Host transfer fingerprint:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-(pid=, ip=10.130.0.77) I0221 04:52:31.881670  105056 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 762.01858025ms
-(pid=, ip=10.130.0.77) I0221 04:52:31.974280  105056 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 315 instructions, modules: jit__normal
-(pid=, ip=10.130.0.77) I0221 04:52:31.974297  105056 2a886c8_compiler_base.cc:7488] Initial HLO module: jit__normal instructions: 315 fingerprint: 
-(pid=, ip=10.130.0.77) I0221 04:52:31.977195  105056 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit__normal instructions: 402
-(pid=, ip=10.130.0.77) I0221 04:52:31.977200  105056 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
-(pid=, ip=10.130.0.77) I0221 04:52:32.018902  105056 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
-(pid=, ip=10.130.0.77) I0221 04:52:32.024613  105056 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 51.99558025ms
-(pid=, ip=10.130.0.77) W0221 04:52:40.137381  106601 lowering_emitter.cc:5115] Successful retry compilation of fusion.18 = bf16[2048,128256]{1,0:T(8,128)(2,1)} fusion(xor.73, bitcast.1, bitcast, fusion.29, broadcast_add_fusion, fusion.28), kind=kLoop, calls=
-(pid=, ip=10.130.0.77) {
-(pid=, ip=10.130.0.77)   constant.187 = bf16[]{:T(256)} constant(-0.9961)
-(pid=, ip=10.130.0.77)   max.3 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.187), dimensions={}
-(pid=, ip=10.130.0.77)   param_5.125 = u32[2048]{0:T(1024)S(3)} parameter(5)
-(pid=, ip=10.130.0.77)   broadcast.144 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_5.125), dimensions={0}
-(pid=, ip=10.130.0.77)   iota.31 = u32[2048,128256]{1,0:T(8,128)} iota(), iota_dimension=1
-(pid=, ip=10.130.0.77)   add.281 = u32[2048,128256]{1,0:T(8,128)} add(broadcast.144, iota.31)
-(pid=, ip=10.130.0.77)   compare.9 = pred[2048,128256]{1,0:T(8,128)(4,1)} compare(add.281, broadcast.144), direction=LT
-(pid=, ip=10.130.0.77)   param_4.147 = u32[2048]{0:T(1024)S(3)} parameter(4)
-(pid=, ip=10.130.0.77)   broadcast.143 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_4.147), dimensions={0}
-(pid=, ip=10.130.0.77)   param_3.173 = u32[2048]{0:T(1024)S(3)} parameter(3)
-(pid=, ip=10.130.0.77)   broadcast.142 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_3.173), dimensions={0}
-(pid=, ip=10.130.0.77)   select.7 = u32[2048,128256]{1,0:T(8,128)} select(compare.9, broadcast.143, broadcast.142)
-(pid=, ip=10.130.0.77)   constant.140 = u32[]{:T(128)} constant(0)
-(pid=, ip=10.130.0.77)   broadcast.141 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.140), dimensions={}
-(pid=, ip=10.130.0.77)   shift-right-logical.15 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(select.7, broadcast.141)
-(pid=, ip=10.130.0.77)   param_2.190 = u32[]{:T(128)} parameter(2)
-(pid=, ip=10.130.0.77)   add.280 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_2.190), dimensions={}
-(pid=, ip=10.130.0.77)   add.279 = u32[2048,128256]{1,0:T(8,128)} add(shift-right-logical.15, add.280)
-(pid=, ip=10.130.0.77)   param_1.230 = u32[]{:T(128)} parameter(1)
-(pid=, ip=10.130.0.77)   add.278 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_1.230), dimensions={}
-(pid=, ip=10.130.0.77)   add.277 = u32[2048,128256]{1,0:T(8,128)} add(add.281, add.278)
-(pid=, ip=10.130.0.77)   add.276 = u32[2048,128256]{1,0:T(8,128)} add(add.279, add.277)
-(pid=, ip=10.130.0.77)   constant.177 = u32[]{:T(128)} constant(13)
-(pid=, ip=10.130.0.77)   broadcast.140 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.177), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.89 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.277, broadcast.140)
-(pid=, ip=10.130.0.77)   constant.176 = u32[]{:T(128)} constant(19)
-(pid=, ip=10.130.0.77)   broadcast.139 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.176), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.90 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.277, broadcast.139)
-(pid=, ip=10.130.0.77)   or.93 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.89, shift_right_logical.90)
-(pid=, ip=10.130.0.77)   xor.91 = u32[2048,128256]{1,0:T(8,128)} xor(add.276, or.93)
-(pid=, ip=10.130.0.77)   add.275 = u32[2048,128256]{1,0:T(8,128)} add(add.276, xor.91)
-(pid=, ip=10.130.0.77)   constant.175 = u32[]{:T(128)} constant(15)
-(pid=, ip=10.130.0.77)   broadcast.138 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.175), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.88 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.91, broadcast.138)
-(pid=, ip=10.130.0.77)   constant.174 = u32[]{:T(128)} constant(17)
-(pid=, ip=10.130.0.77)   broadcast.137 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.174), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.89 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.91, broadcast.137)
-(pid=, ip=10.130.0.77)   or.92 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.88, shift_right_logical.89)
-(pid=, ip=10.130.0.77)   xor.67 = u32[2048,128256]{1,0:T(8,128)} xor(add.275, or.92)
-(pid=, ip=10.130.0.77)   add.274 = u32[2048,128256]{1,0:T(8,128)} add(add.275, xor.67)
-(pid=, ip=10.130.0.77)   constant.173 = u32[]{:T(128)} constant(26)
-(pid=, ip=10.130.0.77)   broadcast.136 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.173), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.87 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.67, broadcast.136)
-(pid=, ip=10.130.0.77)   constant.172 = u32[]{:T(128)} constant(6)
-(pid=, ip=10.130.0.77)   broadcast.135 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.172), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.88 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.67, broadcast.135)
-(pid=, ip=10.130.0.77)   or.91 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.87, shift_right_logical.88)
-(pid=, ip=10.130.0.77)   xor.66 = u32[2048,128256]{1,0:T(8,128)} xor(add.274, or.91)
-(pid=, ip=10.130.0.77)   add.273 = u32[2048,128256]{1,0:T(8,128)} add(add.274, xor.66)
-(pid=, ip=10.130.0.77)   add.272 = u32[2048,128256]{1,0:T(8,128)} add(add.273, add.278)
-(pid=, ip=10.130.0.77)   shift_left.86 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.66, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.87 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.66, broadcast.136)
-(pid=, ip=10.130.0.77)   or.90 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.86, shift_right_logical.87)
-(pid=, ip=10.130.0.77)   xor.65 = u32[2048,128256]{1,0:T(8,128)} xor(add.273, or.90)
-(pid=, ip=10.130.0.77)   param_0.181 = u32[]{:T(128)S(6)} parameter(0)
-(pid=, ip=10.130.0.77)   add.271 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_0.181), dimensions={}
-(pid=, ip=10.130.0.77)   add.270 = u32[2048,128256]{1,0:T(8,128)} add(xor.65, add.271)
-(pid=, ip=10.130.0.77)   constant.179 = u32[]{:T(128)} constant(1)
-(pid=, ip=10.130.0.77)   broadcast.134 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.179), dimensions={}
-(pid=, ip=10.130.0.77)   add.269 = u32[2048,128256]{1,0:T(8,128)} add(add.270, broadcast.134)
-(pid=, ip=10.130.0.77)   add.268 = u32[2048,128256]{1,0:T(8,128)} add(add.272, add.269)
-(pid=, ip=10.130.0.77)   shift_left.85 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.269, broadcast.137)
-(pid=, ip=10.130.0.77)   shift_right_logical.86 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.269, broadcast.138)
-(pid=, ip=10.130.0.77)   or.89 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.85, shift_right_logical.86)
-(pid=, ip=10.130.0.77)   xor.64 = u32[2048,128256]{1,0:T(8,128)} xor(add.268, or.89)
-(pid=, ip=10.130.0.77)   add.267 = u32[2048,128256]{1,0:T(8,128)} add(add.268, xor.64)
-(pid=, ip=10.130.0.77)   constant.171 = u32[]{:T(128)} constant(29)
-(pid=, ip=10.130.0.77)   broadcast.133 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.171), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.84 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.64, broadcast.133)
-(pid=, ip=10.130.0.77)   constant.170 = u32[]{:T(128)} constant(3)
-(pid=, ip=10.130.0.77)   broadcast.132 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.170), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.63 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.64, broadcast.132)
-(pid=, ip=10.130.0.77)   or.88 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.84, shift_right_logical.63)
-(pid=, ip=10.130.0.77)   xor.63 = u32[2048,128256]{1,0:T(8,128)} xor(add.267, or.88)
-(pid=, ip=10.130.0.77)   add.266 = u32[2048,128256]{1,0:T(8,128)} add(add.267, xor.63)
-(pid=, ip=10.130.0.77)   constant.183 = u32[]{:T(128)} constant(16)
-(pid=, ip=10.130.0.77)   broadcast.131 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.183), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.83 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.63, broadcast.131)
-(pid=, ip=10.130.0.77)   shift_right_logical.62 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.63, broadcast.131)
-(pid=, ip=10.130.0.77)   or.87 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.83, shift_right_logical.62)
-(pid=, ip=10.130.0.77)   xor.62 = u32[2048,128256]{1,0:T(8,128)} xor(add.266, or.87)
-(pid=, ip=10.130.0.77)   add.265 = u32[2048,128256]{1,0:T(8,128)} add(add.266, xor.62)
-(pid=, ip=10.130.0.77)   add.264 = u32[2048,128256]{1,0:T(8,128)} add(add.265, add.271)
-(pid=, ip=10.130.0.77)   constant.169 = u32[]{:T(128)} constant(24)
-(pid=, ip=10.130.0.77)   broadcast.130 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.169), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.82 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.62, broadcast.130)
-(pid=, ip=10.130.0.77)   constant.168 = u32[]{:T(128)} constant(8)
-(pid=, ip=10.130.0.77)   broadcast.129 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.168), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.61 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.62, broadcast.129)
-(pid=, ip=10.130.0.77)   or.86 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.82, shift_right_logical.61)
-(pid=, ip=10.130.0.77)   xor.61 = u32[2048,128256]{1,0:T(8,128)} xor(add.265, or.86)
-(pid=, ip=10.130.0.77)   add.263 = u32[2048,128256]{1,0:T(8,128)} add(xor.61, add.280)
-(pid=, ip=10.130.0.77)   constant.167 = u32[]{:T(128)} constant(2)
-(pid=, ip=10.130.0.77)   add.262 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.167), dimensions={}
-(pid=, ip=10.130.0.77)   add.261 = u32[2048,128256]{1,0:T(8,128)} add(add.263, add.262)
-(pid=, ip=10.130.0.77)   add.260 = u32[2048,128256]{1,0:T(8,128)} add(add.264, add.261)
-(pid=, ip=10.130.0.77)   shift_left.81 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.261, broadcast.140)
-(pid=, ip=10.130.0.77)   shift_right_logical.60 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.261, broadcast.139)
-(pid=, ip=10.130.0.77)   or.63 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.81, shift_right_logical.60)
-(pid=, ip=10.130.0.77)   xor.60 = u32[2048,128256]{1,0:T(8,128)} xor(add.260, or.63)
-(pid=, ip=10.130.0.77)   add.259 = u32[2048,128256]{1,0:T(8,128)} add(add.260, xor.60)
-(pid=, ip=10.130.0.77)   shift_left.80 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.60, broadcast.138)
-(pid=, ip=10.130.0.77)   shift_right_logical.59 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.60, broadcast.137)
-(pid=, ip=10.130.0.77)   or.62 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.80, shift_right_logical.59)
-(pid=, ip=10.130.0.77)   xor.59 = u32[2048,128256]{1,0:T(8,128)} xor(add.259, or.62)
-(pid=, ip=10.130.0.77)   add.258 = u32[2048,128256]{1,0:T(8,128)} add(add.259, xor.59)
-(pid=, ip=10.130.0.77)   shift_left.59 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.59, broadcast.136)
-(pid=, ip=10.130.0.77)   shift_right_logical.58 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.59, broadcast.135)
-(pid=, ip=10.130.0.77)   or.61 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.59, shift_right_logical.58)
-(pid=, ip=10.130.0.77)   xor.58 = u32[2048,128256]{1,0:T(8,128)} xor(add.258, or.61)
-(pid=, ip=10.130.0.77)   add.257 = u32[2048,128256]{1,0:T(8,128)} add(add.258, xor.58)
-(pid=, ip=10.130.0.77)   add.256 = u32[2048,128256]{1,0:T(8,128)} add(add.257, add.280)
-(pid=, ip=10.130.0.77)   shift_left.58 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.58, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.57 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.58, broadcast.136)
-(pid=, ip=10.130.0.77)   or.60 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.58, shift_right_logical.57)
-(pid=, ip=10.130.0.77)   xor.57 = u32[2048,128256]{1,0:T(8,128)} xor(add.257, or.60)
-(pid=, ip=10.130.0.77)   add.255 = u32[2048,128256]{1,0:T(8,128)} add(xor.57, add.278)
-(pid=, ip=10.130.0.77)   add.254 = u32[2048,128256]{1,0:T(8,128)} add(add.255, broadcast.132)
-(pid=, ip=10.130.0.77)   add.253 = u32[2048,128256]{1,0:T(8,128)} add(add.256, add.254)
-(pid=, ip=10.130.0.77)   shift_left.57 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.254, broadcast.137)
-(pid=, ip=10.130.0.77)   shift_right_logical.56 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.254, broadcast.138)
-(pid=, ip=10.130.0.77)   or.59 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.57, shift_right_logical.56)
-(pid=, ip=10.130.0.77)   xor.56 = u32[2048,128256]{1,0:T(8,128)} xor(add.253, or.59)
-(pid=, ip=10.130.0.77)   add.252 = u32[2048,128256]{1,0:T(8,128)} add(add.253, xor.56)
-(pid=, ip=10.130.0.77)   shift_left.56 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.56, broadcast.133)
-(pid=, ip=10.130.0.77)   shift_right_logical.55 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.56, broadcast.132)
-(pid=, ip=10.130.0.77)   or.58 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.56, shift_right_logical.55)
-(pid=, ip=10.130.0.77)   xor.55 = u32[2048,128256]{1,0:T(8,128)} xor(add.252, or.58)
-(pid=, ip=10.130.0.77)   add.251 = u32[2048,128256]{1,0:T(8,128)} add(add.252, xor.55)
-(pid=, ip=10.130.0.77)   shift_left.55 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.55, broadcast.131)
-(pid=, ip=10.130.0.77)   shift_right_logical.54 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.55, broadcast.131)
-(pid=, ip=10.130.0.77)   or.57 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.55, shift_right_logical.54)
-(pid=, ip=10.130.0.77)   xor.54 = u32[2048,128256]{1,0:T(8,128)} xor(add.251, or.57)
-(pid=, ip=10.130.0.77)   add.250 = u32[2048,128256]{1,0:T(8,128)} add(add.251, xor.54)
-(pid=, ip=10.130.0.77)   add.249 = u32[2048,128256]{1,0:T(8,128)} add(add.250, add.278)
-(pid=, ip=10.130.0.77)   shift_left.54 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.54, broadcast.130)
-(pid=, ip=10.130.0.77)   shift_right_logical.53 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.54, broadcast.129)
-(pid=, ip=10.130.0.77)   or.56 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.54, shift_right_logical.53)
-(pid=, ip=10.130.0.77)   xor.53 = u32[2048,128256]{1,0:T(8,128)} xor(add.250, or.56)
-(pid=, ip=10.130.0.77)   add.248 = u32[2048,128256]{1,0:T(8,128)} add(xor.53, add.271)
-(pid=, ip=10.130.0.77)   constant.166 = u32[]{:T(128)} constant(4)
-(pid=, ip=10.130.0.77)   add.247 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.166), dimensions={}
-(pid=, ip=10.130.0.77)   add.246 = u32[2048,128256]{1,0:T(8,128)} add(add.248, add.247)
-(pid=, ip=10.130.0.77)   add.245 = u32[2048,128256]{1,0:T(8,128)} add(add.249, add.246)
-(pid=, ip=10.130.0.77)   shift_left.53 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.246, broadcast.140)
-(pid=, ip=10.130.0.77)   shift_right_logical.52 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.246, broadcast.139)
-(pid=, ip=10.130.0.77)   or.55 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.53, shift_right_logical.52)
-(pid=, ip=10.130.0.77)   xor.52 = u32[2048,128256]{1,0:T(8,128)} xor(add.245, or.55)
-(pid=, ip=10.130.0.77)   add.244 = u32[2048,128256]{1,0:T(8,128)} add(add.245, xor.52)
-(pid=, ip=10.130.0.77)   shift_left.52 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.52, broadcast.138)
-(pid=, ip=10.130.0.77)   shift_right_logical.51 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.52, broadcast.137)
-(pid=, ip=10.130.0.77)   or.54 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.52, shift_right_logical.51)
-(pid=, ip=10.130.0.77)   xor.51 = u32[2048,128256]{1,0:T(8,128)} xor(add.244, or.54)
-(pid=, ip=10.130.0.77)   add.243 = u32[2048,128256]{1,0:T(8,128)} add(add.244, xor.51)
-(pid=, ip=10.130.0.77)   shift_left.51 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.51, broadcast.136)
-(pid=, ip=10.130.0.77)   shift_right_logical.50 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.51, broadcast.135)
-(pid=, ip=10.130.0.77)   or.53 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.51, shift_right_logical.50)
-(pid=, ip=10.130.0.77)   xor.50 = u32[2048,128256]{1,0:T(8,128)} xor(add.243, or.53)
-(pid=, ip=10.130.0.77)   add.242 = u32[2048,128256]{1,0:T(8,128)} add(add.243, xor.50)
-(pid=, ip=10.130.0.77)   add.241 = u32[2048,128256]{1,0:T(8,128)} add(add.242, add.271)
-(pid=, ip=10.130.0.77)   shift_left.50 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.50, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.49 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.50, broadcast.136)
-(pid=, ip=10.130.0.77)   or.52 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.50, shift_right_logical.49)
-(pid=, ip=10.130.0.77)   xor.49 = u32[2048,128256]{1,0:T(8,128)} xor(add.242, or.52)
-(pid=, ip=10.130.0.77)   add.240 = u32[2048,128256]{1,0:T(8,128)} add(xor.49, add.280)
-(pid=, ip=10.130.0.77)   constant.165 = u32[]{:T(128)} constant(5)
-(pid=, ip=10.130.0.77)   add.239 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.165), dimensions={}
-(pid=, ip=10.130.0.77)   add.238 = u32[2048,128256]{1,0:T(8,128)} add(add.240, add.239)
-(pid=, ip=10.130.0.77)   xor.48 = u32[2048,128256]{1,0:T(8,128)} xor(add.241, add.238)
-(pid=, ip=10.130.0.77)   convert_element_type.3 = u8[2048,128256]{1,0:T(8,128)(4,1)} convert(xor.48)
-(pid=, ip=10.130.0.77)   convert_element_type.1 = u16[2048,128256]{1,0:T(8,128)(2,1)} convert(convert_element_type.3)
-(pid=, ip=10.130.0.77)   constant.164 = u16[]{:T(256)} constant(1)
-(pid=, ip=10.130.0.77)   shift_right_logical.91 = u16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.164), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.28 = u16[2048,128256]{1,0:T(8,128)(2,1)} shift-right-logical(convert_element_type.1, shift_right_logical.91)
-(pid=, ip=10.130.0.77)   constant.163 = u16[]{:T(256)} constant(16256)
-(pid=, ip=10.130.0.77)   or.94 = u16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.163), dimensions={}
-(pid=, ip=10.130.0.77)   or.31 = u16[2048,128256]{1,0:T(8,128)(2,1)} or(shift_right_logical.28, or.94)
-(pid=, ip=10.130.0.77)   bitcast_convert_type.0 = bf16[2048,128256]{1,0:T(8,128)(2,1)} bitcast-convert(or.31)
-(pid=, ip=10.130.0.77)   constant.136 = bf16[]{:T(256)} constant(-1)
-(pid=, ip=10.130.0.77)   broadcast.145 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.136), dimensions={}
-(pid=, ip=10.130.0.77)   add.130 = bf16[2048,128256]{1,0:T(8,128)(2,1)} add(bitcast_convert_type.0, broadcast.145)
-(pid=, ip=10.130.0.77)   constant.135 = bf16[]{:T(256)} constant(2)
-(pid=, ip=10.130.0.77)   mul.11 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.135), dimensions={}
-(pid=, ip=10.130.0.77)   mul.8 = bf16[2048,128256]{1,0:T(8,128)(2,1)} multiply(add.130, mul.11)
-(pid=, ip=10.130.0.77)   add.129 = bf16[2048,128256]{1,0:T(8,128)(2,1)} add(mul.8, max.3)
-(pid=, ip=10.130.0.77)   max.2 = bf16[2048,128256]{1,0:T(8,128)(2,1)} maximum(max.3, add.129)
-(pid=, ip=10.130.0.77)   erf_inv.316 = f32[2048,128256]{1,0:T(8,128)} convert(max.2)
-(pid=, ip=10.130.0.77)   erf_inv.315 = f32[2048,128256]{1,0:T(8,128)} abs(erf_inv.316)
-(pid=, ip=10.130.0.77)   constant.162 = f32[]{:T(128)} constant(1)
-(pid=, ip=10.130.0.77)   erf_inv.337 = f32[2048,128256]{1,0:T(8,128)} broadcast(constant.162), dimensions={}
-(pid=, ip=10.130.0.77)   erf_inv.314 = pred[2048,128256]{1,0:T(8,128)(4,1)} compare(erf_inv.315, erf_inv.337), direction=EQ
-(pid=, ip=10.130.0.77)   constant.161 = f32[]{:T(128)} constant(inf)
-(pid=, ip=10.130.0.77)   erf_inv.336 = f32[2048,128256]{1,0:T(8,128)} broadcast(constant.161), dimensions={}
-(pid=, ip=10.130.0.77)   erf_inv.313 = f32[2048,128256]{1,0:T(8,128)} multiply(erf_inv.316, erf_inv.336)
-(pid=, ip=10.130.0.77)   erf_inv.312 = f32[2048,128256]{1,0:T(8,128)} negate(erf_inv.316)
-(pid=, ip=10.130.0.77)   erf_inv.311 = f32[2048,128256]{1,0:T(8,128)} multiply(erf_inv.316, erf_inv.312)
-(pid=, ip=10.130.0.77)   erf_inv.310 = f32[2048,128256]{1,0:T(8,128)} log-plus-one(erf_inv.311)
-(pid=, ip=10.130.0.77)   erf_inv.309 = f32[2048,128256]{1,0:T(8,128)} negate(erf_inv.310)
-(pid=, ip=10.130.0.77)   c
-(pid=, ip=10.130.0.77) W0221 04:52:40.137381  106601 lowering_emitter.cc:5115] Successful retry compilation of fusion.18 = bf16[2048,128256]{1,0:T(8,128)(2,1)} fusion(xor.73, bitcast.1, bitcast, fusion.29, broadcast_add_fusion, fusion.28), kind=kLoop, calls=
-(pid=, ip=10.130.0.77) {
-(pid=, ip=10.130.0.77)   constant.187 = bf16[]{:T(256)} constant(-0.9961)
-(pid=, ip=10.130.0.77)   max.3 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.187), dimensions={}
-(pid=, ip=10.130.0.77)   param_5.125 = u32[2048]{0:T(1024)S(3)} parameter(5)
-(pid=, ip=10.130.0.77)   broadcast.144 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_5.125), dimensions={0}
-(pid=, ip=10.130.0.77)   iota.31 = u32[2048,128256]{1,0:T(8,128)} iota(), iota_dimension=1
-(pid=, ip=10.130.0.77)   add.281 = u32[2048,128256]{1,0:T(8,128)} add(broadcast.144, iota.31)
-(pid=, ip=10.130.0.77)   compare.9 = pred[2048,128256]{1,0:T(8,128)(4,1)} compare(add.281, broadcast.144), direction=LT
-(pid=, ip=10.130.0.77)   param_4.147 = u32[2048]{0:T(1024)S(3)} parameter(4)
-(pid=, ip=10.130.0.77)   broadcast.143 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_4.147), dimensions={0}
-(pid=, ip=10.130.0.77)   param_3.173 = u32[2048]{0:T(1024)S(3)} parameter(3)
-(pid=, ip=10.130.0.77)   broadcast.142 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_3.173), dimensions={0}
-(pid=, ip=10.130.0.77)   select.7 = u32[2048,128256]{1,0:T(8,128)} select(compare.9, broadcast.143, broadcast.142)
-(pid=, ip=10.130.0.77)   constant.140 = u32[]{:T(128)} constant(0)
-(pid=, ip=10.130.0.77)   broadcast.141 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.140), dimensions={}
-(pid=, ip=10.130.0.77)   shift-right-logical.15 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(select.7, broadcast.141)
-(pid=, ip=10.130.0.77)   param_2.190 = u32[]{:T(128)} parameter(2)
-(pid=, ip=10.130.0.77)   add.280 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_2.190), dimensions={}
-(pid=, ip=10.130.0.77)   add.279 = u32[2048,128256]{1,0:T(8,128)} add(shift-right-logical.15, add.280)
-(pid=, ip=10.130.0.77)   param_1.230 = u32[]{:T(128)} parameter(1)
-(pid=, ip=10.130.0.77)   add.278 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_1.230), dimensions={}
-(pid=, ip=10.130.0.77)   add.277 = u32[2048,128256]{1,0:T(8,128)} add(add.281, add.278)
-(pid=, ip=10.130.0.77)   add.276 = u32[2048,128256]{1,0:T(8,128)} add(add.279, add.277)
-(pid=, ip=10.130.0.77)   constant.177 = u32[]{:T(128)} constant(13)
-(pid=, ip=10.130.0.77)   broadcast.140 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.177), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.89 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.277, broadcast.140)
-(pid=, ip=10.130.0.77)   constant.176 = u32[]{:T(128)} constant(19)
-(pid=, ip=10.130.0.77)   broadcast.139 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.176), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.90 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.277, broadcast.139)
-(pid=, ip=10.130.0.77)   or.93 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.89, shift_right_logical.90)
-(pid=, ip=10.130.0.77)   xor.91 = u32[2048,128256]{1,0:T(8,128)} xor(add.276, or.93)
-(pid=, ip=10.130.0.77)   add.275 = u32[2048,128256]{1,0:T(8,128)} add(add.276, xor.91)
-(pid=, ip=10.130.0.77)   constant.175 = u32[]{:T(128)} constant(15)
-(pid=, ip=10.130.0.77)   broadcast.138 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.175), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.88 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.91, broadcast.138)
-(pid=, ip=10.130.0.77)   constant.174 = u32[]{:T(128)} constant(17)
-(pid=, ip=10.130.0.77)   broadcast.137 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.174), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.89 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.91, broadcast.137)
-(pid=, ip=10.130.0.77)   or.92 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.88, shift_right_logical.89)
-(pid=, ip=10.130.0.77)   xor.67 = u32[2048,128256]{1,0:T(8,128)} xor(add.275, or.92)
-(pid=, ip=10.130.0.77)   add.274 = u32[2048,128256]{1,0:T(8,128)} add(add.275, xor.67)
-(pid=, ip=10.130.0.77)   constant.173 = u32[]{:T(128)} constant(26)
-(pid=, ip=10.130.0.77)   broadcast.136 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.173), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.87 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.67, broadcast.136)
-(pid=, ip=10.130.0.77)   constant.172 = u32[]{:T(128)} constant(6)
-(pid=, ip=10.130.0.77)   broadcast.135 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.172), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.88 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.67, broadcast.135)
-(pid=, ip=10.130.0.77)   or.91 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.87, shift_right_logical.88)
-(pid=, ip=10.130.0.77)   xor.66 = u32[2048,128256]{1,0:T(8,128)} xor(add.274, or.91)
-(pid=, ip=10.130.0.77)   add.273 = u32[2048,128256]{1,0:T(8,128)} add(add.274, xor.66)
-(pid=, ip=10.130.0.77)   add.272 = u32[2048,128256]{1,0:T(8,128)} add(add.273, add.278)
-(pid=, ip=10.130.0.77)   shift_left.86 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.66, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.87 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.66, broadcast.136)
-(pid=, ip=10.130.0.77)   or.90 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.86, shift_right_logical.87)
-(pid=, ip=10.130.0.77)   xor.65 = u32[2048,128256]{1,0:T(8,128)} xor(add.273, or.90)
-(pid=, ip=10.130.0.77)   param_0.181 = u32[]{:T(128)S(6)} parameter(0)
-(pid=, ip=10.130.0.77)   add.271 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_0.181), dimensions={}
-(pid=, ip=10.130.0.77)   add.270 = u32[2048,128256]{1,0:T(8,128)} add(xor.65, add.271)
-(pid=, ip=10.130.0.77)   constant.179 = u32[]{:T(128)} constant(1)
-(pid=, ip=10.130.0.77)   broadcast.134 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.179), dimensions={}
-(pid=, ip=10.130.0.77)   add.269 = u32[2048,128256]{1,0:T(8,128)} add(add.270, broadcast.134)
-(pid=, ip=10.130.0.77)   add.268 = u32[2048,128256]{1,0:T(8,128)} add(add.272, add.269)
-(pid=, ip=10.130.0.77)   shift_left.85 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.269, broadcast.137)
-(pid=, ip=10.130.0.77)   shift_right_logical.86 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.269, broadcast.138)
-(pid=, ip=10.130.0.77)   or.89 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.85, shift_right_logical.86)
-(pid=, ip=10.130.0.77)   xor.64 = u32[2048,128256]{1,0:T(8,128)} xor(add.268, or.89)
-(pid=, ip=10.130.0.77)   add.267 = u32[2048,128256]{1,0:T(8,128)} add(add.268, xor.64)
-(pid=, ip=10.130.0.77)   constant.171 = u32[]{:T(128)} constant(29)
-(pid=, ip=10.130.0.77)   broadcast.133 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.171), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.84 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.64, broadcast.133)
-(pid=, ip=10.130.0.77)   constant.170 = u32[]{:T(128)} constant(3)
-(pid=, ip=10.130.0.77)   broadcast.132 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.170), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.63 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.64, broadcast.132)
-(pid=, ip=10.130.0.77)   or.88 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.84, shift_right_logical.63)
-(pid=, ip=10.130.0.77)   xor.63 = u32[2048,128256]{1,0:T(8,128)} xor(add.267, or.88)
-(pid=, ip=10.130.0.77)   add.266 = u32[2048,128256]{1,0:T(8,128)} add(add.267, xor.63)
-(pid=, ip=10.130.0.77)   constant.183 = u32[]{:T(128)} constant(16)
-(pid=, ip=10.130.0.77)   broadcast.131 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.183), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.83 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.63, broadcast.131)
-(pid=, ip=10.130.0.77)   shift_right_logical.62 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.63, broadcast.131)
-(pid=, ip=10.130.0.77)   or.87 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.83, shift_right_logical.62)
-(pid=, ip=10.130.0.77)   xor.62 = u32[2048,128256]{1,0:T(8,128)} xor(add.266, or.87)
-(pid=, ip=10.130.0.77)   add.265 = u32[2048,128256]{1,0:T(8,128)} add(add.266, xor.62)
-(pid=, ip=10.130.0.77)   add.264 = u32[2048,128256]{1,0:T(8,128)} add(add.265, add.271)
-(pid=, ip=10.130.0.77)   constant.169 = u32[]{:T(128)} constant(24)
-(pid=, ip=10.130.0.77)   broadcast.130 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.169), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.82 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.62, broadcast.130)
-(pid=, ip=10.130.0.77)   constant.168 = u32[]{:T(128)} constant(8)
-(pid=, ip=10.130.0.77)   broadcast.129 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.168), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.61 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.62, broadcast.129)
-(pid=, ip=10.130.0.77)   or.86 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.82, shift_right_logical.61)
-(pid=, ip=10.130.0.77)   xor.61 = u32[2048,128256]{1,0:T(8,128)} xor(add.265, or.86)
-(pid=, ip=10.130.0.77)   add.263 = u32[2048,128256]{1,0:T(8,128)} add(xor.61, add.280)
-(pid=, ip=10.130.0.77)   constant.167 = u32[]{:T(128)} constant(2)
-(pid=, ip=10.130.0.77)   add.262 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.167), dimensions={}
-(pid=, ip=10.130.0.77)   add.261 = u32[2048,128256]{1,0:T(8,128)} add(add.263, add.262)
-(pid=, ip=10.130.0.77)   add.260 = u32[2048,128256]{1,0:T(8,128)} add(add.264, add.261)
-(pid=, ip=10.130.0.77)   shift_left.81 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.261, broadcast.140)
-(pid=, ip=10.130.0.77)   shift_right_logical.60 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.261, broadcast.139)
-(pid=, ip=10.130.0.77)   or.63 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.81, shift_right_logical.60)
-(pid=, ip=10.130.0.77)   xor.60 = u32[2048,128256]{1,0:T(8,128)} xor(add.260, or.63)
-(pid=, ip=10.130.0.77)   add.259 = u32[2048,128256]{1,0:T(8,128)} add(add.260, xor.60)
-(pid=, ip=10.130.0.77)   shift_left.80 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.60, broadcast.138)
-(pid=, ip=10.130.0.77)   shift_right_logical.59 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.60, broadcast.137)
-(pid=, ip=10.130.0.77)   or.62 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.80, shift_right_logical.59)
-(pid=, ip=10.130.0.77)   xor.59 = u32[2048,128256]{1,0:T(8,128)} xor(add.259, or.62)
-(pid=, ip=10.130.0.77)   add.258 = u32[2048,128256]{1,0:T(8,128)} add(add.259, xor.59)
-(pid=, ip=10.130.0.77)   shift_left.59 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.59, broadcast.136)
-(pid=, ip=10.130.0.77)   shift_right_logical.58 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.59, broadcast.135)
-(pid=, ip=10.130.0.77)   or.61 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.59, shift_right_logical.58)
-(pid=, ip=10.130.0.77)   xor.58 = u32[2048,128256]{1,0:T(8,128)} xor(add.258, or.61)
-(pid=, ip=10.130.0.77)   add.257 = u32[2048,128256]{1,0:T(8,128)} add(add.258, xor.58)
-(pid=, ip=10.130.0.77)   add.256 = u32[2048,128256]{1,0:T(8,128)} add(add.257, add.280)
-(pid=, ip=10.130.0.77)   shift_left.58 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.58, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.57 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.58, broadcast.136)
-(pid=, ip=10.130.0.77)   or.60 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.58, shift_right_logical.57)
-(pid=, ip=10.130.0.77)   xor.57 = u32[2048,128256]{1,0:T(8,128)} xor(add.257, or.60)
-(pid=, ip=10.130.0.77)   add.255 = u32[2048,128256]{1,0:T(8,128)} add(xor.57, add.278)
-(pid=, ip=10.130.0.77)   add.254 = u32[2048,128256]{1,0:T(8,128)} add(add.255, broadcast.132)
-(pid=, ip=10.130.0.77)   add.253 = u32[2048,128256]{1,0:T(8,128)} add(add.256, add.254)
-(pid=, ip=10.130.0.77)   shift_left.57 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.254, broadcast.137)
-(pid=, ip=10.130.0.77)   shift_right_logical.56 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.254, broadcast.138)
-(pid=, ip=10.130.0.77)   or.59 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.57, shift_right_logical.56)
-(pid=, ip=10.130.0.77)   xor.56 = u32[2048,128256]{1,0:T(8,128)} xor(add.253, or.59)
-(pid=, ip=10.130.0.77)   add.252 = u32[2048,128256]{1,0:T(8,128)} add(add.253, xor.56)
-(pid=, ip=10.130.0.77)   shift_left.56 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.56, broadcast.133)
-(pid=, ip=10.130.0.77)   shift_right_logical.55 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.56, broadcast.132)
-(pid=, ip=10.130.0.77)   or.58 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.56, shift_right_logical.55)
-(pid=, ip=10.130.0.77)   xor.55 = u32[2048,128256]{1,0:T(8,128)} xor(add.252, or.58)
-(pid=, ip=10.130.0.77)   add.251 = u32[2048,128256]{1,0:T(8,128)} add(add.252, xor.55)
-(pid=, ip=10.130.0.77)   shift_left.55 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.55, broadcast.131)
-(pid=, ip=10.130.0.77)   shift_right_logical.54 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.55, broadcast.131)
-(pid=, ip=10.130.0.77)   or.57 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.55, shift_right_logical.54)
-(pid=, ip=10.130.0.77)   xor.54 = u32[2048,128256]{1,0:T(8,128)} xor(add.251, or.57)
-(pid=, ip=10.130.0.77)   add.250 = u32[2048,128256]{1,0:T(8,128)} add(add.251, xor.54)
-(pid=, ip=10.130.0.77)   add.249 = u32[2048,128256]{1,0:T(8,128)} add(add.250, add.278)
-(pid=, ip=10.130.0.77)   shift_left.54 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.54, broadcast.130)
-(pid=, ip=10.130.0.77)   shift_right_logical.53 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.54, broadcast.129)
-(pid=, ip=10.130.0.77)   or.56 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.54, shift_right_logical.53)
-(pid=, ip=10.130.0.77)   xor.53 = u32[2048,128256]{1,0:T(8,128)} xor(add.250, or.56)
-(pid=, ip=10.130.0.77)   add.248 = u32[2048,128256]{1,0:T(8,128)} add(xor.53, add.271)
-(pid=, ip=10.130.0.77)   constant.166 = u32[]{:T(128)} constant(4)
-(pid=, ip=10.130.0.77)   add.247 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.166), dimensions={}
-(pid=, ip=10.130.0.77)   add.246 = u32[2048,128256]{1,0:T(8,128)} add(add.248, add.247)
-(pid=, ip=10.130.0.77)   add.245 = u32[2048,128256]{1,0:T(8,128)} add(add.249, add.246)
-(pid=, ip=10.130.0.77)   shift_left.53 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.246, broadcast.140)
-(pid=, ip=10.130.0.77)   shift_right_logical.52 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.246, broadcast.139)
-(pid=, ip=10.130.0.77)   or.55 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.53, shift_right_logical.52)
-(pid=, ip=10.130.0.77)   xor.52 = u32[2048,128256]{1,0:T(8,128)} xor(add.245, or.55)
-(pid=, ip=10.130.0.77)   add.244 = u32[2048,128256]{1,0:T(8,128)} add(add.245, xor.52)
-(pid=, ip=10.130.0.77)   shift_left.52 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.52, broadcast.138)
-(pid=, ip=10.130.0.77)   shift_right_logical.51 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.52, broadcast.137)
-(pid=, ip=10.130.0.77)   or.54 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.52, shift_right_logical.51)
-(pid=, ip=10.130.0.77)   xor.51 = u32[2048,128256]{1,0:T(8,128)} xor(add.244, or.54)
-(pid=, ip=10.130.0.77)   add.243 = u32[2048,128256]{1,0:T(8,128)} add(add.244, xor.51)
-(pid=, ip=10.130.0.77)   shift_left.51 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.51, broadcast.136)
-(pid=, ip=10.130.0.77)   shift_right_logical.50 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.51, broadcast.135)
-(pid=, ip=10.130.0.77)   or.53 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.51, shift_right_logical.50)
-(pid=, ip=10.130.0.77)   xor.50 = u32[2048,128256]{1,0:T(8,128)} xor(add.243, or.53)
-(pid=, ip=10.130.0.77)   add.242 = u32[2048,128256]{1,0:T(8,128)} add(add.243, xor.50)
-(pid=, ip=10.130.0.77)   add.241 = u32[2048,128256]{1,0:T(8,128)} add(add.242, add.271)
-(pid=, ip=10.130.0.77)   shift_left.50 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.50, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.49 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.50, broadcast.136)
-(pid=, ip=10.130.0.77)   or.52 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.50, shift_right_logical.49)
-(pid=, ip=10.130.0.77)   xor.49 = u32[2048,128256]{1,0:T(8,128)} xor(add.242, or.52)
-(pid=, ip=10.130.0.77)   add.240 = u32[2048,128256]{1,0:T(8,128)} add(xor.49, add.280)
-(pid=, ip=10.130.0.77)   constant.165 = u32[]{:T(128)} constant(5)
-(pid=, ip=10.130.0.77)   add.239 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.165), dimensions={}
-(pid=, ip=10.130.0.77)   add.238 = u32[2048,128256]{1,0:T(8,128)} add(add.240, add.239)
-(pid=, ip=10.130.0.77)   xor.48 = u32[2048,128256]{1,0:T(8,128)} xor(add.241, add.238)
-(pid=, ip=10.130.0.77)   convert_element_type.3 = u8[2048,128256]{1,0:T(8,128)(4,1)} convert(xor.48)
-(pid=, ip=10.130.0.77)   convert_element_type.1 = u16[2048,128256]{1,0:T(8,128)(2,1)} convert(convert_element_type.3)
-(pid=, ip=10.130.0.77)   constant.164 = u16[]{:T(256)} constant(1)
-(pid=, ip=10.130.0.77)   shift_right_logical.91 = u16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.164), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.28 = u16[2048,128256]{1,0:T(8,128)(2,1)} shift-right-logical(convert_element_type.1, shift_right_logical.91)
-(pid=, ip=10.130.0.77)   constant.163 = u16[]{:T(256)} constant(16256)
-(pid=, ip=10.130.0.77)   or.94 = u16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.163), dimensions={}
-(pid=, ip=10.130.0.77)   or.31 = u16[2048,128256]{1,0:T(8,128)(2,1)} or(shift_right_logical.28, or.94)
-(pid=, ip=10.130.0.77)   bitcast_convert_type.0 = bf16[2048,128256]{1,0:T(8,128)(2,1)} bitcast-convert(or.31)
-(pid=, ip=10.130.0.77)   constant.136 = bf16[]{:T(256)} constant(-1)
-(pid=, ip=10.130.0.77)   broadcast.145 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.136), dimensions={}
-(pid=, ip=10.130.0.77)   add.130 = bf16[2048,128256]{1,0:T(8,128)(2,1)} add(bitcast_convert_type.0, broadcast.145)
-(pid=, ip=10.130.0.77)   constant.135 = bf16[]{:T(256)} constant(2)
-(pid=, ip=10.130.0.77)   mul.11 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.135), dimensions={}
-(pid=, ip=10.130.0.77)   mul.8 = bf16[2048,128256]{1,0:T(8,128)(2,1)} multiply(add.130, mul.11)
-(pid=, ip=10.130.0.77)   add.129 = bf16[2048,128256]{1,0:T(8,128)(2,1)} add(mul.8, max.3)
-(pid=, ip=10.130.0.77)   max.2 = bf16[2048,128256]{1,0:T(8,128)(2,1)} maximum(max.3, add.129)
-(pid=, ip=10.130.0.77)   erf_inv.316 = f32[2048,128256]{1,0:T(8,128)} convert(max.2)
-(pid=, ip=10.130.0.77)   erf_inv.315 = f32[2048,128256]{1,0:T(8,128)} abs(erf_inv.316)
-(pid=, ip=10.130.0.77)   constant.162 = f32[]{:T(128)} constant(1)
-(pid=, ip=10.130.0.77)   erf_inv.337 = f32[2048,128256]{1,0:T(8,128)} broadcast(constant.162), dimensions={}
-(pid=, ip=10.130.0.77)   erf_inv.314 = pred[2048,128256]{1,0:T(8,128)(4,1)} compare(erf_inv.315, erf_inv.337), direction=EQ
-(pid=, ip=10.130.0.77)   constant.161 = f32[]{:T(128)} constant(inf)
-(pid=, ip=10.130.0.77)   erf_inv.336 = f32[2048,128256]{1,0:T(8,128)} broadcast(constant.161), dimensions={}
-(pid=, ip=10.130.0.77)   erf_inv.313 = f32[2048,128256]{1,0:T(8,128)} multiply(erf_inv.316, erf_inv.336)
-(pid=, ip=10.130.0.77)   erf_inv.312 = f32[2048,128256]{1,0:T(8,128)} negate(erf_inv.316)
-(pid=, ip=10.130.0.77)   erf_inv.311 = f32[2048,128256]{1,0:T(8,128)} multiply(erf_inv.316, erf_inv.312)
-(pid=, ip=10.130.0.77)   erf_inv.310 = f32[2048,128256]{1,0:T(8,128)} log-plus-one(erf_inv.311)
-(pid=, ip=10.130.0.77)   erf_inv.309 = f32[2048,128256]{1,0:T(8,128)} negate(erf_inv.310)
-(pid=, ip=10.130.0.77)   c
-(pid=, ip=10.130.0.77) bc902e497e3d9d0ecd38b3b2ce6
-(pid=, ip=10.130.0.77) I0221 04:52:31.881404  105514 isa_program_util_common.cc:524] (HLO module jit__normal): Executable fingerprint (including data segments):0a323246cb642664e3dc6f9aa149ff52e393df44b55c7976e41db45845fbaa62
-(pid=, ip=10.130.0.77) I0221 04:52:31.881405  105514 isa_program_util_common.cc:527] (HLO module jit__normal): Host transfer fingerprint:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-(pid=, ip=10.130.0.77) I0221 04:52:31.881670  105056 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 762.01858025ms
-(pid=, ip=10.130.0.77) I0221 04:52:31.974280  105056 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 315 instructions, modules: jit__normal
-(pid=, ip=10.130.0.77) I0221 04:52:31.974297  105056 2a886c8_compiler_base.cc:7488] Initial HLO module: jit__normal instructions: 315 fingerprint: 
-(pid=, ip=10.130.0.77) I0221 04:52:31.977195  105056 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit__normal instructions: 402
-(pid=, ip=10.130.0.77) I0221 04:52:31.977200  105056 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
-(pid=, ip=10.130.0.77) I0221 04:52:32.018902  105056 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
-(pid=, ip=10.130.0.77) I0221 04:52:32.024613  105056 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 51.99558025ms
-(pid=, ip=10.130.0.77) W0221 04:52:40.137381  106601 lowering_emitter.cc:5115] Successful retry compilation of fusion.18 = bf16[2048,128256]{1,0:T(8,128)(2,1)} fusion(xor.73, bitcast.1, bitcast, fusion.29, broadcast_add_fusion, fusion.28), kind=kLoop, calls=
-(pid=, ip=10.130.0.77) {
-(pid=, ip=10.130.0.77)   constant.187 = bf16[]{:T(256)} constant(-0.9961)
-(pid=, ip=10.130.0.77)   max.3 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.187), dimensions={}
-(pid=, ip=10.130.0.77)   param_5.125 = u32[2048]{0:T(1024)S(3)} parameter(5)
-(pid=, ip=10.130.0.77)   broadcast.144 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_5.125), dimensions={0}
-(pid=, ip=10.130.0.77)   iota.31 = u32[2048,128256]{1,0:T(8,128)} iota(), iota_dimension=1
-(pid=, ip=10.130.0.77)   add.281 = u32[2048,128256]{1,0:T(8,128)} add(broadcast.144, iota.31)
-(pid=, ip=10.130.0.77)   compare.9 = pred[2048,128256]{1,0:T(8,128)(4,1)} compare(add.281, broadcast.144), direction=LT
-(pid=, ip=10.130.0.77)   param_4.147 = u32[2048]{0:T(1024)S(3)} parameter(4)
-(pid=, ip=10.130.0.77)   broadcast.143 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_4.147), dimensions={0}
-(pid=, ip=10.130.0.77)   param_3.173 = u32[2048]{0:T(1024)S(3)} parameter(3)
-(pid=, ip=10.130.0.77)   broadcast.142 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_3.173), dimensions={0}
-(pid=, ip=10.130.0.77)   select.7 = u32[2048,128256]{1,0:T(8,128)} select(compare.9, broadcast.143, broadcast.142)
-(pid=, ip=10.130.0.77)   constant.140 = u32[]{:T(128)} constant(0)
-(pid=, ip=10.130.0.77)   broadcast.141 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.140), dimensions={}
-(pid=, ip=10.130.0.77)   shift-right-logical.15 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(select.7, broadcast.141)
-(pid=, ip=10.130.0.77)   param_2.190 = u32[]{:T(128)} parameter(2)
-(pid=, ip=10.130.0.77)   add.280 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_2.190), dimensions={}
-(pid=, ip=10.130.0.77)   add.279 = u32[2048,128256]{1,0:T(8,128)} add(shift-right-logical.15, add.280)
-(pid=, ip=10.130.0.77)   param_1.230 = u32[]{:T(128)} parameter(1)
-(pid=, ip=10.130.0.77)   add.278 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_1.230), dimensions={}
-(pid=, ip=10.130.0.77)   add.277 = u32[2048,128256]{1,0:T(8,128)} add(add.281, add.278)
-(pid=, ip=10.130.0.77)   add.276 = u32[2048,128256]{1,0:T(8,128)} add(add.279, add.277)
-(pid=, ip=10.130.0.77)   constant.177 = u32[]{:T(128)} constant(13)
-(pid=, ip=10.130.0.77)   broadcast.140 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.177), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.89 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.277, broadcast.140)
-(pid=, ip=10.130.0.77)   constant.176 = u32[]{:T(128)} constant(19)
-(pid=, ip=10.130.0.77)   broadcast.139 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.176), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.90 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.277, broadcast.139)
-(pid=, ip=10.130.0.77)   or.93 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.89, shift_right_logical.90)
-(pid=, ip=10.130.0.77)   xor.91 = u32[2048,128256]{1,0:T(8,128)} xor(add.276, or.93)
-(pid=, ip=10.130.0.77)   add.275 = u32[2048,128256]{1,0:T(8,128)} add(add.276, xor.91)
-(pid=, ip=10.130.0.77)   constant.175 = u32[]{:T(128)} constant(15)
-(pid=, ip=10.130.0.77)   broadcast.138 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.175), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.88 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.91, broadcast.138)
-(pid=, ip=10.130.0.77)   constant.174 = u32[]{:T(128)} constant(17)
-(pid=, ip=10.130.0.77)   broadcast.137 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.174), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.89 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.91, broadcast.137)
-(pid=, ip=10.130.0.77)   or.92 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.88, shift_right_logical.89)
-(pid=, ip=10.130.0.77)   xor.67 = u32[2048,128256]{1,0:T(8,128)} xor(add.275, or.92)
-(pid=, ip=10.130.0.77)   add.274 = u32[2048,128256]{1,0:T(8,128)} add(add.275, xor.67)
-(pid=, ip=10.130.0.77)   constant.173 = u32[]{:T(128)} constant(26)
-(pid=, ip=10.130.0.77)   broadcast.136 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.173), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.87 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.67, broadcast.136)
-(pid=, ip=10.130.0.77)   constant.172 = u32[]{:T(128)} constant(6)
-(pid=, ip=10.130.0.77)   broadcast.135 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.172), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.88 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.67, broadcast.135)
-(pid=, ip=10.130.0.77)   or.91 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.87, shift_right_logical.88)
-(pid=, ip=10.130.0.77)   xor.66 = u32[2048,128256]{1,0:T(8,128)} xor(add.274, or.91)
-(pid=, ip=10.130.0.77)   add.273 = u32[2048,128256]{1,0:T(8,128)} add(add.274, xor.66)
-(pid=, ip=10.130.0.77)   add.272 = u32[2048,128256]{1,0:T(8,128)} add(add.273, add.278)
-(pid=, ip=10.130.0.77)   shift_left.86 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.66, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.87 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.66, broadcast.136)
-(pid=, ip=10.130.0.77)   or.90 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.86, shift_right_logical.87)
-(pid=, ip=10.130.0.77)   xor.65 = u32[2048,128256]{1,0:T(8,128)} xor(add.273, or.90)
-(pid=, ip=10.130.0.77)   param_0.181 = u32[]{:T(128)S(6)} parameter(0)
-(pid=, ip=10.130.0.77)   add.271 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_0.181), dimensions={}
-(pid=, ip=10.130.0.77)   add.270 = u32[2048,128256]{1,0:T(8,128)} add(xor.65, add.271)
-(pid=, ip=10.130.0.77)   constant.179 = u32[]{:T(128)} constant(1)
-(pid=, ip=10.130.0.77)   broadcast.134 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.179), dimensions={}
-(pid=, ip=10.130.0.77)   add.269 = u32[2048,128256]{1,0:T(8,128)} add(add.270, broadcast.134)
-(pid=, ip=10.130.0.77)   add.268 = u32[2048,128256]{1,0:T(8,128)} add(add.272, add.269)
-(pid=, ip=10.130.0.77)   shift_left.85 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.269, broadcast.137)
-(pid=, ip=10.130.0.77)   shift_right_logical.86 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.269, broadcast.138)
-(pid=, ip=10.130.0.77)   or.89 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.85, shift_right_logical.86)
-(pid=, ip=10.130.0.77)   xor.64 = u32[2048,128256]{1,0:T(8,128)} xor(add.268, or.89)
-(pid=, ip=10.130.0.77)   add.267 = u32[2048,128256]{1,0:T(8,128)} add(add.268, xor.64)
-(pid=, ip=10.130.0.77)   constant.171 = u32[]{:T(128)} constant(29)
-(pid=, ip=10.130.0.77)   broadcast.133 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.171), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.84 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.64, broadcast.133)
-(pid=, ip=10.130.0.77)   constant.170 = u32[]{:T(128)} constant(3)
-(pid=, ip=10.130.0.77)   broadcast.132 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.170), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.63 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.64, broadcast.132)
-(pid=, ip=10.130.0.77)   or.88 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.84, shift_right_logical.63)
-(pid=, ip=10.130.0.77)   xor.63 = u32[2048,128256]{1,0:T(8,128)} xor(add.267, or.88)
-(pid=, ip=10.130.0.77)   add.266 = u32[2048,128256]{1,0:T(8,128)} add(add.267, xor.63)
-(pid=, ip=10.130.0.77)   constant.183 = u32[]{:T(128)} constant(16)
-(pid=, ip=10.130.0.77)   broadcast.131 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.183), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.83 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.63, broadcast.131)
-(pid=, ip=10.130.0.77)   shift_right_logical.62 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.63, broadcast.131)
-(pid=, ip=10.130.0.77)   or.87 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.83, shift_right_logical.62)
-(pid=, ip=10.130.0.77)   xor.62 = u32[2048,128256]{1,0:T(8,128)} xor(add.266, or.87)
-(pid=, ip=10.130.0.77)   add.265 = u32[2048,128256]{1,0:T(8,128)} add(add.266, xor.62)
-(pid=, ip=10.130.0.77)   add.264 = u32[2048,128256]{1,0:T(8,128)} add(add.265, add.271)
-(pid=, ip=10.130.0.77)   constant.169 = u32[]{:T(128)} constant(24)
-(pid=, ip=10.130.0.77)   broadcast.130 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.169), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.82 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.62, broadcast.130)
-(pid=, ip=10.130.0.77)   constant.168 = u32[]{:T(128)} constant(8)
-(pid=, ip=10.130.0.77)   broadcast.129 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.168), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.61 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.62, broadcast.129)
-(pid=, ip=10.130.0.77)   or.86 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.82, shift_right_logical.61)
-(pid=, ip=10.130.0.77)   xor.61 = u32[2048,128256]{1,0:T(8,128)} xor(add.265, or.86)
-(pid=, ip=10.130.0.77)   add.263 = u32[2048,128256]{1,0:T(8,128)} add(xor.61, add.280)
-(pid=, ip=10.130.0.77)   constant.167 = u32[]{:T(128)} constant(2)
-(pid=, ip=10.130.0.77)   add.262 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.167), dimensions={}
-(pid=, ip=10.130.0.77)   add.261 = u32[2048,128256]{1,0:T(8,128)} add(add.263, add.262)
-(pid=, ip=10.130.0.77)   add.260 = u32[2048,128256]{1,0:T(8,128)} add(add.264, add.261)
-(pid=, ip=10.130.0.77)   shift_left.81 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.261, broadcast.140)
-(pid=, ip=10.130.0.77)   shift_right_logical.60 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.261, broadcast.139)
-(pid=, ip=10.130.0.77)   or.63 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.81, shift_right_logical.60)
-(pid=, ip=10.130.0.77)   xor.60 = u32[2048,128256]{1,0:T(8,128)} xor(add.260, or.63)
-(pid=, ip=10.130.0.77)   add.259 = u32[2048,128256]{1,0:T(8,128)} add(add.260, xor.60)
-(pid=, ip=10.130.0.77)   shift_left.80 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.60, broadcast.138)
-(pid=, ip=10.130.0.77)   shift_right_logical.59 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.60, broadcast.137)
-(pid=, ip=10.130.0.77)   or.62 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.80, shift_right_logical.59)
-(pid=, ip=10.130.0.77)   xor.59 = u32[2048,128256]{1,0:T(8,128)} xor(add.259, or.62)
-(pid=, ip=10.130.0.77)   add.258 = u32[2048,128256]{1,0:T(8,128)} add(add.259, xor.59)
-(pid=, ip=10.130.0.77)   shift_left.59 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.59, broadcast.136)
-(pid=, ip=10.130.0.77)   shift_right_logical.58 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.59, broadcast.135)
-(pid=, ip=10.130.0.77)   or.61 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.59, shift_right_logical.58)
-(pid=, ip=10.130.0.77)   xor.58 = u32[2048,128256]{1,0:T(8,128)} xor(add.258, or.61)
-(pid=, ip=10.130.0.77)   add.257 = u32[2048,128256]{1,0:T(8,128)} add(add.258, xor.58)
-(pid=, ip=10.130.0.77)   add.256 = u32[2048,128256]{1,0:T(8,128)} add(add.257, add.280)
-(pid=, ip=10.130.0.77)   shift_left.58 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.58, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.57 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.58, broadcast.136)
-(pid=, ip=10.130.0.77)   or.60 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.58, shift_right_logical.57)
-(pid=, ip=10.130.0.77)   xor.57 = u32[2048,128256]{1,0:T(8,128)} xor(add.257, or.60)
-(pid=, ip=10.130.0.77)   add.255 = u32[2048,128256]{1,0:T(8,128)} add(xor.57, add.278)
-(pid=, ip=10.130.0.77)   add.254 = u32[2048,128256]{1,0:T(8,128)} add(add.255, broadcast.132)
-(pid=, ip=10.130.0.77)   add.253 = u32[2048,128256]{1,0:T(8,128)} add(add.256, add.254)
-(pid=, ip=10.130.0.77)   shift_left.57 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.254, broadcast.137)
-(pid=, ip=10.130.0.77)   shift_right_logical.56 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.254, broadcast.138)
-(pid=, ip=10.130.0.77)   or.59 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.57, shift_right_logical.56)
-(pid=, ip=10.130.0.77)   xor.56 = u32[2048,128256]{1,0:T(8,128)} xor(add.253, or.59)
-(pid=, ip=10.130.0.77)   add.252 = u32[2048,128256]{1,0:T(8,128)} add(add.253, xor.56)
-(pid=, ip=10.130.0.77)   shift_left.56 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.56, broadcast.133)
-(pid=, ip=10.130.0.77)   shift_right_logical.55 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.56, broadcast.132)
-(pid=, ip=10.130.0.77)   or.58 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.56, shift_right_logical.55)
-(pid=, ip=10.130.0.77)   xor.55 = u32[2048,128256]{1,0:T(8,128)} xor(add.252, or.58)
-(pid=, ip=10.130.0.77)   add.251 = u32[2048,128256]{1,0:T(8,128)} add(add.252, xor.55)
-(pid=, ip=10.130.0.77)   shift_left.55 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.55, broadcast.131)
-(pid=, ip=10.130.0.77)   shift_right_logical.54 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.55, broadcast.131)
-(pid=, ip=10.130.0.77)   or.57 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.55, shift_right_logical.54)
-(pid=, ip=10.130.0.77)   xor.54 = u32[2048,128256]{1,0:T(8,128)} xor(add.251, or.57)
-(pid=, ip=10.130.0.77)   add.250 = u32[2048,128256]{1,0:T(8,128)} add(add.251, xor.54)
-(pid=, ip=10.130.0.77)   add.249 = u32[2048,128256]{1,0:T(8,128)} add(add.250, add.278)
-(pid=, ip=10.130.0.77)   shift_left.54 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.54, broadcast.130)
-(pid=, ip=10.130.0.77)   shift_right_logical.53 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.54, broadcast.129)
-(pid=, ip=10.130.0.77)   or.56 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.54, shift_right_logical.53)
-(pid=, ip=10.130.0.77)   xor.53 = u32[2048,128256]{1,0:T(8,128)} xor(add.250, or.56)
-(pid=, ip=10.130.0.77)   add.248 = u32[2048,128256]{1,0:T(8,128)} add(xor.53, add.271)
-(pid=, ip=10.130.0.77)   constant.166 = u32[]{:T(128)} constant(4)
-(pid=, ip=10.130.0.77)   add.247 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.166), dimensions={}
-(pid=, ip=10.130.0.77)   add.246 = u32[2048,128256]{1,0:T(8,128)} add(add.248, add.247)
-(pid=, ip=10.130.0.77)   add.245 = u32[2048,128256]{1,0:T(8,128)} add(add.249, add.246)
-(pid=, ip=10.130.0.77)   shift_left.53 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.246, broadcast.140)
-(pid=, ip=10.130.0.77)   shift_right_logical.52 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.246, broadcast.139)
-(pid=, ip=10.130.0.77)   or.55 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.53, shift_right_logical.52)
-(pid=, ip=10.130.0.77)   xor.52 = u32[2048,128256]{1,0:T(8,128)} xor(add.245, or.55)
-(pid=, ip=10.130.0.77)   add.244 = u32[2048,128256]{1,0:T(8,128)} add(add.245, xor.52)
-(pid=, ip=10.130.0.77)   shift_left.52 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.52, broadcast.138)
-(pid=, ip=10.130.0.77)   shift_right_logical.51 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.52, broadcast.137)
-(pid=, ip=10.130.0.77)   or.54 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.52, shift_right_logical.51)
-(pid=, ip=10.130.0.77)   xor.51 = u32[2048,128256]{1,0:T(8,128)} xor(add.244, or.54)
-(pid=, ip=10.130.0.77)   add.243 = u32[2048,128256]{1,0:T(8,128)} add(add.244, xor.51)
-(pid=, ip=10.130.0.77)   shift_left.51 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.51, broadcast.136)
-(pid=, ip=10.130.0.77)   shift_right_logical.50 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.51, broadcast.135)
-(pid=, ip=10.130.0.77)   or.53 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.51, shift_right_logical.50)
-(pid=, ip=10.130.0.77)   xor.50 = u32[2048,128256]{1,0:T(8,128)} xor(add.243, or.53)
-(pid=, ip=10.130.0.77)   add.242 = u32[2048,128256]{1,0:T(8,128)} add(add.243, xor.50)
-(pid=, ip=10.130.0.77)   add.241 = u32[2048,128256]{1,0:T(8,128)} add(add.242, add.271)
-(pid=, ip=10.130.0.77)   shift_left.50 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.50, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.49 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.50, broadcast.136)
-(pid=, ip=10.130.0.77)   or.52 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.50, shift_right_logical.49)
-(pid=, ip=10.130.0.77)   xor.49 = u32[2048,128256]{1,0:T(8,128)} xor(add.242, or.52)
-(pid=, ip=10.130.0.77)   add.240 = u32[2048,128256]{1,0:T(8,128)} add(xor.49, add.280)
-(pid=, ip=10.130.0.77)   constant.165 = u32[]{:T(128)} constant(5)
-(pid=, ip=10.130.0.77)   add.239 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.165), dimensions={}
-(pid=, ip=10.130.0.77)   add.238 = u32[2048,128256]{1,0:T(8,128)} add(add.240, add.239)
-(pid=, ip=10.130.0.77)   xor.48 = u32[2048,128256]{1,0:T(8,128)} xor(add.241, add.238)
-(pid=, ip=10.130.0.77)   convert_element_type.3 = u8[2048,128256]{1,0:T(8,128)(4,1)} convert(xor.48)
-(pid=, ip=10.130.0.77)   convert_element_type.1 = u16[2048,128256]{1,0:T(8,128)(2,1)} convert(convert_element_type.3)
-(pid=, ip=10.130.0.77)   constant.164 = u16[]{:T(256)} constant(1)
-(pid=, ip=10.130.0.77)   shift_right_logical.91 = u16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.164), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.28 = u16[2048,128256]{1,0:T(8,128)(2,1)} shift-right-logical(convert_element_type.1, shift_right_logical.91)
-(pid=, ip=10.130.0.77)   constant.163 = u16[]{:T(256)} constant(16256)
-(pid=, ip=10.130.0.77)   or.94 = u16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.163), dimensions={}
-(pid=, ip=10.130.0.77)   or.31 = u16[2048,128256]{1,0:T(8,128)(2,1)} or(shift_right_logical.28, or.94)
-(pid=, ip=10.130.0.77)   bitcast_convert_type.0 = bf16[2048,128256]{1,0:T(8,128)(2,1)} bitcast-convert(or.31)
-(pid=, ip=10.130.0.77)   constant.136 = bf16[]{:T(256)} constant(-1)
-(pid=, ip=10.130.0.77)   broadcast.145 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.136), dimensions={}
-(pid=, ip=10.130.0.77)   add.130 = bf16[2048,128256]{1,0:T(8,128)(2,1)} add(bitcast_convert_type.0, broadcast.145)
-(pid=, ip=10.130.0.77)   constant.135 = bf16[]{:T(256)} constant(2)
-(pid=, ip=10.130.0.77)   mul.11 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.135), dimensions={}
-(pid=, ip=10.130.0.77)   mul.8 = bf16[2048,128256]{1,0:T(8,128)(2,1)} multiply(add.130, mul.11)
-(pid=, ip=10.130.0.77)   add.129 = bf16[2048,128256]{1,0:T(8,128)(2,1)} add(mul.8, max.3)
-(pid=, ip=10.130.0.77)   max.2 = bf16[2048,128256]{1,0:T(8,128)(2,1)} maximum(max.3, add.129)
-(pid=, ip=10.130.0.77)   erf_inv.316 = f32[2048,128256]{1,0:T(8,128)} convert(max.2)
-(pid=, ip=10.130.0.77)   erf_inv.315 = f32[2048,128256]{1,0:T(8,128)} abs(erf_inv.316)
-(pid=, ip=10.130.0.77)   constant.162 = f32[]{:T(128)} constant(1)
-(pid=, ip=10.130.0.77)   erf_inv.337 = f32[2048,128256]{1,0:T(8,128)} broadcast(constant.162), dimensions={}
-(pid=, ip=10.130.0.77)   erf_inv.314 = pred[2048,128256]{1,0:T(8,128)(4,1)} compare(erf_inv.315, erf_inv.337), direction=EQ
-(pid=, ip=10.130.0.77)   constant.161 = f32[]{:T(128)} constant(inf)
-(pid=, ip=10.130.0.77)   erf_inv.336 = f32[2048,128256]{1,0:T(8,128)} broadcast(constant.161), dimensions={}
-(pid=, ip=10.130.0.77)   erf_inv.313 = f32[2048,128256]{1,0:T(8,128)} multiply(erf_inv.316, erf_inv.336)
-(pid=, ip=10.130.0.77)   erf_inv.312 = f32[2048,128256]{1,0:T(8,128)} negate(erf_inv.316)
-(pid=, ip=10.130.0.77)   erf_inv.311 = f32[2048,128256]{1,0:T(8,128)} multiply(erf_inv.316, erf_inv.312)
-(pid=, ip=10.130.0.77)   erf_inv.310 = f32[2048,128256]{1,0:T(8,128)} log-plus-one(erf_inv.311)
-(pid=, ip=10.130.0.77)   erf_inv.309 = f32[2048,128256]{1,0:T(8,128)} negate(erf_inv.310)
-(pid=, ip=10.130.0.77)   c
-(pid=, ip=10.130.0.77) W0221 04:52:40.137381  106601 lowering_emitter.cc:5115] Successful retry compilation of fusion.18 = bf16[2048,128256]{1,0:T(8,128)(2,1)} fusion(xor.73, bitcast.1, bitcast, fusion.29, broadcast_add_fusion, fusion.28), kind=kLoop, calls=
-(pid=, ip=10.130.0.77) {
-(pid=, ip=10.130.0.77)   constant.187 = bf16[]{:T(256)} constant(-0.9961)
-(pid=, ip=10.130.0.77)   max.3 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.187), dimensions={}
-(pid=, ip=10.130.0.77)   param_5.125 = u32[2048]{0:T(1024)S(3)} parameter(5)
-(pid=, ip=10.130.0.77)   broadcast.144 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_5.125), dimensions={0}
-(pid=, ip=10.130.0.77)   iota.31 = u32[2048,128256]{1,0:T(8,128)} iota(), iota_dimension=1
-(pid=, ip=10.130.0.77)   add.281 = u32[2048,128256]{1,0:T(8,128)} add(broadcast.144, iota.31)
-(pid=, ip=10.130.0.77)   compare.9 = pred[2048,128256]{1,0:T(8,128)(4,1)} compare(add.281, broadcast.144), direction=LT
-(pid=, ip=10.130.0.77)   param_4.147 = u32[2048]{0:T(1024)S(3)} parameter(4)
-(pid=, ip=10.130.0.77)   broadcast.143 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_4.147), dimensions={0}
-(pid=, ip=10.130.0.77)   param_3.173 = u32[2048]{0:T(1024)S(3)} parameter(3)
-(pid=, ip=10.130.0.77)   broadcast.142 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_3.173), dimensions={0}
-(pid=, ip=10.130.0.77)   select.7 = u32[2048,128256]{1,0:T(8,128)} select(compare.9, broadcast.143, broadcast.142)
-(pid=, ip=10.130.0.77)   constant.140 = u32[]{:T(128)} constant(0)
-(pid=, ip=10.130.0.77)   broadcast.141 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.140), dimensions={}
-(pid=, ip=10.130.0.77)   shift-right-logical.15 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(select.7, broadcast.141)
-(pid=, ip=10.130.0.77)   param_2.190 = u32[]{:T(128)} parameter(2)
-(pid=, ip=10.130.0.77)   add.280 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_2.190), dimensions={}
-(pid=, ip=10.130.0.77)   add.279 = u32[2048,128256]{1,0:T(8,128)} add(shift-right-logical.15, add.280)
-(pid=, ip=10.130.0.77)   param_1.230 = u32[]{:T(128)} parameter(1)
-(pid=, ip=10.130.0.77)   add.278 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_1.230), dimensions={}
-(pid=, ip=10.130.0.77)   add.277 = u32[2048,128256]{1,0:T(8,128)} add(add.281, add.278)
-(pid=, ip=10.130.0.77)   add.276 = u32[2048,128256]{1,0:T(8,128)} add(add.279, add.277)
-(pid=, ip=10.130.0.77)   constant.177 = u32[]{:T(128)} constant(13)
-(pid=, ip=10.130.0.77)   broadcast.140 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.177), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.89 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.277, broadcast.140)
-(pid=, ip=10.130.0.77)   constant.176 = u32[]{:T(128)} constant(19)
-(pid=, ip=10.130.0.77)   broadcast.139 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.176), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.90 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.277, broadcast.139)
-(pid=, ip=10.130.0.77)   or.93 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.89, shift_right_logical.90)
-(pid=, ip=10.130.0.77)   xor.91 = u32[2048,128256]{1,0:T(8,128)} xor(add.276, or.93)
-(pid=, ip=10.130.0.77)   add.275 = u32[2048,128256]{1,0:T(8,128)} add(add.276, xor.91)
-(pid=, ip=10.130.0.77)   constant.175 = u32[]{:T(128)} constant(15)
-(pid=, ip=10.130.0.77)   broadcast.138 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.175), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.88 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.91, broadcast.138)
-(pid=, ip=10.130.0.77)   constant.174 = u32[]{:T(128)} constant(17)
-(pid=, ip=10.130.0.77)   broadcast.137 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.174), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.89 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.91, broadcast.137)
-(pid=, ip=10.130.0.77)   or.92 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.88, shift_right_logical.89)
-(pid=, ip=10.130.0.77)   xor.67 = u32[2048,128256]{1,0:T(8,128)} xor(add.275, or.92)
-(pid=, ip=10.130.0.77)   add.274 = u32[2048,128256]{1,0:T(8,128)} add(add.275, xor.67)
-(pid=, ip=10.130.0.77)   constant.173 = u32[]{:T(128)} constant(26)
-(pid=, ip=10.130.0.77)   broadcast.136 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.173), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.87 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.67, broadcast.136)
-(pid=, ip=10.130.0.77)   constant.172 = u32[]{:T(128)} constant(6)
-(pid=, ip=10.130.0.77)   broadcast.135 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.172), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.88 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.67, broadcast.135)
-(pid=, ip=10.130.0.77)   or.91 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.87, shift_right_logical.88)
-(pid=, ip=10.130.0.77)   xor.66 = u32[2048,128256]{1,0:T(8,128)} xor(add.274, or.91)
-(pid=, ip=10.130.0.77)   add.273 = u32[2048,128256]{1,0:T(8,128)} add(add.274, xor.66)
-(pid=, ip=10.130.0.77)   add.272 = u32[2048,128256]{1,0:T(8,128)} add(add.273, add.278)
-(pid=, ip=10.130.0.77)   shift_left.86 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.66, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.87 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.66, broadcast.136)
-(pid=, ip=10.130.0.77)   or.90 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.86, shift_right_logical.87)
-(pid=, ip=10.130.0.77)   xor.65 = u32[2048,128256]{1,0:T(8,128)} xor(add.273, or.90)
-(pid=, ip=10.130.0.77)   param_0.181 = u32[]{:T(128)S(6)} parameter(0)
-(pid=, ip=10.130.0.77)   add.271 = u32[2048,128256]{1,0:T(8,128)} broadcast(param_0.181), dimensions={}
-(pid=, ip=10.130.0.77)   add.270 = u32[2048,128256]{1,0:T(8,128)} add(xor.65, add.271)
-(pid=, ip=10.130.0.77)   constant.179 = u32[]{:T(128)} constant(1)
-(pid=, ip=10.130.0.77)   broadcast.134 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.179), dimensions={}
-(pid=, ip=10.130.0.77)   add.269 = u32[2048,128256]{1,0:T(8,128)} add(add.270, broadcast.134)
-(pid=, ip=10.130.0.77)   add.268 = u32[2048,128256]{1,0:T(8,128)} add(add.272, add.269)
-(pid=, ip=10.130.0.77)   shift_left.85 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.269, broadcast.137)
-(pid=, ip=10.130.0.77)   shift_right_logical.86 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.269, broadcast.138)
-(pid=, ip=10.130.0.77)   or.89 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.85, shift_right_logical.86)
-(pid=, ip=10.130.0.77)   xor.64 = u32[2048,128256]{1,0:T(8,128)} xor(add.268, or.89)
-(pid=, ip=10.130.0.77)   add.267 = u32[2048,128256]{1,0:T(8,128)} add(add.268, xor.64)
-(pid=, ip=10.130.0.77)   constant.171 = u32[]{:T(128)} constant(29)
-(pid=, ip=10.130.0.77)   broadcast.133 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.171), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.84 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.64, broadcast.133)
-(pid=, ip=10.130.0.77)   constant.170 = u32[]{:T(128)} constant(3)
-(pid=, ip=10.130.0.77)   broadcast.132 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.170), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.63 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.64, broadcast.132)
-(pid=, ip=10.130.0.77)   or.88 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.84, shift_right_logical.63)
-(pid=, ip=10.130.0.77)   xor.63 = u32[2048,128256]{1,0:T(8,128)} xor(add.267, or.88)
-(pid=, ip=10.130.0.77)   add.266 = u32[2048,128256]{1,0:T(8,128)} add(add.267, xor.63)
-(pid=, ip=10.130.0.77)   constant.183 = u32[]{:T(128)} constant(16)
-(pid=, ip=10.130.0.77)   broadcast.131 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.183), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.83 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.63, broadcast.131)
-(pid=, ip=10.130.0.77)   shift_right_logical.62 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.63, broadcast.131)
-(pid=, ip=10.130.0.77)   or.87 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.83, shift_right_logical.62)
-(pid=, ip=10.130.0.77)   xor.62 = u32[2048,128256]{1,0:T(8,128)} xor(add.266, or.87)
-(pid=, ip=10.130.0.77)   add.265 = u32[2048,128256]{1,0:T(8,128)} add(add.266, xor.62)
-(pid=, ip=10.130.0.77)   add.264 = u32[2048,128256]{1,0:T(8,128)} add(add.265, add.271)
-(pid=, ip=10.130.0.77)   constant.169 = u32[]{:T(128)} constant(24)
-(pid=, ip=10.130.0.77)   broadcast.130 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.169), dimensions={}
-(pid=, ip=10.130.0.77)   shift_left.82 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.62, broadcast.130)
-(pid=, ip=10.130.0.77)   constant.168 = u32[]{:T(128)} constant(8)
-(pid=, ip=10.130.0.77)   broadcast.129 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.168), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.61 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.62, broadcast.129)
-(pid=, ip=10.130.0.77)   or.86 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.82, shift_right_logical.61)
-(pid=, ip=10.130.0.77)   xor.61 = u32[2048,128256]{1,0:T(8,128)} xor(add.265, or.86)
-(pid=, ip=10.130.0.77)   add.263 = u32[2048,128256]{1,0:T(8,128)} add(xor.61, add.280)
-(pid=, ip=10.130.0.77)   constant.167 = u32[]{:T(128)} constant(2)
-(pid=, ip=10.130.0.77)   add.262 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.167), dimensions={}
-(pid=, ip=10.130.0.77)   add.261 = u32[2048,128256]{1,0:T(8,128)} add(add.263, add.262)
-(pid=, ip=10.130.0.77)   add.260 = u32[2048,128256]{1,0:T(8,128)} add(add.264, add.261)
-(pid=, ip=10.130.0.77)   shift_left.81 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.261, broadcast.140)
-(pid=, ip=10.130.0.77)   shift_right_logical.60 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.261, broadcast.139)
-(pid=, ip=10.130.0.77)   or.63 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.81, shift_right_logical.60)
-(pid=, ip=10.130.0.77)   xor.60 = u32[2048,128256]{1,0:T(8,128)} xor(add.260, or.63)
-(pid=, ip=10.130.0.77)   add.259 = u32[2048,128256]{1,0:T(8,128)} add(add.260, xor.60)
-(pid=, ip=10.130.0.77)   shift_left.80 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.60, broadcast.138)
-(pid=, ip=10.130.0.77)   shift_right_logical.59 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.60, broadcast.137)
-(pid=, ip=10.130.0.77)   or.62 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.80, shift_right_logical.59)
-(pid=, ip=10.130.0.77)   xor.59 = u32[2048,128256]{1,0:T(8,128)} xor(add.259, or.62)
-(pid=, ip=10.130.0.77)   add.258 = u32[2048,128256]{1,0:T(8,128)} add(add.259, xor.59)
-(pid=, ip=10.130.0.77)   shift_left.59 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.59, broadcast.136)
-(pid=, ip=10.130.0.77)   shift_right_logical.58 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.59, broadcast.135)
-(pid=, ip=10.130.0.77)   or.61 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.59, shift_right_logical.58)
-(pid=, ip=10.130.0.77)   xor.58 = u32[2048,128256]{1,0:T(8,128)} xor(add.258, or.61)
-(pid=, ip=10.130.0.77)   add.257 = u32[2048,128256]{1,0:T(8,128)} add(add.258, xor.58)
-(pid=, ip=10.130.0.77)   add.256 = u32[2048,128256]{1,0:T(8,128)} add(add.257, add.280)
-(pid=, ip=10.130.0.77)   shift_left.58 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.58, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.57 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.58, broadcast.136)
-(pid=, ip=10.130.0.77)   or.60 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.58, shift_right_logical.57)
-(pid=, ip=10.130.0.77)   xor.57 = u32[2048,128256]{1,0:T(8,128)} xor(add.257, or.60)
-(pid=, ip=10.130.0.77)   add.255 = u32[2048,128256]{1,0:T(8,128)} add(xor.57, add.278)
-(pid=, ip=10.130.0.77)   add.254 = u32[2048,128256]{1,0:T(8,128)} add(add.255, broadcast.132)
-(pid=, ip=10.130.0.77)   add.253 = u32[2048,128256]{1,0:T(8,128)} add(add.256, add.254)
-(pid=, ip=10.130.0.77)   shift_left.57 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.254, broadcast.137)
-(pid=, ip=10.130.0.77)   shift_right_logical.56 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.254, broadcast.138)
-(pid=, ip=10.130.0.77)   or.59 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.57, shift_right_logical.56)
-(pid=, ip=10.130.0.77)   xor.56 = u32[2048,128256]{1,0:T(8,128)} xor(add.253, or.59)
-(pid=, ip=10.130.0.77)   add.252 = u32[2048,128256]{1,0:T(8,128)} add(add.253, xor.56)
-(pid=, ip=10.130.0.77)   shift_left.56 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.56, broadcast.133)
-(pid=, ip=10.130.0.77)   shift_right_logical.55 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.56, broadcast.132)
-(pid=, ip=10.130.0.77)   or.58 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.56, shift_right_logical.55)
-(pid=, ip=10.130.0.77)   xor.55 = u32[2048,128256]{1,0:T(8,128)} xor(add.252, or.58)
-(pid=, ip=10.130.0.77)   add.251 = u32[2048,128256]{1,0:T(8,128)} add(add.252, xor.55)
-(pid=, ip=10.130.0.77)   shift_left.55 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.55, broadcast.131)
-(pid=, ip=10.130.0.77)   shift_right_logical.54 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.55, broadcast.131)
-(pid=, ip=10.130.0.77)   or.57 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.55, shift_right_logical.54)
-(pid=, ip=10.130.0.77)   xor.54 = u32[2048,128256]{1,0:T(8,128)} xor(add.251, or.57)
-(pid=, ip=10.130.0.77)   add.250 = u32[2048,128256]{1,0:T(8,128)} add(add.251, xor.54)
-(pid=, ip=10.130.0.77)   add.249 = u32[2048,128256]{1,0:T(8,128)} add(add.250, add.278)
-(pid=, ip=10.130.0.77)   shift_left.54 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.54, broadcast.130)
-(pid=, ip=10.130.0.77)   shift_right_logical.53 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.54, broadcast.129)
-(pid=, ip=10.130.0.77)   or.56 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.54, shift_right_logical.53)
-(pid=, ip=10.130.0.77)   xor.53 = u32[2048,128256]{1,0:T(8,128)} xor(add.250, or.56)
-(pid=, ip=10.130.0.77)   add.248 = u32[2048,128256]{1,0:T(8,128)} add(xor.53, add.271)
-(pid=, ip=10.130.0.77)   constant.166 = u32[]{:T(128)} constant(4)
-(pid=, ip=10.130.0.77)   add.247 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.166), dimensions={}
-(pid=, ip=10.130.0.77)   add.246 = u32[2048,128256]{1,0:T(8,128)} add(add.248, add.247)
-(pid=, ip=10.130.0.77)   add.245 = u32[2048,128256]{1,0:T(8,128)} add(add.249, add.246)
-(pid=, ip=10.130.0.77)   shift_left.53 = u32[2048,128256]{1,0:T(8,128)} shift-left(add.246, broadcast.140)
-(pid=, ip=10.130.0.77)   shift_right_logical.52 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(add.246, broadcast.139)
-(pid=, ip=10.130.0.77)   or.55 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.53, shift_right_logical.52)
-(pid=, ip=10.130.0.77)   xor.52 = u32[2048,128256]{1,0:T(8,128)} xor(add.245, or.55)
-(pid=, ip=10.130.0.77)   add.244 = u32[2048,128256]{1,0:T(8,128)} add(add.245, xor.52)
-(pid=, ip=10.130.0.77)   shift_left.52 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.52, broadcast.138)
-(pid=, ip=10.130.0.77)   shift_right_logical.51 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.52, broadcast.137)
-(pid=, ip=10.130.0.77)   or.54 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.52, shift_right_logical.51)
-(pid=, ip=10.130.0.77)   xor.51 = u32[2048,128256]{1,0:T(8,128)} xor(add.244, or.54)
-(pid=, ip=10.130.0.77)   add.243 = u32[2048,128256]{1,0:T(8,128)} add(add.244, xor.51)
-(pid=, ip=10.130.0.77)   shift_left.51 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.51, broadcast.136)
-(pid=, ip=10.130.0.77)   shift_right_logical.50 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.51, broadcast.135)
-(pid=, ip=10.130.0.77)   or.53 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.51, shift_right_logical.50)
-(pid=, ip=10.130.0.77)   xor.50 = u32[2048,128256]{1,0:T(8,128)} xor(add.243, or.53)
-(pid=, ip=10.130.0.77)   add.242 = u32[2048,128256]{1,0:T(8,128)} add(add.243, xor.50)
-(pid=, ip=10.130.0.77)   add.241 = u32[2048,128256]{1,0:T(8,128)} add(add.242, add.271)
-(pid=, ip=10.130.0.77)   shift_left.50 = u32[2048,128256]{1,0:T(8,128)} shift-left(xor.50, broadcast.135)
-(pid=, ip=10.130.0.77)   shift_right_logical.49 = u32[2048,128256]{1,0:T(8,128)} shift-right-logical(xor.50, broadcast.136)
-(pid=, ip=10.130.0.77)   or.52 = u32[2048,128256]{1,0:T(8,128)} or(shift_left.50, shift_right_logical.49)
-(pid=, ip=10.130.0.77)   xor.49 = u32[2048,128256]{1,0:T(8,128)} xor(add.242, or.52)
-(pid=, ip=10.130.0.77)   add.240 = u32[2048,128256]{1,0:T(8,128)} add(xor.49, add.280)
-(pid=, ip=10.130.0.77)   constant.165 = u32[]{:T(128)} constant(5)
-(pid=, ip=10.130.0.77)   add.239 = u32[2048,128256]{1,0:T(8,128)} broadcast(constant.165), dimensions={}
-(pid=, ip=10.130.0.77)   add.238 = u32[2048,128256]{1,0:T(8,128)} add(add.240, add.239)
-(pid=, ip=10.130.0.77)   xor.48 = u32[2048,128256]{1,0:T(8,128)} xor(add.241, add.238)
-(pid=, ip=10.130.0.77)   convert_element_type.3 = u8[2048,128256]{1,0:T(8,128)(4,1)} convert(xor.48)
-(pid=, ip=10.130.0.77)   convert_element_type.1 = u16[2048,128256]{1,0:T(8,128)(2,1)} convert(convert_element_type.3)
-(pid=, ip=10.130.0.77)   constant.164 = u16[]{:T(256)} constant(1)
-(pid=, ip=10.130.0.77)   shift_right_logical.91 = u16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.164), dimensions={}
-(pid=, ip=10.130.0.77)   shift_right_logical.28 = u16[2048,128256]{1,0:T(8,128)(2,1)} shift-right-logical(convert_element_type.1, shift_right_logical.91)
-(pid=, ip=10.130.0.77)   constant.163 = u16[]{:T(256)} constant(16256)
-(pid=, ip=10.130.0.77)   or.94 = u16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.163), dimensions={}
-(pid=, ip=10.130.0.77)   or.31 = u16[2048,128256]{1,0:T(8,128)(2,1)} or(shift_right_logical.28, or.94)
-(pid=, ip=10.130.0.77)   bitcast_convert_type.0 = bf16[2048,128256]{1,0:T(8,128)(2,1)} bitcast-convert(or.31)
-(pid=, ip=10.130.0.77)   constant.136 = bf16[]{:T(256)} constant(-1)
-(pid=, ip=10.130.0.77)   broadcast.145 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.136), dimensions={}
-(pid=, ip=10.130.0.77)   add.130 = bf16[2048,128256]{1,0:T(8,128)(2,1)} add(bitcast_convert_type.0, broadcast.145)
-(pid=, ip=10.130.0.77)   constant.135 = bf16[]{:T(256)} constant(2)
-(pid=, ip=10.130.0.77)   mul.11 = bf16[2048,128256]{1,0:T(8,128)(2,1)} broadcast(constant.135), dimensions={}
-(pid=, ip=10.130.0.77)   mul.8 = bf16[2048,128256]{1,0:T(8,128)(2,1)} multiply(add.130, mul.11)
-(pid=, ip=10.130.0.77)   add.129 = bf16[2048,128256]{1,0:T(8,128)(2,1)} add(mul.8, max.3)
-(pid=, ip=10.130.0.77)   max.2 = bf16[2048,128256]{1,0:T(8,128)(2,1)} maximum(max.3, add.129)
-(pid=, ip=10.130.0.77)   erf_inv.316 = f32[2048,128256]{1,0:T(8,128)} convert(max.2)
-(pid=, ip=10.130.0.77)   erf_inv.315 = f32[2048,128256]{1,0:T(8,128)} abs(erf_inv.316)
-(pid=, ip=10.130.0.77)   constant.162 = f32[]{:T(128)} constant(1)
-(pid=, ip=10.130.0.77)   erf_inv.337 = f32[2048,128256]{1,0:T(8,128)} broadcast(constant.162), dimensions={}
-(pid=, ip=10.130.0.77)   erf_inv.314 = pred[2048,128256]{1,0:T(8,128)(4,1)} compare(erf_inv.315, erf_inv.337), direction=EQ
-(pid=, ip=10.130.0.77)   constant.161 = f32[]{:T(128)} constant(inf)
-(pid=, ip=10.130.0.77)   erf_inv.336 = f32[2048,128256]{1,0:T(8,128)} broadcast(constant.161), dimensions={}
-(pid=, ip=10.130.0.77)   erf_inv.313 = f32[2048,128256]{1,0:T(8,128)} multiply(erf_inv.316, erf_inv.336)
-(pid=, ip=10.130.0.77)   erf_inv.312 = f32[2048,128256]{1,0:T(8,128)} negate(erf_inv.316)
-(pid=, ip=10.130.0.77)   erf_inv.311 = f32[2048,128256]{1,0:T(8,128)} multiply(erf_inv.316, erf_inv.312)
-(pid=, ip=10.130.0.77)   erf_inv.310 = f32[2048,128256]{1,0:T(8,128)} log-plus-one(erf_inv.311)
-(pid=, ip=10.130.0.77)   erf_inv.309 = f32[2048,128256]{1,0:T(8,128)} negate(erf_inv.310)
-(pid=, ip=10.130.0.77)   c
-(raylet, ip=10.130.2.17) [2026-02-20 20:52:40,166 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
-(pid=, ip=10.130.0.77) I0221 04:52:40.145550  105514 2a886c8_compiler_base.cc:10953] BACKEND_PASSES stage duration: 8.119433867s
-(pid=, ip=10.130.0.77) I0221 04:52:40.235039  105514 2a886c8_compiler_base.cc:3026] final program bundle count: 33,977 note this count does not reflect cycles spent executing delays.
-(pid=, ip=10.130.0.77) W0221 04:52:40.235514  105514 2a886c8_compiler_base.cc:8764] Unable to dump host DMA stats for targets that do not support IOVA transfers.
-(pid=, ip=10.130.0.77) W0221 04:52:40.235514  105514 2a886c8_compiler_base.cc:8764] Unable to dump host DMA stats for targets that do not support IOVA transfers.
-(pid=, ip=10.130.0.77) I0221 04:52:40.145550  105514 2a886c8_compiler_base.cc:10953] BACKEND_PASSES stage duration: 8.119433867s
-(pid=, ip=10.130.0.77) I0221 04:52:40.235039  105514 2a886c8_compiler_base.cc:3026] final program bundle count: 33,977 note this count does not reflect cycles spent executing delays.
-(pid=, ip=10.130.0.77) W0221 04:52:40.235514  105514 2a886c8_compiler_base.cc:8764] Unable to dump host DMA stats for targets that do not support IOVA transfers.
-(pid=, ip=10.130.0.77) W0221 04:52:40.235514  105514 2a886c8_compiler_base.cc:8764] Unable to dump host DMA stats for targets that do not support IOVA transfers.
-(pid=, ip=10.130.0.77) I0221 04:52:40.238437  105514 2a886c8_compiler_base.cc:3026] final program bundle count: 80 note this count does not reflect cycles spent executing delays.
-(pid=, ip=10.130.0.77) I0221 04:52:40.283305  105514 2a886c8_compiler_base.cc:3444] Program divided into 2 overlays without HLO functions (1.67M).
-(pid=, ip=10.130.0.77) I0221 04:52:40.297969  105514 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__normal
-(pid=, ip=10.130.0.77) I0221 04:52:40.297982  105514 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 1.72M / 30.75G
-(pid=, ip=10.130.0.77) I0221 04:52:40.297989  105514 2a886c8_compiler_base.cc:3656] XLA::TPU program Cmem usage: 24.0K / 128.00M
-(pid=, ip=10.130.0.77) I0221 04:52:40.297991  105514 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 3.99M / 16.00M
-(pid=, ip=10.130.0.77) I0221 04:52:40.298048  105514 2a886c8_compiler_base.cc:3683] Total hbm usage >= 1.25G:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298049  105514 2a886c8_compiler_base.cc:3683]     reserved          1.25G 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298050  105514 2a886c8_compiler_base.cc:3683]     program           1.72M 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298050  105514 2a886c8_compiler_base.cc:3683]     arguments          512B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298051  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298052  105514 2a886c8_compiler_base.cc:3683] Output size 501.00M; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:40.298053  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298053  105514 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298054  105514 2a886c8_compiler_base.cc:3683]     reserved             0B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298055  105514 2a886c8_compiler_base.cc:3683]     program         unknown size 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298055  105514 2a886c8_compiler_base.cc:3683]     arguments            0B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298056  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298057  105514 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:40.298058  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298058  105514 2a886c8_compiler_base.cc:3683] Total cmem usage >= 24.0K:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298059  105514 2a886c8_compiler_base.cc:3683]     reserved             0B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298060  105514 2a886c8_compiler_base.cc:3683]     program           24.0K 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298060  105514 2a886c8_compiler_base.cc:3683]     arguments            0B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298061  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298062  105514 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:40.298085  105514 2a886c8_compiler_base.cc:3687] Program sflag requirement 280B:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298086  105514 2a886c8_compiler_base.cc:3687]     reserved           204B
-(pid=, ip=10.130.0.77) I0221 04:52:40.298086  105514 2a886c8_compiler_base.cc:3687]     scoped              76B
-(pid=, ip=10.130.0.77) I0221 04:52:40.298087  105514 2a886c8_compiler_base.cc:3687] Program hbm requirement 1.72M:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298088  105514 2a886c8_compiler_base.cc:3687]     HLO temp          48.0K (33.9% utilization: Unpadded (520B) Padded (1.5K), 96.9% fragmentation (46.5K))
-(pid=, ip=10.130.0.77) I0221 04:52:40.298089  105514 2a886c8_compiler_base.cc:3687]     overlays          1.67M
-(pid=, ip=10.130.0.77) I0221 04:52:40.298089  105514 2a886c8_compiler_base.cc:3687] Program cmem requirement 24.0K:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298090  105514 2a886c8_compiler_base.cc:3687]     HLO temp          24.0K (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (24.0K))
-(pid=, ip=10.130.0.77) I0221 04:52:40.298091  105514 2a886c8_compiler_base.cc:3687] Program vmem requirement 3.99M:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298091  105514 2a886c8_compiler_base.cc:3687]     scoped            3.99M
-(pid=, ip=10.130.0.77) I0221 04:52:40.298092  105514 2a886c8_compiler_base.cc:3687] Program smem requirement 520B:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298093  105514 2a886c8_compiler_base.cc:3687]     scoped             520B
-(pid=, ip=10.130.0.77) I0221 04:52:40.298093  105514 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298095  105514 2a886c8_compiler_base.cc:3695] XLA::TPU program SMEM usage: 888B / 1.00M (1 parameters)
-(pid=, ip=10.130.0.77) I0221 04:52:40.298117  105514 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 152.3546085ms
-(pid=, ip=10.130.0.77) I0221 04:52:40.299296  105514 isa_program_util_common.cc:520] (HLO module jit__normal): Executable fingerprint:17cb04a8cc6fa748b4d4e34863ae50a39e0b4e4
-(pid=, ip=10.130.0.77) I0221 04:52:40.238437  105514 2a886c8_compiler_base.cc:3026] final program bundle count: 80 note this count does not reflect cycles spent executing delays.
-(pid=, ip=10.130.0.77) I0221 04:52:40.283305  105514 2a886c8_compiler_base.cc:3444] Program divided into 2 overlays without HLO functions (1.67M).
-(pid=, ip=10.130.0.77) I0221 04:52:40.297969  105514 2a886c8_compiler_base.cc:3620] XLA::TPU module name: jit__normal
-(pid=, ip=10.130.0.77) I0221 04:52:40.297982  105514 2a886c8_compiler_base.cc:3622] XLA::TPU program HBM usage: 1.72M / 30.75G
-(pid=, ip=10.130.0.77) I0221 04:52:40.297989  105514 2a886c8_compiler_base.cc:3656] XLA::TPU program Cmem usage: 24.0K / 128.00M
-(pid=, ip=10.130.0.77) I0221 04:52:40.297991  105514 2a886c8_compiler_base.cc:3672] XLA::TPU program VMEM usage: 3.99M / 16.00M
-(pid=, ip=10.130.0.77) I0221 04:52:40.298048  105514 2a886c8_compiler_base.cc:3683] Total hbm usage >= 1.25G:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298049  105514 2a886c8_compiler_base.cc:3683]     reserved          1.25G 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298050  105514 2a886c8_compiler_base.cc:3683]     program           1.72M 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298050  105514 2a886c8_compiler_base.cc:3683]     arguments          512B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298051  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298052  105514 2a886c8_compiler_base.cc:3683] Output size 501.00M; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:40.298053  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298053  105514 2a886c8_compiler_base.cc:3683] Total host usage >= 0B:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298054  105514 2a886c8_compiler_base.cc:3683]     reserved             0B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298055  105514 2a886c8_compiler_base.cc:3683]     program         unknown size 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298055  105514 2a886c8_compiler_base.cc:3683]     arguments            0B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298056  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298057  105514 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:40.298058  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298058  105514 2a886c8_compiler_base.cc:3683] Total cmem usage >= 24.0K:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298059  105514 2a886c8_compiler_base.cc:3683]     reserved             0B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298060  105514 2a886c8_compiler_base.cc:3683]     program           24.0K 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298060  105514 2a886c8_compiler_base.cc:3683]     arguments            0B 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298061  105514 2a886c8_compiler_base.cc:3683] 
-(pid=, ip=10.130.0.77) I0221 04:52:40.298062  105514 2a886c8_compiler_base.cc:3683] Output size 0B; shares 0B with arguments.
-(pid=, ip=10.130.0.77) I0221 04:52:40.298085  105514 2a886c8_compiler_base.cc:3687] Program sflag requirement 280B:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298086  105514 2a886c8_compiler_base.cc:3687]     reserved           204B
-(pid=, ip=10.130.0.77) I0221 04:52:40.298086  105514 2a886c8_compiler_base.cc:3687]     scoped              76B
-(pid=, ip=10.130.0.77) I0221 04:52:40.298087  105514 2a886c8_compiler_base.cc:3687] Program hbm requirement 1.72M:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298088  105514 2a886c8_compiler_base.cc:3687]     HLO temp          48.0K (33.9% utilization: Unpadded (520B) Padded (1.5K), 96.9% fragmentation (46.5K))
-(pid=, ip=10.130.0.77) I0221 04:52:40.298089  105514 2a886c8_compiler_base.cc:3687]     overlays          1.67M
-(pid=, ip=10.130.0.77) I0221 04:52:40.298089  105514 2a886c8_compiler_base.cc:3687] Program cmem requirement 24.0K:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298090  105514 2a886c8_compiler_base.cc:3687]     HLO temp          24.0K (0.0% utilization: Unpadded (0B) Padded (0B), 100.0% fragmentation (24.0K))
-(pid=, ip=10.130.0.77) I0221 04:52:40.298091  105514 2a886c8_compiler_base.cc:3687] Program vmem requirement 3.99M:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298091  105514 2a886c8_compiler_base.cc:3687]     scoped            3.99M
-(pid=, ip=10.130.0.77) I0221 04:52:40.298092  105514 2a886c8_compiler_base.cc:3687] Program smem requirement 520B:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298093  105514 2a886c8_compiler_base.cc:3687]     scoped             520B
-(pid=, ip=10.130.0.77) I0221 04:52:40.298093  105514 2a886c8_compiler_base.cc:3687] Program host requirement 0B:
-(pid=, ip=10.130.0.77) I0221 04:52:40.298095  105514 2a886c8_compiler_base.cc:3695] XLA::TPU program SMEM usage: 888B / 1.00M (1 parameters)
-(pid=, ip=10.130.0.77) I0221 04:52:40.298117  105514 2a886c8_compiler_base.cc:3729] CODE_GENERATION stage duration: 152.3546085ms
-(pid=, ip=10.130.0.77) I0221 04:52:40.299296  105514 isa_program_util_common.cc:520] (HLO module jit__normal): Executable fingerprint:17cb04a8cc6fa748b4d4e34863ae50a39e0b4e4
-(pid=, ip=10.130.0.77) 9709f66e6b920c57f31ee9b8d
-(pid=, ip=10.130.0.77) I0221 04:52:40.299298  105514 isa_program_util_common.cc:524] (HLO module jit__normal): Executable fingerprint (including data segments):e02a13901d350ce1469ea6dffd29e69d9e29ba3f2f79717369582e1a0ee93026
-(pid=, ip=10.130.0.77) I0221 04:52:40.299300  105514 isa_program_util_common.cc:527] (HLO module jit__normal): Host transfer fingerprint:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-(pid=, ip=10.130.0.77) I0221 04:52:40.299623  105056 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 8.327645998s
-(pid=, ip=10.130.0.77) I0221 04:52:40.421086  105056 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 60 instructions, modules: jit_loss_fn
-(pid=, ip=10.130.0.77) I0221 04:52:40.421104  105056 2a886c8_compiler_base.cc:7488] Initial HLO module: jit_loss_fn instructions: 60 fingerprint: 
-(pid=, ip=10.130.0.77) I0221 04:52:40.421593  105056 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit_loss_fn instructions: 42
-(pid=, ip=10.130.0.77) I0221 04:52:40.421597  105056 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
-(pid=, ip=10.130.0.77) I0221 04:52:40.426962  105056 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
-(pid=, ip=10.130.0.77) I0221 04:52:40.428640  105056 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 9.09824875ms
-(pid=, ip=10.130.0.77) W0221 04:52:41.571025  106333 lowering_emitter.cc:5115] Unsuccessful retry compilation of jvp_jit_linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu__.1 = (bf16[8192,128]{1,0:T(8,128)(2,1)S(3)}, bf16[8192,128]{1,0:T(8,128)(2,1)S(3)}) custom-call(x_in.1, y_in.1, w_in.1), custom_call_target="tpu_custom_call", operand_layout_constraints={bf16[8192,2048]{1,0}, s32[8192]{0}, bf16[2048,128256]{1,0}} after 1 retry
-(pid=, ip=10.130.0.77) W0221 04:52:41.571025  106333 lowering_emitter.cc:5115] Unsuccessful retry compilation of jvp_jit_linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu__.1 = (bf16[8192,128]{1,0:T(8,128)(2,1)S(3)}, bf16[8192,128]{1,0:T(8,128)(2,1)S(3)}) custom-call(x_in.1, y_in.1, w_in.1), custom_call_target="tpu_custom_call", operand_layout_constraints={bf16[8192,2048]{1,0}, s32[8192]{0}, bf16[2048,128256]{1,0}} after 1 retry
-(pid=, ip=10.130.0.77) 9709f66e6b920c57f31ee9b8d
-(pid=, ip=10.130.0.77) I0221 04:52:40.299298  105514 isa_program_util_common.cc:524] (HLO module jit__normal): Executable fingerprint (including data segments):e02a13901d350ce1469ea6dffd29e69d9e29ba3f2f79717369582e1a0ee93026
-(pid=, ip=10.130.0.77) I0221 04:52:40.299300  105514 isa_program_util_common.cc:527] (HLO module jit__normal): Host transfer fingerprint:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-(pid=, ip=10.130.0.77) I0221 04:52:40.299623  105056 2a886c8_compiler_base.cc:8086] END_TO_END stage duration: 8.327645998s
-(pid=, ip=10.130.0.77) I0221 04:52:40.421086  105056 2a886c8_compiler_base.cc:7431] XLA::TPU running hlo passes for 60 instructions, modules: jit_loss_fn
-(pid=, ip=10.130.0.77) I0221 04:52:40.421104  105056 2a886c8_compiler_base.cc:7488] Initial HLO module: jit_loss_fn instructions: 60 fingerprint: 
-(pid=, ip=10.130.0.77) I0221 04:52:40.421593  105056 2a886c8_compiler_base.cc:7560] HLO optimizing module: jit_loss_fn instructions: 42
-(pid=, ip=10.130.0.77) I0221 04:52:40.421597  105056 2a886c8_compiler_base.cc:7575] XLA::TPU HLO optimization
-(pid=, ip=10.130.0.77) I0221 04:52:40.426962  105056 2a886c8_compiler_base.cc:6548] XLA::TPU HLO PostOptimizationPipeline
-(pid=, ip=10.130.0.77) I0221 04:52:40.428640  105056 2a886c8_compiler_base.cc:7648] HLO_PASSES stage duration: 9.09824875ms
-(pid=, ip=10.130.0.77) W0221 04:52:41.571025  106333 lowering_emitter.cc:5115] Unsuccessful retry compilation of jvp_jit_linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu__.1 = (bf16[8192,128]{1,0:T(8,128)(2,1)S(3)}, bf16[8192,128]{1,0:T(8,128)(2,1)S(3)}) custom-call(x_in.1, y_in.1, w_in.1), custom_call_target="tpu_custom_call", operand_layout_constraints={bf16[8192,2048]{1,0}, s32[8192]{0}, bf16[2048,128256]{1,0}} after 1 retry
-(pid=, ip=10.130.0.77) W0221 04:52:41.571025  106333 lowering_emitter.cc:5115] Unsuccessful retry compilation of jvp_jit_linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu__.1 = (bf16[8192,128]{1,0:T(8,128)(2,1)S(3)}, bf16[8192,128]{1,0:T(8,128)(2,1)S(3)}) custom-call(x_in.1, y_in.1, w_in.1), custom_call_target="tpu_custom_call", operand_layout_constraints={bf16[8192,2048]{1,0}, s32[8192]{0}, bf16[2048,128256]{1,0}} after 1 retry
-(raylet, ip=10.130.1.0) [2026-02-20 20:52:45,171 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+rom exc
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred:
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train")
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}")
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train
+(run_on_pod_ray pid=43096, ip=10.130.0.71) Traceback (most recent call last):
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return func(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path)
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception:
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 836, in build_caches
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                    ^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 136, in load
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred:
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train")
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}")
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train
+(SliceActor pid=1957, ip=10.130.0.43) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(SliceActor pid=1957, ip=10.130.0.43) 
+(SliceActor pid=1957, ip=10.130.0.43) 
+(SliceActor pid=1957, ip=10.130.0.43) ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(SliceActor pid=1957, ip=10.130.0.43) 
+(SliceActor pid=1957, ip=10.130.0.43) 
+(SliceActor pid=1957, ip=10.130.0.43) ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(<lambda> pid=8842, ip=10.130.1.33) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f1e5023c860>
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=8842, ip=10.130.1.33)     conn.teardown(hooks.exit_code)
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=8842, ip=10.130.1.33)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=8842, ip=10.130.1.33)     return future.result()
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=8842, ip=10.130.1.33)     return self.__get_result()
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=8842, ip=10.130.1.33)     raise self._exception
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=8842, ip=10.130.1.33)     return await fn()
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=8842, ip=10.130.1.33)     await self._client.close()
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=8842, ip=10.130.1.33)     await self._writer.wait_closed()
+(<lambda> pid=8842, ip=10.130.1.33)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=8842, ip=10.130.1.33)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=8842, ip=10.130.1.33) BrokenPipeError: [Errno 32] Broken pipe
+(<lambda> pid=8842, ip=10.130.1.33) E0311 06:56:43.514997    8998 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=8842, ip=10.130.1.33) F0311 06:56:43.515040    8998 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: UNAVAILABLE: Failed to send RPC to coordination service. Either the leader task was preempted/died/restarted unexpectedly or this task is experiencing network issues. Check earlier logs from 1) this task, 2) the leader (usually slice 0 task 0), and 3) cluster scheduler to debug further.
+(<lambda> pid=8842, ip=10.130.1.33) Additional GRPC error information from remote target coordination_service while calling /tensorflow.CoordinationService/PollForError:
+(<lambda> pid=8842, ip=10.130.1.33) :UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"recvmsg:Connection reset by peer"}
+(run_on_pod_ray pid=43096, ip=10.130.0.71) Failed 5 times. Continuing to retry.
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return func(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=8842, ip=10.130.1.33)
+(raylet) WARNING: 8 PYTHON worker processes have been started on node: 8e66857438327529af7f052d28bc085065606f216e41419da2352f44 with address: 10.130.0.4. This could be a result of using a large number of actors, or due to tasks blocked in ray.get() calls (see https://github.com/ray-project/ray/issues/3644 for some discussion of workarounds).
+(raylet) The node with node id: c42a61bb2c6bb07d392fbef5a3d09411198bbe6620db8a5ec1507d90 and address: 10.130.0.15 and node name: 10.130.0.15 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 7x across cluster]
+(<lambda> pid=9034, ip=10.130.1.65) 2026-03-11T06:56:58 - 2 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=9986, ip=10.130.0.43) 2026-03-11T06:56:40 - 4 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:- [repeated 6x across cluster]
+(<lambda> pid=8832, ip=10.130.1.67) 2026-03-11T06:56:40 - 7 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a/checkpoints [repeated 6x across cluster]
+(<lambda> pid=9035, ip=10.130.1.65) 2026-03-11T06:56:41 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/visual_only_cache/train [repeated 6x across cluster]
+(<lambda> pid=9035, ip=10.130.1.65) 2026-03-11T06:56:41 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/visual_only_cache/train/shard_ledger.json [repeated 6x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__ [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"] [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper [repeated 3x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)] [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception: [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred: [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train") [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}") [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) Traceback (most recent call last): [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(<lambda> pid=8790, ip=10.130.0.200) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=8833, ip=10.130.1.67) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a.
+(<lambda> pid=8838, ip=10.130.1.49) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=8838, ip=10.130.1.49) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=8838, ip=10.130.1.49) wandb: Run data is saved locally in /tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/wandb/offline-run-20260311_065658-unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=8790, ip=10.130.0.200) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=8790, ip=10.130.0.200) wandb: setting up run unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(autoscaler +14m33s) Adding 6 node(s) of type tpu_slice_v4_64.
+(autoscaler +14m33s) Resized to 10440 CPUs, 348 TPUs.
+(<lambda> pid=8790, ip=10.130.0.200) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=8790, ip=10.130.0.200) wandb: Resuming run unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=8790, ip=10.130.0.200) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
+(<lambda> pid=8790, ip=10.130.0.200) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=8790, ip=10.130.0.200) 2026-03-11T06:56:58 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 7x across cluster]
+(<lambda> pid=8846, ip=10.130.0.198) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a. [repeated 6x across cluster]
+(<lambda> pid=8790, ip=10.130.0.200) wandb: Tracking run with wandb version 0.24.0 [repeated 7x across cluster]
+(<lambda> pid=9034, ip=10.130.1.65) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 6x across cluster]
+(<lambda> pid=8790, ip=10.130.0.200) wandb: Run data is saved locally in /tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/wandb/run-20260311_065701-unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a [repeated 7x across cluster]
+(<lambda> pid=9034, ip=10.130.1.65) 2026-03-11T06:57:09 - 2 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=8790, ip=10.130.0.200) 2026-03-11T06:57:09 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=9985, ip=10.130.0.43) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=8790, ip=10.130.0.200) 2026-03-11T06:57:23 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 8x across cluster]
+(<lambda> pid=8838, ip=10.130.1.49) 2026-03-11T06:57:09 - 1 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a [repeated 6x across cluster]
+(<lambda> pid=8833, ip=10.130.1.67) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 6x across cluster]
+(<lambda> pid=8790, ip=10.130.0.200) 2026-03-11T06:57:25 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=8846, ip=10.130.0.198) 2026-03-11T06:57:25 - 6 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=9034, ip=10.130.1.65) 2026-03-11T06:57:25 - 2 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a/checkpoints
+(<lambda> pid=8846, ip=10.130.0.198) 2026-03-11T06:57:26 - 6 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/visual_only_cache/train
+(<lambda> pid=8846, ip=10.130.0.198) 2026-03-11T06:57:26 - 6 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/visual_only_cache/train/shard_ledger.json
+(run_on_pod_ray pid=43096, ip=10.130.0.71) Task error ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path)
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception:
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 836, in build_caches
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                    ^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 136, in load
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred:
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train")
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}")
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train
+(run_on_pod_ray pid=43096, ip=10.130.0.71) Traceback (most recent call last):
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return func(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1804, in __init__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path)
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception:
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 836, in build_caches
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                    ^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 136, in load
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred:
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda>
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train")
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}")
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train
+(SliceActor pid=1957, ip=10.130.0.43) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(SliceActor pid=1957, ip=10.130.0.43) 
+(SliceActor pid=1957, ip=10.130.0.43) 
+(SliceActor pid=1957, ip=10.130.0.43) ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(SliceActor pid=1957, ip=10.130.0.43) 
+(SliceActor pid=1957, ip=10.130.0.43) 
+(SliceActor pid=1957, ip=10.130.0.43) ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(<lambda> pid=9985, ip=10.130.0.43) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f7e600fc7c0>
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 65, in teardown_atexit
+(<lambda> pid=9985, ip=10.130.0.43)     conn.teardown(hooks.exit_code)
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 310, in teardown
+(<lambda> pid=9985, ip=10.130.0.43)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 136, in run
+(<lambda> pid=9985, ip=10.130.0.43)     return future.result()
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=9985, ip=10.130.0.43)     return self.__get_result()
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=9985, ip=10.130.0.43)     raise self._exception
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 219, in _wrap
+(<lambda> pid=9985, ip=10.130.0.43)     return await fn()
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 308, in publish_teardown_and_close
+(<lambda> pid=9985, ip=10.130.0.43)     await self._client.close()
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 69, in close
+(<lambda> pid=9985, ip=10.130.0.43)     await self._writer.wait_closed()
+(<lambda> pid=9985, ip=10.130.0.43)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=9985, ip=10.130.0.43)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=9985, ip=10.130.0.43) BrokenPipeError: [Errno 32] Broken pipe
+(run_on_pod_ray pid=43096, ip=10.130.0.71) Failed 6 times. Continuing to retry.
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/tpu.py", line 767, in run_on_pod_ray
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return func(*args, **kwargs)
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray.exceptions.RayTaskError(ValueError): ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) 
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ray::<lambda>() (pid=9985, ip=10.130.0.43)
+(<lambda> pid=8838, ip=10.130.1.49) 2026-03-11T06:57:25 - 1 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a [repeated 7x across cluster]
+(<lambda> pid=8790, ip=10.130.0.200) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(raylet) WARNING: 10 PYTHON worker processes have been started on node: 8e66857438327529af7f052d28bc085065606f216e41419da2352f44 with address: 10.130.0.4. This could be a result of using a large number of actors, or due to tasks blocked in ray.get() calls (see https://github.com/ray-project/ray/issues/3644 for some discussion of workarounds).
+(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.822629   11876 coordination_service.cc:681] /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted.
+(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.822875   11876 coordination_service.cc:1858] Shutdown barrier in coordination service has failed:
+(<lambda> pid=9985, ip=10.130.0.43) INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x01']. Barrier Id: Shutdown::12177662794209080691::0, Task: /job:jax_worker/replica:0/task:1 [type.googleapis.com/tensorflow.BarrierError='\n\x1eShutdown::12177662794209080691'] [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(<lambda> pid=9985, ip=10.130.0.43) This suggests that the workers are out of sync. Either at least one worker (a) crashed early due to program error or scheduler events (e.g. preemption, eviction), (b) was too fast in its execution, or (c) too slow / hanging. Check the logs (both the program and scheduler events) for an earlier error to identify the root cause.
+(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.822909   11876 coordination_service.cc:1899] Use error polling to propagate the following error to all tasks: INTERNAL: Shutdown barrier has failed.
+(<lambda> pid=9985, ip=10.130.0.43) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x01']. Barrier Id: Shutdown::12177662794209080691::0, Task: /job:jax_worker/replica:0/task:1 [type.googleapis.com/tensorflow.BarrierError='\n\x1eShutdown::12177662794209080691'] [type.googleapis.com/tensorflow.CoordinationServiceError=''] [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.823192   11898 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=9985, ip=10.130.0.43) E0311 06:57:37.823397   11876 coordination_service.cc:1899] Use error polling to propagate the following error to all tasks: ABORTED: /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x01']
+(<lambda> pid=9985, ip=10.130.0.43) F0311 06:57:37.823398   11898 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: INTERNAL: Shutdown barrier has failed.
+(<lambda> pid=9985, ip=10.130.0.43) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:1 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x01']. Barrier Id: Shutdown::12177662794209080691::0, Task: /job:jax_worker/replica:0/task:1 [type.googleapis.com/tensorflow.BarrierError='\n\x1eShutdown::12177662794209080691'] [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(<lambda> pid=9985, ip=10.130.0.43) 
+(<lambda> pid=9985, ip=10.130.0.43) RPC: /tensorflow.CoordinationService/PollForError [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(<lambda> pid=8826, ip=10.130.0.93) 2026-03-11T06:57:25 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:145 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:- [repeated 6x across cluster]
+(<lambda> pid=8843, ip=10.130.1.33) 2026-03-11T06:57:25 - 5 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a/checkpoints [repeated 6x across cluster]
+(<lambda> pid=8826, ip=10.130.0.93) 2026-03-11T06:57:26 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/visual_only_cache/train [repeated 6x across cluster]
+(<lambda> pid=8826, ip=10.130.0.93) 2026-03-11T06:57:26 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/visual_only_cache/train/shard_ledger.json [repeated 6x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/core.py", line 105, in __enter__ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self.fs.open(self.path, mode=mode) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1310, in open [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     f = self._open( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)         ^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1638, in _open [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return GCSFile( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/spec.py", line 1884, in __init__ [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     super().__init__( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self.size = self.details["size"] [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1841, in details [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     self._details = self.fs.info(self.path, generation=self.generation) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 118, in wrapper [repeated 3x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return sync(self.loop, func, *args, **kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 103, in sync [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise return_result [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/fsspec/asyn.py", line 56, in _runner [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     result[0] = await coro [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                 ^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1031, in _info [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     out = await self._ls(path, **kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 1060, in _ls [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     for entry in await self._list_objects( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 621, in _list_objects [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return [await self._get_object(path)] [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 557, in _get_object [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     res = await self._call( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)           ^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 477, in _call [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     status, headers, info, contents = await self._request( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                       ^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/decorator.py", line 224, in fun [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await caller(func, *(extras + args), **kw) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 135, in retry_request [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     return await func(*args, **kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/core.py", line 470, in _request [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     validate_response(status, contents, path, args) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/home/ray/anaconda3/lib/python3.11/site-packages/gcsfs/retry.py", line 98, in validate_response [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(path) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: b/marin-vlm/o/visual_only_cache%2Ftrain%2Fshard_ledger.json [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) The above exception was the direct cause of the following exception: [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 843, in build_caches [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     caches[name] = load_lm_dataset_cache( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                     ^^^^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/cache.py", line 52, in load_lm_dataset_cache [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     cache = TreeCache.load( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/store/cache.py", line 194, in load [repeated 4x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     ledger = CacheLedger.load(cache_dir, options) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) FileNotFoundError: Cache ledger not found at gs://marin-vlm/visual_only_cache/train/shard_ledger.json [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) During handling of the above exception, another exception occurred: [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/fray/src/fray/v2/ray_backend/backend.py", line 320, in <lambda> [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/main/train_lm.py", line 170, in main [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     train_dataset = config.data.train_set( [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 724, in train_set [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size) [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)   File "/tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/lib/levanter/src/levanter/data/text/datasets.py", line 741, in train_sets [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     doc_caches = self.build_caches("train") [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)     raise ValueError(f"No source and no cache found for component {name} split {split}") [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) ValueError: No source and no cache found for component visual_only split train [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71) Traceback (most recent call last): [repeated 2x across cluster]
+(run_on_pod_ray pid=43096, ip=10.130.0.71)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(<lambda> pid=11897, ip=10.130.1.67) 2026-03-11T06:57:44 - 7 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=11825, ip=10.130.0.200) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=11906, ip=10.130.1.33) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a.
+(<lambda> pid=11897, ip=10.130.1.67) wandb: Tracking run with wandb version 0.24.0
+(<lambda> pid=11897, ip=10.130.1.67) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=11897, ip=10.130.1.67) wandb: Run data is saved locally in /tmp/ray/session_2026-03-11_01-19-37_892331_658/runtime_resources/working_dir_files/_ray_pkg_c2a9ce12032b6b32/wandb/offline-run-20260311_065744-unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=11825, ip=10.130.0.200) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=11825, ip=10.130.0.200) wandb: setting up run unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=11825, ip=10.130.0.200) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=11825, ip=10.130.0.200) wandb: Resuming run unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=11825, ip=10.130.0.200) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
+(<lambda> pid=11825, ip=10.130.0.200) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=12128, ip=10.130.1.65) 2026-03-11T06:57:48 - 2 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a
+(<lambda> pid=11825, ip=10.130.0.200) 2026-03-11T06:57:48 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a unified-vision-qwen3-1.7b-8e3-2.4e3-linear-10k-demo12-068b2a

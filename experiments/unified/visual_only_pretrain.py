@@ -35,7 +35,8 @@ Usage:
 
 import os
 
-from experiments.unified.unified_pretrain_demo_eu import (
+from experiments.unified.unified_pretrain_demo import (
+    VISUAL_ONLY_CACHE_PATH,
     _demo_train_config,
     visual_only_data_config,
 )
@@ -44,10 +45,6 @@ from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
 from marin.execution import executor_main
 
 import dataclasses
-
-# --- Constants ---
-
-VISUAL_ONLY_CACHE_PATH = "gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only"
 
 # --- Environment Variables ---
 
@@ -79,8 +76,11 @@ def make_visual_only_0_6b(
         ),
         model_config=qwen3_0_6b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps,
-            lr_schedule=lr_schedule, z_loss_weight=z_loss_weight,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "0.6b"],
         eval_harness_tasks=[],
@@ -106,8 +106,11 @@ def make_visual_only_1_7b(
         ),
         model_config=qwen3_1_7b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps,
-            lr_schedule=lr_schedule, z_loss_weight=z_loss_weight,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "1.7b"],
         eval_harness_tasks=[],
@@ -133,8 +136,11 @@ def make_visual_only_4b(
         ),
         model_config=qwen3_4b,
         train_config=_demo_train_config(
-            muon_lr=muon_lr, adam_lr=adam_lr, num_train_steps=num_train_steps,
-            lr_schedule=lr_schedule, z_loss_weight=z_loss_weight,
+            muon_lr=muon_lr,
+            adam_lr=adam_lr,
+            num_train_steps=num_train_steps,
+            lr_schedule=lr_schedule,
+            z_loss_weight=z_loss_weight,
         ),
         tags=["visual-only", "scaling", "qwen3", "4b"],
         eval_harness_tasks=[],
@@ -145,10 +151,15 @@ def make_visual_only_4b(
 
 
 if __name__ == "__main__":
-    steps = [make_visual_only_1_7b(
-        muon_lr=MUON_LR, adam_lr=ADAM_LR, num_train_steps=NUM_STEPS,
-        lr_schedule=LR_SCHEDULE, z_loss_weight=Z_LOSS_WEIGHT,
-    )]
+    steps = [
+        make_visual_only_1_7b(
+            muon_lr=MUON_LR,
+            adam_lr=ADAM_LR,
+            num_train_steps=NUM_STEPS,
+            lr_schedule=LR_SCHEDULE,
+            z_loss_weight=Z_LOSS_WEIGHT,
+        )
+    ]
     executor_main(
         steps,
         description="Visual-only pre-training with Qwen3 architecture (EU)",
