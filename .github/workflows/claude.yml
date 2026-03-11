@@ -129,14 +129,9 @@ jobs:
             config tweaks) or whether it requires broader design work.
 
             ## Step 3a: Small Fix
-            If the change is small and self-contained:
-            - Create branch agent/YYYYMMDD-fix-{issue_number}
-            - If applicable, write a failing test first
-            - Implement the fix, run ./infra/pre-commit.py --all-files --fix
-            - Run appropriate tests, validate your fix
-            - Find the right reviewer using git log to identify editors of affected files
-            - Open a PR tagging that reviewer via `gh pr create --reviewer <username>`
-            - Post a brief comment on the issue summarizing your fix and linking the PR
+            If the change is small and self-contained, follow the fix-issue skill workflow
+            (already loaded above). Post a brief comment on the issue summarizing your fix
+            and linking the PR when done.
 
             ## Step 3b: Research Report
             If the change is larger or needs design input:
