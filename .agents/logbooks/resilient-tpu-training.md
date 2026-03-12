@@ -632,3 +632,33 @@
 - Next action:
   - monitor `0312b` for first eval points in W&B
   - compare baseline and elastic on both eval loss and `elastic/delivered_total_tokens`
+
+### 2026-03-12 11:05 - Dispatched budget compare through Executor and relaunched
+- Hypothesis:
+  - the `0312b` failures (`TypeError: object of type 'InputName' has no len()`) come from unresolved default-validation `InputName` references created inside `run_elastic_budget_compare`; launching via Executor with a pre-resolved data config should materialize those references before training starts.
+- Command:
+  - patched:
+    - `lib/marin/src/marin/training/elastic_budget_compare.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare_executor.py` (new)
+  - verification:
+    - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py -q`
+    - `./infra/pre-commit.py --fix lib/marin/src/marin/training/elastic_budget_compare.py lib/marin/src/marin/training/elastic_budget_compare_executor.py`
+  - committed as:
+    - `798c7bb26` `Launch elastic budget compare via executor`
+  - launched:
+    - executor parent: `/dlwh/resilient-1e19-0312e-diloco-adam100-executor-parent`
+    - baseline launcher: `.../resilient-1e19-0312e-diloco-adam100-baseline-launcher`
+    - elastic launcher: `.../resilient-1e19-0312e-diloco-adam100-elastic-launcher`
+- Result:
+  - new executor launcher builds the default-validation-augmented data config once, passes it as `data_config` in `ElasticBudgetCompareConfig`, and dispatches baseline + elastic launchers as Executor steps.
+  - current scheduler snapshot:
+    - baseline `train_lm` pending on `v5p-32`
+    - elastic `w000` and `w001` running, `w002/w003` pending on `v5p-8`
+  - sanity check:
+    - elastic `w000` reached JAX distributed init and W&B run startup without reproducing the prior `InputName` traceback.
+- Interpretation:
+  - dispatch path is now executor-native, with child jobs nested under the executor parent.
+  - this is the first relaunch after switching default validation to an executor-resolved config rather than runtime ad hoc expansion.
+- Next action:
+  - monitor `0312e` for first eval points and elastic aggregate token metrics
+  - compare against baseline on loss versus `elastic/delivered_total_tokens`
