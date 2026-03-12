@@ -27,6 +27,7 @@ from iris.cluster.controller.controller import (
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.rpc.auth import TokenVerifier
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
@@ -156,9 +157,13 @@ class LocalController:
         self,
         config: config_pb2.IrisClusterConfig,
         threads: ThreadContainer | None = None,
+        auth_verifier: TokenVerifier | None = None,
+        auth_provider: str | None = None,
     ):
         self._config = config
         self._threads = threads
+        self._auth_verifier = auth_verifier
+        self._auth_provider = auth_provider
         self._controller: _InProcessController | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
@@ -198,6 +203,8 @@ class LocalController:
                 heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
                 log_dir=Path(self._db_dir.name),
+                auth_verifier=self._auth_verifier,
+                auth_provider=self._auth_provider,
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,

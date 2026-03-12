@@ -32,6 +32,7 @@ from iris.cluster.worker.env_probe import DefaultEnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
+from iris.rpc.auth import StaticTokenVerifier
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff
 
@@ -857,3 +858,82 @@ def test_gpu_worker_metadata(tmp_path):
             finally:
                 worker.stop()
                 threads.stop(timeout=Duration.from_seconds(5.0))
+
+
+# ============================================================================
+# Dashboard authentication flow (standalone cluster with auth enabled)
+# ============================================================================
+
+_AUTH_TOKEN = "e2e-test-token"
+_AUTH_USER = "test-user"
+
+
+def test_dashboard_login_flow():
+    """Dashboard shows login page when auth is enabled, allows token login, and supports logout.
+
+    Creates a standalone local cluster with StaticTokenVerifier. Exercises the
+    full browser auth flow: redirect to login, paste token, verify RPC data loads,
+    then logout back to the login page.
+    """
+    from iris.cluster.controller.local import LocalController
+
+    try:
+        import playwright.sync_api as pw
+    except ImportError:
+        pytest.skip("playwright not installed")
+
+    config = _make_controller_only_config()
+    verifier = StaticTokenVerifier({_AUTH_TOKEN: _AUTH_USER})
+    controller = LocalController(config, auth_verifier=verifier, auth_provider="static")
+    url = controller.start()
+
+    try:
+        with pw.sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+
+            # Navigate to dashboard root — auth guard should redirect to login
+            page.goto(f"{url}/")
+            page.wait_for_load_state("domcontentloaded")
+            wait_for_dashboard_ready(page)
+
+            page.wait_for_function(
+                "() => window.location.hash.includes('/login')",
+                timeout=10000,
+            )
+
+            # Login page should show the token textarea and login button
+            assert_visible(page, "text=Iris Dashboard")
+            assert_visible(page, "text=bearer token")
+            assert_visible(page, "button:has-text('Login')")
+
+            # Enter the token and submit
+            page.fill("textarea#token", _AUTH_TOKEN)
+            page.click("button:has-text('Login')")
+
+            # After login, should redirect to jobs tab (root hash)
+            page.wait_for_function(
+                "() => !window.location.hash.includes('/login')",
+                timeout=10000,
+            )
+            wait_for_dashboard_ready(page)
+
+            # Verify the dashboard loaded — the Jobs tab heading or
+            # an empty "No jobs" state should be visible
+            page.wait_for_function(
+                "() => document.body.textContent.includes('Jobs') || " "document.body.textContent.includes('No jobs')",
+                timeout=10000,
+            )
+
+            # Logout should redirect back to login
+            page.click("button:has-text('Logout')")
+            page.wait_for_function(
+                "() => window.location.hash.includes('/login')",
+                timeout=10000,
+            )
+            assert_visible(page, "text=bearer token")
+
+            page.close()
+            browser.close()
+    finally:
+        controller.close()
