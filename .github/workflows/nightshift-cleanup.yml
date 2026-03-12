@@ -131,14 +131,14 @@ jobs:
       - name: Run Cleanup Agent ${{ matrix.agent_id }}
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
           direct_prompt: true
           prompt: |
             You are Nightshift Cleanup Agent #${{ matrix.agent_id }}.
 
             Your random seed is: ${{ matrix.haiku_seed }}
-            Use this seed to compose a short haiku that will serve as the epigraph
+            Use this seed to compose a haiku that will serve as the epigraph
             for your PR description. The haiku should relate to code maintenance.
 
             ## Your Mission
@@ -186,7 +186,7 @@ jobs:
             and open a PR with:
             - Title: `[nightshift] <concise description of cleanup>`
             - Body: your haiku, then a summary of what was cleaned and why
-            - Label: `agent-generated`
+            - Labels: `agent-generated`, `nightshift`
 
             If you find nothing worth changing, do NOT create a PR. Instead, exit cleanly
             with a message saying the folder is in good shape.

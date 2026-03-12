@@ -36,7 +36,7 @@ jobs:
       - name: Detect documentation drift
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
           direct_prompt: true
           prompt: |
@@ -45,7 +45,7 @@ jobs:
             ## Ritual
 
             Your random seed is: ${{ github.run_id }}-${{ github.run_attempt }}
-            Before you begin, use this seed to inspire a short haiku about
+            Before you begin, use this seed to inspire a haiku about
             documentation drift. Keep the haiku — you will include it as an epigraph
             in any PR or issue you create.
 
@@ -88,10 +88,11 @@ jobs:
 
             If meaningful drift is found:
             - Fix straightforward issues (broken links, wrong imports in examples).
-            - For larger issues, file a GitHub issue with label `documentation` and
-              `agent-generated`. Begin the body with your haiku.
+            - For larger issues, file a GitHub issue with labels `documentation`,
+              `agent-generated`, and `nightshift`. Begin the body with your haiku.
             - If you made fixes, open a PR titled `[nightshift] fix documentation drift`
-              with label `agent-generated`. Begin the PR body with your haiku.
+              with labels `agent-generated` and `nightshift`. Begin the PR body with
+              your haiku.
 
             If nothing is found, exit cleanly.
           claude_args: |

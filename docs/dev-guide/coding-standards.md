@@ -28,8 +28,8 @@ def train(config):
     setup_logging()
 ```
 
-No `TYPE_CHECKING` guards. Fix import cycles structurally via `Protocol` at
-module boundaries.
+No `TYPE_CHECKING` guards. Fix import cycles structurally — extract common
+code/interfaces into a separate module, or use `Protocol` at module boundaries.
 
 ### 1.2 Naming
 
@@ -37,7 +37,6 @@ module boundaries.
 |---|---|---|
 | Modules | Descriptive nouns. No `*_utils.py`. | `text_cleaning.py` not `text_utils.py` |
 | Functions | Verb phrases reflecting return type. | `task_status()` not `probe_task()` |
-| Time values | Seconds assumed, no `_s` suffix. | `timeout=30` not `timeout_s=30` |
 | Abbreviations | Spell out. | `executor` not `exe` |
 | Constants | `UPPER_SNAKE_CASE` at module level. | `MAX_RETRY_COUNT = 3` |
 
@@ -50,7 +49,7 @@ Every `.py` file begins with:
 # SPDX-License-Identifier: Apache-2.0
 ```
 
-This is enforced by `./infra/pre-commit.py --fix`.
+See `pyproject.toml` for the pre-commit configuration that checks this.
 
 ---
 
@@ -109,6 +108,19 @@ Functions should accept the narrowest possible interface. Replace `parallel: boo
 with `num_workers: int`. Normalize inputs to a canonical format once at the
 boundary, not throughout the call chain.
 
+### 2.6 Enforced keyword arguments
+
+Use keyword-only arguments (after `*`) for non-obvious parameters and flags.
+This prevents positional mistakes and makes call sites self-documenting.
+
+```python
+# BAD
+def train(config, 128, True, 0.001): ...
+
+# GOOD
+def train(config, *, batch_size: int, shuffle: bool, lr: float): ...
+```
+
 ---
 
 ## 3. Types and Data Structures
@@ -116,9 +128,13 @@ boundary, not throughout the call chain.
 ### 3.1 Typed data over raw dicts
 
 Use `dataclass` or `namedtuple` instead of raw dictionaries for structured data.
-Use `dataclass(frozen=True)` for immutable value objects.
+Prefer `dataclass(frozen=True)` for immutable value objects — frozen dataclasses
+are safer defaults since they prevent accidental mutation and are hashable.
 
 ### 3.2 StrEnum over string keys
+
+Use `StrEnum` with `auto()` for string enums. LLMs often generate manual string
+assignments; prefer `auto()` to keep values consistent and reduce boilerplate.
 
 ```python
 # BAD
@@ -126,9 +142,11 @@ status = "running"
 if task["status"] == "running": ...
 
 # GOOD
+from enum import StrEnum, auto
+
 class TaskStatus(StrEnum):
-    RUNNING = "running"
-    COMPLETED = "completed"
+    RUNNING = auto()
+    COMPLETED = auto()
 ```
 
 ### 3.3 Protocol for decoupling
