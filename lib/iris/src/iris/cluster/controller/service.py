@@ -744,6 +744,13 @@ class ControllerServiceImpl:
         jobs = _jobs_in_states(self._db, USER_JOB_STATES)
         task_summaries = _task_summaries_for_jobs(self._db, {job.job_id for job in jobs})
 
+        # Lazily create scheduling context for pending job diagnostics
+        pending_jobs = [j for j in jobs if j.state == cluster_pb2.JOB_STATE_PENDING]
+        sched_context: SchedulingContext | None = None
+        if pending_jobs:
+            workers = healthy_active_workers_with_attributes(self._db)
+            sched_context = self._controller.create_scheduling_context(workers)
+
         for j in jobs:
             # Apply name filter
             job_name = j.request.name if j.request else ""
@@ -764,11 +771,12 @@ class ControllerServiceImpl:
             )
 
             pending_reason = j.error or ""
-            if j.state == cluster_pb2.JOB_STATE_PENDING:
+            if j.state == cluster_pb2.JOB_STATE_PENDING and sched_context is not None:
+                pending_reason = self._controller.get_job_scheduling_diagnostics(j, sched_context)
                 hint = autoscaler_pending_hints.get(j.job_id.to_wire())
                 if hint is not None:
                     scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
-                    pending_reason = f"Autoscaler: {scaling_prefix}{hint.message}"
+                    pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
             proto_job = cluster_pb2.JobStatus(
                 job_id=j.job_id.to_wire(),
