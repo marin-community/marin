@@ -496,7 +496,7 @@ class Platform(Protocol):
 # Default stop_all implementation
 # ============================================================================
 
-TERMINATE_TIMEOUT_SECONDS = 120
+TERMINATE_TIMEOUT_SECONDS = 60
 
 
 def default_stop_all(
