@@ -17,7 +17,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -41,11 +40,24 @@ jobs:
           prompt: |
             You are the Nightshift Test Gap analyzer.
 
+            ## Ritual
+
+            Your random seed is: ${{ github.run_id }}-${{ github.run_attempt }}
+            Before you begin, use this seed to inspire a short haiku about untested
+            code. Keep the haiku — you will include it as an epigraph in any issue
+            you create.
+
+            ## Scope
+
+            Sample a single library to focus on. Pick one at random from:
+            `lib/marin`, `lib/levanter`, `lib/iris`, `lib/haliax`, `lib/zephyr`, `lib/fray`.
+            Use your random seed to choose.
+
             Read `AGENTS.md` for project conventions.
 
             ## Mission
 
-            Identify source modules that lack adequate test coverage.
+            Identify source modules in your chosen library that lack adequate test coverage.
 
             ## Process
 
@@ -60,16 +72,21 @@ jobs:
 
             ## Output
 
-            File a single GitHub issue titled `[nightshift] Test coverage gaps report`
-            with label `agent-generated` and `testing`. Include:
+            Do NOT file an issue unless you find genuinely significant coverage gaps.
+            If the library is well-tested, exit cleanly with a brief summary.
+
+            If meaningful gaps exist, file a single GitHub issue titled
+            `[nightshift] Test coverage gaps — <library> — $(date +%Y-%m-%d)`
+            with label `agent-generated` and `testing`. Begin the issue body with
+            your haiku, then include:
             - A ranked table of modules missing tests
             - For each, the public functions that lack coverage
             - Suggested test strategies (unit vs integration, key edge cases)
 
             Do NOT write tests yourself — this is an analysis-only workflow.
-            If an open issue with the same title already exists, update it instead
+            If an open issue with a matching title already exists, update it instead
             of creating a duplicate.
           claude_args: |
             --model opus
             --max-turns 40
-            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(wc:*)"
+            --allowedTools "Read,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(python:*)"

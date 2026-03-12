@@ -31,23 +31,7 @@ def train(config):
 No `TYPE_CHECKING` guards. Fix import cycles structurally via `Protocol` at
 module boundaries.
 
-### 1.2 File-level docstrings
-
-Every `.py` file must have a top-level docstring describing its purpose and a
-rough sketch of the design. Test files should describe the testing strategy if
-non-trivial.
-
-```python
-"""Tokenizer cache backed by fsspec.
-
-Stores pre-tokenized shards on GCS with content-addressed naming so that
-identical source documents always map to the same shard key. Designed for
-append-only writes; deletions are handled by the garbage collector in
-gc_tokenizer_cache.py.
-"""
-```
-
-### 1.3 Naming
+### 1.2 Naming
 
 | Convention | Rule | Example |
 |---|---|---|
@@ -57,7 +41,7 @@ gc_tokenizer_cache.py.
 | Abbreviations | Spell out. | `executor` not `exe` |
 | Constants | `UPPER_SNAKE_CASE` at module level. | `MAX_RETRY_COUNT = 3` |
 
-### 1.4 License header
+### 1.3 License header
 
 Every `.py` file begins with:
 
@@ -299,7 +283,9 @@ These are the specific patterns that automated cleanup workflows should look for
 Enforced automatically by `./infra/pre-commit.py --all-files --fix`:
 
 - **Formatter**: `black` with `line-length = 121`, `target-version = ["py310"]`, preview mode.
-- **Linter**: `ruff` with rules: `A, B, E, F, I, NPY, RUF, UP, W`.
+- **Linter**: `ruff` with rules: `A, B, E, F, I, NPY, RUF, UP, W` and
+  `ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]`.
+  See `pyproject.toml` for the full ruff configuration including ignored rules.
 - **Type checker**: `pyrefly` on `lib/*/src/` directories.
 - **File hygiene**: max 500 KB, valid AST, no merge conflict markers, trailing
   whitespace, end-of-file newline.

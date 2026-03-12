@@ -17,7 +17,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,15 +37,35 @@ jobs:
           prompt: |
             You are the Nightshift TODO tracker.
 
+            ## Ritual
+
+            Your random seed is: ${{ github.run_id }}-${{ github.run_attempt }}
+            Before you begin, use this seed to inspire a short haiku about forgotten
+            TODOs. Keep the haiku — you will include it as an epigraph in any issue
+            you create.
+
+            ## Scope
+
+            Sample a single top-level source folder to focus on. Pick one at random from:
+            `lib/marin/src/marin`, `lib/levanter/src/levanter`, `lib/iris/src/iris`,
+            `lib/haliax/src/haliax`, `lib/zephyr/src/zephyr`, `lib/fray/src/fray`,
+            `experiments`, `tests`.
+            Use your random seed to choose.
+
             ## Mission
 
-            Find all `TODO`, `FIXME`, `HACK`, and `XXX` comments in the codebase.
+            Find all `TODO`, `FIXME`, `HACK`, and `XXX` comments in your chosen folder.
             For each one, use `git blame` to determine when it was added.
 
             ## Output
 
-            File a GitHub issue titled `[nightshift] Stale TODO report — $(date +%Y-%m-%d)`
-            with label `agent-generated`. Include:
+            Do NOT file an issue unless you find stale TODOs (>90 days) that are
+            genuinely worth flagging. If the folder is clean, exit with a brief summary.
+
+            If you have meaningful findings, file a GitHub issue titled
+            `[nightshift] Stale TODO report — <folder> — $(date +%Y-%m-%d)`
+            with label `agent-generated`. Begin the issue body with your haiku,
+            then include:
 
             - A table grouped by age bucket (>1 year, >6 months, >90 days, recent)
             - Each entry: file:line, the comment text, author, date added
@@ -58,4 +77,4 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 30
-            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(date:*)"
+            --allowedTools "Read,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(python:*),Bash(date:*)"

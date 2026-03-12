@@ -37,9 +37,12 @@ jobs:
       - name: Pick target folders
         id: pick
         shell: bash
+        env:
+          INPUT_AGENT_COUNT: ${{ inputs.agent_count || '5' }}
+          INPUT_TARGET_FOLDER: ${{ inputs.target_folder }}
         run: |
-          AGENT_COUNT="${{ inputs.agent_count || '5' }}"
-          OVERRIDE="${{ inputs.target_folder }}"
+          AGENT_COUNT="$INPUT_AGENT_COUNT"
+          OVERRIDE="$INPUT_TARGET_FOLDER"
 
           # Candidate top-level source directories (excludes scripts/, infra/, docs/)
           CANDIDATES=(
@@ -71,24 +74,26 @@ jobs:
             exit 1
           fi
 
-          # Generate a random seed from /dev/urandom
-          SEED=$(od -An -tu4 -N4 /dev/urandom | tr -d ' ')
-
           # Pick AGENT_COUNT random directories (or use override)
+          if [ -n "$OVERRIDE" ]; then
+            SELECTED=()
+            for i in $(seq 1 "$AGENT_COUNT"); do
+              SELECTED+=("$OVERRIDE")
+            done
+          else
+            readarray -t SELECTED < <(printf '%s\n' "${ALL_DIRS[@]}" | shuf -n "$AGENT_COUNT")
+          fi
+
           MATRIX='{"include":['
-          for i in $(seq 1 "$AGENT_COUNT"); do
-            if [ -n "$OVERRIDE" ]; then
-              FOLDER="$OVERRIDE"
-            else
-              IDX=$(( (SEED + i * 7919) % ${#ALL_DIRS[@]} ))
-              FOLDER="${ALL_DIRS[$IDX]}"
-            fi
+          for i in $(seq 0 $(( ${#SELECTED[@]} - 1 ))); do
+            FOLDER="${SELECTED[$i]}"
+            AGENT_NUM=$((i + 1))
 
             # Generate a haiku seed for the agent
             HAIKU_SEED=$(od -An -tx4 -N4 /dev/urandom | tr -d ' ')
 
-            if [ "$i" -gt 1 ]; then MATRIX+=','; fi
-            MATRIX+="{\"agent_id\":$i,\"folder\":\"$FOLDER\",\"haiku_seed\":\"$HAIKU_SEED\"}"
+            if [ "$AGENT_NUM" -gt 1 ]; then MATRIX+=','; fi
+            MATRIX+="{\"agent_id\":$AGENT_NUM,\"folder\":\"$FOLDER\",\"haiku_seed\":\"$HAIKU_SEED\"}"
           done
           MATRIX+=']}'
 
@@ -108,7 +113,6 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
       actions: read
     steps:
       - name: Checkout repository
@@ -164,6 +168,9 @@ jobs:
 
             - Only make changes you are confident are correct improvements.
             - Do NOT refactor working code for style alone — focus on genuine issues.
+            - Do NOT create a PR unless you have identified genuinely high-value fixes.
+              Cosmetic-only or marginal improvements do not warrant a PR. If nothing
+              meaningful is found, exit cleanly instead.
             - Do NOT touch files outside `${{ matrix.folder }}` unless fixing an import.
             - Run `./infra/pre-commit.py --all-files --fix` before committing.
             - Run `uv run pytest -m 'not slow'` on any test files you modified or that
@@ -186,4 +193,4 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 80
-            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*),Bash(date:*),Bash(wc:*)"
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)"

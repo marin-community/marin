@@ -17,7 +17,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -41,6 +40,13 @@ jobs:
           prompt: |
             You are the Nightshift Dependency Auditor.
 
+            ## Ritual
+
+            Your random seed is: ${{ github.run_id }}-${{ github.run_attempt }}
+            Before you begin, use this seed to inspire a short haiku about dependency
+            management. Keep the haiku — you will include it as an epigraph in any
+            issue you create.
+
             ## Mission
 
             Analyze `pyproject.toml` and the lock file for dependency health.
@@ -59,10 +65,15 @@ jobs:
 
             ## Output
 
-            File a GitHub issue titled `[nightshift] Dependency audit — $(date +%Y-%m)`
-            with labels `agent-generated` and `infrastructure`. Include findings
-            grouped by severity (action needed / worth investigating / informational).
+            Do NOT file an issue unless you have found genuinely actionable findings.
+            If everything looks healthy, exit cleanly with a brief summary.
+
+            If you have meaningful findings, file a GitHub issue titled
+            `[nightshift] Dependency audit — $(date +%Y-%m)` with labels
+            `agent-generated` and `infrastructure`. Begin the issue body with your
+            haiku, then include findings grouped by severity
+            (action needed / worth investigating / informational).
           claude_args: |
             --model opus
             --max-turns 30
-            --allowedTools "Bash(git:*),Bash(gh:*),Bash(uv:*),Bash(python:*),Bash(date:*)"
+            --allowedTools "Read,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(uv:*),Bash(python:*),Bash(date:*)"

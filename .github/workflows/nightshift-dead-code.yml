@@ -18,7 +18,6 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
       actions: read
     steps:
       - name: Checkout repository
@@ -43,18 +42,34 @@ jobs:
           prompt: |
             You are the Nightshift Dead Code hunter.
 
+            ## Ritual
+
+            Your random seed is: ${{ github.run_id }}-${{ github.run_attempt }}
+            Before you begin, use this seed to inspire a short haiku about hunting
+            dead code. Keep the haiku — you will include it as an epigraph in any
+            PR or issue you create.
+
+            ## Scope
+
+            Sample a single top-level source folder to focus on. Pick one at random from:
+            `lib/marin/src/marin`, `lib/levanter/src/levanter`, `lib/iris/src/iris`,
+            `lib/haliax/src/haliax`, `lib/zephyr/src/zephyr`, `lib/fray/src/fray`,
+            `experiments`, `tests`.
+            Use your random seed to choose. You may drill into a subfolder if the
+            top-level folder is too large.
+
             Read `AGENTS.md` for project conventions.
 
             ## Mission
 
-            Systematically find and remove dead code across the codebase.
+            Systematically find and remove dead code in your chosen folder.
 
             ## What counts as dead code
 
             1. **Unused imports**: imports not referenced anywhere in the file.
                (Note: `__init__.py` re-exports are exempt per ruff config.)
             2. **Unreferenced functions/classes**: defined but never called/instantiated
-               anywhere in the repo. Use `grep -r` to verify across the entire codebase.
+               anywhere in the repo. Use the Grep tool or `rg` to verify across the entire codebase.
             3. **Commented-out code blocks**: more than 2 consecutive commented lines
                that look like code (not documentation). This is in git history.
             4. **Stale TODO/FIXME**: comments older than 90 days (check via `git blame`).
@@ -75,11 +90,15 @@ jobs:
 
             ## Output
 
-            Open a PR titled `[nightshift] remove dead code` with label `agent-generated`.
-            List each removal with a one-line justification.
+            Do NOT create a PR unless you have identified genuinely high-value removals.
+            Removing a single unused import is not worth a PR. If you cannot find
+            substantial dead code, exit cleanly with a brief summary of what you checked.
 
-            If nothing found, exit cleanly.
+            If you do have meaningful removals, open a PR titled
+            `[nightshift] remove dead code in <folder>` with label `agent-generated`.
+            Begin the PR body with your haiku, then list each removal with a one-line
+            justification.
           claude_args: |
             --model opus
             --max-turns 80
-            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)"
