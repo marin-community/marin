@@ -1523,11 +1523,8 @@ class Autoscaler:
         # Check if this was a short-lived slice (preemption detection)
         self._record_slice_failure(slice_id, group)
 
-        try:
-            group.scale_down(slice_id)
-            self._unregister_slice_workers(slice_id)
-        except Exception as e:
-            logger.warning("Failed to terminate slice %s: %s", slice_id, e)
+        group.scale_down(slice_id)
+        self._unregister_slice_workers(slice_id)
 
         return sibling_worker_ids
 
