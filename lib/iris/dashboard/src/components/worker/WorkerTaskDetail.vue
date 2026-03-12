@@ -91,6 +91,7 @@ const ports = computed<[string, number][]>(() => {
 
 // Profiling — calls the worker's ProfileTask RPC via Connect
 const profiling = ref(false)
+const threadDumpText = ref<string | null>(null)
 
 function buildProfileType(profilerType: string): Record<string, unknown> {
   if (profilerType === 'cpu') return { cpu: { format: 'SPEEDSCOPE' } }
@@ -113,13 +114,18 @@ async function handleProfile(profilerType: string) {
       return
     }
     if (resp.profileData) {
-      const blob = new Blob([atob(resp.profileData)], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `profile-${props.taskId.replace(/\//g, '_')}.out`
-      a.click()
-      URL.revokeObjectURL(url)
+      const decoded = atob(resp.profileData)
+      if (profilerType === 'threads') {
+        threadDumpText.value = decoded
+      } else {
+        const blob = new Blob([decoded], { type: 'application/octet-stream' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `profile-${props.taskId.replace(/\//g, '_')}.out`
+        a.click()
+        URL.revokeObjectURL(url)
+      }
     }
   } catch (e) {
     alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
@@ -334,5 +340,25 @@ onMounted(async () => {
         <LogViewer :task-id="taskId" source="worker" />
       </div>
     </template>
+
+    <!-- Thread dump modal -->
+    <div
+      v-if="threadDumpText !== null"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="threadDumpText = null"
+    >
+      <div class="bg-surface rounded-lg shadow-xl w-[90vw] max-w-4xl max-h-[80vh] flex flex-col">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-surface-border">
+          <h3 class="text-sm font-semibold text-text">Thread Dump</h3>
+          <button
+            class="text-text-muted hover:text-text text-lg leading-none px-1"
+            @click="threadDumpText = null"
+          >
+            &times;
+          </button>
+        </div>
+        <pre class="flex-1 overflow-auto px-4 py-3 text-xs font-mono text-text whitespace-pre-wrap">{{ threadDumpText }}</pre>
+      </div>
+    </div>
   </div>
 </template>
