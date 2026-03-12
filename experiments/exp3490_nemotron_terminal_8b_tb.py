@@ -78,12 +78,13 @@ HARBOR_AGENT = "terminus-2"
 MODEL_NAME = "nemotron-terminal-8b"
 MODEL_PATH = "gs://marin-us-central1/models/nvidia--Nemotron-Terminal-8B--main/"
 
-# TPU jobs typically do not have Docker available; use native vLLM by default.
-os.environ.setdefault("MARIN_VLLM_MODE", "native")
-
 HARBOR_MAX_INSTANCES = _optional_int_from_env("HARBOR_MAX_INSTANCES", default=None)
 HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=25) or 1
 HARBOR_AGENT_KWARGS = _optional_json_dict_from_env("HARBOR_AGENT_KWARGS_JSON")
+
+# Sampling parameters from the model's generation_config.json to match the paper.
+# Terminus-2 defaults to temperature=0.7; the model was evaluated with temperature=0.6.
+HARBOR_AGENT_KWARGS.setdefault("temperature", 0.6)
 
 OUTPUT_DIR = os.path.join("evaluation", "harbor", "terminal-bench", MODEL_NAME, HARBOR_AGENT)
 

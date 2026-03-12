@@ -22,6 +22,8 @@ import re
 import subprocess
 import time
 from pathlib import Path
+
+import requests
 from typing import Any
 
 from fray.v1.cluster import ResourceConfig
@@ -66,6 +68,28 @@ def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
         candidate = f"model_{digest}"
 
     return candidate
+
+
+def _warmup_vllm_server(server_url: str, model_name: str) -> None:
+    """Send a short completion request to trigger TPU JIT compilation before real tasks start."""
+    logger.info("Sending warmup request to vLLM server to trigger JIT compilation...")
+    warmup_start = time.time()
+    try:
+        response = requests.post(
+            f"{server_url}/chat/completions",
+            json={
+                "model": model_name,
+                "messages": [{"role": "user", "content": "Say hello."}],
+                "max_tokens": 16,
+            },
+            timeout=900,
+        )
+        response.raise_for_status()
+        elapsed = time.time() - warmup_start
+        logger.info("vLLM warmup completed in %.1fs", elapsed)
+    except Exception as e:
+        elapsed = time.time() - warmup_start
+        logger.warning("vLLM warmup request failed after %.1fs: %s", elapsed, e)
 
 
 def _env_vars_from_keys(keys: list[str]) -> dict[str, str]:
@@ -248,6 +272,7 @@ class HarborEvaluator(Evaluator):
         ) as env:
             agent_kwargs.setdefault("api_base", env.server_url)
             logger.info("vLLM server ready: api_base=%s model=%s", env.server_url, env.model_id)
+            _warmup_vllm_server(env.server_url, canonical_name)
             self._run_eval_inner(
                 model_name=hosted_model_name,
                 agent=agent,
