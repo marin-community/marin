@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 EMBEDDING_MODEL = LUXICAL_MODEL
-N_PER_BUCKET = 25
-N_PER_SOURCE = 25
+N_PER_BUCKET = 200
+N_PER_SOURCE = 67
 N_TOPIC_CLUSTERS = 15
 ORACLE_BACKEND = OracleBackend.CLAUDE
 PROMPT_VERSION = "v1"
@@ -59,7 +59,7 @@ _OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="embed-everything")
 sample_quality = StepSpec(
     name="sample_quality",
     output_path_prefix=_OUTPUT_PREFIX,
-    hash_attrs={"n_per_bucket": N_PER_BUCKET, "seed": 42, "v": 3},
+    hash_attrs={"n_per_bucket": N_PER_BUCKET, "seed": 42, "v": 4},
     fn=remote(
         lambda output_path: sample_quality_documents(
             output_path=output_path,
@@ -73,7 +73,7 @@ sample_quality = StepSpec(
 sample_topic = StepSpec(
     name="sample_topic",
     output_path_prefix=_OUTPUT_PREFIX,
-    hash_attrs={"n_per_source": N_PER_SOURCE, "seed": 42, "v": 3},
+    hash_attrs={"n_per_source": N_PER_SOURCE, "seed": 42, "v": 4},
     fn=remote(
         lambda output_path: sample_topic_documents(
             output_path=output_path,
@@ -92,7 +92,7 @@ oracle_quality = StepSpec(
     name="oracle_quality",
     output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_quality],
-    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 2},
+    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 3},
     fn=remote(
         lambda output_path: label_quality(
             output_path=output_path,
@@ -108,7 +108,7 @@ oracle_topic = StepSpec(
     name="oracle_topic",
     output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_topic],
-    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 2},
+    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 3},
     fn=remote(
         lambda output_path: label_topics(
             output_path=output_path,

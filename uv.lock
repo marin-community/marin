@@ -4704,6 +4704,9 @@ math = [
     { name = "pylatexenc" },
     { name = "sympy" },
 ]
+oracle = [
+    { name = "anthropic" },
+]
 rl = [
     { name = "prime" },
     { name = "sympy" },
@@ -4799,6 +4802,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", marker = "extra == 'oracle'" },
     { name = "antlr4-python3-runtime", marker = "extra == 'evalchemy'", specifier = "==4.11" },
     { name = "bespokelabs-curator", marker = "extra == 'evalchemy'" },
     { name = "braceexpand" },
@@ -4868,7 +4872,7 @@ requires-dist = [
     { name = "wandb" },
     { name = "warcio" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "embed", "math"]
+provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "embed", "oracle", "math"]
 
 [package.metadata.requires-dev]
 dev = [
