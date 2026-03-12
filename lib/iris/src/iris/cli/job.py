@@ -528,9 +528,8 @@ def _submit_and_wait_job(
 ) -> int:
     """Submit job and optionally wait for completion.
 
-    When terminate_on_exit is True, the job (and its children) are killed on
-    any non-normal exit: KeyboardInterrupt, unexpected exceptions, etc.
-    Normal completion (success or JobFailedError) does not trigger termination.
+    Only KeyboardInterrupt terminates the remote job; connection failures
+    are logged and re-raised without killing the job.
     """
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
     entrypoint = Entrypoint.from_command(*command)
@@ -550,12 +549,15 @@ def _submit_and_wait_job(
     )
 
     logger.info(f"Job submitted: {job.job_id}")
+    click.echo(str(job.job_id))
 
     if not wait:
-        logger.info("Job submitted (not waiting for completion)")
         return 0
 
-    logger.info("Streaming logs (Ctrl+C to kill)...")
+    logger.info(
+        "Streaming logs (Ctrl+C to stop). If disconnected, reconnect with: iris job logs -f %s",
+        job.job_id,
+    )
     try:
         try:
             status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
@@ -564,14 +566,19 @@ def _submit_and_wait_job(
         except JobFailedError as e:
             logger.error(f"Job failed: {e}")
             return 1
-    except BaseException:
+    except KeyboardInterrupt:
         if terminate_on_exit:
             logger.info(f"Terminating job {job.job_id}...")
             terminated = _terminate_jobs(client, (str(job.job_id),), include_children=True)
             for t in terminated:
                 logger.info(f"  Terminated: {t}")
-        if isinstance(sys.exc_info()[1], KeyboardInterrupt):
-            return 130
+        return 130
+    except Exception:
+        logger.warning(
+            "Connection lost; job %s is still running. Reconnect with: iris job logs -f %s",
+            job.job_id,
+            job.job_id,
+        )
         raise
 
 
@@ -644,7 +651,7 @@ Examples:
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
-    help="Terminate the job if an unexpected error occurs (default: terminate).",
+    help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
 )
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
@@ -722,6 +729,7 @@ def run(
             except Exception:
                 logger.debug("Controller post-mortem failed", exc_info=True)
         raise
+
     sys.exit(exit_code)
 
 
