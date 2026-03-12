@@ -662,3 +662,38 @@
 - Next action:
   - monitor `0312e` for first eval points and elastic aggregate token metrics
   - compare against baseline on loss versus `elastic/delivered_total_tokens`
+
+### 2026-03-12 11:27 - Patched deleted-array transfer publish crash and restarted monitor run
+- Hypothesis:
+  - the repeated elastic worker restarts in `0312e` are caused by a transient transfer publish failure (`RuntimeError: Array has been deleted ...`) and should be survivable by skipping a publish interval rather than failing the worker.
+- Command:
+  - reproduced via live logs on:
+    - `/dlwh/resilient-1e19-0312e-diloco-adam100-executor-parent/.../train_lm-w000`
+  - stack trace pinned to:
+    - `FileBackedPeerSyncController._publish_state -> _JaxTransferRuntime.publish -> _materialize_payload -> jax.device_get`
+    - file/line at failure time: `lib/levanter/src/levanter/elastic.py:509`
+  - patched:
+    - `lib/levanter/src/levanter/elastic.py`
+    - `lib/levanter/tests/test_elastic.py`
+  - verification:
+    - `uv run --with pytest --with pytest-timeout python -m pytest lib/levanter/tests/test_elastic.py -q`
+    - `./infra/pre-commit.py --fix lib/levanter/src/levanter/elastic.py lib/levanter/tests/test_elastic.py`
+  - commit:
+    - `1679185e6` `Treat deleted transfer buffers as transient publish misses`
+  - rolled run:
+    - stopped `0312e` executor tree
+    - relaunched as `/dlwh/resilient-1e19-0312f-diloco-adam100-executor-parent`
+- Result:
+  - transfer publish now catches deleted/donated-array runtime errors and logs a warning instead of crashing the worker.
+  - added tests for:
+    - deleted-array error classifier
+    - jax_transfer publish path tolerating deleted-array runtime error
+  - immediate post-relaunch scheduler state:
+    - baseline + all elastic children are currently pending on TPU capacity in `us-central1-a`
+    - no new worker-level failures yet on `0312f` (still waiting for admission)
+- Interpretation:
+  - this removes a deterministic failure mode in the elastic path.
+  - remaining blocker is TPU admission/capacity, not an immediate Python crash on launch.
+- Next action:
+  - continue monitoring `0312f` until first worker admission
+  - if the same deleted-array traceback reappears after admission, escalate to a deeper transfer payload lifecycle change
