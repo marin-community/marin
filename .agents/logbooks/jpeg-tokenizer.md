@@ -910,3 +910,35 @@
     baseline
 - Next action: keep the gzip/reset thread as the main follow-up, and if we return to JPEG first, prioritize
   `scan_payload_bytes` over `huffman_events`.
+
+### 2026-03-11 20:45 - Exact `K=64` SWA baseline staged
+
+- Hypothesis: `K=8` is dramatically more compact, but that result is confounded by heavy coefficient truncation. A full
+  `K=64` exact-libjpeg coefficient run should tell us where the coefficient family lands once it is brought much closer
+  to the information content of the whole-image syntax streams.
+- Changes:
+  - added `tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-smoke` and
+    `tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial` in
+    `experiments/jpeg_tokenizer/base/launch.py`
+  - both use exact libjpeg coefficients, `max_seq_len=65536`, `sliding_window=4096`, and `batch_size=8`
+- Data:
+  - built full store locally with:
+    `uv run python scripts/jpeg_tokenizer/build_coeff_token_store.py --k 64 --source libjpeg --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0`
+  - mirrored to:
+    `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0`
+  - store stats:
+    - local size: `3.3G`
+    - `seq_len=65536`
+    - `vocab_size=4095`
+    - train examples: `9469`
+    - validation examples: `3925`
+- Interpretation:
+  - `K=64` is now in the same rough whole-image sequence regime as the syntax streams:
+    - `coeff_k64`: `65536`
+    - `huffman_events`: mean `63173.26`
+    - `symbols`: mean `32598.44`
+    - `bytes`: mean `25662.39`
+  - the main remaining question is whether full coefficients retain enough structure to beat the near-lossless syntax
+    streams once the `K=8` compactness advantage is gone
+- Next action: launch the `K=64` exact-libjpeg `SWA=4096` smoke on `marin-eu-west4-a`, then decide whether the full
+  trial is worth the spend from the smoke behavior.

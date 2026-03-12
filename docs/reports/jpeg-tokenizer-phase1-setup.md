@@ -869,3 +869,45 @@ That changes the JPEG-side decision:
 - `scan_payload_bytes` does not improve enough over whole-image bytes to be especially interesting, but it is now
   cheap enough to keep as a control baseline
 - `huffman_events` is not just a stress test; despite the long sequence, it is strong enough to justify a full trial
+
+## Exact `K=64` Coefficients
+
+The `K=8` coefficient result is useful, but it is also heavily confounded by truncation: it keeps only `8/64`
+quantized coefficients per block. To reconnect the coefficient family to the fairer whole-image comparison, I staged a
+full exact-libjpeg coefficient baseline with sliding-window attention:
+
+- store:
+  `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0`
+- sequence length:
+  `65536`
+- vocab:
+  `4095`
+- train examples:
+  `9469`
+- validation examples:
+  `3925`
+- local store size during build:
+  about `3.3 GiB`
+
+The launch surface is now wired in `experiments/jpeg_tokenizer/base/launch.py` as:
+
+- `tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-smoke`
+- `tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial`
+
+Both use:
+
+- exact libjpeg coefficients
+- `max_seq_len=65536`
+- `sliding_window=4096`
+- `batch_size=8` on `v6e-8`
+
+That puts `K=64` into the same rough whole-image sequence regime as the syntax streams:
+
+- exact `K=64` coeffs: fixed `65536`
+- Huffman events: mean `63173.26`
+- exact symbols: mean `32598.44`
+- whole-image bytes: mean `25662.39`
+
+The next decision point is straightforward: if the `K=64` smoke is stable and the early loss curve is competitive,
+then the full-trial question becomes interesting. If it is unstable or obviously weaker than the syntax streams, that
+will confirm that the `K=8` compactness result does not carry over once most of the discarded information comes back.
