@@ -523,8 +523,10 @@ class ControllerTransitions:
             subtree_ids = [str(row["job_id"]) for row in subtree]
             placeholders = ",".join("?" for _ in subtree_ids)
             running_rows = cur.execute(
-                f"SELECT t.task_id FROM tasks t "
+                f"SELECT t.task_id, a.worker_id, j.request_proto, j.is_reservation_holder "
+                f"FROM tasks t "
                 f"JOIN task_attempts a ON a.task_id = t.task_id AND a.attempt_id = t.current_attempt_id "
+                f"JOIN jobs j ON j.job_id = t.job_id "
                 f"WHERE t.job_id IN ({placeholders}) "
                 "AND t.state IN (?, ?, ?) "
                 "AND a.worker_id IS NOT NULL",
@@ -536,6 +538,15 @@ class ControllerTransitions:
                 ),
             ).fetchall()
             tasks_to_kill = {JobName.from_wire(str(row["task_id"])) for row in running_rows}
+            # Decommit resources for each active task on its assigned worker.
+            # cancel_job marks tasks as KILLED, but apply_heartbeat skips
+            # already-finished tasks (is_finished() check), so the normal
+            # heartbeat decommit path never fires for cancelled tasks.
+            for row in running_rows:
+                if not int(row["is_reservation_holder"]):
+                    job_req = cluster_pb2.Controller.LaunchJobRequest()
+                    job_req.ParseFromString(row["request_proto"])
+                    _decommit_worker_resources(cur, str(row["worker_id"]), job_req.resources)
             now_ms = Timestamp.now().epoch_ms()
             task_terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
             cur.execute(
