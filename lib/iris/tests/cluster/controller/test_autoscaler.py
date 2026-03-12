@@ -802,6 +802,29 @@ class TestAutoscalerWorkerFailure:
 
         assert siblings == []
 
+    def test_notify_worker_failed_cleans_up_even_if_terminate_fails(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """notify_worker_failed() removes the slice even if terminate() raises.
+
+        Prevents ghost slices where a preempted/deleted cloud resource causes
+        terminate() to fail, leaving the slice tracked forever.
+        """
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
+        mock_handle.terminate.side_effect = RuntimeError("resource not found")
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+        _mark_discovered_ready(group, [mock_handle])
+
+        failed_worker_id = "slice-001-vm-0"
+        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+
+        # Slice should be removed despite terminate() failure
+        assert group.slice_count() == 0
+        assert siblings == []
+
 
 class TestAutoscalerIdleVerification:
     """Tests for idle verification during scale-down."""

@@ -265,6 +265,48 @@ class TestScalingGroupVmGroupOwnership:
 
         assert group.slice_count() == 0
 
+    def test_scale_down_cleans_up_even_if_terminate_fails(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """scale_down() removes the slice from tracking even if terminate() raises.
+
+        This prevents ghost slices where the cloud resource is gone (e.g.
+        preempted) but the autoscaler still counts it as live capacity.
+        """
+        mock_handle = make_mock_slice_handle("slice-001")
+        mock_handle.terminate.side_effect = RuntimeError("resource not found")
+        platform = make_mock_platform(slice_handles_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        assert group.slice_count() == 1
+
+        # Should NOT raise despite terminate() failure
+        group.scale_down("slice-001")
+
+        mock_handle.terminate.assert_called_once()
+        assert group.slice_count() == 0
+        assert group.get_slice("slice-001") is None
+
+    def test_terminate_all_continues_on_individual_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """terminate_all() terminates remaining slices even if one fails."""
+        handles = [
+            make_mock_slice_handle("slice-001"),
+            make_mock_slice_handle("slice-002"),
+            make_mock_slice_handle("slice-003"),
+        ]
+        handles[0].terminate.side_effect = RuntimeError("resource not found")
+        platform = make_mock_platform(slice_handles_to_discover=handles)
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        assert group.slice_count() == 3
+
+        group.terminate_all()
+
+        # All three should have been attempted
+        for h in handles:
+            h.terminate.assert_called_once()
+        assert group.slice_count() == 0
+
     def test_ready_slice_count(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """ready_slice_count() only counts VM groups where all VMs are ready."""
         discovered = [
