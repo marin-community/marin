@@ -145,8 +145,20 @@ jobs:
       LABEL_PREFIX: smoke-ci
 
     steps:
+      - name: Resolve PR head ref
+        id: pr
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_json=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }})
+          echo "ref=$(echo "$pr_json" | jq -r .head.ref)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo "$pr_json" | jq -r .head.sha)" >> "$GITHUB_OUTPUT"
+
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.ref || github.ref }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -209,15 +221,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Resolve PR SHA (cleanup job doesn't share outputs with test job)
-          pr_json=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }})
-          sha=$(echo "$pr_json" | jq -r .head.sha)
           if [ "${{ needs.cloud-smoke-test.result }}" = "success" ]; then
             state=success
           else
             state=failure
           fi
-          gh api repos/${{ github.repository }}/statuses/"$sha" \
+          gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
             -f state="$state" \
             -f context="Iris Cloud Smoke Test" \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
