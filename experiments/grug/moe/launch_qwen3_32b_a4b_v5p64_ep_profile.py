@@ -459,6 +459,10 @@ def parse_args() -> argparse.Namespace:
         default="auto",
     )
     parser.add_argument("--cross-entropy-v-block-divisor", type=int, default=1)
+    parser.add_argument("--hidden-dim", type=int, default=None)
+    parser.add_argument("--num-layers", type=int, default=None)
+    parser.add_argument("--num-heads", type=int, default=None)
+    parser.add_argument("--num-kv-heads", type=int, default=None)
     parser.add_argument("--run-suffix", type=str, default="")
     args, remaining = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining]
@@ -488,6 +492,10 @@ def main() -> None:
         profiler_num_steps=args.profiler_num_steps,
         cross_entropy_implementation=args.cross_entropy_implementation,
         cross_entropy_v_block_divisor=args.cross_entropy_v_block_divisor,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        num_heads=args.num_heads,
+        num_kv_heads=args.num_kv_heads,
         run_suffix=args.run_suffix,
     )
     executor_main(

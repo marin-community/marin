@@ -1236,3 +1236,20 @@ uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --cpu 4 --me
   - `es3r2` is the current "best really-MoE-like" target: it keeps shared width modest and equal to routed width while beating the other equal-shared variants.
   - `es2` is the cleaner, simpler fallback target in the same equal-shared-width design family.
   - These are the two target shapes to carry into the longer real-data compare.
+
+### 2026-03-12 10:18 PT - GRUG-PERF-046 seal snapshot for issue #3528
+- Scope closeout:
+  - Sealing the current research thread state after geometry sweeps, corrected FLOPs accounting, and scale-up planning notes.
+  - Issue: `#3528` (long-run compare thread).
+- Final target-shape recommendation for the next long run:
+  - primary: `es3r2`
+    - `hidden_dim=4096 / layers=27 / E=64 / EP=4 / topk=4 / routed=1024 / shared=1024 / cf=1.25`
+  - fallback: `es2`
+    - `hidden_dim=3072 / layers=32 / E=64 / EP=4 / topk=4 / routed=1536 / shared=1536 / cf=1.25`
+- Additional scale-up follow-ups captured before close:
+  - Re-test MaxText MoE XLA perf flag bundle at higher EP:
+    - `MOE_VMEM_LIMIT_FLAG + CF_FOR_ALL_GATHER + DATA_PARALLEL_OVERLAP`
+  - Re-evaluate dispatch crossover at high-order EP (`ragged_all_to_all` vs ring path), cross-referencing `#2710` low-EP ring results.
+- Seal artifact intent:
+  - Include launch/config scripts used for v5p64 and v4 sizing checks.
+  - Tag snapshot for reproducibility and issue permalinking.

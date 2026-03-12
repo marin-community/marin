@@ -33,7 +33,7 @@ from levanter.grug.grug_moe import (
     moe_mlp,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pvocab, unshard
+from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.fused_cross_entropy_loss import BlockSizes
 from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
@@ -41,6 +41,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 _BLOCK_MLP_INPUT_CKPT = "grug_moe_block_mlp_input"
 _BLOCK_MLP_OUTPUT_CKPT = "grug_moe_block_mlp_output"
+_PVOCAB_PARAM_SHARD = P("data", None)
 BlockRematMode = Literal[
     "full",
     "off",
@@ -507,8 +508,12 @@ class Transformer(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, *block_keys = random.split(key, cfg.num_layers + 2)
-        token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
+        token_embed = reshard(
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), _PVOCAB_PARAM_SHARD
+        )
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _PVOCAB_PARAM_SHARD
+        )
         blocks = tuple(Block.init(cfg, key=layer_key) for layer_key in block_keys)
         final_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
 
