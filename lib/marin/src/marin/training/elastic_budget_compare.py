@@ -57,6 +57,8 @@ class ElasticBudgetCompareConfig:
     outer_learning_rate: float = 0.25
     outer_optimizer: Literal["adam", "sgd"] = "sgd"
     max_peers: int | None = None
+    data_config: LmDataConfig | None = None
+    """Optional pre-resolved data config, useful when dispatching via Executor."""
 
 
 def _write_json(path: str, payload: dict[str, Any]) -> None:
@@ -239,11 +241,14 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
     base_config = _base_train_config(config.base_config_path)
     model_config = _experiment_model_config()
     optimizer_config = _experiment_optimizer_config()
-    data_config = _cached_data_config(
-        base_config.data,
-        dataset_cache_dir=config.dataset_cache_dir,
-        tokenizer=config.tokenizer,
-    )
+    if config.data_config is not None:
+        data_config = config.data_config
+    else:
+        data_config = _cached_data_config(
+            base_config.data,
+            dataset_cache_dir=config.dataset_cache_dir,
+            tokenizer=config.tokenizer,
+        )
 
     baseline_steps = _num_train_steps_for_target_flops(
         model_config=model_config,
