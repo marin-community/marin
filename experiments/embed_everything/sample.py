@@ -7,6 +7,7 @@ Produces JSONL files with stratified train/test splits for downstream
 oracle labeling and embedding evaluation.
 """
 
+import gzip
 import hashlib
 import json
 import logging
@@ -15,17 +16,16 @@ import random
 
 from iris.marin_fs import open_url, url_to_fs
 
-from marin.processing.classification.dataset_utils import read_dataset_streaming
-
 logger = logging.getLogger(__name__)
 
-# Nemotron CC quality buckets (actual only, skip synthetic per issue discussion)
+# Nemotron CC quality buckets (actual only, skip synthetic per issue discussion).
+# Files live under kind2=actual/ (not directly under kind=actual/).
 NEMOTRON_QUALITY_BUCKETS = {
-    "high": "quality=high/kind=actual",
-    "medium_high": "quality=medium-high",
-    "medium": "quality=medium",
-    "medium_low": "quality=medium-low",
-    "low": "quality=low/kind=actual",
+    "high": "quality=high/kind=actual/kind2=actual",
+    "medium_high": "quality=medium-high/kind=actual/kind2=actual",
+    "medium": "quality=medium/kind=actual/kind2=actual",
+    "medium_low": "quality=medium-low/kind=actual/kind2=actual",
+    "low": "quality=low/kind=actual/kind2=actual",
 }
 
 # Dolma 1.7 source splits
@@ -49,6 +49,7 @@ DOLMA_SOURCES = [
 
 TRAIN_FRACTION = 0.8
 RANDOM_SEED = 42
+MAX_FILES_PER_STRATUM = 3
 
 # Mapping from Dolma source names to their file glob patterns
 DOLMA_SOURCE_PATTERNS: dict[str, list[str]] = {
@@ -75,17 +76,29 @@ def _stable_doc_id(text: str, source: str) -> str:
     return hashlib.sha256(f"{source}:{text[:1000]}".encode()).hexdigest()[:16]
 
 
+def _read_gzipped_jsonl(gcs_path: str):
+    """Stream JSONL records from a .json.gz or .jsonl.gz file on GCS."""
+    with open_url(gcs_path, "rb") as raw:
+        content = raw.read()
+    lines = gzip.decompress(content).decode("utf-8").splitlines()
+    for line in lines:
+        line = line.strip()
+        if line:
+            yield json.loads(line)
+
+
 def _sample_from_files(
     file_patterns: list[str],
     n_per_stratum: int,
     label: str,
     label_field: str,
     seed: int,
+    max_files: int = MAX_FILES_PER_STRATUM,
 ) -> list[dict]:
     """Sample n documents from a set of file patterns.
 
-    Reads documents streaming and uses reservoir sampling to avoid
-    loading entire files into memory.
+    Uses reservoir sampling. Limits the number of files globbed per pattern
+    to avoid slow recursive listings on GCS.
     """
     rng = random.Random(seed)
     reservoir: list[dict] = []
@@ -93,19 +106,27 @@ def _sample_from_files(
 
     for pattern in file_patterns:
         fs, path = url_to_fs(pattern)
-        matched = fs.glob(path)
+        matched = sorted(fs.glob(path))
         if not matched:
             logger.warning("No files matched pattern: %s", pattern)
             continue
 
+        # Only read a few files — we only need n_per_stratum docs total
+        rng_files = random.Random(seed)
+        rng_files.shuffle(matched)
+        matched = matched[:max_files]
+
         for filepath in matched:
             full_path = f"gs://{filepath}" if not filepath.startswith("gs://") else filepath
             try:
-                for doc in read_dataset_streaming(full_path, columns=["id", "text", "source"]):
+                for doc in _read_gzipped_jsonl(full_path):
                     count += 1
+                    text = doc.get("text", "")
+                    if not text:
+                        continue
                     record = {
-                        "doc_id": doc.get("id", _stable_doc_id(doc["text"], doc.get("source", "unknown"))),
-                        "text": doc["text"],
+                        "doc_id": doc.get("id", _stable_doc_id(text, doc.get("source", "unknown"))),
+                        "text": text,
                         "source": doc.get("source", "unknown"),
                         label_field: label,
                     }
@@ -157,7 +178,7 @@ def sample_quality_documents(
     all_docs: list[dict] = []
 
     for bucket_name, bucket_path in NEMOTRON_QUALITY_BUCKETS.items():
-        pattern = os.path.join(nemotron_base_path, bucket_path, "**/*.jsonl.gz")
+        pattern = os.path.join(nemotron_base_path, bucket_path, "*.jsonl.gz")
         docs = _sample_from_files(
             file_patterns=[pattern],
             n_per_stratum=n_per_bucket,
