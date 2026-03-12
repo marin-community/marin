@@ -268,8 +268,8 @@ const SORTABLE_COLS: SortableCol[] = [
 ]
 
 function sortIndicator(field: SortField): string {
-  if (sortField.value !== field) return '\u2195'
-  return sortDir.value === 'asc' ? '\u2191' : '\u2193'
+  if (sortField.value !== field) return '↕'
+  return sortDir.value === 'asc' ? '↑' : '↓'
 }
 </script>
 
@@ -372,7 +372,7 @@ function sortIndicator(field: SortField): string {
                 class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
                 @click.stop="toggleExpanded(node.job.name)"
               >
-                {{ expandedJobs.has(node.job.name) ? '\u25BC' : '\u25B6' }}
+                {{ expandedJobs.has(node.job.name) ? '▼' : '▶' }}
               </button>
               <span v-else class="w-4" />
               <RouterLink
@@ -430,7 +430,7 @@ function sortIndicator(field: SortField): string {
             class="px-3 py-2 text-xs text-text-muted max-w-xs truncate"
             :title="node.job.pendingReason ?? ''"
           >
-            {{ node.job.pendingReason || '\u2014' }}
+            {{ node.job.pendingReason || '—' }}
           </td>
         </tr>
       </tbody>

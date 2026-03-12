@@ -508,7 +508,7 @@ function idleThresholdMs(groupName: string): number {
                     @click="toggleSlices(gs.group)"
                   >
                     <span class="text-[10px] text-text-muted">
-                      {{ expandedSlices.has(gs.group) ? '\u25BC' : '\u25B6' }}
+                      {{ expandedSlices.has(gs.group) ? '▼' : '▶' }}
                     </span>
                     <span class="inline-flex items-center gap-1">
                       <template v-for="state in SLICE_BADGE_ORDER" :key="state">
@@ -545,7 +545,7 @@ function idleThresholdMs(groupName: string): number {
                     @click="toggleDemand(gs.group)"
                   >
                     <span class="text-[10px] text-text-muted mr-1">
-                      {{ expandedDemand.has(gs.group) ? '\u25BC' : '\u25B6' }}
+                      {{ expandedDemand.has(gs.group) ? '▼' : '▶' }}
                     </span>
                     {{ groupDemand(gs.group) }}
                   </button>
