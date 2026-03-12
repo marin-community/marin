@@ -164,5 +164,42 @@
   - Topics: The NMI ~0.44 ceiling is robust across all dimensionality reduction methods. This is a fundamental limitation of Luxical embeddings for topic separation, not a noise/dimensionality issue.
   - The quality probe verdict remains **"investigate"** (0.6-0.8). Improving further likely requires higher-dimensional or task-specialized embeddings, not better probes.
 - Next actions:
-  - Compare with higher-dimensional embeddings (Arctic 1024-dim, BGE-large 1024-dim) to test whether dim=192 is the bottleneck
-  - Report findings in issue #3535
+  - Compare with higher-dimensional embeddings → see EE-004
+
+### 2026-03-12 — Model comparison: Luxical vs Arctic vs BGE-large (EE-004)
+- Hypothesis: Higher-dimensional embeddings (1024-dim) will outperform Luxical (192-dim) on both quality and topics
+- Setup: Ran locally on cached v7 sample/oracle data. Embedded with three models, same RidgeCV and K-Means eval.
+- Models:
+  - Luxical-One: `DatologyAI/luxical-one` (192-dim)
+  - Arctic-L: `Snowflake/snowflake-arctic-embed-l` (1024-dim, 335M params)
+  - BGE-large: `BAAI/bge-large-en-v1.5` (1024-dim, 326M params)
+- **Results**:
+
+  **Quality Probe (RidgeCV)**:
+  | Model | Dim | Spearman ρ | Kendall τ | R² | MSE |
+  |---|---|---|---|---|---|
+  | **Luxical** | 192 | **0.698** | **0.560** | **0.472** | **0.601** |
+  | Arctic-L | 1024 | 0.621 | 0.493 | 0.336 | 0.755 |
+  | BGE-large | 1024 | 0.510 | 0.391 | 0.150 | 0.967 |
+
+  **Topic Clustering (K-Means, k=15)**:
+  | Model | Dim | ARI | NMI | V-measure |
+  |---|---|---|---|---|
+  | Luxical | 192 | 0.242 | 0.439 | 0.439 |
+  | Arctic-L | 1024 | 0.254 | 0.443 | 0.443 |
+  | **BGE-large** | 1024 | **0.277** | **0.478** | **0.478** |
+
+- **Key findings**:
+  - Quality: **Luxical wins decisively** (Spearman 0.698 vs Arctic 0.621 vs BGE 0.510). Higher dimensionality does NOT help — in fact it hurts, likely because RidgeCV overfits on 1024 features with only 800 training samples. Luxical's compact 192-dim space is better regularized for linear probes.
+  - Topics: **BGE-large edges ahead** (NMI 0.478 vs Luxical 0.439 vs Arctic 0.443). BGE-large's NMI 0.478 approaches the 0.5 threshold but still doesn't clear it. Arctic barely improves over Luxical.
+  - The quality ranking (Luxical > Arctic > BGE) is the inverse of the topic ranking (BGE > Arctic > Luxical), suggesting these models encode different kinds of information. Luxical appears optimized for document quality signals; BGE for semantic/topical similarity.
+
+- **Final verdict on stop criteria**:
+  - Quality: Luxical RidgeCV Spearman **0.698** is the best result across all models/probes tested. Verdict: **investigate further** — promising but not yet go.
+  - Topics: Best model (BGE-large) achieves NMI **0.478**, ARI **0.277** — closer to thresholds but still **no-go**.
+  - Overall: Embedding-based quality filtering with Luxical + RidgeCV is the most promising direction. Topic clustering remains a hard problem for general-purpose embeddings.
+
+- Next actions:
+  - Consider ensembling (Luxical for quality, BGE for topics)
+  - Try larger training sets for quality probe (currently 800 train)
+  - Report complete findings in issue #3535
