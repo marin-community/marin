@@ -371,26 +371,13 @@ def cluster_dashboard_proxy(ctx, port: int):
     to the upstream controller. Useful for viewing a remote controller without
     SSH tunneling. Rebuilds dashboard assets on each run.
     """
-    import subprocess
-
     import uvicorn
 
+    from iris.cli.build import _ensure_dashboard_dist
     from iris.cluster.controller.dashboard import ProxyControllerDashboard
 
     # Rebuild dashboard assets so the proxy always serves the latest UI.
-    dashboard_dir = find_iris_root() / "dashboard"
-    if (dashboard_dir / "package.json").exists():
-        if not (dashboard_dir / "node_modules").exists():
-            click.echo("Installing dashboard dependencies...")
-            subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
-        click.echo("Building dashboard...")
-        result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
-        if result.returncode != 0:
-            click.echo(result.stderr, err=True)
-            raise click.ClickException("Dashboard build failed")
-        click.echo("Dashboard built successfully.")
-    else:
-        click.echo(f"Warning: dashboard source not found at {dashboard_dir}, skipping build", err=True)
+    _ensure_dashboard_dist()
 
     controller_url = require_controller_url(ctx)
     dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
