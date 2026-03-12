@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ from levanter.optim import MuonConfig
 from experiments.llama import llama_50m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import GpuConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 muon_config = MuonConfig(
@@ -52,7 +52,7 @@ speedrun_config = SpeedrunConfig(
     description="Phase 1: 50M Llama with Muon at 1x Chinchilla (1B tokens). Baseline validation.",
     model_config=llama_50m,
     train_config=SimpleTrainConfig(
-        GpuConfig(gpu_count=1, accelerator_type="H200"),
+        ResourceConfig.with_gpu("H200", count=1),
         train_batch_size=128,
         num_train_steps=num_train_steps,
         learning_rate=muon_config.learning_rate,
