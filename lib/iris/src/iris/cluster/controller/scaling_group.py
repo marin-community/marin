@@ -540,6 +540,11 @@ class ScalingGroup:
     def scale_down(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
         """Terminate a slice.
 
+        Always removes the slice from in-memory tracking and the DB, even if
+        the cloud terminate call fails (e.g. resource already deleted by
+        preemption). This prevents ghost slices that the autoscaler counts as
+        live capacity but that no longer exist.
+
         Args:
             slice_id: ID of the slice to terminate
             timestamp: Optional timestamp (for testing)
@@ -548,7 +553,15 @@ class ScalingGroup:
         with self._slices_lock:
             state = self._slices.get(slice_id)
         if state:
-            state.handle.terminate()
+            try:
+                state.handle.terminate()
+            except Exception:
+                logger.warning(
+                    "Scale group %s: terminate() failed for slice %s, cleaning up anyway",
+                    self.name,
+                    slice_id,
+                    exc_info=True,
+                )
             with self._slices_lock:
                 self._slices.pop(slice_id, None)
             self._last_scale_down = timestamp
@@ -1049,13 +1062,25 @@ class ScalingGroup:
         return list(self._get_slice_worker_ids(state))
 
     def terminate_all(self) -> None:
-        """Terminate all slices in this scale group."""
+        """Terminate all slices in this scale group.
+
+        Continues terminating remaining slices even if individual terminate
+        calls fail, to avoid leaking cloud resources.
+        """
         with self._slices_lock:
             snapshot = [s.handle for s in self._slices.values()]
             self._slices.clear()
             self._pending_scale_ups = 0
         for handle in snapshot:
-            handle.terminate()
+            try:
+                handle.terminate()
+            except Exception:
+                logger.warning(
+                    "Scale group %s: terminate() failed for slice %s during terminate_all, continuing",
+                    self.name,
+                    handle.slice_id,
+                    exc_info=True,
+                )
         self._db_clear_slices()
 
     def restore_from_snapshot(
