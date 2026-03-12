@@ -26,9 +26,25 @@ You can also run them manually with `./infra/pre-commit.py --all-files` or via `
 
 ### Testing
 
-You can run the tests with `make test`.
+For most changes, start with targeted fast tests:
+
+```bash
+uv run pytest -m 'not slow' <relevant test paths>
+```
+
+Use `make test` when you need the full default test suite.
 
 *Note* that to run the unit tests, you must not have set `RAY_ADDRESS`. You can unset it with `unset RAY_ADDRESS` or `export RAY_ADDRESS=""`.
+
+### Opening a pull request
+
+Before opening a pull request:
+
+1. Run `./infra/pre-commit.py --all-files --fix`.
+2. Run `uv run pytest -m 'not slow'` for the files or packages you changed.
+3. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
+
+For the end-to-end branch and fork workflow, follow the PR steps in [Submitting to the Marin Speedrun](../tutorials/submitting-speedrun.md#submit). The same GitHub push and PR process applies to non-speedrun changes.
 
 ## Guidelines
 
