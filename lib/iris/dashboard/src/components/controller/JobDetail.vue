@@ -15,6 +15,7 @@ import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import LogViewer from '@/components/shared/LogViewer.vue'
 
 const props = defineProps<{
   jobId: string
@@ -396,6 +397,14 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Job logs -->
+      <div class="mt-6 mb-6">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
+          Job Logs
+        </h3>
+        <LogViewer :task-id="jobId" />
       </div>
     </template>
   </PageShell>
