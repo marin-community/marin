@@ -18,7 +18,7 @@ Do not launch concurrent TPU commands on the same worker from multiple shells, t
 - `connect`: opens an interactive SSH session to one reserved worker
 - `setup_env`: syncs the repo by default, then installs or refreshes the remote `uv` environment on one worker or all reserved workers
 - `execute`: syncs local files to `~/marin` on the reserved worker(s), then runs one command
-- `watch`: syncs + reruns a command when local files change
+- `watch`: syncs all reserved workers + reruns a command on the selected worker when local files change
 - `release`: terminates the holder job and removes the local session file
 
 ## Prerequisites
@@ -128,7 +128,7 @@ uv run scripts/iris/dev_tpu.py \
 ```
 
 `execute` and `watch` default to worker `0`.
-Initial sync during `allocate` still pushes the repo to every reserved worker.
+`execute` syncs all reserved workers before each run (unless `--no-sync`), and `watch` does the same before each restart.
 
 ## Observability
 

@@ -274,7 +274,8 @@ def sync_to_remote(node: GcpNodeRef, local_path: Path) -> None:
             node,
             "bash -lc "
             + shlex.quote(
-                'rm -rf "$HOME/marin" && mkdir -p "$HOME/marin" '
+                'mkdir -p "$HOME/marin" '
+                '&& find "$HOME/marin" -mindepth 1 -maxdepth 1 ! -name ".venv" -exec rm -rf {} + '
                 f'&& tar -xzf {remote_archive} -C "$HOME/marin" && rm -f {remote_archive}'
             ),
         )
@@ -408,7 +409,16 @@ class FileChangeHandler(FileSystemEventHandler):
 class RemoteProcessManager:
     """Run a remote command, synchronizing and restarting on demand."""
 
-    def __init__(self, worker: DevTpuWorker, command: str, sync_path: Path, env_dict: dict[str, str], no_sync: bool):
+    def __init__(
+        self,
+        workers: list[DevTpuWorker],
+        worker: DevTpuWorker,
+        command: str,
+        sync_path: Path,
+        env_dict: dict[str, str],
+        no_sync: bool,
+    ):
+        self._workers = workers
         self._worker = worker
         self._command = command
         self._sync_path = sync_path
@@ -421,7 +431,7 @@ class RemoteProcessManager:
         with self._lock:
             self.kill()
             if not self._no_sync:
-                sync_to_remote(self._worker.node, self._sync_path)
+                sync_all_workers(self._workers, self._sync_path)
             remote = build_remote_command(self._command, self._env_dict)
             self._process = popen_remote_command(self._worker.node, remote)
 
@@ -683,7 +693,7 @@ def watch(
 
     local_path = Path(sync_path).resolve()
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
-    process_manager = RemoteProcessManager(worker, shlex.join(command), local_path, env_dict, no_sync)
+    process_manager = RemoteProcessManager(state.workers, worker, shlex.join(command), local_path, env_dict, no_sync)
     atexit.register(process_manager.kill)
     process_manager()
 
