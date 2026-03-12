@@ -2588,8 +2588,25 @@ def _profile_summary_bucket_deltas(
     return deltas[:top_k]
 
 
+def _profile_summary_positive_delta_budget(
+    candidate: dict[str, float],
+    baseline: dict[str, float],
+) -> float:
+    total = 0.0
+    for path in set(candidate) | set(baseline):
+        total += max(candidate.get(path, 0.0) - baseline.get(path, 0.0), 0.0)
+    return total
+
+
 def _is_decoder_layer_shell_bucket(path: str) -> bool:
     return path.startswith(PROFILE_SUMMARY_DECODER_LAYER_PREFIXES)
+
+
+def _is_ad_shell_path(tf_op_path: str) -> bool:
+    return (
+        "jvp(HackableTransformer)/HackableDecoderLayer/" in tf_op_path
+        or "transpose(jvp(HackableTransformer))/HackableDecoderLayer/" in tf_op_path
+    )
 
 
 def _is_ad_shell_bucket(path: str) -> bool:
@@ -2604,6 +2621,17 @@ def _is_layout_shell_bucket(path: str) -> bool:
     if not _is_decoder_layer_shell_bucket(path):
         return False
     return any(token in path for token in ("/reshape", "/transpose", "reshape:", "transpose:"))
+
+
+def _is_untracked_profile_hot_path(tf_op_path: str) -> bool:
+    return not any(
+        tracked_path in tf_op_path
+        for tracked_path in (
+            PROFILE_SUMMARY_FORWARD_CLOSED_CALL_HOT_PATH,
+            PROFILE_SUMMARY_BACKWARD_CLOSED_CALL_HOT_PATH,
+            PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH,
+        )
+    )
 
 
 def _profile_summary_attribution(
@@ -2648,16 +2676,7 @@ def _profile_summary_attribution(
     remainder_bucket_ms = _profile_summary_hot_path_buckets(
         summary,
         divisor=divisor,
-        include_predicate=lambda tf_op_path: (
-            not any(
-                tracked_path in tf_op_path
-                for tracked_path in (
-                    PROFILE_SUMMARY_FORWARD_CLOSED_CALL_HOT_PATH,
-                    PROFILE_SUMMARY_BACKWARD_CLOSED_CALL_HOT_PATH,
-                    PROFILE_SUMMARY_CE_BWD_ROOT_HOT_PATH,
-                )
-            )
-        ),
+        include_predicate=_is_untracked_profile_hot_path,
     )
     ce_while_bucket_ms = _profile_summary_hot_path_buckets(
         summary,
@@ -2668,9 +2687,12 @@ def _profile_summary_attribution(
         remainder_bucket_ms,
         include_predicate=_is_decoder_layer_shell_bucket,
     )
-    ad_shell_bucket_ms = _profile_summary_bucket_subset(
-        decoder_layer_shell_bucket_ms,
-        include_predicate=_is_ad_shell_bucket,
+    ad_shell_bucket_ms = _profile_summary_hot_path_buckets(
+        summary,
+        divisor=divisor,
+        include_predicate=lambda tf_op_path: (
+            _is_untracked_profile_hot_path(tf_op_path) and _is_ad_shell_path(tf_op_path)
+        ),
     )
     sharding_shell_bucket_ms = _profile_summary_bucket_subset(
         decoder_layer_shell_bucket_ms,
@@ -2992,28 +3014,104 @@ def cmd_summary_attribution(args: argparse.Namespace) -> int:
         )
         payload["baseline_summary"] = str(args.baseline_summary)
         payload["baseline_attribution"] = baseline_result
-        payload["baseline_remainder_delta_topk"] = _profile_summary_bucket_deltas(
-            result.get("remainder_bucket_ms", {}) if isinstance(result.get("remainder_bucket_ms"), dict) else {},
-            (
-                baseline_result.get("remainder_bucket_ms", {})
-                if isinstance(baseline_result.get("remainder_bucket_ms"), dict)
-                else {}
-            ),
+        candidate_remainder_bucket_ms = (
+            result.get("remainder_bucket_ms", {}) if isinstance(result.get("remainder_bucket_ms"), dict) else {}
+        )
+        baseline_remainder_bucket_ms = (
+            baseline_result.get("remainder_bucket_ms", {})
+            if isinstance(baseline_result.get("remainder_bucket_ms"), dict)
+            else {}
+        )
+        candidate_decoder_shell_bucket_ms = (
+            result.get("decoder_layer_shell_bucket_ms", {})
+            if isinstance(result.get("decoder_layer_shell_bucket_ms"), dict)
+            else {}
+        )
+        baseline_decoder_shell_bucket_ms = (
+            baseline_result.get("decoder_layer_shell_bucket_ms", {})
+            if isinstance(baseline_result.get("decoder_layer_shell_bucket_ms"), dict)
+            else {}
+        )
+        candidate_ad_shell_bucket_ms = (
+            result.get("ad_shell_bucket_ms", {}) if isinstance(result.get("ad_shell_bucket_ms"), dict) else {}
+        )
+        baseline_ad_shell_bucket_ms = (
+            baseline_result.get("ad_shell_bucket_ms", {})
+            if isinstance(baseline_result.get("ad_shell_bucket_ms"), dict)
+            else {}
+        )
+        candidate_sharding_shell_bucket_ms = (
+            result.get("sharding_shell_bucket_ms", {})
+            if isinstance(result.get("sharding_shell_bucket_ms"), dict)
+            else {}
+        )
+        baseline_sharding_shell_bucket_ms = (
+            baseline_result.get("sharding_shell_bucket_ms", {})
+            if isinstance(baseline_result.get("sharding_shell_bucket_ms"), dict)
+            else {}
+        )
+        candidate_layout_shell_bucket_ms = (
+            result.get("layout_shell_bucket_ms", {}) if isinstance(result.get("layout_shell_bucket_ms"), dict) else {}
+        )
+        baseline_layout_shell_bucket_ms = (
+            baseline_result.get("layout_shell_bucket_ms", {})
+            if isinstance(baseline_result.get("layout_shell_bucket_ms"), dict)
+            else {}
+        )
+
+        remainder_delta_topk = _profile_summary_bucket_deltas(
+            candidate_remainder_bucket_ms,
+            baseline_remainder_bucket_ms,
             top_k=args.top_k,
         )
-        payload["decoder_layer_shell_delta_topk"] = _profile_summary_bucket_deltas(
-            (
-                result.get("decoder_layer_shell_bucket_ms", {})
-                if isinstance(result.get("decoder_layer_shell_bucket_ms"), dict)
-                else {}
-            ),
-            (
-                baseline_result.get("decoder_layer_shell_bucket_ms", {})
-                if isinstance(baseline_result.get("decoder_layer_shell_bucket_ms"), dict)
-                else {}
-            ),
+        decoder_layer_shell_delta_topk = _profile_summary_bucket_deltas(
+            candidate_decoder_shell_bucket_ms,
+            baseline_decoder_shell_bucket_ms,
             top_k=args.top_k,
         )
+
+        comparison: dict[str, object] = {
+            "remainder_delta_budget_ms": _profile_summary_positive_delta_budget(
+                candidate_remainder_bucket_ms,
+                baseline_remainder_bucket_ms,
+            ),
+            "remainder_delta_topk": remainder_delta_topk,
+            "decoder_layer_shell_delta_budget_ms": _profile_summary_positive_delta_budget(
+                candidate_decoder_shell_bucket_ms,
+                baseline_decoder_shell_bucket_ms,
+            ),
+            "decoder_layer_shell_delta_topk": decoder_layer_shell_delta_topk,
+            "ad_shell_delta_budget_ms": _profile_summary_positive_delta_budget(
+                candidate_ad_shell_bucket_ms,
+                baseline_ad_shell_bucket_ms,
+            ),
+            "sharding_shell_delta_budget_ms": _profile_summary_positive_delta_budget(
+                candidate_sharding_shell_bucket_ms,
+                baseline_sharding_shell_bucket_ms,
+            ),
+            "layout_shell_delta_budget_ms": _profile_summary_positive_delta_budget(
+                candidate_layout_shell_bucket_ms,
+                baseline_layout_shell_bucket_ms,
+            ),
+        }
+        upper_bound_gap_ms = _coerce_float(result.get("upper_bound_gap_ms"))
+        if upper_bound_gap_ms is None:
+            candidate_step_duration_ms = _coerce_float(result.get("step_duration_ms"))
+            baseline_step_duration_ms = _coerce_float(baseline_result.get("step_duration_ms"))
+            if candidate_step_duration_ms is not None and baseline_step_duration_ms is not None:
+                upper_bound_gap_ms = candidate_step_duration_ms - baseline_step_duration_ms
+        if upper_bound_gap_ms is not None and upper_bound_gap_ms > 0.0:
+            comparison["upper_bound_gap_ms"] = upper_bound_gap_ms
+            comparison["gap_explained_by_decoder_layer_shell_delta"] = (
+                float(comparison["decoder_layer_shell_delta_budget_ms"]) / upper_bound_gap_ms
+            )
+            comparison["gap_explained_by_remainder_delta"] = (
+                float(comparison["remainder_delta_budget_ms"]) / upper_bound_gap_ms
+            )
+
+        payload["comparison"] = comparison
+        payload["remainder_delta_topk"] = remainder_delta_topk
+        payload["decoder_layer_shell_delta_topk"] = decoder_layer_shell_delta_topk
 
     output_json = json.dumps(payload, indent=2, sort_keys=True)
     if args.output is not None:

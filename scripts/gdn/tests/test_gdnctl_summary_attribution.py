@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
+import json
 import math
 from pathlib import Path
+
+import pytest
 
 
 def _load_gdnctl_module():
@@ -48,7 +52,9 @@ def _summary_with_ce_forward_divisor() -> dict[str, object]:
             {
                 "count": 8,
                 "total_duration": 12000.0,
-                "tf_op_path": "jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/add:",
+                "tf_op_path": (
+                    "jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/add:"
+                ),
             },
             {
                 "count": 8,
@@ -103,6 +109,12 @@ def test_profile_summary_attribution_extracts_tracked_and_remainder_budgets() ->
     assert math.isclose(metrics["remainder_budget_ms"], 87.998)
     assert math.isclose(metrics["upper_bound_gap_ms"], 60.0)
     assert math.isclose(metrics["gap_explained_by_train_path"], 12.002 / 60.0)
+    assert math.isclose(metrics["ad_shell_budget_ms"], 2.75)
+    assert [row["path"] for row in metrics["ad_shell_topk"]] == [
+        "HackableDecoderLayer/closed_call/shard_map:",
+        "HackableDecoderLayer/reshape:",
+        "HackableDecoderLayer/shard_map/pallas_call:",
+    ]
 
     remainder_bucket_ms = metrics["remainder_bucket_ms"]
     assert isinstance(remainder_bucket_ms, dict)
@@ -147,3 +159,60 @@ def test_profile_summary_bucket_deltas_only_report_positive_deltas() -> None:
     )
 
     assert deltas == [{"path": "decoder shell", "ms": 4.0}]
+
+
+def test_profile_summary_positive_delta_budget_aggregates_bucketwise_uplift() -> None:
+    delta_budget = gdnctl._profile_summary_positive_delta_budget(
+        {"shell/a": 5.0, "shell/b": 1.0},
+        {"shell/a": 1.5, "shell/c": 9.0},
+    )
+
+    assert math.isclose(delta_budget, 4.5)
+
+
+def test_summary_attribution_emits_delta_budget_comparison(tmp_path: Path) -> None:
+    candidate_summary = _summary_with_ce_forward_divisor()
+    baseline_summary = {
+        "hot_ops": [
+            {
+                "count": 8,
+                "total_duration": 4000.0,
+                "tf_op_path": (
+                    "jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/add:"
+                ),
+            },
+        ],
+        "hierarchical_regions": [],
+    }
+    candidate_path = tmp_path / "candidate.json"
+    baseline_path = tmp_path / "baseline.json"
+    output_path = tmp_path / "comparison.json"
+    candidate_path.write_text(json.dumps(candidate_summary), encoding="utf-8")
+    baseline_path.write_text(json.dumps(baseline_summary), encoding="utf-8")
+
+    args = argparse.Namespace(
+        summary=candidate_path,
+        baseline_summary=baseline_path,
+        step_duration_ms=100.0,
+        baseline_step_duration_ms=40.0,
+        upper_bound_step_ms=40.0,
+        gdn_layer_fraction=0.75,
+        baseline_gdn_layer_fraction=0.0,
+        gdn_layers_per_block=3,
+        baseline_gdn_layers_per_block=0,
+        gdn_block_size=4,
+        baseline_gdn_block_size=4,
+        top_k=4,
+        output=output_path,
+    )
+
+    assert gdnctl.cmd_summary_attribution(args) == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    comparison = payload["comparison"]
+    assert comparison["remainder_delta_budget_ms"] == pytest.approx(4.95)
+    assert comparison["decoder_layer_shell_delta_budget_ms"] == pytest.approx(2.25)
+    assert comparison["ad_shell_delta_budget_ms"] == pytest.approx(2.25)
+    assert comparison["sharding_shell_delta_budget_ms"] == pytest.approx(1.5)
+    assert comparison["layout_shell_delta_budget_ms"] == pytest.approx(0.75)
+    assert comparison["gap_explained_by_decoder_layer_shell_delta"] == pytest.approx(2.25 / 60.0)
+    assert payload["remainder_delta_topk"][0] == {"path": "CE forward pallas_call", "ms": 2.7}
