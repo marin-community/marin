@@ -200,6 +200,50 @@
   - Overall: Embedding-based quality filtering with Luxical + RidgeCV is the most promising direction. Topic clustering remains a hard problem for general-purpose embeddings.
 
 - Next actions:
-  - Consider ensembling (Luxical for quality, BGE for topics)
-  - Try larger training sets for quality probe (currently 800 train)
-  - Report complete findings in issue #3535
+  - Try larger training sets → see EE-005
+
+### 2026-03-12 — Quality probe scaling (EE-005)
+- Hypothesis: The Spearman 0.698 ceiling is due to insufficient training data (N=800)
+- Setup: Ran locally. (A) Subsampled existing oracle data for a learning curve; (B) sampled fresh Nemotron docs at scale, used bucket ordinals (0-4) as targets.
+- **Results**:
+
+  **Part A: Learning curve (oracle scores, existing 1000 docs)**:
+  | N_train | Spearman ρ | Kendall τ | R² |
+  |---|---|---|---|
+  | 50 | 0.486 | 0.377 | 0.216 |
+  | 100 | 0.496 | 0.385 | 0.262 |
+  | 200 | 0.630 | 0.492 | 0.381 |
+  | 400 | 0.639 | 0.506 | 0.397 |
+  | 600 | 0.664 | 0.522 | 0.422 |
+  | 800 | 0.698 | 0.560 | 0.472 |
+
+  Curve still climbing at N=800 — not saturated. Biggest jump: 100→200 (+0.134).
+
+  **Part B: Large-scale (bucket ordinals, freshly sampled)**:
+  | N_total | N_train | Spearman ρ | Kendall τ | R² |
+  |---|---|---|---|---|
+  | 2,500 | 2,000 | 0.749 | 0.594 | 0.547 |
+  | 5,000 | 4,000 | 0.740 | 0.584 | 0.531 |
+  | 10,000 | 8,000 | **0.750** | **0.595** | **0.548** |
+
+  Plateau at Spearman ~0.75 with bucket ordinals. Doubling from 2K→8K train makes no difference.
+
+- **Conclusions**:
+  - The Spearman ~0.75 ceiling is a property of the Luxical embedding space, not a data limitation.
+  - More data does help up to ~2000 training samples, then plateaus.
+  - Oracle scores (continuous 0-5) have slightly lower Spearman than bucket ordinals because they add noise from the LLM oracle.
+  - **Updated verdict**: Quality Spearman 0.75 falls squarely in the "investigate" zone (0.6-0.8). The embedding captures meaningful quality signal but cannot fully recover the Nemotron quality ranking with a linear probe.
+
+- **Final summary of all experiments**:
+  | ID | What | Quality Spearman | Topic NMI |
+  |---|---|---|---|
+  | EE-001 | Luxical, N=125 | 0.485 | 0.463 |
+  | EE-002 | Luxical, N=1000 | 0.698 | 0.439 |
+  | EE-003 | MLP probe | 0.603 (worse) | — |
+  | EE-003 | PCA/UMAP | — | 0.442 (flat) |
+  | EE-004 | Arctic 1024-dim | 0.621 | 0.443 |
+  | EE-004 | BGE-large 1024-dim | 0.510 | **0.478** |
+  | EE-005 | Luxical, N=10000, bucket ordinals | **0.750** | — |
+
+  Quality: Luxical + RidgeCV peaks at Spearman **0.75** with sufficient data.
+  Topics: BGE-large peaks at NMI **0.478**, still below 0.5 threshold.
