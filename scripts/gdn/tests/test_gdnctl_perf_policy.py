@@ -490,9 +490,13 @@ def test_latest_iteration_hotspot_context_parses_decoder_shell_metrics(tmp_path:
             [
                 "### Iteration 14 - Candidate",
                 "- `Decoder-layer shell budget`: `61.200 ms -> 55.000 ms`",
+                "- `Hybrid generic shell delta budget`: `17.000 ms -> 14.250 ms`",
+                "- `Dispatch/shard shell delta budget`: `9.000 ms -> 7.750 ms`",
+                "- `AD/wrapper shell delta budget`: `4.500 ms -> 3.250 ms`",
                 "- `AD shell budget`: `18.000 ms -> 16.500 ms`",
                 "- `Sharding shell budget`: `24.000 ms -> 20.250 ms`",
                 "- `Layout shell budget`: `7.000 ms -> 5.750 ms`",
+                "- `Interaction remainder`: `54.000 ms -> 50.500 ms`",
             ]
         )
         + "\n",
@@ -502,9 +506,13 @@ def test_latest_iteration_hotspot_context_parses_decoder_shell_metrics(tmp_path:
     context = gdnctl._latest_iteration_hotspot_context(log_path)
     current = context["hotspot_metrics"]
     assert current["decoder_layer_shell_budget_ms"] == 55.0
+    assert current["hybrid_generic_shell_delta_budget_ms"] == 14.25
+    assert current["dispatch_shard_shell_delta_ms"] == 7.75
+    assert current["ad_wrapper_shell_delta_ms"] == 3.25
     assert current["ad_shell_budget_ms"] == 16.5
     assert current["sharding_shell_budget_ms"] == 20.25
     assert current["layout_shell_budget_ms"] == 5.75
+    assert current["interaction_remainder_ms"] == 50.5
 
 
 def test_perf_policy_reverts_off_critical_path_candidate(tmp_path: Path) -> None:
@@ -636,6 +644,71 @@ def test_perf_policy_reverts_wrong_boundary_progress_candidate(tmp_path: Path) -
     reasons = last["control_gate_reasons"]
     assert isinstance(reasons, list)
     assert any("wrong-boundary progress" in reason for reason in reasons)
+
+
+def test_perf_policy_reverts_namespace_only_progress_candidate(tmp_path: Path) -> None:
+    repo, baseline_commit = _init_repo(tmp_path)
+    state_path = tmp_path / "perf_state.json"
+    args = _perf_args(regression_policy="revert-count-failure")
+
+    baseline_hotspots = {
+        "train_path_budget_ms": 42.700,
+        "decoder_layer_shell_budget_ms": 20.400,
+        "hybrid_generic_shell_delta_budget_ms": 14.200,
+        "interaction_remainder_ms": 53.100,
+        "step_duration_ms": 166.300,
+        "remainder_budget_ms": 123.600,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=1,
+        commit_sha=baseline_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.09, "throughput/duration": 0.1663},
+            "warnings": [],
+            "hotspot_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert not count_failure
+    assert rc == 0
+
+    candidate_commit = _commit_change(repo, "candidate\n", "candidate")
+    candidate_hotspots = {
+        "train_path_budget_ms": 40.900,
+        "decoder_layer_shell_budget_ms": 20.000,
+        "hybrid_generic_shell_delta_budget_ms": 14.150,
+        "interaction_remainder_ms": 55.500,
+        "step_duration_ms": 166.420,
+        "remainder_budget_ms": 125.520,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=2,
+        commit_sha=candidate_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.08, "throughput/duration": 0.16642},
+            "warnings": [],
+            "hotspot_metrics": candidate_hotspots,
+            "hotspot_baseline_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert count_failure
+    assert rc == 0
+    assert _run_git(repo, "rev-parse", "HEAD") != candidate_commit
+
+    state = _read_state(state_path)
+    last = state["history"][-1]
+    reasons = last["control_gate_reasons"]
+    assert isinstance(reasons, list)
+    assert any("namespace-only / renamed-bucket progress" in reason for reason in reasons)
 
 
 def test_extract_wandb_run_url_supports_slug_with_underscore() -> None:

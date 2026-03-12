@@ -146,6 +146,13 @@ PROFILE_SUMMARY_AD_SHELL_PREFIXES = (
     "transpose(jvp(HackableTransformer))/HackableDecoderBlock/",
 )
 PROFILE_SUMMARY_DECODER_ADD_SHELL_RE = re.compile(r"(^|/)add(_any)?(?::|/|$)")
+PROFILE_SUMMARY_LAYOUT_SHELL_RE = re.compile(r"(^|/)(reshape|transpose|bitcast)(?::|/|$)")
+PROFILE_SUMMARY_AD_WRAPPER_SHELL_RE = re.compile(
+    r"(transpose\(jvp\(|^jvp\(|(^|/)(select_n|scatter-add|scatter_add|select-and-scatter|select-and-gather)(?::|/|$))"
+)
+PROFILE_SUMMARY_DISPATCH_SHARD_SHELL_RE = re.compile(
+    r"(shard_map/pallas_call|closed_call/shard_map|shard_map/psum|all-gather|all_gather)"
+)
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -769,6 +776,14 @@ def _normalize_iteration_metric_label(label: str) -> str | None:
         return "remainder_budget_ms"
     if normalized.startswith("decoder-layer shell budget") or normalized.startswith("decoder layer shell budget"):
         return "decoder_layer_shell_budget_ms"
+    if normalized.startswith("hybrid generic shell delta budget"):
+        return "hybrid_generic_shell_delta_budget_ms"
+    if normalized.startswith("dispatch/shard shell delta budget") or normalized.startswith(
+        "dispatch shard shell delta budget"
+    ):
+        return "dispatch_shard_shell_delta_ms"
+    if normalized.startswith("ad/wrapper shell delta budget") or normalized.startswith("ad wrapper shell delta budget"):
+        return "ad_wrapper_shell_delta_ms"
     if normalized.startswith("ad shell budget"):
         return "ad_shell_budget_ms"
     if normalized.startswith("sharding shell budget"):
@@ -777,6 +792,8 @@ def _normalize_iteration_metric_label(label: str) -> str | None:
         return "layout_shell_budget_ms"
     if normalized.startswith("residual/add shell budget") or normalized.startswith("add shell budget"):
         return "residual_add_shell_budget_ms"
+    if normalized.startswith("interaction remainder"):
+        return "interaction_remainder_ms"
     if normalized.startswith("shard_map"):
         return "shard_map_ms"
     if normalized.startswith("all-gather"):
@@ -1019,6 +1036,10 @@ def _evaluate_control_flow_gate(
     baseline_train = _coerce_float(baseline_hotspots.get("train_path_budget_ms"))
     candidate_decoder_shell = _coerce_float(candidate_hotspots.get("decoder_layer_shell_budget_ms"))
     baseline_decoder_shell = _coerce_float(baseline_hotspots.get("decoder_layer_shell_budget_ms"))
+    candidate_generic_shell = _coerce_float(candidate_hotspots.get("hybrid_generic_shell_delta_budget_ms"))
+    baseline_generic_shell = _coerce_float(baseline_hotspots.get("hybrid_generic_shell_delta_budget_ms"))
+    candidate_interaction_remainder = _coerce_float(candidate_hotspots.get("interaction_remainder_ms"))
+    baseline_interaction_remainder = _coerce_float(baseline_hotspots.get("interaction_remainder_ms"))
     if candidate_train is not None and baseline_train is not None:
         train_increase = candidate_train - baseline_train
         if train_increase > args.perf_max_train_path_budget_increase_ms:
@@ -1050,6 +1071,13 @@ def _evaluate_control_flow_gate(
                     f"`remainder_budget_ms` increased by {remainder_increase:.3f} ms "
                     f"({baseline_remainder:.3f} -> {candidate_remainder:.3f})"
                 )
+        if candidate_interaction_remainder is not None and baseline_interaction_remainder is not None:
+            interaction_increase = candidate_interaction_remainder - baseline_interaction_remainder
+            if interaction_increase > args.perf_max_remainder_budget_increase_ms:
+                reasons.append(
+                    f"`interaction_remainder_ms` increased by {interaction_increase:.3f} ms "
+                    f"({baseline_interaction_remainder:.3f} -> {candidate_interaction_remainder:.3f})"
+                )
 
     if candidate_decoder_shell is not None and baseline_decoder_shell is not None:
         decoder_shell_increase = candidate_decoder_shell - baseline_decoder_shell
@@ -1071,6 +1099,36 @@ def _evaluate_control_flow_gate(
                     f"({baseline_decoder_shell:.3f} -> {candidate_decoder_shell:.3f}) while "
                     f"`step_duration_ms` did not improve materially ({baseline_step:.3f} -> {candidate_step:.3f}); "
                     "classify as wrong-boundary progress"
+                )
+
+    if candidate_generic_shell is not None and baseline_generic_shell is not None:
+        generic_shell_increase = candidate_generic_shell - baseline_generic_shell
+        if generic_shell_increase > args.perf_max_decoder_layer_shell_budget_increase_ms:
+            reasons.append(
+                f"`hybrid_generic_shell_delta_budget_ms` increased by {generic_shell_increase:.3f} ms "
+                f"({baseline_generic_shell:.3f} -> {candidate_generic_shell:.3f})"
+            )
+
+        if (
+            candidate_step is not None
+            and baseline_step is not None
+            and candidate_train is not None
+            and baseline_train is not None
+        ):
+            step_drop = baseline_step - candidate_step
+            train_drop = baseline_train - candidate_train
+            generic_shell_drop = baseline_generic_shell - candidate_generic_shell
+            if (
+                train_drop >= args.perf_min_train_path_drop_ms
+                and step_drop < args.perf_step_duration_improvement_margin_ms
+                and generic_shell_drop < args.perf_min_decoder_layer_shell_drop_ms
+            ):
+                reasons.append(
+                    f"`train_path_budget_ms` improved by {train_drop:.3f} ms but "
+                    f"`hybrid_generic_shell_delta_budget_ms` did not improve materially "
+                    f"({baseline_generic_shell:.3f} -> {candidate_generic_shell:.3f}) and "
+                    f"`step_duration_ms` did not improve materially ({baseline_step:.3f} -> {candidate_step:.3f}); "
+                    "classify as namespace-only / renamed-bucket progress"
                 )
 
     return reasons
@@ -2056,8 +2114,9 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         upper_bound_line = (
             "\n"
             f"- Attention-only upper-bound step time: `{args.perf_upper_bound_step_ms:.6f} ms`.\n"
-            "- Record `upper_bound_gap_ms`, `gap_explained_by_train_path`, and "
-            "`gap_explained_by_decoder_layer_shell` in every iteration writeup."
+            "- Record `upper_bound_gap_ms`, `gap_explained_by_train_path`, "
+            "`gap_explained_by_decoder_layer_shell`, `hybrid_generic_shell_delta_budget_ms`, "
+            "`gap_explained_by_hybrid_generic_shell_delta`, and `interaction_remainder_ms` in every iteration writeup."
         )
 
     return (
@@ -2078,27 +2137,36 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - `Control budget: <before> ms -> <after> ms`\n"
         "  - `Train-path budget: <before> ms -> <after> ms`\n"
         "  - `Decoder-layer shell budget: <before> ms -> <after> ms`\n"
+        "  - `Hybrid generic shell delta budget: <before> ms -> <after> ms`\n"
+        "  - `Dispatch/shard shell delta budget: <before> ms -> <after> ms`\n"
+        "  - `AD/wrapper shell delta budget: <before> ms -> <after> ms`\n"
         "  - `AD shell budget: <before> ms -> <after> ms`\n"
         "  - `Sharding shell budget: <before> ms -> <after> ms`\n"
         "  - `Layout shell budget: <before> ms -> <after> ms`\n"
+        "  - `Residual/add shell budget: <before> ms -> <after> ms`\n"
         "  - `Step duration: <before> ms -> <after> ms`\n"
         "  - `Remainder budget: <before> ms -> <after> ms`\n"
+        "  - `Interaction remainder: <before> ms -> <after> ms`\n"
         "  - `Upper-bound gap: <before> ms -> <after> ms`\n"
         "  - `Gap explained by train-path: <before> -> <after>`\n"
         "  - `Gap explained by decoder-layer shell: <before> -> <after>`\n"
+        "  - `Gap explained by hybrid generic shell delta: <before> -> <after>`\n"
         "  - `gdn_layer_fraction: ...`\n"
+        "  - `hybrid_generic_shell_delta_topk: ...`\n"
         "  - `decoder_layer_shell_topk: ...`\n"
         "  - `remainder_topk: ...`\n"
         "- Classification is mandatory in the iteration writeup:\n"
         "  - `Change class: decoder shell attribution | whole-layer boundary | CE backend |\n"
         "    diagnostic side-arm | inner kernel math`\n"
         "  - `Expected effect on step_duration_ms: ...`\n"
-        "  - `Reject if decoder_layer_shell_budget_ms stays flat/up? yes/no + why`\n"
+        "  - `Reject if hybrid_generic_shell_delta_budget_ms stays flat/up? yes/no + why`\n"
         "- Hard control-flow gate: reject candidates when `while_ms` grows by > "
         f"{args.perf_max_while_increase_ms:.3f} ms or `train_path_budget_ms` grows by > "
         f"{args.perf_max_train_path_budget_increase_ms:.3f} ms unless "
         f"`{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
         "- Reject candidates when `decoder_layer_shell_budget_ms` grows by > "
+        f"{args.perf_max_decoder_layer_shell_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
+        "- Reject candidates when `hybrid_generic_shell_delta_budget_ms` grows by > "
         f"{args.perf_max_decoder_layer_shell_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
         f"- Reject candidates when a new `conditional_ms` bucket >= {args.perf_new_conditional_ms:.3f} ms appears, "
         f"unless `{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
@@ -2107,7 +2175,12 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         f"{args.perf_step_duration_improvement_margin_ms:.3f} ms.\n"
         "- Reject candidates as wrong-boundary progress when `decoder_layer_shell_budget_ms` fails to drop by at least "
         f"{args.perf_min_decoder_layer_shell_drop_ms:.3f} ms and `step_duration_ms` does not improve materially.\n"
+        "- Reject candidates as namespace-only / renamed-bucket progress when `train_path_budget_ms` improves "
+        "but `hybrid_generic_shell_delta_budget_ms` does not improve materially and `step_duration_ms` does not "
+        "improve materially.\n"
         "- Reject candidates when `remainder_budget_ms` grows by > "
+        f"{args.perf_max_remainder_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
+        "- Reject candidates when `interaction_remainder_ms` grows by > "
         f"{args.perf_max_remainder_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
         f"- Validation profile CE implementation request: `{args.validation_profile_ce_implementation}`.\n"
         f"- Validation profile CE backward mode: `{args.validation_profile_ce_bwd_mode}`.\n"
@@ -2444,6 +2517,15 @@ def _with_upper_bound_gap_metrics(
     decoder_layer_shell_budget_ms = _coerce_float(augmented.get("decoder_layer_shell_budget_ms"))
     if decoder_layer_shell_budget_ms is not None and upper_bound_gap_ms > 0:
         augmented["gap_explained_by_decoder_layer_shell"] = decoder_layer_shell_budget_ms / upper_bound_gap_ms
+    hybrid_generic_shell_delta_budget_ms = _coerce_float(augmented.get("hybrid_generic_shell_delta_budget_ms"))
+    if hybrid_generic_shell_delta_budget_ms is not None and upper_bound_gap_ms > 0:
+        augmented["gap_explained_by_hybrid_generic_shell_delta"] = (
+            hybrid_generic_shell_delta_budget_ms / upper_bound_gap_ms
+        )
+        if train_path_budget_ms is not None:
+            augmented["interaction_remainder_ms"] = (
+                upper_bound_gap_ms - train_path_budget_ms - hybrid_generic_shell_delta_budget_ms
+            )
     return augmented
 
 
@@ -2616,6 +2698,58 @@ def _is_layout_shell_bucket(path: str) -> bool:
 
 def _is_residual_add_shell_bucket(path: str) -> bool:
     return _is_decoder_layer_shell_bucket(path) and PROFILE_SUMMARY_DECODER_ADD_SHELL_RE.search(path) is not None
+
+
+def _canonical_hybrid_generic_shell_family(path: str) -> str | None:
+    normalized = path.strip()
+    if not normalized:
+        return None
+    if PROFILE_SUMMARY_DECODER_ADD_SHELL_RE.search(normalized) is not None:
+        return "residual_add_shell"
+    if PROFILE_SUMMARY_LAYOUT_SHELL_RE.search(normalized) is not None and not normalized.startswith("transpose(jvp("):
+        return "layout_shell"
+    if "transpose(jvp(" in normalized and "closed_call/shard_map" in normalized and "pallas_call" not in normalized:
+        return "ad_wrapper_shell"
+    if PROFILE_SUMMARY_AD_WRAPPER_SHELL_RE.search(
+        normalized
+    ) is not None and not PROFILE_SUMMARY_DISPATCH_SHARD_SHELL_RE.search(normalized):
+        return "ad_wrapper_shell"
+    if PROFILE_SUMMARY_DISPATCH_SHARD_SHELL_RE.search(normalized) is not None:
+        return "dispatch_shard_shell"
+    if PROFILE_SUMMARY_AD_WRAPPER_SHELL_RE.search(normalized) is not None:
+        return "ad_wrapper_shell"
+    return None
+
+
+def _profile_summary_hybrid_generic_shell_delta(
+    candidate_buckets: dict[str, float],
+    baseline_buckets: dict[str, float],
+    *,
+    top_k: int,
+) -> dict[str, object]:
+    family_totals = {
+        "dispatch_shard_shell_delta_ms": 0.0,
+        "ad_wrapper_shell_delta_ms": 0.0,
+        "layout_shell_delta_ms": 0.0,
+        "residual_add_shell_delta_ms": 0.0,
+    }
+    delta_rows: list[dict[str, object]] = []
+
+    for path in sorted(set(candidate_buckets) | set(baseline_buckets)):
+        family = _canonical_hybrid_generic_shell_family(path)
+        if family is None:
+            continue
+        delta_ms = candidate_buckets.get(path, 0.0) - baseline_buckets.get(path, 0.0)
+        if delta_ms <= 0.0:
+            continue
+        family_key = f"{family}_delta_ms"
+        family_totals[family_key] += delta_ms
+        delta_rows.append({"path": path, "family": family, "ms": delta_ms})
+
+    delta_rows.sort(key=lambda item: (-float(item["ms"]), str(item["path"])))
+    family_totals["hybrid_generic_shell_delta_budget_ms"] = sum(family_totals.values())
+    family_totals["hybrid_generic_shell_delta_topk"] = delta_rows[:top_k]
+    return family_totals
 
 
 def _profile_summary_attribution(
@@ -3033,6 +3167,33 @@ def cmd_summary_attribution(args: argparse.Namespace) -> int:
             ),
             top_k=args.top_k,
         )
+        compare_metrics = _profile_summary_hybrid_generic_shell_delta(
+            result.get("remainder_bucket_ms", {}) if isinstance(result.get("remainder_bucket_ms"), dict) else {},
+            (
+                baseline_result.get("remainder_bucket_ms", {})
+                if isinstance(baseline_result.get("remainder_bucket_ms"), dict)
+                else {}
+            ),
+            top_k=args.top_k,
+        )
+        compare_metrics = _with_upper_bound_gap_metrics(compare_metrics, upper_bound_step_ms=args.upper_bound_step_ms)
+        if "upper_bound_gap_ms" not in compare_metrics:
+            upper_bound_gap_ms = _coerce_float(result.get("upper_bound_gap_ms"))
+            train_path_budget_ms = _coerce_float(result.get("train_path_budget_ms"))
+            hybrid_generic_shell_delta_budget_ms = _coerce_float(
+                compare_metrics.get("hybrid_generic_shell_delta_budget_ms")
+            )
+            if upper_bound_gap_ms is not None:
+                compare_metrics["upper_bound_gap_ms"] = upper_bound_gap_ms
+                if hybrid_generic_shell_delta_budget_ms is not None and upper_bound_gap_ms > 0:
+                    compare_metrics["gap_explained_by_hybrid_generic_shell_delta"] = (
+                        hybrid_generic_shell_delta_budget_ms / upper_bound_gap_ms
+                    )
+                    if train_path_budget_ms is not None:
+                        compare_metrics["interaction_remainder_ms"] = (
+                            upper_bound_gap_ms - train_path_budget_ms - hybrid_generic_shell_delta_budget_ms
+                        )
+        payload["compare_attribution"] = compare_metrics
 
     output_json = json.dumps(payload, indent=2, sort_keys=True)
     if args.output is not None:

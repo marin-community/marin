@@ -170,6 +170,46 @@ Promotion policy in this regime:
 - Classify `train_path_budget_ms down, decoder_layer_shell_budget_ms flat/up` as `wrong-boundary progress`.
 - Treat same-boundary chunk-kernel/tape tweaks as research side-arms only.
 
+## Hybrid-Specific Generic Shell Delta Regime (March 2026, post-Iteration 91)
+
+Latest evidence tightened the shell target again:
+
+- The fixed-CE `3/4` hybrid regime is still about `6.05-6.09 MFU` at `~166-167 ms`.
+- The matched attention-only control is still about `21.36 MFU` at `~57.13 ms`.
+- The matched gap is about `110 ms`.
+- The tracked train path explains only about `38.7%` of that gap.
+- The coarse decoder-layer shell budget explains only about `18.5%` of that gap.
+- The broad `HackableDecoderLayer/*` family is too coarse because the attention-only control still carries substantial normal layer-body compute there.
+
+Updated mainline target:
+
+- Stop using the broad `HackableDecoderLayer/*` sum as the actionable shell tax.
+- Define a namespace-invariant **hybrid-specific generic shell delta** from a matched hybrid vs attention-only attribution pair.
+- Canonical shell families:
+  - `dispatch_shard_shell_delta_ms`
+  - `ad_wrapper_shell_delta_ms`
+  - `layout_shell_delta_ms`
+  - `residual_add_shell_delta_ms`
+- Mainline budget:
+  - `hybrid_generic_shell_delta_budget_ms`
+- Residual budget after train path + hybrid shell delta:
+  - `interaction_remainder_ms`
+
+Updated promotion policy:
+
+- Reject candidates whose `step_duration_ms` does not improve, unless they are explicitly diagnostic.
+- Reject candidates whose `hybrid_generic_shell_delta_budget_ms` stays flat or grows, unless they are explicitly diagnostic.
+- Reject candidates whose `interaction_remainder_ms` grows, unless they are explicitly diagnostic.
+- Classify `train_path_budget_ms down, hybrid_generic_shell_delta_budget_ms flat/up` as `namespace-only / renamed-bucket progress`.
+
+Updated systems direction:
+
+- The next serious prototype is a fixed `3 GDN + 1 attention` block with:
+  - a manual/custom VJP at the block boundary,
+  - an explicit sharding contract,
+  - and existing leaf kernels reused initially.
+- A larger forward wrapper without bespoke backward/sharding is not enough; Iteration 90 already showed that such work just re-emits cost under `HackableDecoderBlock/*`.
+
 ## ejkernel / EasyDeL takeaways (March 2026)
 
 Local reference repos:

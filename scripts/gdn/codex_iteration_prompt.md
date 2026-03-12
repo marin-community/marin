@@ -23,33 +23,36 @@ Current diagnosis to optimize against:
 - The deployable hybrid champion is still only about:
   - `throughput/mfu ~= 6.09`
   - `step_duration ~= 166.3 ms`
-- The attention-only control on the same benchmark family is about:
-  - `throughput/mfu ~= 21.09`
-  - `step_duration ~= 57.86 ms`
-- With `3/4` GDN fixed, the main question is no longer GDN fraction.
-- The main question is why the hybrid GDN-bearing decoder layers carry such a large shell/scaffolding tax.
-- The tracked train path explains only about `39%` of the hybrid-vs-attention gap.
-- The dominant unexplained buckets are decoder-layer shell categories such as:
-  - `HackableDecoderLayer/shard_map/pallas_call`
-  - `HackableDecoderLayer/closed_call/shard_map`
-  - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map`
-  - `HackableDecoderLayer/reshape`
-  - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any`
+- The fresh attention-only control on the same benchmark family is about:
+  - `throughput/mfu ~= 21.36`
+  - `step_duration ~= 57.13 ms`
+- The matched hybrid-vs-attention gap is about `110 ms`.
+- The tracked train path explains only about `39%` of that gap.
+- The broad `HackableDecoderLayer/*` family is too coarse to use as the main optimization target because the attention-only control also carries substantial normal layer-body compute there.
+- The next actionable target is a **hybrid-specific generic shell delta budget** computed from matched hybrid vs attention-only attribution.
+- The dominant hybrid-only generic shell buckets are categories such as:
+  - `shard_map/pallas_call`
+  - `closed_call/shard_map`
+  - `transpose(jvp(...))/closed_call/shard_map`
+  - `reshape`
+  - `add_any`
+  - `select_n`
+  - `scatter-add`
 - Therefore:
   - same-boundary GDN Pallas hillclimbing is demoted from the mainline,
-  - decoder-layer-shell attribution is the mainline,
-  - whole-layer boundary prototypes are the next serious systems bet,
-  - kernel-local train-path wins are secondary unless they reduce the whole-layer shell budget and step time.
+  - broad `HackableDecoderLayer/*` attribution is only a coarse upper bound,
+  - the next serious systems bet is a fixed 4-layer block with bespoke backward and explicit sharding,
+  - kernel-local train-path wins are secondary unless they reduce the new hybrid-specific shell delta and the full step.
 
 Required behavior for this iteration:
 1. Read the latest log entries and identify the current validated baseline.
 2. Generate a shortlist of 3 candidates with upside and risk.
 3. Pick exactly one coverage slot:
-   - `S2` decoder-layer-shell attribution widening,
-   - `L2` specialized whole-layer design/skeleton work,
-   - `P2` first whole-layer prototype,
+   - `S3` hybrid-specific generic shell delta attribution,
+   - `L3` fixed-4-layer block design / skeleton with manual VJP + explicit sharding contract,
+   - `P3` first fixed-4-layer block prototype with manual VJP + explicit sharding contract,
    - `U` bounded CE side-arm only if CE is again implicated,
-   - `diagnostic` only if you can explain why `S2/L2/P2/U` are lower information.
+   - `diagnostic` only if you can explain why `S3/L3/P3/U` are lower information.
 4. Classify the change as exactly one of:
    - `decoder shell attribution`
    - `whole-layer boundary`
@@ -62,14 +65,15 @@ Required behavior for this iteration:
 6. State what you expect to happen to:
    - `step_duration_ms`
    - `upper_bound_gap_ms`
-   - `decoder_layer_shell_budget_ms`
-   - `gap_explained_by_decoder_layer_shell`
+   - `hybrid_generic_shell_delta_budget_ms`
+   - `gap_explained_by_hybrid_generic_shell_delta`
    - `train_path_budget_ms`
+   - `interaction_remainder_ms`
    - `remainder_budget_ms`
 7. State whether the candidate should be rejected if:
    - `step_duration_ms` does not improve,
-   - or `decoder_layer_shell_budget_ms` stays flat / grows,
-   - or `remainder_budget_ms` grows.
+   - or `hybrid_generic_shell_delta_budget_ms` stays flat / grows,
+   - or `interaction_remainder_ms` grows.
 8. Implement the smallest code/config change needed to execute the chosen slot.
 9. Validate correctness on TPU when code changed.
 10. Run the required profile(s).
@@ -77,7 +81,7 @@ Required behavior for this iteration:
 
 Coverage slots:
 
-### S2) Decoder-layer-shell attribution (highest priority)
+### S3) Hybrid-specific generic shell delta attribution (highest priority)
 - No kernel changes are required.
 - Refresh hybrid vs attention-only comparison under the same:
   - TPU family,
@@ -89,32 +93,34 @@ Coverage slots:
   - `step_duration_ms`
   - `train_path_budget_ms`
   - `decoder_layer_shell_budget_ms`
-  - `ad_shell_budget_ms`
-  - `sharding_shell_budget_ms`
-  - `layout_shell_budget_ms`
+  - `hybrid_generic_shell_delta_budget_ms`
+  - `dispatch_shard_shell_delta_ms`
+  - `ad_wrapper_shell_delta_ms`
+  - `layout_shell_delta_ms`
+  - `residual_add_shell_delta_ms`
   - `remainder_budget_ms`
+  - `interaction_remainder_ms`
   - `upper_bound_gap_ms`
   - `gap_explained_by_train_path`
   - `gap_explained_by_decoder_layer_shell`
-  - `decoder_layer_shell_topk`
+  - `gap_explained_by_hybrid_generic_shell_delta`
+  - `hybrid_generic_shell_delta_topk`
   - `remainder_topk`
 
-### L2) Specialized whole-layer design / skeleton
+### L3) Fixed-4-layer block design / skeleton
 - This is a design-and-scaffold iteration, not a promotion candidate unless it also improves step time.
-- Keep the same `3/4` GDN math and benchmark config.
-- Build the minimal specialized GDN-bearing decoder-layer boundary with manual/custom VJP at the layer boundary.
-- Target the whole `HackableDecoderLayer` shell, not another chunk-kernel/tape tweak.
+- Keep the exact `3 GDN + 1 attention` block pattern and benchmark config.
+- Build the minimal specialized 4-layer block boundary with manual/custom VJP and an explicit sharding contract.
+- Target the hybrid-specific generic shell families, not another chunk-kernel/tape tweak.
 
-### P2) First whole-layer prototype
+### P3) First fixed-4-layer block prototype
 - One serious systems prototype only.
-- Optimize the entire GDN-bearing decoder-layer boundary:
-  - QKV / gate projections,
-  - conv / RMSNorm / gating path,
-  - chunked GDN primitive,
-  - output projection,
-  - residual add / layer output,
-  - backward boundary.
-- Prefer XLA-first shell + Pallas leaf kernels initially.
+- Optimize the fixed `3 GDN + 1 attention` block as a unit.
+- Own all three of:
+  - the forward block boundary,
+  - the backward / AD strategy,
+  - and the sharding/layout contract.
+- Prefer XLA-visible shell + Pallas leaf kernels initially, but do not leave backward to generic JAX AD.
 - Do not combine this with unrelated kernel-local math changes.
 
 ### U) Bounded CE side-arm
@@ -122,18 +128,18 @@ Coverage slots:
 - Promotion bar is strict:
   - `ce_attributed_while_ms` must drop materially,
   - and `step_duration_ms` must improve,
-  - with no decoder-layer-shell or remainder regression.
+  - with no shell-delta or interaction-remainder regression.
 
 ### Diagnostic only
-- Use only if you can justify why `S2/L2/P2/U` would be lower information.
-- Same-boundary GDN shell/tape/kernel work belongs here now unless it directly attacks the decoder-layer shell budget.
+- Use only if you can justify why `S3/L3/P3/U` would be lower information.
+- Same-boundary GDN shell/tape/kernel work belongs here now unless it directly attacks the hybrid-specific shell delta or the interaction remainder.
 
 Deprioritized unless explicitly justified:
 - same-boundary GDN shell/tape rewrites,
 - forward-only GDN improvements,
 - kernel-local matmul/tiling/exp-diff work,
 - more closed-call-only wins,
-- model-boundary/GDN-fraction sweeps as a product recommendation,
+- broad `HackableDecoderLayer/*` accounting as the main shell target,
 - CE micro-tuning without a clear end-to-end path.
 
 Acceptance gate checklist (must appear in the iteration writeup):
@@ -152,22 +158,28 @@ Acceptance gate checklist (must appear in the iteration writeup):
   - `Control budget: ...`
   - `Train-path budget: ...`
   - `Decoder-layer shell budget: ...`
+  - `Hybrid generic shell delta budget: ...`
+  - `Dispatch/shard shell delta budget: ...`
+  - `AD/wrapper shell delta budget: ...`
   - `AD shell budget: ...`
   - `Sharding shell budget: ...`
   - `Layout shell budget: ...`
+  - `Residual/add shell budget: ...`
   - `Step duration: ...`
   - `Remainder budget: ...`
+  - `Interaction remainder: ...`
   - `Upper-bound gap: ...`
   - `Gap explained by train-path: ...`
   - `Gap explained by decoder-layer shell: ...`
-  - `decoder_layer_shell_topk: ...`
+  - `Gap explained by hybrid generic shell delta: ...`
+  - `hybrid_generic_shell_delta_topk: ...`
   - `remainder_topk: ...`
   - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`
 - Governance:
   - reject any candidate where `step_duration_ms` does not improve unless it is explicitly diagnostic,
-  - reject any candidate where `decoder_layer_shell_budget_ms` is flat/up unless it is explicitly diagnostic,
-  - reject any candidate where `remainder_budget_ms` grows unless it is explicitly diagnostic,
-  - classify `train_path_budget_ms down, shell flat/up` as `wrong-boundary progress`,
+  - reject any candidate where `hybrid_generic_shell_delta_budget_ms` is flat/up unless it is explicitly diagnostic,
+  - reject any candidate where `interaction_remainder_ms` grows unless it is explicitly diagnostic,
+  - classify `train_path_budget_ms down, generic shell delta flat/up` as `namespace-only / renamed-bucket progress`,
   - do not leave `Commit: (pending)` or `Commit: this commit` in the log.
 
 Preferred commands:
@@ -179,10 +191,10 @@ Preferred commands:
 
 Definition of done:
 - either:
-  - one current-baseline attribution result that materially improves understanding of decoder-layer shell cost,
-  - or one whole-layer design/skeleton result that makes the new boundary concrete,
-  - or one whole-layer prototype result that improves the full step,
+  - one current-baseline attribution result that materially improves understanding of hybrid-specific shell delta,
+  - or one fixed-4-layer block design/skeleton result that makes the new boundary concrete,
+  - or one fixed-4-layer block prototype result that improves the full step,
   - or one bounded CE side-arm that improves the full step,
 - plus TPU correctness when code changed,
 - plus one profiled run (or comparison) completed,
-- plus a log entry with explicit whole-layer shell metrics, not only train-path metrics.
+- plus a log entry with explicit hybrid-specific shell-delta metrics, not only coarse decoder-layer or train-path metrics.

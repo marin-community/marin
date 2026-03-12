@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
+import json
 import math
 from pathlib import Path
 
@@ -159,3 +161,83 @@ def test_profile_summary_bucket_deltas_only_report_positive_deltas() -> None:
     )
 
     assert deltas == [{"path": "decoder shell", "ms": 4.0}]
+
+
+def test_profile_summary_hybrid_generic_shell_delta_groups_namespace_invariant_families() -> None:
+    candidate = {
+        "HackableDecoderLayer/shard_map/pallas_call:": 5.2,
+        "HackableDecoderLayer/closed_call/shard_map:": 4.5,
+        "transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map:": 2.0,
+        "HackableDecoderLayer/reshape:": 1.8,
+        "transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any:": 1.7,
+        "CE forward pallas_call": 2.7,
+    }
+    baseline = {
+        "HackableDecoderLayer/shard_map/pallas_call:": 0.1,
+        "HackableDecoderLayer/closed_call/shard_map:": 0.2,
+        "transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map:": 0.4,
+        "HackableDecoderLayer/reshape:": 0.3,
+        "transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any:": 0.5,
+        "CE forward pallas_call": 2.7,
+    }
+
+    metrics = gdnctl._profile_summary_hybrid_generic_shell_delta(candidate, baseline, top_k=5)
+
+    assert math.isclose(metrics["dispatch_shard_shell_delta_ms"], 9.4)
+    assert math.isclose(metrics["ad_wrapper_shell_delta_ms"], 1.6)
+    assert math.isclose(metrics["layout_shell_delta_ms"], 1.5)
+    assert math.isclose(metrics["residual_add_shell_delta_ms"], 1.2)
+    assert math.isclose(metrics["hybrid_generic_shell_delta_budget_ms"], 13.7)
+    topk = metrics["hybrid_generic_shell_delta_topk"]
+    assert isinstance(topk, list)
+    assert topk[0]["family"] == "dispatch_shard_shell"
+    assert topk[0]["path"] == "HackableDecoderLayer/shard_map/pallas_call:"
+
+
+def test_cmd_summary_attribution_emits_compare_attribution(tmp_path: Path) -> None:
+    candidate_summary = {
+        "hot_ops": [
+            {"count": 2, "total_duration": 4000.0, "tf_op_path": "HackableDecoderLayer/shard_map/pallas_call:"},
+            {"count": 2, "total_duration": 2000.0, "tf_op_path": "HackableDecoderLayer/reshape:"},
+        ],
+        "hierarchical_regions": [],
+    }
+    baseline_summary = {
+        "hot_ops": [
+            {"count": 2, "total_duration": 1000.0, "tf_op_path": "HackableDecoderLayer/shard_map/pallas_call:"},
+            {"count": 2, "total_duration": 500.0, "tf_op_path": "HackableDecoderLayer/reshape:"},
+        ],
+        "hierarchical_regions": [],
+    }
+    candidate_path = tmp_path / "candidate.json"
+    baseline_path = tmp_path / "baseline.json"
+    output_path = tmp_path / "output.json"
+    candidate_path.write_text(json.dumps(candidate_summary))
+    baseline_path.write_text(json.dumps(baseline_summary))
+
+    rc = gdnctl.cmd_summary_attribution(
+        argparse.Namespace(
+            summary=candidate_path,
+            baseline_summary=baseline_path,
+            step_duration_ms=100.0,
+            baseline_step_duration_ms=60.0,
+            upper_bound_step_ms=50.0,
+            gdn_layer_fraction=0.75,
+            baseline_gdn_layer_fraction=0.0,
+            gdn_layers_per_block=3,
+            baseline_gdn_layers_per_block=0,
+            gdn_block_size=4,
+            baseline_gdn_block_size=4,
+            top_k=4,
+            output=output_path,
+        )
+    )
+
+    assert rc == 0
+    payload = json.loads(output_path.read_text())
+    compare = payload["compare_attribution"]
+    assert math.isclose(compare["dispatch_shard_shell_delta_ms"], 1.5)
+    assert math.isclose(compare["layout_shell_delta_ms"], 0.75)
+    assert math.isclose(compare["hybrid_generic_shell_delta_budget_ms"], 2.25)
+    assert math.isclose(compare["gap_explained_by_hybrid_generic_shell_delta"], 2.25 / 50.0)
+    assert math.isclose(compare["interaction_remainder_ms"], 50.0 - 2.25)
