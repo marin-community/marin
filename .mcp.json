@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "comms": {
+      "command": "uv",
+      "args": ["run", "--script", "/Users/ahmed/code/mcp-comms/server.py", "--name", "claude-lora-dpo", "--db-path", "/Users/ahmed/code/mcp-comms/.agent-comms/comms.db"]
+    }
+  }
+}

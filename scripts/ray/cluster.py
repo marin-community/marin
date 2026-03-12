@@ -37,7 +37,7 @@ from typing import Any
 import click
 import yaml
 
-from fray.cluster.ray.auth import ray_auth_secret
+from fray.cluster.ray.auth import maybe_fetch_local_ray_token, ray_auth_secret
 from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
 from marin.cluster import gcp
 from marin.cluster.config import (
@@ -894,13 +894,59 @@ def init_worker(ctx, name):
     print("Worker initialized successfully!")
 
 
+def _auto_auth_open_browser(dashboard_url: str, token: str):
+    """Open the browser with a redirect that auto-sets the Ray auth cookie.
+
+    Starts a one-shot HTTP server on localhost that responds with a Set-Cookie
+    header for the ``ray-authentication-token`` cookie and a 302 redirect to
+    the actual dashboard URL.  Because cookies are scoped by domain (not port),
+    the cookie set by our ephemeral server is sent to the dashboard on the next
+    request, so the user is never prompted for a token.
+    """
+    import http.server
+    import threading
+
+    class _AuthRedirectHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Set-Cookie", f"ray-authentication-token={token}; Path=/")
+            self.send_header("Location", dashboard_url)
+            self.end_headers()
+
+        def log_message(self, fmt, *args):
+            pass  # suppress request logs
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _AuthRedirectHandler)
+    port = server.server_address[1]
+
+    thread = threading.Thread(target=server.handle_request, daemon=True)
+    thread.start()
+
+    auth_url = f"http://localhost:{port}"
+    if sys.platform == "darwin":
+        subprocess.run(["open", auth_url], check=False)
+    else:
+        subprocess.run(["xdg-open", auth_url], check=False)
+
+    thread.join(timeout=5)
+    server.server_close()
+
+
 @cli.command("dashboard")
 @click.pass_context
 def open_dashboard(ctx):
     """Open dashboard for all active Ray clusters."""
     config_obj = ctx.obj.config_obj
     if config_obj:
-        with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)) as conn:
+            cluster_name = next(iter(conn.clusters.keys()))
+            ports = conn.port_mappings[cluster_name]
+            dashboard_url = f"http://localhost:{ports.dashboard_port}"
+            token_path = maybe_fetch_local_ray_token()
+            token = Path(token_path).read_text().strip()
+            _auto_auth_open_browser(dashboard_url, token)
+            print(f"Dashboard: {dashboard_url} (auto-authenticated)")
+            print("\nPress Ctrl+C to stop")
             try:
                 time.sleep(86400)
             except KeyboardInterrupt:
@@ -913,16 +959,25 @@ def open_dashboard(ctx):
             return
 
         print(f"Connected to {len(conn.clusters)} clusters:")
+        first_dashboard_url = None
         for name, info in conn.clusters.items():
             ports = conn.port_mappings[name]
-            direct_url = f"http://localhost:{ports.dashboard_port}"
-            print(f"  {name} ({info.zone}) - {direct_url}")
-            print(f"    IP: {info.external_ip} ({info.head_ip})")
             dashboard_url = f"http://localhost:{ports.dashboard_port}"
+            if first_dashboard_url is None:
+                first_dashboard_url = dashboard_url
+            print(f"  {name} ({info.zone}) - {dashboard_url}")
+            print(f"    IP: {info.external_ip} ({info.head_ip})")
             gcs_url = f"localhost:{ports.gcs_port}"
             api_url = f"localhost:{ports.api_port}"
             print(f"    Dashboard: {dashboard_url} | GCS: {gcs_url} | API: {api_url}")
             print()
+
+        # Auto-authenticate the first cluster's dashboard in the browser
+        if first_dashboard_url:
+            token_path = maybe_fetch_local_ray_token()
+            token = Path(token_path).read_text().strip()
+            _auto_auth_open_browser(first_dashboard_url, token)
+            print("Browser opened with auto-authentication.")
 
         print("\nPress Ctrl+C to stop")
         try:

@@ -1,0 +1,63 @@
+# LoRA-DPO config for Llama 3.1 8B on UltraFeedback preference data.
+# Runs on TPU v5p-128 (16 workers, 4x4x4 topology).
+# Uses the base model (without LoRA adapters) as the implicit reference model,
+# eliminating the need for a second model copy.
+
+data:
+  tokenizer: marin-community/marin-tokenizer
+  cache_dir: gs://marin-us-central1/tokenized
+  shuffle: true
+  permutation_type: feistel
+  components:
+    ultrafeedback_train:
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
+      format:
+        type: preference_chat
+        pack: false
+        slice_strategy: raise
+      shuffle: true
+
+train_seq_len: 4096
+
+trainer:
+  seed: 42
+  mp: p=f32,c=bfloat16
+  train_batch_size: 128
+  num_train_steps: 2000
+  steps_per_eval: 200
+  model_averaging: null
+  ray:
+    auto_start_cluster: false
+  checkpointer:
+    base_path: gs://marin-us-central1/checkpoints/lora_dpo_llama8b_ultrafeedback
+    save_interval: 10m
+    keep:
+      - every: 500
+  tracker:
+    type: wandb
+    project: dpo
+    tags:
+      - lora-dpo
+      - llama3-8b
+      - ultrafeedback
+      - v5p-128
+
+optimizer:
+  learning_rate: 5e-6
+  weight_decay: 0.01
+  warmup: 0.1
+  lr_schedule: cosine
+  max_grad_norm: 1.0
+
+lora:
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+
+initialize_from_hf: meta-llama/Llama-3.1-8B
+use_hf_model_config: true
+beta: 0.1
+validation_split_fraction: 0.05
+
+merged_hf_save_path: gs://marin-us-central1/checkpoints/lora_dpo_llama8b_ultrafeedback/hf_merged
+hf_save_steps: 1000
