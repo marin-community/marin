@@ -591,3 +591,44 @@
     - aggregate elastic token metrics,
     - and whether live sync failures recur under the hardened transport
   - if syncs now work cleanly, compare baseline and elastic on loss versus delivered tokens rather than loss versus worker-local step
+
+### 2026-03-12 09:33 - Switched benchmark launchers onto the standard default-validation mix and relaunched
+- Hypothesis:
+  - the `0312a` rerun still had the wrong eval path because the launcher was rebuilding validation components from the base `LmDataConfig` instead of using the same `add_validation_sets_to_mixture(default_validation_sets(...))` path as `default_train` and the existing `NEMOTRON_MIX_WITH_DEFAULT_VALIDATION` experiment configs.
+- Command:
+  - patched:
+    - `lib/marin/src/marin/training/validation_sets.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare.py`
+    - `lib/marin/src/marin/training/elastic_fault_benchmark.py`
+    - `tests/test_training.py`
+  - verification:
+    - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py -q`
+    - `uv run --with pytest --with pytest-timeout python -m pytest lib/levanter/tests/test_elastic.py -q`
+    - `./infra/pre-commit.py --fix lib/marin/src/marin/training/validation_sets.py lib/marin/src/marin/training/elastic_budget_compare.py lib/marin/src/marin/training/elastic_fault_benchmark.py tests/test_training.py`
+  - committed as:
+    - `142d72d7b` `Use standard validation mixes in elastic benchmarks`
+  - relaunched:
+    - baseline parent `/dlwh/resilient-1e19-0312b-diloco-adam100-baseline-parent`
+    - elastic parent `/dlwh/resilient-1e19-0312b-diloco-adam100-elastic-parent`
+  - launch config unchanged from `0312a` except for the validation fix:
+    - `outer_optimizer=adam`
+    - `outer_learning_rate=0.05`
+    - `sync_every=100`
+    - `publish_every=100`
+    - `steps_per_eval=500`
+    - `max_eval_batches=1`
+- Result:
+  - root cause:
+    - the helper I had added earlier only copied validation-capable components from the base config
+    - that is not the same as Marin’s normal “default validation” path, which injects the Paloma/uncheatable tokenized sets via `default_validation_sets(...)`
+  - launcher behavior now matches the standard path used by `default_train` and the Nemotron-with-default-validation configs
+  - scheduler state immediately after relaunch:
+    - baseline child `train_lm` is pending on `v5p-32`
+    - elastic workers `w000` and `w001` are already building/running on `v5p-8`
+    - elastic workers `w002` and `w003` are pending
+- Interpretation:
+  - `0312b` is the first budget-compare rerun with the intended eval source as well as the hardened transfer and aggregate elastic token metrics.
+  - if eval curves still fail to appear, the next bug is elsewhere; it is no longer the validation-set source selection.
+- Next action:
+  - monitor `0312b` for first eval points in W&B
+  - compare baseline and elastic on both eval loss and `elastic/delivered_total_tokens`
