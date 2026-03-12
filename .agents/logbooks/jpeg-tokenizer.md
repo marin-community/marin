@@ -1076,6 +1076,14 @@
       `ray-run-dlwh-launch-20260312-053012`
     - step:
       `tokexplore/jpeg-tokenizer-bytes-whole-large-swa4096-trial`
+  - `K=64` larger-model trial:
+    - Ray job:
+      `ray-run-dlwh-launch-20260312-055501`
+    - step:
+      `tokexplore/jpeg-tokenizer-k64-libjpeg-large-swa4096-trial`
+    - note:
+      launched despite the smoke still looking scheduler-delayed, because the remaining risk is queue waste rather than
+      an identified model/config bug
 - Long same-model resumes still active:
   - `ray-run-dlwh-launch-20260312-052159` (`K=64` long)
   - `ray-run-dlwh-launch-20260312-052212` (`symbols` long)
