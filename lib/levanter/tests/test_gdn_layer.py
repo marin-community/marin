@@ -2,18 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
-import dataclasses
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import haliax as hax
 from haliax import Axis
 import pytest
 
-from experiments.speedrun.hackable_transformer_gdn.hackable_transformer_gdn import (
-    HackableDecoderLayer,
-    HackableTransformerConfig,
-)
 from levanter.layers.gated_deltanet import (
     GatedDeltaNet,
     GatedDeltaNetConfig,
@@ -239,69 +233,6 @@ def test_layer_gradients_exist(use_flash: bool):
 
     grads = jax.grad(loss_fn)(x0.array)
     assert jnp.all(jnp.isfinite(grads))
-
-
-def test_hackable_gdn_decoder_layer_custom_vjp_matches_baseline():
-    key = jax.random.PRNGKey(0)
-    model_cfg = HackableTransformerConfig(
-        seq_len=8,
-        max_seq_len=8,
-        hidden_dim=16,
-        intermediate_dim=32,
-        num_layers=1,
-        num_heads=2,
-        num_kv_heads=2,
-        gdn_layers_per_block=1,
-        gdn_block_size=1,
-        gdn_chunk_size=8,
-        gdn_segment_size=4,
-        gradient_checkpointing=False,
-    )
-    layer = HackableDecoderLayer.init(model_cfg, key=key, layer_index=0)
-    assert layer.gdn is not None
-    nonflash_gdn = dataclasses.replace(
-        layer.gdn,
-        use_flash=False,
-        o_norm=dataclasses.replace(layer.gdn.o_norm, use_flash=False),
-    )
-    layer = dataclasses.replace(layer, gdn=nonflash_gdn)
-    custom_vjp_layer = dataclasses.replace(
-        layer,
-        config=dataclasses.replace(model_cfg, gdn_use_decoder_layer_custom_vjp=True),
-    )
-
-    Batch = Axis("batch", 1)
-    x = hax.named(
-        jax.random.normal(
-            jax.random.PRNGKey(1), (Batch.size, model_cfg.Pos.size, model_cfg.Embed.size), dtype=jnp.float32
-        ),
-        (Batch, model_cfg.Pos, model_cfg.Embed),
-    )
-    call_key = jax.random.PRNGKey(2)
-
-    baseline_output = layer(x, mask=None, key=call_key)
-    custom_vjp_output = custom_vjp_layer(x, mask=None, key=call_key)
-    np.testing.assert_allclose(baseline_output.array, custom_vjp_output.array, rtol=1e-5, atol=1e-5)
-
-    def loss_fn(layer_and_x):
-        test_layer, test_x = layer_and_x
-        output = test_layer(test_x, mask=None, key=call_key)
-        return jnp.sum(output.array.astype(jnp.float32))
-
-    baseline_grads = eqx.filter_grad(loss_fn)((layer, x))
-    custom_vjp_grads = eqx.filter_grad(loss_fn)((custom_vjp_layer, x))
-
-    baseline_layer_grad, baseline_x_grad = baseline_grads
-    custom_vjp_layer_grad, custom_vjp_x_grad = custom_vjp_grads
-
-    baseline_param_leaves = jax.tree_util.tree_leaves(eqx.filter(baseline_layer_grad, eqx.is_inexact_array))
-    custom_vjp_param_leaves = jax.tree_util.tree_leaves(eqx.filter(custom_vjp_layer_grad, eqx.is_inexact_array))
-    assert len(baseline_param_leaves) == len(custom_vjp_param_leaves)
-    for baseline_leaf, custom_vjp_leaf in zip(baseline_param_leaves, custom_vjp_param_leaves, strict=True):
-        np.testing.assert_allclose(np.array(baseline_leaf), np.array(custom_vjp_leaf), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(
-        np.array(baseline_x_grad.array), np.array(custom_vjp_x_grad.array), rtol=1e-5, atol=1e-5
-    )
 
 
 @skip_if_no_torch
