@@ -81,9 +81,11 @@ def get_job_info() -> JobInfo | None:
         return info
 
     # Fall back to environment variables
-    raw_task_id = os.environ.get("IRIS_JOB_ID")
+    raw_task_id = os.environ.get("IRIS_JOB_ID") or os.environ.get("IRIS_TASK_ID")
     if raw_task_id:
         try:
+            if ":" in raw_task_id:
+                raw_task_id = raw_task_id.rsplit(":", 1)[0]
             task_id = JobName.from_wire(raw_task_id)
             task_id.require_task()
         except ValueError:

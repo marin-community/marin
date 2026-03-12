@@ -477,3 +477,60 @@
   - that is much closer to the shape we actually want for stable local-batch elastic training.
 - Next action:
   - run a smaller elastic benchmark with the new `diloco` mode and compare its loss trajectory against the previous peer-averaging path before spending more TPU on another large comparison.
+
+### 2026-03-11 22:30 - Fixed Iris parent context detection and relaunched DiLoCo comparison
+- Hypothesis:
+  - the failed DiLoCo canary was blocked by parent-job backend detection, not by the elastic controller itself; if nested Iris parents recover their context correctly, the real `1e19` elastic comparison should launch on TPU and start making progress even with only a subset of slices available.
+- Command:
+  - patched `lib/iris/src/iris/cluster/client/job_info.py`
+  - patched `lib/iris/tests/cluster/client/test_job_info.py`
+  - `uv run --with pytest --with pytest-xdist python -m pytest lib/iris/tests/cluster/client/test_job_info.py -q`
+  - `uv run --with pytest --with pytest-timeout python -m pytest lib/fray/tests/test_v2_current_client.py -q`
+  - `./infra/pre-commit.py --fix lib/iris/src/iris/cluster/client/job_info.py lib/iris/tests/cluster/client/test_job_info.py`
+  - live probe:
+    - launched `/dlwh/codex-fray-client-probe`
+    - verified `job_info=/dlwh/codex-fray-client-probe/0`
+    - verified `client=FrayIrisClient`
+    - verified nested child job `/dlwh/codex-fray-client-probe/fray-client-probe-fde37fe0` completed `succeeded`
+  - launched real comparison parents in `us-central1`:
+    - `/dlwh/resilient-1e19-0311c-diloco50-baseline-parent`
+    - `/dlwh/resilient-1e19-0311c-diloco50-elastic-parent`
+  - launch config:
+    - `benchmark_id=resilient-1e19-0311c-diloco50`
+    - `sync_every=50`
+    - `publish_every=50`
+    - `outer_optimizer=sgd`
+    - `outer_learning_rate=0.25`
+- Result:
+  - Root cause of the launcher bug:
+    - live Iris workers expose `IRIS_TASK_ID=/job/.../0:0`
+    - `get_job_info()` was only reading `IRIS_JOB_ID`
+    - that made `get_iris_ctx()` return `None`
+    - so `fray.v2.current_client()` incorrectly fell back to `LocalClient`
+  - Fixed `get_job_info()` to accept both `IRIS_JOB_ID` and `IRIS_TASK_ID`, normalizing the task-attempt suffix before building `JobInfo`.
+  - The real comparison now fans out correctly on Iris:
+    - baseline child:
+      - `/dlwh/resilient-1e19-0311c-diloco50-baseline-parent/train_lm`
+      - currently `pending` on `tpu_v5p_32-us-central1-a`
+    - elastic children:
+      - `/dlwh/resilient-1e19-0311c-diloco50-elastic-parent/train_lm-w000` `running`
+      - `/dlwh/resilient-1e19-0311c-diloco50-elastic-parent/train_lm-w001` `pending`
+      - `/dlwh/resilient-1e19-0311c-diloco50-elastic-parent/train_lm-w002` `pending`
+      - `/dlwh/resilient-1e19-0311c-diloco50-elastic-parent/train_lm-w003` `pending`
+  - Parent elastic logs explicitly show:
+    - `INFO:fray.v2.client:current_client: using Iris backend (auto-detected)`
+    - `Starting elastic run resilient-1e19-0311c-diloco50-elastic`
+  - W&B targets:
+    - baseline: `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311c-diloco50-baseline`
+    - elastic:
+      - `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311c-diloco50-elastic-w000`
+      - `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311c-diloco50-elastic-w001`
+      - `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311c-diloco50-elastic-w002`
+      - `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311c-diloco50-elastic-w003`
+- Interpretation:
+  - the DiLoCo path is now exercising the intended non-restart launcher design on real TPU jobs.
+  - the elastic arm already demonstrates partial-capacity startup: one `v5p-8` slice is live and can begin progress before the other three slices arrive.
+  - moving from `sync_every=200` to `50` is a reasonable first densification step given the earlier steady-state throughput measurements; the remaining question is optimization quality and actual transfer overhead under live training state.
+- Next action:
+  - monitor the launched runs for first W&B history rows and successful elastic syncs
+  - if sync failures reappear under real optimizer state, trace the transfer payload and sanitize any remaining non-array leaves
