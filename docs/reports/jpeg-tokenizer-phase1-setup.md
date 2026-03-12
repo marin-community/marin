@@ -823,6 +823,21 @@ So the real JPEG result is no longer just "codec structure beats raw bytes." It 
 - bounded coefficient streams are much more compact
 - raw canonical bytes are worst on both axes that the current evaluator measures well
 
+The middle-ground exact whole-image comparison later filled in the rest of the near-lossless side:
+
+| Representation | Mean actual tokens/image | Mean bits/image | Mean bits/pixel | Mean bits/modeled-token |
+| --- | ---: | ---: | ---: | ---: |
+| Exact JPEG symbols | `32598.44` | `145094.24` | `2.2140` | `4.3496` |
+| Huffman events | `63173.26` | `147539.84` | `2.2513` | `2.2946` |
+| Scan-payload bytes | `25184.66` | `158185.08` | `2.4137` | `6.2597` |
+| Canonical JPEG bytes | `25662.39` | `159685.81` | `2.4366` | `6.1948` |
+
+That isolates the main mechanism cleanly:
+
+- stripping headers/tables/markers does almost nothing
+- decoded entropy events help a lot relative to byte tokenization
+- exact symbols are still the best near-lossless JPEG representation on total bits/image
+
 ## Current Recommendation
 
 The JPEG baseline work is complete enough to stop training churn here. The next useful steps are:
@@ -908,6 +923,53 @@ That puts `K=64` into the same rough whole-image sequence regime as the syntax s
 - exact symbols: mean `32598.44`
 - whole-image bytes: mean `25662.39`
 
-The next decision point is straightforward: if the `K=64` smoke is stable and the early loss curve is competitive,
-then the full-trial question becomes interesting. If it is unstable or obviously weaker than the syntax streams, that
-will confirm that the `K=8` compactness result does not carry over once most of the discarded information comes back.
+The smoke and full trial both completed cleanly:
+
+- smoke Ray job:
+  `ray-run-dlwh-launch-20260312-034553`
+- smoke W&B:
+  `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-k64-libjpeg-swa4096-smoke`
+- smoke eval loss trajectory:
+  `8.891 -> 1.654 -> 1.573`
+- full trial Ray job:
+  `ray-run-dlwh-launch-20260312-035554`
+- full checkpoint:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial-7e3e81/checkpoints/step-2000`
+- full eval loss:
+  `1.078`
+
+I then ran a focused exact whole-image evaluator for the final checkpoint:
+
+- summary:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-k64-only-r1/summary.md`
+- json:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-k64-only-r1/representation_eval.json`
+
+Exact `K=64` whole-image sequence metrics:
+
+| Representation | Mean actual tokens/image | Mean bits/image | Mean bits/pixel | Mean bits/modeled-token |
+| --- | ---: | ---: | ---: | ---: |
+| Exact coeffs (`K=64`) | `65536.00` | `138557.72` | `2.1142` | `2.1143` |
+
+For coefficients, the block-normalized view is:
+
+- exact `K=64` coeffs:
+  mean `bits_per_block = 135.3103`
+
+This changes the coefficient interpretation substantially:
+
+- `K=64` is much less compact than `K=8`, as expected
+- but even at full coefficient length it still beats the near-lossless syntax streams on total bits/image:
+  - `K=64`: `138557.72`
+  - exact symbols: `145094.24`
+  - Huffman events: `147539.84`
+  - scan-payload bytes: `158185.08`
+  - bytes: `159685.81`
+- so the coefficient family is not only winning by throwing information away at `K=8`
+
+The clean current reading is:
+
+- `K=8` is the compact lossy coefficient baseline
+- `K=64` is the strongest whole-image coefficient baseline we have so far
+- exact symbols remain the best near-lossless syntax/event baseline
+- bytes remain the weakest representation

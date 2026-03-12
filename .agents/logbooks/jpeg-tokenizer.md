@@ -942,3 +942,47 @@
     streams once the `K=8` compactness advantage is gone
 - Next action: launch the `K=64` exact-libjpeg `SWA=4096` smoke on `marin-eu-west4-a`, then decide whether the full
   trial is worth the spend from the smoke behavior.
+
+### 2026-03-11 22:13 - Exact `K=64` whole-image result recorded
+
+- Outcome:
+  - `K=64` smoke succeeded:
+    - Ray job:
+      `ray-run-dlwh-launch-20260312-034553`
+    - eval loss:
+      `8.891 -> 1.654 -> 1.573`
+  - `K=64` full trial succeeded:
+    - Ray job:
+      `ray-run-dlwh-launch-20260312-035554`
+    - final checkpoint:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial-7e3e81/checkpoints/step-2000`
+    - final eval loss:
+      `1.078`
+- Follow-up:
+  - the first attempt at a six-way exact whole-image evaluator was broader than necessary and took too long to be the
+    right move for answering the immediate question
+  - launched a focused exact evaluator for `coeff_k64_exact` only:
+    - Ray job:
+      `ray-run-dlwh-evaluate_representation_head2head-20260312-050919`
+    - summary:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-k64-only-r1/summary.md`
+- Exact sequence-level result:
+  - `coeff_k64_exact`
+    - mean actual tokens/image: `65536.00`
+    - mean bits/image: `138557.72`
+    - mean bits/pixel: `2.1142`
+    - mean bits/modeled-token: `2.1143`
+    - mean bits/block: `135.3103`
+- Combined whole-image table:
+  - `coeff_k8_exact`: `44928.74` bits/image
+  - `coeff_k64_exact`: `138557.72`
+  - `symbols_whole_exact`: `145094.24`
+  - `huffman_events`: `147539.84`
+  - `scan_payload_bytes`: `158185.08`
+  - `bytes_whole`: `159685.81`
+- Interpretation:
+  - `K=8` remains the compact lossy coefficient baseline
+  - `K=64` is the first fair whole-image coefficient comparison, and it still beats the near-lossless syntax streams on
+    total bits/image
+  - exact symbols remain the best non-coefficient whole-image JPEG representation
+  - bytes are still worst, and removing headers still does not matter
