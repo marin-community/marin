@@ -59,7 +59,7 @@ _OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="embed-everything")
 sample_quality = StepSpec(
     name="sample_quality",
     output_path_prefix=_OUTPUT_PREFIX,
-    hash_attrs={"n_per_bucket": N_PER_BUCKET, "seed": 42},
+    hash_attrs={"n_per_bucket": N_PER_BUCKET, "seed": 42, "v": 2},
     fn=remote(
         lambda output_path: sample_quality_documents(
             output_path=output_path,
@@ -73,7 +73,7 @@ sample_quality = StepSpec(
 sample_topic = StepSpec(
     name="sample_topic",
     output_path_prefix=_OUTPUT_PREFIX,
-    hash_attrs={"n_per_source": N_PER_SOURCE, "seed": 42},
+    hash_attrs={"n_per_source": N_PER_SOURCE, "seed": 42, "v": 2},
     fn=remote(
         lambda output_path: sample_topic_documents(
             output_path=output_path,
