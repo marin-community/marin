@@ -3,75 +3,68 @@ name: add-pallas-kernel
 description: Add or update a TPU kernel using jax.experimental.pallas. Use when asked to implement, modify, benchmark, or autotune a Pallas TPU/GPU kernel.
 ---
 
-# Skill: Add or Update a Pallas Kernel (Agent-Oriented)
+# Skill: Add or Update a Pallas Kernel
 
-This skill describes a repeatable workflow for adding or updating a TPU kernel using
-`jax.experimental.pallas` in a way that is:
+This is a specialization of `.agents/skills/agent-research/SKILL.md`.
 
-- **safe** (numerics and gradients checked),
-- **fast** (microbench + profiling evidence),
-- **reviewable** (clear baseline + clear diff),
-- **agent-friendly** (explicit checkpoints; no silent guessing).
+Use `agent-research` for the generic research lifecycle (branching, issue/logbook cadence,
+snapshot/tag discipline, and reporting). This skill adds kernel-specific standards for:
 
-This is modeled after our other "agent workflows", e.g. `.agents/skills/add-dataset/SKILL.md`, but kernels are even more
-snowflake-y: expect iteration.
+- numerics and gradient safety,
+- backend/fallback API design,
+- TPU/GPU performance diagnosis,
+- block-size autotuning and tuned-table outputs.
 
-## What you produce
+## How to apply this skill
 
-For a new kernel `K`, you should produce:
-- A **vanilla JAX reference implementation** (readable, correct, stable API). You may be given torch code or pseudocode to get started.
-- A **Pallas kernel implementation** + wrapper function with the same API.
-- A **test harness** that checks:
-  - values match reference (within tolerance),
-  - gradients match reference on small shapes,
-  - the kernel is jittable and works on representative shapes/dtypes,
-- A **perf harness** that compares speeds for configurable shapes and dtypes as appropriate. Should also be suitable for autotuning.
-- **Autotuned block sizes** for a reasonable range of sizes/parameters, to be specified in request.
-- A **running report** in `.agents/projects/<short-topic>.md` that logs nontrivial iterations, perf numbers, tuning results,
-  and any pitfalls; update it whenever you do meaningful work (append-only is preferred).
-- A **short report** (in the PR description) summarizing:
-  - the tested shape/dtype grid,
-  - perf results,
-  - known limitations and follow-ups.
+1. Load and follow `.agents/skills/agent-research/SKILL.md` first.
+2. Apply the additional kernel rules in this document.
+3. Keep shared process details in `agent-research`; keep this file focused on kernel-specific constraints.
 
-## Workflow
+## Kernel Deliverables
 
-## Recommended module layout (Tokamax-style)
+For a kernel `K`, produce:
 
-Tokamax uses a pattern that works well for kernel development:
-- a single public API entrypoint (`api.py`) that dispatches to implementations
-- a default backend order chosen for robustness in production (for example, XLA first with optional Pallas override)
-- optional imports for accelerated backends so CPU-only users can still import modules
+- A readable **vanilla JAX reference** implementation with the target public API.
+- A **Pallas kernel implementation** plus wrapper with the same API.
+- A **correctness harness** that validates:
+  - value parity vs reference,
+  - gradient parity on small shapes,
+  - CPU and accelerator numerics where applicable.
+- A **performance harness** with steady-state timing on representative shape/dtype grids.
+- **Autotuned block/tile sizes** for requested hardware/shape regimes.
+- A checked-in **tuned table module** for runtime selection (with explicit fallback behavior).
+- An **autotune-on-miss fallback path** that can sweep a bounded candidate set and cache winning configs for later reuse.
 
-For Levanter kernels, we recommend the same pattern:
-- `reference.py`: readable vanilla JAX oracle
-- `xla.py`: default implementation (often identical to reference)
-- `pallas_tpu.py`: TPU/Pallas implementation (optional import)
-- `pallas_gpu.py`: optional GPU/Pallas implementation (if applicable)
-- `api.py`: stable user-facing function with `implementation=` override and fallback order
+Use the research logbook and issue workflow from `agent-research` for experiment history and milestone updates.
 
-See `lib/levanter/src/levanter/kernels/pallas/template_kernel.py` for a minimal example of the dispatch pattern.
+## Recommended Module Layout
 
-## Batching convention (recommended)
+Tokamax-style decomposition is preferred for maintainability:
 
-To avoid juggling vmap-aware vs non-vmap-aware versions, prefer this simple convention:
+- `reference.py`: readable vanilla JAX oracle.
+- `xla.py`: default implementation (often same math as reference).
+- `pallas_tpu.py`: TPU Pallas implementation.
+- `pallas_gpu.py`: optional GPU Pallas implementation.
+- `api.py`: stable user-facing entrypoint with `implementation=` override and fallback order.
 
-- Implement **one** "true" kernel for the **batched** case.
-- The public API accepts either batched inputs or a single unbatched example and normalizes by adding/removing a
-  trivial leading batch dimension.
+Reference template:
+- `lib/levanter/src/levanter/kernels/pallas/template_kernel.py`
 
-This makes it easy to support:
-- `op(x)` for a single example (debug/unit tests),
-- `op(x_batched)` for real training,
-- and it keeps the kernel implementation focused on one shape regime.
+## API and Safety Rules
 
-If you later need `vmap(op)` semantics, treat the vmap axis as part of the batch by reshaping leading dims into a
-single batch dimension, then reshaping back.
+### Batching convention
 
-## Block size config (recommended)
+Prefer one true batched kernel:
 
-Expose tile sizes via a small dataclass in the public API, similar to
-`jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_kernel.BlockSizes`:
+- Implement the core kernel for batched inputs.
+- Normalize single-example inputs by temporarily adding a leading batch dimension.
+- Reshape leading axes into one batch axis when needed, then restore on output.
+- Preserve explicit parallel-dimension semantics on at least one axis (usually batch) for TPU kernels.
+
+### Block size config
+
+Expose tile choices via a dataclass and keep defaults explicit:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -85,101 +78,72 @@ class BlockSizes:
         return cls()
 ```
 
-Notes:
-- For TPU Pallas, block sizes are typically required to be multiples of 128 (DMA alignment). Validate in the Pallas
-  backend, not in the generic API, so XLA/reference paths can still run.
-- If Mosaic reports a layout mismatch for a batched integer operand (e.g. labels), align the batch block size to the
-  XLA tile size (often 1024 on v5p for `s32[B]`), or raise a clear error before lowering.
-- Keep a `block_size` convenience arg if it already exists in a legacy API; map it to `block_sizes.v_block_size` and
-  raise if both are set inconsistently.
+Rules:
 
-## Flattening rule for token losses
+- Validate TPU-specific alignment constraints (for example multiples of 128) in the TPU backend.
+- Keep reference/XLA paths usable even when TPU constraints are not met.
+- If Mosaic reports a layout mismatch for a batched integer operand (for example labels), align the batch block size to
+  the XLA tile size used on that TPU generation or raise a clear pre-lowering error.
+- If a legacy `block_size` arg exists, map it clearly to the new config and raise on conflicting inputs.
 
-For token-level losses that operate on `[B, H]` and `[H, V]`:
-- Flatten all **non-Contract** axes of `pred_embeddings` into a single batch dimension `B`.
-- Flatten `target_y` to match this same `B`.
-- Run the kernel on `(x: [B, H], labels: [B], w: [H, V])`.
-- Reshape the per-example outputs back to the original axes before applying masks/reductions.
+### Fallback semantics
+
+- If a single implementation is explicitly requested (for example `implementation="pallas_tpu"`), fail fast on
+  unsupported backend/shape.
+- If a sequence of implementations is requested, try each in order, warn on each fallback, and raise if none work.
+- If using a default implementation order, treat it the same as a sequence and keep behavior explicit.
+- Keep backend selection behavior explicit and predictable in `api.py`.
+
+### Input normalization rule
+
+Prefer a canonical kernel input shape and make callers normalize to it:
+
+- Define one canonical shape contract for the kernel (for example rank-2/1/2 forms).
+- Expect callers/users to flatten or reshape batch axes before kernel invocation.
+- If you provide wrapper reshaping helpers, keep them thin and explicit at API boundaries.
+
+## Correctness Workflow
 
 ### 1) Start from a reference
 
-Pick one:
-- existing implementation in the repo (best),
+Use one of:
+
+- existing implementation in repo,
 - pseudocode,
 - PyTorch reference,
 - Optax/JAX baseline.
 
-For the first target, we want **fused softmax cross entropy** with:
-- optional **z-loss** (logsumexp penalty),
-- optional **unreduced** output (per-token/per-example loss).
+Baseline must be obvious and stable, not clever.
 
-### 2) Write the vanilla JAX baseline
+If the naive baseline would materialize huge intermediates, use a streaming/blockwise baseline with identical math so
+correctness checks stay feasible.
 
-Write a baseline in plain JAX that:
-- makes shapes and dtypes explicit,
-- is obviously correct,
-- has a stable signature you want to keep.
+### 2) Write value + grad harness
 
-Avoid cleverness here: the baseline is your oracle.
+Minimum checks:
 
-**Memory-efficient baseline (when the naive baseline is too big):**
-If the naive baseline would materialize huge intermediates, write a streaming or
-blockwise baseline that matches the math but avoids those allocations. This keeps
-correctness/perf checks feasible on realistic sizes.
+- value parity over a shape/dtype grid,
+- gradient parity on small shapes,
+- backend numerics on CPU and accelerator backends as applicable.
 
-**Type annotations:**
-Use `jaxtyping` for public kernel APIs and reference implementations to make
-shape/dtype expectations explicit (e.g. `Float[Array, "B H"]`).
+Report pointwise deviation metrics (max/mean absolute diff), not only `allclose`.
 
-### 3) Build a correctness harness (value + grad)
+Use explicit shape/dtype annotations for public APIs and references (for example via `jaxtyping`) where available.
 
-At minimum:
-- value match vs baseline on a grid of shapes/dtypes,
-- grad match on small shapes (finite difference or `jax.grad` vs baseline),
-- **backend numerics**: validate numerics on CPU and on accelerator backends (TPU/GPU) as applicable.
+### 3) Promote long-lived checks to pytest
 
-When comparing outputs, prefer **pointwise deviation** metrics (e.g. max/mean
-absolute diff) in addition to `allclose` so you can quickly spot outliers.
+For kernels that remain in-tree, add/extend tests under:
 
-Keep the harness small, deterministic, and fast enough to run locally.
-For long-lived kernels, turn the numerics script into a proper pytest in
-`lib/levanter/tests/kernels/` that compares the **default implementation** to the
-reference baseline. Use small shapes on CPU, and on TPU/GPU pick shapes aligned
-with your block sizes so the fast path runs.
+- `lib/levanter/tests/kernels/`
 
-### 4) Implement the Pallas kernel + wrapper
+Compare default implementation against the reference on small CPU shapes and accelerator-aligned shapes for fast paths.
 
-Implement the kernel and wrap it behind the same API as the baseline.
+## Cost Estimate Requirement
 
-Guidelines:
-- keep the wrapper pure and explicit (no hidden global state),
-- keep the "edit surface" obvious (tile sizes, block sizes),
-- make failure modes actionable (shape constraints, alignment, etc.).
+Add `cost_estimate=` to each `pl.pallas_call`:
 
-**Fallback semantics (recommended):**
-- If a specific implementation is selected (e.g. `implementation="pallas_tpu"`), **error** on unsupported shapes or
-  non-TPU backends.
-- If the default implementation order is used, **warn and fallback** to XLA/reference.
-- For fused CE specifically, TPU defaults are intentionally XLA-first; use `implementation="pallas_tpu"` when you are
-  explicitly benchmarking/tuning shape-dependent Pallas behavior.
-
-**Z-loss/logsumexp penalty:**
-- Have the kernel return both per-example loss and `logsumexp`.
-- Apply the penalty outside the kernel: `loss + logsumexp_weight * logsumexp**2`.
-- In custom VJP, propagate both `dloss` and `dlogsumexp` so gradients remain correct.
-
-**TPU matmul precision gotcha:**
-Some Mosaic TPU matmul paths require 32-bit accumulation. If you see
-`Expected matmul acc to be 32-bit`, set `preferred_element_type=jnp.float32` in
-`lax.dot_general` or set `jax.config.update("jax_default_matmul_precision", "highest")`
-in your benchmark script. Prefer the explicit `preferred_element_type` in kernels.
-
-**Pallas cost estimates (required for new kernels):**
-- Add a `cost_estimate=` argument on each `pl.pallas_call` so profiler and scheduler metadata have usable FLOP/byte
-  estimates.
-- Use `pl.estimate_cost` on a **reference/body-equivalent JAX function**. Do not call it on a kernel body that uses
-  `pl.program_id`, because that tracing path is outside a Pallas grid context.
-- Compute `bytes_accessed` from kernel inputs + outputs passed to the call.
+- Use `pl.estimate_cost` on a body-equivalent JAX function (not a kernel body with `pl.program_id`).
+- Include IO bytes from call inputs/outputs.
 
 ```python
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
@@ -199,411 +163,135 @@ def _cost_estimate(
         kernel_inputs_specs=kernel_inputs_specs,
         kernel_outputs_specs=kernel_outputs_specs,
     )
-
-
-out_shape = jax.ShapeDtypeStruct(...)
-out = pl.pallas_call(
-    kernel,
-    ...,
-    out_shape=out_shape,
-    cost_estimate=_cost_estimate(
-        q,
-        k,
-        v,
-        kernel_inputs_specs=(q, k, v),
-        kernel_outputs_specs=out_shape,
-    ),
-)(q, k, v)
 ```
 
-### 5) Add a speed microbench + profiling hook
+## Performance and Profiling Workflow
 
-Minimum:
-- microbench step time vs baseline on a representative shape,
-- (optional but encouraged) a profiling run that produces an xprof artifact so agents can reason about hotspots.
+Use the execution environment guidance and cadence from `agent-research`; this section only adds kernel-specific constraints.
+For kernel-specific profiling capture/compare guidance, see `docs/reference/profiling.md`.
 
-#### Running on TPU (Marin Ray infra)
+Key iteration loop:
+- `profile -> hypothesis -> change -> tests -> microbench -> profile`
 
-For TPU kernels you generally want to run the microbench/profile on a real TPU VM via our Ray runner.
-Use `--tpu` to pick the TPU generation/size and pass environment variables with `-e` (these get injected into the Ray
-job runtime environment).
+Always report:
 
-```sh
-RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
-  --cluster marin-us-central2-staging \
-  --tpu v5p-8 \
-  -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -e WANDB_PROJECT "marin-kernels" \
-  -- python XXX
-```
+- compile-including timing (`time-to-first-step`),
+- steady-state timing,
+- exact hardware type and shape/dtype grid.
 
-Replace:
-- `v5p-8` with the TPU type you care about (common options: `v4-8`, `v5e-8`, `v5p-8`, `v6e-8`, etc.)
-- `XXX` with your benchmark entrypoint (ideally a small script that JIT-compiles once, then runs a fixed number of
-  steps and prints/records timing).
+## Autotuning Workflow
 
-The cluster you use will vary depending on TPU generation/availability; most kernel work should start with a single
-node (e.g. `*-8`) unless you're explicitly targeting multi-slice behavior.
+Keep tuning explicit and reviewable.
 
-##### Scoped VMEM flag policy (kernel benchmarking/tuning)
+1. Define a bounded config space (block/tile candidates).
+2. Define target shape/hardware buckets.
+3. Benchmark every `(bucket, config)` pair and capture timing + failures.
+4. Store raw results as artifacts (CSV/JSON; W&B artifact preferred).
+5. Derive best-config table keyed by `(tpu_type, dtype, shape_bucket[, invariants])`.
+6. Check in a Python tuned-table module with:
+   - bucket definitions,
+   - best configs,
+   - `infer_block_sizes(...)` helper,
+   - default fallback to `BlockSizes.get_default()`.
 
-When running TPU Pallas microbenches/tuning, set `LIBTPU_INIT_ARGS` explicitly by TPU generation:
+Do not key tuned tables by every exact shape; keep buckets stable and reviewable.
 
-- `v5p`/`v5e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"`
-- `v6e`: `LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"`
-- `v4`: do **not** set a special scoped VMEM limit flag (use default platform behavior).
+### Fallback autotuning requirement
 
-Examples:
+Support two levels of fallback tuning, similar to the fused softmax cross-entropy kernel:
 
-```sh
-# v5p / v5e
--e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=50000"
+1. Static lookup fallback:
+   - infer block sizes from a checked-in tuned table by `(device, dtype, shape bucket)`,
+   - validate/sanitize for backend constraints,
+   - fall back to default/safe entries when no exact tuned match exists.
+2. Autotune-on-miss fallback:
+   - when tuned lookup misses (and autotune is enabled), sweep a bounded candidate list,
+   - benchmark candidates on the real implementation, select the best viable config,
+   - cache and persist the winner under a kernel-specific key (include implementation + shape/device/dtype context).
+3. Runtime failure fallback:
+   - if a candidate or implementation is unsupported (for example compile/runtime constraints), warn and try the next
+     candidate/implementation in order when a sequence is available.
 
-# v6e
--e LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=98304"
-```
+## Compiler and Runtime Hints (TPU Pallas)
 
-##### Listing available TPU clusters
+### Matmul precision
 
-If you're not sure which cluster has which TPU types, use the cluster CLI:
+If Mosaic reports errors like `Expected matmul acc to be 32-bit`:
 
-```sh
-uv run ./scripts/ray/cluster.py list-configs
-uv run ./scripts/ray/cluster.py --cluster <cluster-name> list-workers
-```
+- set `preferred_element_type=jnp.float32` in `lax.dot_general` for the kernel path, or
+- set `jax_default_matmul_precision=highest` in benchmark scripts.
 
-Use `--cluster` to target a specific region (e.g. `marin-us-central1`) and inspect
-which TPU types are currently attached.
+Prefer explicit kernel-side `preferred_element_type` for deterministic behavior.
 
-##### Running jobs and tailing logs (unattended-friendly)
+### Scoped VMEM policy
 
-For long runs, submit with `--no_wait`, then poll status and stream logs:
+Set `LIBTPU_INIT_ARGS` by TPU generation during microbench/tuning:
 
-```sh
-RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py \
-  --cluster marin-us-central1 \
-  --tpu v5p-8 \
-  --no_wait \
-  -- python path/to/bench.py
+- `v5p` / `v5e`: `--xla_tpu_scoped_vmem_limit_kib=50000`
+- `v6e`: `--xla_tpu_scoped_vmem_limit_kib=98304`
+- `v4`: no special scoped-VMEM override
 
-uv run ./scripts/ray/cluster.py --cluster marin-us-central1 list-jobs > /tmp/ray_jobs.json
-uv run ./scripts/ray/cluster.py --cluster marin-us-central1 job-logs -n 400 <job_id>
-uv run ./scripts/ray/cluster.py --cluster marin-us-central1 wait-job <job_id>
-```
+### Compiler diagnostics and dumps
 
-You can parse `/tmp/ray_jobs.json` to find the matching `submission_id` and check
-`status` (`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`) for automation.
+Capture compiler diagnostics on serious benchmark/tuning runs:
 
-##### Alternative: dev_tpu helper
+- HLO dumps via `--xla-dump-dir`,
+- compiler logs via `--compiler-log-path`,
+- explicit `XLA_FLAGS` and `LIBTPU_INIT_ARGS` recorded with results.
 
-If you prefer a simpler wrapper, `docs/dev-guide/dev_tpu.md` and
-`scripts/ray/dev_tpu.py` provide a more guided TPU workflow. Use whichever fits
-your setup best; both paths are compatible with the kernel recipe.
+Useful scripts:
 
-Quick start on the staging cluster we commonly use for kernel work:
-
-```sh
-RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central2-staging.yaml allocate
-RAY_AUTH_MODE=token uv run scripts/ray/dev_tpu.py --config infra/marin-us-central2-staging.yaml execute -- python path/to/bench.py
-```
-
-##### Profiling with Levanter (recommended)
-
-Whenever possible, use Levanter's built-in profiler wiring so profiles are captured consistently and uploaded via
-Levanter trackers (e.g. Weights & Biases):
-
-- See `lib/levanter/docs/Performance-Guide.md` for details.
-- Levanter uses JAX profiling and uploads a `jax_profile` artifact to W&B when profiling is enabled.
-- If your benchmark is implemented as (or inside) a Levanter training loop, prefer flags like:
-  - `--trainer.profiler.enabled true`
-  - `--trainer.profiler.start_step 5`
-  - `--trainer.profiler.num_steps 50`
-  - `--trainer.profiler.perfetto_link false` (enable if you want a Perfetto URL; see the guide)
-
-If you're writing a standalone microbench script, prefer invoking the profiler directly with
-`levanter.callbacks.profile_ctx` (rather than trying to plumb trainer flags through a non-trainer script). See
-`lib/levanter/src/levanter/main/sample_lm.py` for an example of wrapping a "steady-state" region (skipping the compile
-round) with `profile_ctx(...)`, which then logs a `jax_profile` artifact via the active tracker.
-You will need to set up wandb logging by initializing a Levanter [levanter.tracker.wandb.WandbTracker][] via
-[levanter.tracker.wandb.WandbConfig][].
-
-##### Measuring performance sanely
-
-Always report at least:
-- time-to-first-step (includes compilation) vs steady-state step time (after warmup)
-- the exact TPU type and shape/dtype grid tested
-
-##### Capturing compiler diagnostics early (recommended)
-
-For Pallas TPU work, capture compiler diagnostics on every serious benchmark/tuning run:
-
-1. Enable HLO text dumps with `--xla-dump-dir`.
-2. Tee stdout/stderr to a file with `--compiler-log-path`.
-3. Record the exact `XLA_FLAGS` and `LIBTPU_INIT_ARGS` used (the benchmark/tuning scripts print these now).
-
-These hooks are available in:
 - `lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py`
 - `lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py`
 
-Example (bench):
+### Dump-driven diagnosis
 
-```sh
-uv run --package levanter --extra tpu \
-  python lib/levanter/scripts/bench/bench_fused_cross_entropy_loss_pallas.py \
-  --implementation pallas_tpu \
-  --batch 64 --pos 1024 --embed 1024 --vocab 128256 \
-  --xla-dump-dir /tmp/ce_hlo_dumps \
-  --compiler-log-path /tmp/ce_compile.log
-```
+When performance is unclear, run dump-first comparisons on one fixed shape:
 
-Example (tune):
+- XLA/reference path,
+- full Pallas path,
+- decomposition variant(s) (temporary toggles).
 
-```sh
-uv run --package levanter --extra tpu \
-  python lib/levanter/scripts/tune/tune_fused_cross_entropy_loss_block_sizes.py \
-  --implementation pallas_tpu \
-  --batch 64 --seq-len 1024 --embed 1024 --vocab 128256 \
-  --xla-dump-dir /tmp/ce_tune_hlo_dumps \
-  --compiler-log-path /tmp/ce_tune_compile.log
-```
+Use separate dump dirs per variant (`hlo_*`, `llo_*`, `mosaic_*`) and compare:
 
-When a kernel unexpectedly underperforms, this is the first triage loop:
-- compare Pallas vs XLA HLO dumps on the same shape,
-- scan compiler logs for VMEM pressure / verifier errors / lowering warnings,
-- then run the microbench ladder (`matmul-only`, `streaming-lse-only`, `fused matmul+lse`) before retuning blocks.
+- throughput,
+- fusion/custom-call placement,
+- schedule bundle counts,
+- pressure signals (e.g. heavy `vrot`/`vsel`, spills, vreg pressure).
 
-##### Tokamax comparison (optional)
-
-If a similar Tokamax op exists, it can be a useful performance reference.
-Common gotchas:
-- Tokamax uses `absl.flags`; you must parse flags before accessing any
-  Tokamax modules (`absl_flags.FLAGS([argv0])`).
-- Tokamax Mosaic kernels may OOM VMEM at large shapes; reduce tile sizes or
-  use smaller shapes for a quick comparison.
-
-GPU kernels are typically runnable locally (and can still follow the same "baseline vs fast kernel" harness pattern).
-
-## Autotuning (v0)
-
-Most Pallas kernels have "knobs" (tile sizes, block sizes, pipeline stages, etc.). The best values depend on:
-- TPU generation (v4/v5e/v5p/v6e),
-- dtypes,
-- shapes (batch/hidden/vocab),
-- sharding/layout assumptions.
-
-For v0, keep autotuning deliberately simple and explicit, with a concrete deliverable:
-
-- a checked-in **Python "tuned table" module** that records the best-performing tile/block sizes per
-  `(hardware, dtype, shape bucket)` and provides a reasonable default fallback.
-
-This mirrors how some JAX Pallas TPU ops ship tuned defaults, e.g.
-`jax.experimental.pallas.ops.tpu.ragged_paged_attention.tuned_block_sizes`.
-
-1) Define a small **configuration space** you're willing to search (a list of candidate block/tile configs).
-2) Define a small set of **user-defined "architectures" / shape regimes** you care about (e.g. common hidden sizes,
-   vocab sizes, batch sizes).
-3) Run a **repeatable benchmark** for each (architecture, config) pair and record:
-   - compile time (optional),
-   - steady-state step time / tokens/sec,
-   - any correctness/NaN failures.
-4) Emit a **raw results table** (CSV/JSON) keyed by:
-   `(device_kind, tpu_type, dtype, shape_bucket, config_id) -> metrics` and store it as an artifact.
-
-### Tuned block-size tables
-
-Even a tiny, uninteresting tuned table is still useful as an exemplar. Prefer
-storing a small `tuned_block_sizes.py` module that:
-- defines shape buckets and tuned entries,
-- provides a single `infer_block_sizes(...)` helper,
-- falls back to `BlockSizes.get_default()` if no match is found.
-5) Derive a **best-config table** and write it to a Python module in the codebase (the tuned table):
-   - mapping from `(tpu_type, dtype, shape_bucket)` to the best config (tile sizes etc.)
-   - **shape buckets are important**: do not key on every exact shape. Pick a small number of representative buckets
-     (e.g. ranges of `B/H/V` or a small set of canonical architectures) so the table stays stable and reviewable.
-   - if the kernel depends on additional invariants (e.g. sharding/layout assumptions), include those in the key or
-     enforce them before lookup.
-   - a small helper that selects the best known config (or falls back to a default)
-6) Repeat:
-   - pick a new architecture/shape bucket (or a new TPU generation)
-   - run the grid
-   - append/merge best configs into the tuned table
-7) Pick a **reasonable default** strategy:
-   - global default (works "ok" everywhere), and/or
-   - per-architecture defaults (if performance is highly shape-dependent).
-
-The raw results should be treated as an artifact (W&B artifact preferred). The tuned Python table is the
-code-reviewed "source of truth" for runtime defaults.
-
-The point is to make tuning reproducible and reviewable: "why did we pick tile size X?" should be answerable by looking
-at the table.
-
-### 6) Iterate using evidence
-
-The iteration loop should look like:
-`profile -> hypothesis -> change -> tests -> microbench -> profile`
-
-Use `.agents/skills/agent-profiling/` tooling as it matures.
-
-### 7) TPU dump-driven workflow (generic)
-
-When TPU performance is unclear, use a dump-first workflow and compare multiple variants on the exact same shape.
-
-Recommended comparison set:
-- baseline/reference implementation (usually XLA path)
-- full Pallas implementation
-- one or more decomposition variants (for example, "matmul-only", "skip softmax", or "skip extra reductions")
-
-The decomposition variants are temporary benchmark/debug toggles. They help answer: is the bottleneck the core matmul/scheduling, or surrounding math/data movement?
-
-#### Required dump flags
-
-Set these before JAX initializes TPU:
-
-```bash
-export XLA_FLAGS="\
-  --xla_dump_to=${HLO_DIR} \
-  --xla_dump_hlo_as_text"
-
-export LIBTPU_INIT_ARGS="\
-  --xla_jf_dump_to=${LLO_DIR} \
-  --xla_jf_dump_hlo_text=true \
-  --xla_jf_dump_llo_text=true \
-  --xla_jf_dump_llo_html=false \
-  --xla_jf_dump_llo_static_gaps=true \
-  --xla_jf_emit_annotations=true \
-  --xla_jf_debug_level=2 \
-  --xla_mosaic_dump_to=${MOSAIC_DIR} \
-  --xla_mosaic_enable_dump_debug_info=true \
-  --xla_mosaic_enable_llo_source_annotations=true"
-```
-
-Use separate dump directories per variant so files are comparable and not mixed:
-- `${ROOT}/hlo_<variant>`
-- `${ROOT}/llo_<variant>`
-- `${ROOT}/mosaic_<variant>`
-
-#### Analysis checklist
-
-1) Record steady-state throughput first (`tokens/s`, `bwd_tokens/s`, or your kernel metric).
-2) Inspect HLO:
-   - identify where custom-calls/fusions are
-   - confirm expected path is being used
-3) Inspect LLO schedule summaries:
-   - open `*schedule-analysis_final_bundles.txt`
-   - capture total/non-empty scheduled bundle counts for the target kernels
-4) Compare variants:
-   - if decomposition variant is fast but full kernel is slow, bottleneck is in the removed stage(s)
-   - if decomposition is still slow, focus on core tiling/scheduling/layout
-5) Map back to source:
-   - use `metadata={... source_file=... source_line=...}` in dump files
-   - connect expensive kernels directly to code regions
-6) Keep a short artifact summary in the project notes/PR:
-   - shape/config
-   - throughput table
-   - dump paths
-   - bundle-count comparison
-   - next hypothesis
-
-#### XLA-LLO Replication Playbook (generic)
-
-When the goal is "make Pallas match or beat XLA," the highest-signal workflow is:
-
-1) **Start from one exact shape and freeze it**
-   - pick one representative production shape and keep it fixed until you understand the gap.
-   - compare only on that shape while iterating on structure.
-
-2) **Dump both sides first**
-   - collect dumps for:
-     - XLA/reference path
-     - current Pallas path
-     - one decomposition variant
-   - use separate dump directories per variant and the same benchmark harness/flags.
-
-3) **Infer algorithm structure from XLA fusions**
-   - inspect HLO/LLO to identify stage boundaries (for example: delta/softmax stage vs GEMM update stages).
-   - treat XLA fusion boundaries as a hint for where to split your Pallas/JAX pipeline.
-   - look for input/output aliasing and dynamic-update-slice patterns; these often reveal intended writeback structure.
-
-4) **Replicate the simplest stage first**
-   - do not port everything at once.
-   - first match the stage that should dominate runtime (often backward GEMMs).
-   - temporarily bypass or simplify surrounding math (for example, skip/rewrite softmax pieces) to verify the core stage can hit XLA-like throughput.
-
-5) **Then add complexity incrementally**
-   - add one missing stage at a time (for example, rematerialized logits -> softmax/logsumexp -> label subtraction).
-   - after each addition:
-     - run correctness checks
-     - rerun throughput
-     - re-dump LLO if performance regresses
-   - this makes the first bad step obvious.
-
-6) **Use LLO counters as diagnostics, not just timings**
-   - track changes in:
-     - lane-rotation-heavy ops (`vrot.*`)
-     - select/mask-heavy ops (`vsel`)
-     - expensive transcendental counts (`vpow2.*`, etc.)
-     - spill slots and vreg pressure in bundle reports
-   - if throughput drops and these rise sharply, your structure likely diverged from XLA's efficient schedule.
-
-7) **Prefer structural fixes before tile sweeps**
-   - if a decomposition variant is fast but the full kernel is slow, fix structure first.
-   - block-size sweeps usually help after structure is right, not before.
-
-8) **Validate numerics with more than one metric**
-   - report at least:
-     - absolute max error (`abs_linf`)
-     - relative L2 (`rel_l2`)
-     - loss delta
-   - `rel_linf` alone can look noisy, especially with bf16-scale reference values.
-
-9) **Retune after structural convergence**
-   - once the algorithm shape matches XLA well, rerun block-size tuning.
-   - expect optimal block sizes to move (or constraints to relax) after major structural changes.
-
-## Starter template
-
-Use the starter template under `lib/levanter/src/levanter/kernels/pallas/`:
-- `template_kernel.py` for baseline + kernel scaffolding
-- `tests/test_template_kernel.py` for the value/grad/speed harness pattern
-
-See also the `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss` kernel for a more
-complete/complex example.
+Prefer structural fixes before broad tile sweeps when decomposition variants indicate stage-structure issues.
+For the full LLO workflow (flags, artifact layout, comparison checklist, and replication loop), see
+`docs/reference/llo.md`.
 
 ## Definition of Done
 
-- Correctness: value matches baseline within tolerance across the tested grid.
-- Gradients: gradients match baseline on small shapes.
-- Performance: measurable improvement on at least one realistic shape (or a clear explanation why not).
-- Documentation: PR includes a short "what we tested / what improved / what's next" summary.
-- Block sizes: autotuned block sizes checked in for the requested shape/dtype grid and device types.
+- Values match reference within tolerance on tested grid.
+- Gradients match reference on small shapes.
+- Performance improves on at least one realistic target shape, or limitations are explicitly documented.
+- Tuned table is checked in for requested hardware/shape regimes.
+- Research artifacts (logbook updates, issue summary, snapshot links) follow `agent-research` workflow.
+
+## Starter References
+
+- `lib/levanter/src/levanter/kernels/pallas/template_kernel.py`
+- `lib/levanter/tests/kernels/test_template_kernel.py`
+- `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss`
+
+## Tokamax Notes (Optional)
+
+Tokamax kernels can be useful references for API and kernel structure comparisons.
+
+- Typical install path in this repo's uv environment:
+  `.venv/lib/python3.11/site-packages/tokamax/_src/ops`
+- Compare numerics/perf on identical shapes/dtypes before drawing conclusions.
+- Parse `absl.flags` before accessing Tokamax modules that depend on flags.
+- Tokamax Mosaic kernels can OOM VMEM at larger shapes; reduce shape/tile sizes for controlled comparisons.
 
 ## Further Reading
-
-### Pallas Docs
 
 - [JAX Pallas Overview](https://docs.jax.dev/en/latest/pallas/index.html)
 - [JAX Pallas TPU Docs](https://docs.jax.dev/en/latest/pallas/tpu/index.html)
 - [JAX Pallas Mosaic GPU Docs](https://docs.jax.dev/en/latest/pallas/gpu/index.html)
-
-### Tokamax
-
-Generally a good idea to look at tokamax kernels for inspiration and patterns.
-Assuming we're in a uv install, they should be at `.venv/lib/python3.11/site-packages/tokamax/_src/ops`
-
-We take inspiration from Tokamax's public APIs. We prefer a bit less framework-y stuff overall and
-favor a bit more copy-paste and explicitness for agents.
-
-### JAX kernels
-
-JAX has some built-in kernels that use Pallas under the hood; these can be
-good references for patterns. `.venv/lib/python3.11/site-packages/jax/experimental/pallas/ops`
-
-### Deep Dives
-
 - [When XLA Isn't Enough: From Pallas to VLIW](https://patricktoulme.substack.com/p/when-xla-isnt-enough-from-pallas)
-  This post has a deep dive into the splash attention kernel for JAX Pallas TPU. In particular, it
-  tells you how to get low level code dumps so you can see XLA's decisions on TPU etc.
-
-## Misc Tips
-
-- Try to add parallel dimension semantics to at least one axis (usually batch) for TPU kernels.
+- `docs/reference/llo.md`
+- `docs/reference/profiling.md`
