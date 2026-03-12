@@ -22,6 +22,7 @@ Environment overrides:
 - GDN_PROFILE_SEGMENT_SIZE: optional GDN segment size override
 - GDN_PROFILE_GDN_LAYERS_PER_BLOCK: optional GDN layer-count-per-block override
 - GDN_PROFILE_GDN_BLOCK_SIZE: optional GDN block-size override
+- GDN_PROFILE_GDN_DECODER_LAYER_CUSTOM_VJP: if `1`, enable the opt-in whole-layer custom-VJP boundary for GDN layers
 - GDN_PROFILE_ALL_TRANSFORMER: if `1`, disable all GDN layers and benchmark an all-transformer stack
 - GDN_PROFILE_RUN_NAME_PREFIX: run-name prefix (default: gdn_tinyprof)
 - GDN_PROFILE_RUN_NAME_SUFFIX: optional run-name suffix
@@ -95,6 +96,7 @@ if __name__ == "__main__":
     segment_size_override = _env_optional_int("GDN_PROFILE_SEGMENT_SIZE")
     gdn_layers_per_block_override = _env_optional_int("GDN_PROFILE_GDN_LAYERS_PER_BLOCK")
     gdn_block_size_override = _env_optional_int("GDN_PROFILE_GDN_BLOCK_SIZE")
+    gdn_decoder_layer_custom_vjp = _env_flag("GDN_PROFILE_GDN_DECODER_LAYER_CUSTOM_VJP")
     all_transformer = _env_flag("GDN_PROFILE_ALL_TRANSFORMER")
 
     if batch_size_override is None:
@@ -111,6 +113,8 @@ if __name__ == "__main__":
         model_cfg = dataclasses.replace(model_cfg, gdn_layers_per_block=gdn_layers_per_block_override)
     if gdn_block_size_override is not None:
         model_cfg = dataclasses.replace(model_cfg, gdn_block_size=gdn_block_size_override)
+    if gdn_decoder_layer_custom_vjp:
+        model_cfg = dataclasses.replace(model_cfg, gdn_use_decoder_layer_custom_vjp=True)
     if all_transformer:
         model_cfg = dataclasses.replace(
             model_cfg,
@@ -167,7 +171,8 @@ if __name__ == "__main__":
         f"all_transformer={resolved_all_transformer} "
         f"gdn_layers_per_block={model_cfg.gdn_layers_per_block} "
         f"gdn_block_size={model_cfg.gdn_block_size} "
-        f"gdn_layer_fraction={gdn_layer_fraction:.6f}",
+        f"gdn_layer_fraction={gdn_layer_fraction:.6f} "
+        f"gdn_decoder_layer_custom_vjp={int(model_cfg.gdn_use_decoder_layer_custom_vjp)}",
         flush=True,
     )
 
