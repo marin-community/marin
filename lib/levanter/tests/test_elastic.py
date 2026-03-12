@@ -19,9 +19,9 @@ from levanter.elastic import (
     _remove_if_exists,
     _aggregate_progress_metrics,
     _flatten_transfer_payload,
-    _is_deleted_array_runtime_error,
     _restore_transfer_payload,
     read_completion,
+    read_worker_status,
 )
 from levanter.schedule import BatchSchedule
 from levanter.trainer import _InjectedFaults, MARIN_FAULT_INJECTION_STEPS_ENV
@@ -244,7 +244,7 @@ def test_remove_if_exists_ignores_gcs_not_found_races(monkeypatch):
     _remove_if_exists("gs://bucket/path")
 
 
-def test_jax_transfer_publish_ignores_deleted_array_runtime_error(tmp_path):
+def test_jax_transfer_publish_uses_staged_payload(tmp_path, monkeypatch):
     elastic_root = str(tmp_path / "elastic")
     mesh = _single_device_mesh()
     controller = FileBackedPeerSyncController(
@@ -263,21 +263,80 @@ def test_jax_transfer_publish_ignores_deleted_array_runtime_error(tmp_path):
         mesh=mesh,
     )
 
-    class _FailingTransferRuntime:
-        def publish(self, *, step: int, payload: dict[str, object]) -> dict[str, object]:
-            raise RuntimeError("Array has been deleted with shape=float32[128256,768].")
+    class _FakeTransferRuntime:
+        def __init__(self):
+            self.prepare_calls = 0
+            self.publish_calls: list[tuple[int, dict[str, object]]] = []
+
+        def prepare_publish_payload(self, payload: dict[str, object]) -> dict[str, object]:
+            self.prepare_calls += 1
+            return {"prepared": self.prepare_calls}
+
+        def publish_prepared(self, *, step: int, prepared_payload: dict[str, object]) -> dict[str, object]:
+            self.publish_calls.append((step, prepared_payload))
+            return {"address": "127.0.0.1:1234"}
+
+    transfer_runtime = _FakeTransferRuntime()
 
     controller.transport_kind = "jax_transfer"
-    controller._transfer_runtime = _FailingTransferRuntime()  # type: ignore[assignment]
+    controller._transfer_runtime = transfer_runtime  # type: ignore[assignment]
+    state = DummyState(step=1, model={"weight": jnp.array([1.0], dtype=jnp.float32)})
+
+    controller.stage_publish_state(state)
+    monkeypatch.setattr(
+        controller,
+        "_shareable_state",
+        lambda _state: (_ for _ in ()).throw(AssertionError("staged publish should not rebuild payload")),
+    )
+
+    controller._publish_state(state, step=0)
+    assert transfer_runtime.prepare_calls == 1
+    assert transfer_runtime.publish_calls == [(0, {"prepared": 1})]
+    status = read_worker_status(controller.paths.worker_status_path(controller.worker_id))
+    assert status is not None
+    assert status.transport_kind == "jax_transfer"
+    assert (status.transport_metadata or {})["address"] == "127.0.0.1:1234"
+
+
+def test_jax_transfer_publish_prepares_payload_when_not_staged(tmp_path):
+    elastic_root = str(tmp_path / "elastic")
+    mesh = _single_device_mesh()
+    controller = FileBackedPeerSyncController(
+        config=ElasticTrainingConfig(
+            enabled=True,
+            group_id="run",
+            worker_id="w000",
+            state_path=elastic_root,
+            sync_interval_steps=1,
+            publish_interval_steps=1,
+            sync=PeerAveragingSyncConfig(),
+        ),
+        checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w000"),
+        run_id="run-w000",
+        axis_mapping={},
+        mesh=mesh,
+    )
+
+    class _FakeTransferRuntime:
+        def __init__(self):
+            self.prepare_calls = 0
+            self.publish_calls: list[tuple[int, dict[str, object]]] = []
+
+        def prepare_publish_payload(self, payload: dict[str, object]) -> dict[str, object]:
+            self.prepare_calls += 1
+            return {"prepared": self.prepare_calls}
+
+        def publish_prepared(self, *, step: int, prepared_payload: dict[str, object]) -> dict[str, object]:
+            self.publish_calls.append((step, prepared_payload))
+            return {"address": "127.0.0.1:1234"}
+
+    transfer_runtime = _FakeTransferRuntime()
+    controller.transport_kind = "jax_transfer"
+    controller._transfer_runtime = transfer_runtime  # type: ignore[assignment]
 
     controller._publish_state(
-        DummyState(step=0, model={"weight": jnp.array([1.0], dtype=jnp.float32)}),
+        DummyState(step=1, model={"weight": jnp.array([1.0], dtype=jnp.float32)}),
         step=0,
     )
-    assert read_completion(controller.paths.completion_path) is None
-
-
-def test_deleted_array_error_detection():
-    assert _is_deleted_array_runtime_error(RuntimeError("Array has been deleted with shape=float32[1]."))
-    assert _is_deleted_array_runtime_error(RuntimeError("Buffer has been deleted or donated"))
-    assert not _is_deleted_array_runtime_error(RuntimeError("unrelated runtime error"))
+    assert transfer_runtime.prepare_calls == 1
+    assert transfer_runtime.publish_calls == [(0, {"prepared": 1})]

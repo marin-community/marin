@@ -590,6 +590,8 @@ class Trainer:
                 raise RuntimeError("Loss is Inf")
 
             info = StepInfo(result.new_state, loss, step_time())
+            if self._elastic_controller is not None:
+                self._elastic_controller.stage_publish_state(info.state)
 
             with capture_time() as hook_time:
                 self.run_hooks(info)

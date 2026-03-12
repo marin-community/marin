@@ -369,11 +369,6 @@ class ElasticTrainingFinished(RuntimeError):
         )
 
 
-def _is_deleted_array_runtime_error(exc: RuntimeError) -> bool:
-    message = str(exc)
-    return "Array has been deleted" in message or "Buffer has been deleted" in message
-
-
 def _get_local_ip_from_hostname() -> str:
     return socket.gethostbyname(socket.gethostname())
 
@@ -431,12 +426,18 @@ class _JaxTransferRuntime:
         self._server = None
 
     def publish(self, *, step: int, payload: dict[str, Any]) -> dict[str, Any]:
-        flat_payload = _flatten_transfer_payload(payload)
-        materialized = self._materialize_payload(flat_payload)
+        prepared_payload = self.prepare_publish_payload(payload)
+        return self.publish_prepared(step=step, prepared_payload=prepared_payload)
+
+    def publish_prepared(self, *, step: int, prepared_payload: dict[str, Any]) -> dict[str, Any]:
         with self._payload_lock:
-            self._payload = materialized
+            self._payload = prepared_payload
             self._payload_step = step
         return {"address": self.address}
+
+    def prepare_publish_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        flat_payload = _flatten_transfer_payload(payload)
+        return self._materialize_payload(flat_payload)
 
     def fetch(
         self, *, exemplar_payload: dict[str, Any], peer_status: ElasticWorkerStatus
@@ -555,6 +556,7 @@ class FileBackedPeerSyncController:
             if self.transport_kind == "jax_transfer"
             else None
         )
+        self._staged_publish: tuple[int, dict[str, Any]] | None = None
         self._diloco_state: _DiLoCoState | None = None
         self._progress_config: _ElasticProgressConfig | None = None
 
@@ -607,6 +609,15 @@ class FileBackedPeerSyncController:
         shareable_state, source_step = self._load_shareable_state(state, peer)
         self._last_applied_peer = (peer.worker_id, source_step)
         return self._apply_shareable_state(state, shareable_state, force_copy=True)
+
+    def stage_publish_state(self, state: S) -> None:
+        if self.transport_kind != "jax_transfer":
+            return
+        if int(state.step) % self.publish_interval_steps != 0:
+            return
+        assert self._transfer_runtime is not None
+        prepared_payload = self._transfer_runtime.prepare_publish_payload(self._shareable_state(state))
+        self._staged_publish = (int(state.step) - 1, prepared_payload)
 
     def maybe_update_state(self, info: "StepInfo[S]") -> "StepInfo[S]":
         if info.next_step % self.control_interval_steps == 0:
@@ -753,17 +764,20 @@ class FileBackedPeerSyncController:
     def _publish_state(self, state: S, step: int) -> None:
         if self.transport_kind == "jax_transfer":
             assert self._transfer_runtime is not None
-            try:
-                metadata = self._transfer_runtime.publish(step=step, payload=self._shareable_state(state))
-            except RuntimeError as exc:
-                if not _is_deleted_array_runtime_error(exc):
-                    raise
-                logger.warning(
-                    "Skipping elastic transfer publish at step %d due to transient donated/deleted array: %s",
-                    step,
-                    exc,
-                )
-                return
+            staged = self._staged_publish
+            if staged is not None and staged[0] == step:
+                prepared_payload = staged[1]
+                self._staged_publish = None
+            else:
+                if staged is not None and staged[0] < step:
+                    logger.warning(
+                        "Dropping stale staged elastic payload at step %d while publishing step %d",
+                        staged[0],
+                        step,
+                    )
+                    self._staged_publish = None
+                prepared_payload = self._transfer_runtime.prepare_publish_payload(self._shareable_state(state))
+            metadata = self._transfer_runtime.publish_prepared(step=step, prepared_payload=prepared_payload)
             if jax.process_index() == 0:
                 write_worker_status(
                     self.paths.worker_status_path(self.worker_id),

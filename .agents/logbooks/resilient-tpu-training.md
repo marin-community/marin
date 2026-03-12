@@ -697,3 +697,32 @@
 - Next action:
   - continue monitoring `0312f` until first worker admission
   - if the same deleted-array traceback reappears after admission, escalate to a deeper transfer payload lifecycle change
+
+### 2026-03-12 11:37 - Replaced publish-skip fallback with staged host-detached transfer payloads
+- Hypothesis:
+  - the `0312f` workaround kept workers alive but effectively disabled sync (`Skipping elastic transfer publish ...` at every publish interval); staging a detached transfer payload before hooks/checkpointing should preserve publish liveness without relying on skip-on-error behavior.
+- Command:
+  - patched:
+    - `lib/levanter/src/levanter/elastic.py`
+    - `lib/levanter/src/levanter/trainer.py`
+    - `lib/levanter/tests/test_elastic.py`
+  - verification:
+    - `uv run --with pytest --with pytest-timeout python -m pytest lib/levanter/tests/test_elastic.py -q`
+    - `./infra/pre-commit.py --fix lib/levanter/src/levanter/elastic.py lib/levanter/src/levanter/trainer.py lib/levanter/tests/test_elastic.py`
+  - live diagnosis:
+    - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 1800 --include-children /dlwh/resilient-1e19-0312f-diloco-adam100-executor-parent | rg -n "Skipping elastic transfer publish|Array has been deleted"`
+- Result:
+  - removed the runtime branch that silently skipped publish on deleted-array errors.
+  - added explicit staged publish flow:
+    - `Trainer.train_step` now calls `FileBackedPeerSyncController.stage_publish_state(...)` immediately after the train step result is available and before hooks.
+    - the JAX transfer runtime now exposes `prepare_publish_payload(...)` and `publish_prepared(...)` so detached payloads can be prepared once and published without re-touching training-state buffers.
+    - controller publish consumes staged payloads for the matching step and falls back to inline preparation only if no staged payload exists.
+  - updated tests to validate staged publish consumption and fallback preparation behavior.
+  - confirmed from live logs that `0312f` is currently emitting repeated `Skipping elastic transfer publish` warnings at steps `99, 199, ...`, indicating sync was effectively not happening under the previous workaround.
+- Interpretation:
+  - the old mitigation solved crash/restart but not actual elastic synchronization quality.
+  - staging detached payloads earlier in the step lifecycle is the correct direction for resilient sync semantics.
+- Next action:
+  - commit this patch
+  - stop `0312f` and relaunch a fresh executor-dispatched run with the same benchmark settings
+  - monitor the new run to confirm publish warnings disappear and syncs proceed
