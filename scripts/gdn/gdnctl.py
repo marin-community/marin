@@ -133,12 +133,17 @@ PROFILE_SUMMARY_CE_BWD_WHILE_REGION_PATH = (
 PROFILE_SUMMARY_CONDITIONAL_REGION_PATH = "conditional"
 PROFILE_SUMMARY_DECODER_LAYER_PREFIXES = (
     "HackableDecoderLayer/",
+    "HackableDecoderBlock/",
     "jvp(HackableTransformer)/HackableDecoderLayer/",
+    "jvp(HackableTransformer)/HackableDecoderBlock/",
     "transpose(jvp(HackableTransformer))/HackableDecoderLayer/",
+    "transpose(jvp(HackableTransformer))/HackableDecoderBlock/",
 )
 PROFILE_SUMMARY_AD_SHELL_PREFIXES = (
     "jvp(HackableTransformer)/HackableDecoderLayer/",
+    "jvp(HackableTransformer)/HackableDecoderBlock/",
     "transpose(jvp(HackableTransformer))/HackableDecoderLayer/",
+    "transpose(jvp(HackableTransformer))/HackableDecoderBlock/",
 )
 
 

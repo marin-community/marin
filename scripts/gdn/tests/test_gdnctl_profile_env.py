@@ -451,3 +451,42 @@ def test_profile_summary_attribution_computes_decoder_layer_shell_budgets() -> N
     topk = result["decoder_layer_shell_topk"]
     assert isinstance(topk, list)
     assert topk[0]["path"] == "HackableDecoderLayer/reshape:"
+
+
+def test_profile_summary_attribution_counts_decoder_block_shell_budgets() -> None:
+    summary = {
+        "hot_ops": [
+            {
+                "tf_op_path": "HackableDecoderBlock/reshape:",
+                "total_duration": 4000,
+                "count": 2,
+            },
+            {
+                "tf_op_path": "transpose(jvp(HackableTransformer))/HackableDecoderBlock/closed_call/shard_map/custom:",
+                "total_duration": 6000,
+                "count": 2,
+            },
+        ],
+        "hierarchical_regions": [],
+    }
+
+    result = gdnctl._profile_summary_attribution(
+        summary,
+        step_duration_ms=100.0,
+        upper_bound_step_ms=50.0,
+        gdn_layer_fraction=0.75,
+        gdn_layers_per_block=3,
+        gdn_block_size=4,
+        top_k=5,
+    )
+
+    assert result["decoder_layer_shell_budget_ms"] == pytest.approx(5.0)
+    assert result["ad_shell_budget_ms"] == pytest.approx(3.0)
+    assert result["sharding_shell_budget_ms"] == pytest.approx(3.0)
+    assert result["layout_shell_budget_ms"] == pytest.approx(2.0)
+    topk = result["decoder_layer_shell_topk"]
+    assert isinstance(topk, list)
+    assert [row["path"] for row in topk] == [
+        "transpose(jvp(HackableTransformer))/HackableDecoderBlock/closed_call/shard_map:",
+        "HackableDecoderBlock/reshape:",
+    ]

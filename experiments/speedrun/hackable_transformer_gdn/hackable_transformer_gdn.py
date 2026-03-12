@@ -131,6 +131,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
     gdn_segment_size: int = 16
+    gdn_use_decoder_block_boundary_prototype: bool = False
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     initializer_range: float = 0.02
@@ -376,27 +377,7 @@ class HackableDecoderLayer(eqx.Module):
     def __call__(
         self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
     ):
-        k_attn, k_mlp = maybe_rng_split(key, 2)
-        # self attention and skip connection
-        residual = x
-        x = self.input_layernorm(x)
-        if self.use_gdn:
-            attn_output = self._apply_gdn(x, mask)
-        else:
-            assert self.self_attn is not None
-            attn_output = self.self_attn(x=x, mask=mask, key=k_attn, pos_ids=pos_ids)
-        if self.post_attn_layernorm is not None:
-            attn_output = self.post_attn_layernorm(attn_output)
-        x = residual + attn_output
-
-        # MLP and skip connection
-        residual = x
-        x = self.post_attention_layernorm(x)
-        mlp_output = self.mlp(x, key=k_mlp)
-        if self.post_mlp_layernorm is not None:
-            mlp_output = self.post_mlp_layernorm(mlp_output)
-        output = residual + mlp_output
-        return output
+        return _decoder_layer_forward_impl(self, x, mask, key=key, pos_ids=pos_ids)
 
     def _apply_gdn(self, x: NamedArray, mask: NamedArray | AttentionMask | None) -> NamedArray:
         assert self.gdn is not None
@@ -421,20 +402,90 @@ class HackableDecoderLayer(eqx.Module):
         return y
 
 
+def _decoder_layer_forward_impl(
+    layer: "HackableDecoderLayer",
+    x: NamedArray,
+    mask: NamedArray | AttentionMask | None,
+    *,
+    key=None,
+    pos_ids: NamedArray | None = None,
+) -> NamedArray:
+    k_attn, k_mlp = maybe_rng_split(key, 2)
+
+    residual = x
+    x = layer.input_layernorm(x)
+    if layer.use_gdn:
+        attn_output = layer._apply_gdn(x, mask)
+    else:
+        assert layer.self_attn is not None
+        attn_output = layer.self_attn(x=x, mask=mask, key=k_attn, pos_ids=pos_ids)
+    if layer.post_attn_layernorm is not None:
+        attn_output = layer.post_attn_layernorm(attn_output)
+    x = residual + attn_output
+
+    residual = x
+    x = layer.post_attention_layernorm(x)
+    mlp_output = layer.mlp(x, key=k_mlp)
+    if layer.post_mlp_layernorm is not None:
+        mlp_output = layer.post_mlp_layernorm(mlp_output)
+    return residual + mlp_output
+
+
+class HackableDecoderBlock(eqx.Module):
+    """A fixed execution block that collapses multiple decoder-layer boundaries into one."""
+
+    layers: tuple[HackableDecoderLayer, ...]
+
+    @named_call
+    def __call__(
+        self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
+    ) -> NamedArray:
+        layer_keys = maybe_rng_split(key, len(self.layers)) if key is not None else None
+        for layer_index, layer in enumerate(self.layers):
+            layer_key = None if layer_keys is None else layer_keys[layer_index]
+            x = _decoder_layer_forward_impl(layer, x, mask, key=layer_key, pos_ids=pos_ids)
+        return x
+
+
+def _build_decoder_blocks(
+    layers: tuple[HackableDecoderLayer, ...],
+    *,
+    block_size: int,
+) -> tuple[HackableDecoderBlock, ...]:
+    # The fixed 3/4 regime repeats a small mixed layer pattern. Grouping those
+    # layers into coarser execution blocks removes per-layer BlockSeq shell
+    # without changing the leaf attention/GDN math.
+    return tuple(
+        HackableDecoderBlock(tuple(layers[start : start + block_size])) for start in range(0, len(layers), block_size)
+    )
+
+
 class HackableTransformer(eqx.Module):
     config: HackableTransformerConfig = eqx.field(static=True)
-    layers: BlockFoldable[HackableDecoderLayer]
+    layers: BlockFoldable[HackableDecoderLayer] | BlockFoldable[HackableDecoderBlock]
     norm: hnn.RmsNorm
 
     @staticmethod
     def init(config: HackableTransformerConfig, *, key):
         checkpoint_policy = ScanCheckpointPolicy._mk(config.gradient_checkpointing)
         if config.use_gated_deltanet and config.num_gdn_layers > 0:
+            if config.gdn_use_decoder_block_boundary_prototype and (
+                config.gdn_layers_per_block != 3 or config.gdn_block_size != 4
+            ):
+                raise ValueError(
+                    "decoder block boundary prototype currently requires fixed "
+                    "`gdn_layers_per_block=3` and `gdn_block_size=4`."
+                )
             layer_keys = tuple(jrandom.split(key, config.num_layers))
-            blocks = tuple(
+            layers = tuple(
                 HackableDecoderLayer.init(config, key=subkey, layer_index=i) for i, subkey in enumerate(layer_keys)
             )
-            layers = BlockSeq(blocks, config.Layers, checkpoint_policy)
+            if config.gdn_use_decoder_block_boundary_prototype:
+                block_modules = _build_decoder_blocks(layers, block_size=config.gdn_block_size)
+                block_axis = Axis("layer_block", len(block_modules))
+                layers = BlockSeq(block_modules, block_axis, checkpoint_policy)
+            else:
+                layers = BlockSeq(layers, config.Layers, checkpoint_policy)
         else:
             S = Stacked
             layers = S.init(config.Layers, HackableDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
@@ -446,7 +497,7 @@ class HackableTransformer(eqx.Module):
     def __call__(
         self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
-        keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
+        keys = maybe_rng_split(key, self.layers.Block.size) if key is not None else None
         x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
         return self.norm(x)
 
@@ -682,6 +733,7 @@ if __name__ == "__main__":
         HackableTransformerConfig,
         HackableMlp,
         HackableDecoderLayer,
+        HackableDecoderBlock,
         HackableTransformer,
         HackableEmbedding,
         HackableLMHeadModel,
