@@ -1,5 +1,5 @@
 # Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0 
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Phase 1: 50M Llama with Muon optimizer at 1x Chinchilla-optimal data.
