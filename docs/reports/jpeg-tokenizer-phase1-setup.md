@@ -973,3 +973,43 @@ The clean current reading is:
 - `K=64` is the strongest whole-image coefficient baseline we have so far
 - exact symbols remain the best near-lossless syntax/event baseline
 - bytes remain the weakest representation
+
+## Longer-Run And Larger-Model Check
+
+To test whether the ordering above was a short-run or small-model artifact, we ran:
+
+- longer continuation runs (`step 2000 -> 8000`) for:
+  - `K=64` coefficients
+  - exact symbols
+  - whole-image bytes
+- larger-model (`8 layers`, `d_model=768`) full trials to `step 2000` for the same three representations
+
+All nine related submissions (`3` long runs, `3` larger-model smokes, `3` larger-model trials) reached terminal
+`SUCCEEDED`.
+
+### Long runs (`step 8000`, small model)
+
+| Representation | Ray job | Final eval loss | Final checkpoint |
+| --- | --- | ---: | --- |
+| Exact coeffs (`K=64`) | `ray-run-dlwh-launch-20260312-052159` | `1.013` | `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-long-5272ec/checkpoints/step-8000` |
+| Exact symbols | `ray-run-dlwh-launch-20260312-052212` | `2.673` | `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-long-b4aa28/checkpoints/step-8000` |
+| Whole-image bytes | `ray-run-dlwh-launch-20260312-052225` | `3.930` | `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-swa4096-long-64db87/checkpoints/step-8000` |
+
+### Larger-model trials (`8L/768d`, `step 2000`)
+
+| Representation | Ray job | Final eval loss | Final checkpoint |
+| --- | --- | ---: | --- |
+| Exact coeffs (`K=64`) | `ray-run-dlwh-launch-20260312-055501` | `1.054` | `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-large-swa4096-trial-de16b2/checkpoints/step-2000` |
+| Exact symbols | `ray-run-dlwh-launch-20260312-052950` | `2.795` | `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-large-swa4096-trial-4b09ce/checkpoints/step-2000` |
+| Whole-image bytes | `ray-run-dlwh-launch-20260312-053012` | `4.078` | `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-large-swa4096-trial-f64948/checkpoints/step-2000` |
+
+The earlier delayed `K=64` large smoke also completed:
+
+- Ray job: `ray-run-dlwh-launch-20260312-052237`
+- final eval loss: `1.905`
+- checkpoint: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-large-swa4096-smoke-7603d1/checkpoints/step-32`
+
+This supports a stronger claim than the earlier short-run table:
+
+- the representation ordering (`K=64` > symbols > bytes) persisted under both longer optimization and modest model scaling
+- this makes it less likely that the baseline ordering is only an artifact of undertraining or too-small model capacity

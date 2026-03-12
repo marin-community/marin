@@ -1088,3 +1088,39 @@
   - `ray-run-dlwh-launch-20260312-052159` (`K=64` long)
   - `ray-run-dlwh-launch-20260312-052212` (`symbols` long)
   - `ray-run-dlwh-launch-20260312-052225` (`bytes` long)
+
+### 2026-03-12 11:36 - Long-run and larger-model trials completed
+
+- Goal:
+  - close out the launched longer/smaller-model and larger-model sweeps and check whether the representation ordering
+    persists under more training and more capacity
+- Result summary:
+  - all targeted submissions reached terminal `SUCCEEDED`
+  - long small-model (`step 8000`) final eval losses:
+    - `K=64` long (`ray-run-dlwh-launch-20260312-052159`): `1.013`
+    - `symbols` long (`ray-run-dlwh-launch-20260312-052212`): `2.673`
+    - `bytes` long (`ray-run-dlwh-launch-20260312-052225`): `3.930`
+  - larger-model (`8L/768d`, `step 2000`) final eval losses:
+    - `K=64` trial (`ray-run-dlwh-launch-20260312-055501`): `1.054`
+    - `symbols` trial (`ray-run-dlwh-launch-20260312-052950`): `2.795`
+    - `bytes` trial (`ray-run-dlwh-launch-20260312-053012`): `4.078`
+  - previously ambiguous `K=64` large smoke now confirmed succeeded:
+    - `ray-run-dlwh-launch-20260312-052237`
+    - final smoke eval loss: `1.905`
+- Key output paths:
+  - `K=64` long:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-long-5272ec/checkpoints/step-8000`
+  - `symbols` long:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-long-b4aa28/checkpoints/step-8000`
+  - `bytes` long:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-swa4096-long-64db87/checkpoints/step-8000`
+  - `K=64` large trial:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-large-swa4096-trial-de16b2/checkpoints/step-2000`
+  - `symbols` large trial:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-large-swa4096-trial-4b09ce/checkpoints/step-2000`
+  - `bytes` large trial:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-large-swa4096-trial-f64948/checkpoints/step-2000`
+- Interpretation:
+  - the core ordering is stable under both longer training and the larger model:
+    `K=64` best, `symbols` second, `bytes` last
+  - this reduces the chance that earlier ordering was a short-training or too-small-model artifact
