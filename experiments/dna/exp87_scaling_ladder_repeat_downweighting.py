@@ -74,7 +74,7 @@ LOWERCASE_WEIGHTS = {
 }
 
 # Evenly spaced in log-scale within the nano speedrun FLOP range
-FLOP_BUDGETS = (1e17, 3e17, 1e18)
+FLOP_BUDGETS = (1e17, 3e17, 1e18, 3e18)
 
 
 # =============================================================================
