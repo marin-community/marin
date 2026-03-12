@@ -22,7 +22,12 @@ from fray.v2 import ResourceConfig
 from iris.marin_fs import marin_prefix, marin_temp_bucket
 
 from experiments.embed_everything.embed import LUXICAL_MODEL, embed_documents
-from experiments.embed_everything.evaluate import evaluate_quality_probe, evaluate_topic_clusters
+from experiments.embed_everything.evaluate import (
+    evaluate_quality_mlp,
+    evaluate_quality_probe,
+    evaluate_topic_clusters,
+    evaluate_topic_reduced,
+)
 from experiments.embed_everything.oracle import OracleBackend, label_quality, label_topics
 from experiments.embed_everything.sample import sample_quality_documents, sample_topic_documents
 from marin.execution.remote import remote
@@ -197,6 +202,42 @@ eval_topic = StepSpec(
 )
 
 # ---------------------------------------------------------------------------
+# Step 3b: Investigation steps (MLP probe, dimensionality reduction)
+# ---------------------------------------------------------------------------
+
+eval_quality_mlp = StepSpec(
+    name="eval_quality_mlp",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[embed_quality, oracle_quality],
+    hash_attrs={"v": 1},
+    fn=remote(
+        lambda output_path: evaluate_quality_mlp(
+            output_path=output_path,
+            embeddings_path=embed_quality.output_path,
+            oracle_path=oracle_quality.output_path,
+        ),
+        resources=ResourceConfig.with_cpu(),
+    ),
+)
+
+eval_topic_reduced = StepSpec(
+    name="eval_topic_reduced",
+    output_path_prefix=_OUTPUT_PREFIX,
+    deps=[embed_topic, oracle_topic],
+    hash_attrs={"n_clusters": N_TOPIC_CLUSTERS, "v": 1},
+    fn=remote(
+        lambda output_path: evaluate_topic_reduced(
+            output_path=output_path,
+            embeddings_path=embed_topic.output_path,
+            oracle_path=oracle_topic.output_path,
+            n_clusters=N_TOPIC_CLUSTERS,
+        ),
+        resources=ResourceConfig.with_cpu(),
+        pip_dependency_groups=["dimred"],
+    ),
+)
+
+# ---------------------------------------------------------------------------
 # All steps in topological order for StepRunner
 # ---------------------------------------------------------------------------
 
@@ -209,6 +250,8 @@ ALL_STEPS = [
     embed_topic,
     eval_quality,
     eval_topic,
+    eval_quality_mlp,
+    eval_topic_reduced,
 ]
 
 if __name__ == "__main__":
