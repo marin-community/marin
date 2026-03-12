@@ -630,7 +630,11 @@ Examples:
 @click.option(
     "--reserve",
     multiple=True,
-    help="Reserve workers before scheduling. Format: [COUNT:]DEVICE (e.g., 4:H100x8, v5litepod-16). Can be repeated.",
+    help=(
+        "Reserve workers before scheduling. Format: [COUNT:]DEVICE "
+        "(e.g., 4:H100x8, v5litepod-16). Can be repeated. Reservation does not "
+        "attach accelerator devices to the task; use --tpu/--gpu for accelerator jobs."
+    ),
 )
 @click.option(
     "--include-children-logs/--no-include-children-logs",

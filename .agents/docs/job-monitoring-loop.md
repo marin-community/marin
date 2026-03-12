@@ -29,9 +29,11 @@ Ask:
 2. `config` - Iris config path (e.g., `lib/iris/examples/marin.yaml`)
 3. `resubmit_command` - exact Iris submit command for resubmission; must include `--no-wait`
 4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
+5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
+   `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
 
 Example Iris resubmit command:
-`uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --reserve=v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
+`uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
 
 If any required field is missing, ask for it before proceeding.
 
