@@ -7452,3 +7452,175 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Move to `L2` and sketch a specialized whole-layer GDN-bearing decoder boundary with a custom VJP that directly attacks the `HackableDecoderLayer/*` shell family quantified above.
   - Keep CE fixed and use this `S2` shell split as the acceptance baseline for any `L2` or `P2` attempt.
+
+### Iteration 89 - Coverage Slot diagnostic / transformer checkpoint-remat shell probe on the fixed-CE baseline (validated, diagnostic-only)
+
+- Coverage slot: `diagnostic`
+- Change class: `diagnostic side-arm`
+- Why this is mainline-worthy now:
+  - The latest logged `S2` baseline already pinned the current-head fixed-CE shell budgets, so another `S2` rerun would be lower information on `e2c8b056...`.
+  - `U` is lower information because CE is still bounded in this regime; the standing shell baseline carries `CE-attributed while ~= 8.86 ms`, not a renewed CE wall.
+  - Another generic `L2` or `P2` whole-layer wrapper is also lower information right now because this branch already reverted two such attempts after Iteration 88; both hid old backward closed-call time while exploding nested `HackableDecoderLayer/.../checkpoint/*` shell.
+  - Before spending another mainline whole-layer iteration, the highest-information question was whether baseline transformer checkpoint/remat is itself a first-order contributor to the decoder-layer shell tax, or whether the prior `checkpoint/*` explosion was only a wrapper artifact.
+
+- Codex loop iteration: `8 / 10`
+- Date: `2026-03-12T15:40:41Z`
+- Starting commit: `e2c8b056575293f6e6d9898fe74d477ec7d6063f`
+- Commit: `e2c8b056575293f6e6d9898fe74d477ec7d6063f`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Latest fixed-CE current-head shell baseline from Iteration 88:
+    - `throughput/mfu=6.115848`
+    - `throughput/tokens_per_second=197846.526776`
+    - `throughput/duration=0.165623327 s`
+    - `step_duration=165.623327 ms`
+    - `train_path_budget_ms=42.654889`
+    - `decoder_layer_shell_budget_ms=20.390503`
+    - `remainder_budget_ms=122.968438`
+  - Attention-only upper-bound reference held fixed by governance:
+    - `step_duration=58.229379 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot diagnostic (selected):** add an opt-in `tiny_profile.py` override for `gradient_checkpointing` and run the fixed-CE `3/4` hybrid with checkpointing disabled (`highest information now`, `low correctness risk`, `directly tests whether baseline remat is a first-order shell term`).
+  2. **Coverage slot L2:** retry whole-layer scaffold work only with an explicit residual contract and without generic whole-layer pullback nesting (`higher upside`, `high implementation risk`, `lower information until the checkpoint/remat hypothesis is resolved`).
+  3. **Coverage slot P2:** build a more explicit XLA-visible whole-layer backward contract (`highest upside`, `highest implementation risk`, `lower information until the baseline checkpoint/remat contribution is isolated`).
+
+- Selected slot rationale:
+  - This diagnostic is the shortest path to deciding whether the current shell tax is coming from the standing layer checkpoint policy or only from the reverted generic whole-layer wrappers.
+  - If baseline checkpointing is not a meaningful share of the shell budget, the next mainline `L2/P2` attempt should focus on explicit backward contracts rather than on toggling remat policy.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - Why CE stayed fixed:
+    - This is not a CE side-arm, and the diagnostic only targets whole-layer shell scaffolding around the fixed `3/4` hybrid baseline.
+
+- Expected effect on `step_duration_ms`:
+  - Expected to improve modestly if baseline remat is a material shell contributor; otherwise expected to stay flat or regress.
+- Expected effect on `upper_bound_gap_ms`:
+  - Expected to follow any step-time movement.
+- Expected effect on `decoder_layer_shell_budget_ms`:
+  - Expected to fall only if baseline remat is a first-order contributor; otherwise expected to stay essentially flat.
+- Expected effect on `gap_explained_by_decoder_layer_shell`:
+  - Expected to fall only if the shell budget actually drops.
+- Expected effect on `train_path_budget_ms`:
+  - Expected to stay roughly flat because the probe targets outer decoder-layer scaffolding rather than GDN kernel math.
+- Expected effect on `remainder_budget_ms`:
+  - Expected to fall if checkpoint/remat is a real shell term; otherwise expected to stay flat or grow.
+- Reject if `step_duration_ms` does not improve? **No for iteration validity; yes for promotion.**
+  - This is a diagnostic slot, so the point is information, not immediate promotion.
+- Reject if `decoder_layer_shell_budget_ms` stays flat/up? **No for iteration validity; yes for promotion.**
+  - Flat shell cost still answers the checkpoint hypothesis.
+- Reject if `remainder_budget_ms` grows? **No for iteration validity; yes for promotion.**
+  - A remainder regression still makes the diagnostic informative even though it blocks deployment.
+
+- Change summary:
+  - Added an opt-in `GDN_PROFILE_GRADIENT_CHECKPOINTING` override in `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`.
+  - The override accepts `true`, `false`, `offload`, `recompute`, `full`, `save_all`, and `nested`, then threads the selected value through `HackableTransformerConfig.gradient_checkpointing` via `dataclasses.replace`.
+  - The resolved checkpointing mode is now printed in the profile banner for auditability.
+  - The executable model boundary under test remained the current fixed-CE `3/4` baseline; the repository change is profiling-harness-only and opt-in.
+
+- Correctness checks:
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `88 passed, 2 skipped in 232.73s (0:03:52)`
+
+- Profile run (CE fixed to `pallas_tpu` + `pallas`):
+  - Diagnostic candidate:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_diag_i08_nockpt --profile-env GDN_PROFILE_GRADIENT_CHECKPOINTING=false --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_diag_i08_nockpt_gdn3of4_130m_ch128_seg16_20steps-cf3cc4`
+    - profiler summary: `scratch/gdn_diag_i08_nockpt_summary_200.json`
+    - attribution vs baseline: `scratch/gdn_diag_i08_nockpt_attribution.json`
+    - baseline summary reused for comparison: `scratch/gdn_s2_i03_hybrid_summary_200.json`
+    - throughput metrics use the required history-window median over steps `10-18` (`9` points)
+
+- Measured metrics (Iteration 88 fixed-CE shell baseline -> diagnostic candidate):
+  - `CE backend selected: pallas_tpu -> pallas_tpu`
+  - `CE bwd mode: pallas -> pallas`
+  - `gdn_layer_fraction: 0.833333 -> 0.833333`
+  - `Forward closed-call: 20.663807 ms -> 20.663487 ms`
+  - `Backward closed-call: 13.128370 ms -> 13.128892 ms`
+  - `while: 8.861346 ms -> 8.838234 ms`
+  - `conditional: 0.001367 ms -> 0.001370 ms`
+  - `CE-attributed while: 8.861346 ms -> 8.838234 ms`
+  - `Kernel budget: 33.792177 ms -> 33.792379 ms`
+  - `Control budget: 8.862712 ms -> 8.839604 ms`
+  - `Train-path budget: 42.654889 ms -> 42.631983 ms`
+  - `Decoder-layer shell budget: 20.390503 ms -> 20.391701 ms`
+  - `AD shell budget: 6.983898 ms -> 6.981178 ms`
+  - `Sharding shell budget: 13.244023 ms -> 13.246966 ms`
+  - `Layout shell budget: 2.178094 ms -> 2.178268 ms`
+  - `Step duration: 165.623327 ms -> 168.898625 ms`
+  - `Remainder budget: 122.968438 ms -> 126.266642 ms`
+  - `Upper-bound gap: 107.393948 ms -> 110.669246 ms`
+  - `Gap explained by train-path: 39.72% -> 38.52%`
+  - `Gap explained by decoder-layer shell: 18.99% -> 18.43%`
+  - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call 5.216143 ms; HackableDecoderLayer/closed_call/shard_map 4.525705 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.000855 ms; HackableDecoderLayer/reshape 1.831609 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any 1.788602 ms`
+  - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call 5.216143 ms; HackableDecoderLayer/closed_call/shard_map 4.525705 ms; CE forward pallas_call 2.703006 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.000855 ms; HackableDecoderLayer/reshape 1.831609 ms`
+  - `throughput/mfu: 6.115848 -> 5.997249`
+  - `throughput/tokens_per_second: 197846.526776 -> 194009.868344`
+  - `throughput/duration: 0.165623327 s -> 0.168898625 s`
+
+- Interpretation:
+  - Disabling baseline transformer checkpointing is **not** a material decoder-shell win on the standing fixed-CE `3/4` hybrid:
+    - `train_path_budget_ms` moved only `42.654889 -> 42.631983 ms` (`-0.022906 ms`)
+    - `decoder_layer_shell_budget_ms` moved only `20.390503 -> 20.391701 ms` (`+0.001198 ms`)
+    - `AD`, `sharding`, and `layout` shell sub-budgets stayed effectively flat
+  - The full step still got slower:
+    - `step_duration_ms` regressed by `3.275298 ms`
+    - `remainder_budget_ms` grew by `3.298204 ms`
+  - This means baseline BlockSeq remat/checkpointing is not the dominant explanation for the current hybrid-only decoder shell tax.
+  - The recent whole-layer wrapper regressions that exploded `HackableDecoderLayer/.../checkpoint/*` should therefore be treated as wrapper-specific scaffold failure, not as evidence that simply disabling baseline checkpointing buys back the shell budget.
+  - CE remained bounded and slightly improved rather than re-emerging as the main wall:
+    - `CE-attributed while: 8.861346 -> 8.838234 ms`
+  - Required whole-layer questions answered for this probe:
+    - the whole decoder-layer shell remains a high-teens share of the upper-bound gap even with checkpointing disabled,
+    - the dominant shell sub-budgets remain sharding first, then AD, with layout still visible but unchanged,
+    - this candidate does not shorten the full step and does not reduce shell; it only increases remainder,
+    - another generic whole-layer wrapper is still not justified by a “baseline remat is the real wall” story.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `88 passed, 2 skipped in 232.73s (0:03:52)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `Forward closed-call: 20.663807 ms -> 20.663487 ms`
+    - `Backward closed-call: 13.128370 ms -> 13.128892 ms`
+    - `while: 8.861346 ms -> 8.838234 ms`
+    - `conditional: 0.001367 ms -> 0.001370 ms`
+    - `CE-attributed while: 8.861346 ms -> 8.838234 ms`
+    - `Kernel budget: 33.792177 ms -> 33.792379 ms`
+    - `Control budget: 8.862712 ms -> 8.839604 ms`
+    - `Train-path budget: 42.654889 ms -> 42.631983 ms`
+    - `Decoder-layer shell budget: 20.390503 ms -> 20.391701 ms`
+    - `AD shell budget: 6.983898 ms -> 6.981178 ms`
+    - `Sharding shell budget: 13.244023 ms -> 13.246966 ms`
+    - `Layout shell budget: 2.178094 ms -> 2.178268 ms`
+    - `Step duration: 165.623327 ms -> 168.898625 ms`
+    - `Remainder budget: 122.968438 ms -> 126.266642 ms`
+    - `Upper-bound gap: 107.393948 ms -> 110.669246 ms`
+    - `Gap explained by train-path: 39.72% -> 38.52%`
+    - `Gap explained by decoder-layer shell: 18.99% -> 18.43%`
+    - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call 5.216143 ms; HackableDecoderLayer/closed_call/shard_map 4.525705 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.000855 ms; HackableDecoderLayer/reshape 1.831609 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any 1.788602 ms`
+    - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call 5.216143 ms; HackableDecoderLayer/closed_call/shard_map 4.525705 ms; CE forward pallas_call 2.703006 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.000855 ms; HackableDecoderLayer/reshape 1.831609 ms`
+    - `throughput/mfu=5.997249`, `throughput/tokens_per_second=194009.868344`, `throughput/duration=0.168898625 s`
+  - Governance:
+    - CE stayed fixed at `pallas_tpu` + `pallas`.
+    - This is a diagnostic slot, so it is informative rather than promotable.
+    - Rejected as a speedup candidate because `step_duration_ms` regressed.
+    - Rejected as a speedup candidate because `remainder_budget_ms` grew.
+    - `decoder_layer_shell_budget_ms` stayed flat rather than improving, so the probe does not justify promotion.
+    - This is **not** `wrong-boundary progress`; the tracked train path stayed essentially flat instead of dropping materially, so the value here is negative evidence on the checkpoint hypothesis rather than a fake train-path win.
+
+- Assessment: **validated, high-information diagnostic, and rejected as a speedup**. The fixed-CE `3/4` baseline does not owe its shell tax to the standing transformer-layer checkpoint policy. Turning checkpointing off leaves train-path and decoder-layer shell budgets unchanged while making the full step slower via remainder growth.
+- Next bold hypothesis:
+  - Return to mainline whole-layer work with an explicit residual contract and manual backward that avoids the reverted generic `filter_custom_vjp` / `checkpoint` nesting.
+  - Keep CE fixed and keep the Iteration 88 `S2` shell baseline as the acceptance reference for any future `L2` or `P2` attempt.

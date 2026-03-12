@@ -22,6 +22,8 @@ Environment overrides:
 - GDN_PROFILE_SEGMENT_SIZE: optional GDN segment size override
 - GDN_PROFILE_GDN_LAYERS_PER_BLOCK: optional GDN layer-count-per-block override
 - GDN_PROFILE_GDN_BLOCK_SIZE: optional GDN block-size override
+- GDN_PROFILE_GRADIENT_CHECKPOINTING: optional transformer-layer checkpointing override
+  (`true`, `false`, `offload`, `recompute`, `full`, `save_all`, `nested`)
 - GDN_PROFILE_ALL_TRANSFORMER: if `1`, disable all GDN layers and benchmark an all-transformer stack
 - GDN_PROFILE_RUN_NAME_PREFIX: run-name prefix (default: gdn_tinyprof)
 - GDN_PROFILE_RUN_NAME_SUFFIX: optional run-name suffix
@@ -57,6 +59,21 @@ def _env_optional_int(name: str) -> int | None:
     if value is None or value == "":
         return None
     return int(value)
+
+
+def _env_optional_gradient_checkpointing(name: str) -> bool | str | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return None
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    if normalized in {"offload", "recompute", "full", "save_all", "nested"}:
+        return normalized
+    raise ValueError(f"{name} must be one of true/false/offload/recompute/full/save_all/nested, got {value!r}")
 
 
 def _env_flag(name: str) -> bool:
@@ -95,6 +112,7 @@ if __name__ == "__main__":
     segment_size_override = _env_optional_int("GDN_PROFILE_SEGMENT_SIZE")
     gdn_layers_per_block_override = _env_optional_int("GDN_PROFILE_GDN_LAYERS_PER_BLOCK")
     gdn_block_size_override = _env_optional_int("GDN_PROFILE_GDN_BLOCK_SIZE")
+    gradient_checkpointing_override = _env_optional_gradient_checkpointing("GDN_PROFILE_GRADIENT_CHECKPOINTING")
     all_transformer = _env_flag("GDN_PROFILE_ALL_TRANSFORMER")
 
     if batch_size_override is None:
@@ -111,6 +129,8 @@ if __name__ == "__main__":
         model_cfg = dataclasses.replace(model_cfg, gdn_layers_per_block=gdn_layers_per_block_override)
     if gdn_block_size_override is not None:
         model_cfg = dataclasses.replace(model_cfg, gdn_block_size=gdn_block_size_override)
+    if gradient_checkpointing_override is not None:
+        model_cfg = dataclasses.replace(model_cfg, gradient_checkpointing=gradient_checkpointing_override)
     if all_transformer:
         model_cfg = dataclasses.replace(
             model_cfg,
@@ -167,6 +187,7 @@ if __name__ == "__main__":
         f"all_transformer={resolved_all_transformer} "
         f"gdn_layers_per_block={model_cfg.gdn_layers_per_block} "
         f"gdn_block_size={model_cfg.gdn_block_size} "
+        f"gradient_checkpointing={model_cfg.gradient_checkpointing} "
         f"gdn_layer_fraction={gdn_layer_fraction:.6f}",
         flush=True,
     )
