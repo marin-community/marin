@@ -42,6 +42,9 @@ job = client.submit(
 job.wait()
 ```
 
+For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
+`--reserve ...` only holds capacity for scheduling and does not attach accelerator devices to the task container.
+
 ## Architecture
 
 ```
