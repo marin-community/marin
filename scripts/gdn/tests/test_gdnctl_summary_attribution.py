@@ -105,6 +105,12 @@ def test_profile_summary_attribution_extracts_tracked_and_remainder_budgets() ->
     assert math.isclose(metrics["remainder_budget_ms"], 87.998)
     assert math.isclose(metrics["upper_bound_gap_ms"], 60.0)
     assert math.isclose(metrics["gap_explained_by_train_path"], 12.002 / 60.0)
+    assert math.isclose(metrics["decoder_layer_shell_budget_ms"], 2.75)
+    assert math.isclose(metrics["ad_shell_budget_ms"], 0.0)
+    assert math.isclose(metrics["sharding_shell_budget_ms"], 2.0)
+    assert math.isclose(metrics["layout_shell_budget_ms"], 0.75)
+    assert math.isclose(metrics["residual_add_shell_budget_ms"], 0.0)
+    assert math.isclose(metrics["gap_explained_by_decoder_layer_shell"], 2.75 / 60.0)
 
     remainder_bucket_ms = metrics["remainder_bucket_ms"]
     assert isinstance(remainder_bucket_ms, dict)
@@ -126,6 +132,10 @@ def test_profile_summary_attribution_extracts_tracked_and_remainder_budgets() ->
         "HackableDecoderLayer/reshape:",
         "HackableDecoderLayer/shard_map/pallas_call:",
     ]
+
+    residual_add_topk = metrics["residual_add_shell_topk"]
+    assert isinstance(residual_add_topk, list)
+    assert residual_add_topk == []
 
 
 def test_profile_summary_step_divisor_falls_back_to_gcd_without_ce_forward() -> None:

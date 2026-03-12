@@ -7808,3 +7808,196 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - If whole-layer work continues, it should avoid generic block/module JVP shell and instead make the backward contract explicit enough that `HackableDecoderBlock/*` pallas calls do not remain trapped inside AD shell.
   - Keep CE fixed and keep the Iteration 88 shell baseline as the acceptance reference; do not treat vanished legacy train-path buckets as wins unless `step_duration_ms`, `decoder_layer_shell_budget_ms`, and `remainder_budget_ms` all improve together.
+
+### Iteration 91 - Coverage Slot S2 / residual-add shell split + fresh fixed-CE hybrid-vs-attention refresh (validated, attribution-only)
+
+- Coverage slot: `S2`
+- Change class: `decoder shell attribution`
+- Why this is mainline-worthy now:
+  - The current validated `L2` and `P2` attempts already failed to reduce the full step, so another whole-layer boundary prototype would be lower information unless the shell target is tighter.
+  - The standing `S2` shell family still lumped together sharding, AD, layout, and residual/add effects, which made it unclear whether the generic `HackableDecoderLayer/*` family was isolating hybrid-only shell or also charging normal layer body compute.
+  - The smallest high-information move was therefore another fixed-CE `S2` refresh with an explicit residual/add split and a fresh matched attention-only control on the current head.
+
+- Codex loop iteration: `10 / 10`
+- Date: `2026-03-12T17:57:42Z`
+- Starting commit: `0f41318bb46098389748f426fa7bed2dc076f840`
+- Commit: `final validated result commit descended from 0f41318bb46098389748f426fa7bed2dc076f840`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Fixed-CE shell baseline held as the acceptance reference:
+    - `throughput/mfu=6.115848`
+    - `throughput/tokens_per_second=197846.526776`
+    - `throughput/duration=0.165623327 s`
+    - `step_duration=165.623327 ms`
+    - `train_path_budget_ms=42.654889`
+    - `decoder_layer_shell_budget_ms=20.390503`
+    - `remainder_budget_ms=122.968438`
+  - Attention-only upper-bound step held fixed by governance:
+    - `step_duration=58.229379 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot S2 (selected):** widen shell attribution with an explicit residual/add split and rerun the matched fixed-CE hybrid vs attention-only pair on the current head (`highest information`, `low implementation risk`, `directly tests whether the current shell family is isolating hybrid-only tax or over-charging normal layer body compute`).
+  2. **Coverage slot L2:** build a more explicit whole-layer skeleton with a narrower backward contract (`medium upside`, `high correctness risk`, `lower information until the shell target is narrowed`).
+  3. **Coverage slot P2:** try a second whole-layer prototype targeted at residual/add and sharding shell (`high upside`, `high regression risk`, `lower information after the last boundary prototype regressed without a cleaner shell map`).
+
+- Selected slot rationale:
+  - `S2` stays the best use of the final iteration because the current shell family itself needed another pass before spending more budget on boundary work.
+  - The chosen tooling change is the smallest executable change that answers whether `residual/add` is first-order and whether `HackableDecoderLayer/*` is a clean proxy for hybrid-only shell tax.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - Why CE stayed fixed:
+    - This is not a CE side-arm, and the fresh matched runs again kept CE bounded rather than re-establishing CE as the dominant unresolved wall.
+
+- Expected effect on `step_duration_ms`:
+  - No intended speedup; expected to stay near the standing fixed-`3/4` regime.
+- Expected effect on `upper_bound_gap_ms`:
+  - No intended movement beyond run noise; expected to stay around the standing `~109-110 ms` hybrid-vs-attention gap.
+- Expected effect on `decoder_layer_shell_budget_ms`:
+  - Expected to stay near the existing `~20 ms` family total while making residual/add shell explicit.
+- Expected effect on `gap_explained_by_decoder_layer_shell`:
+  - Expected to remain in the high-teens if the existing shell family was directionally right.
+- Expected effect on `train_path_budget_ms`:
+  - Expected to stay near the standing `~42-43 ms` train-path budget.
+- Expected effect on `remainder_budget_ms`:
+  - Expected to stay near the standing `~123-125 ms` remainder budget; the value of the slot is attribution, not a shorter step.
+- Reject if `step_duration_ms` does not improve? **No for iteration validity; yes for promotion.**
+  - This is a measurement-only `S2` slot.
+- Reject if `decoder_layer_shell_budget_ms` stays flat/up? **No for iteration validity; yes for promotion.**
+  - The point of the slot is a clearer shell split, not an immediate shell reduction.
+- Reject if `remainder_budget_ms` grows? **No for iteration validity; yes for promotion.**
+  - Any growth still blocks a speedup claim, but not the value of the attribution result.
+
+- Change summary:
+  - Added `residual_add_shell_budget_ms`, `residual_add_shell_bucket_ms`, and `residual_add_shell_topk` to `scripts/gdn/gdnctl.py` summary attribution.
+  - Added decoder-shell add detection via a dedicated regex predicate and taught log metric parsing to recognize `Residual/add shell budget`.
+  - Extended `scripts/gdn/tests/test_gdnctl_summary_attribution.py` and `scripts/gdn/tests/test_gdnctl_profile_env.py` to cover the new shell split.
+  - No GDN kernel, model, or CE-backend code changed.
+
+- Correctness checks:
+  - Local tooling slice:
+    - `uv run python -m pytest -o addopts='' scripts/gdn/tests/test_gdnctl_summary_attribution.py scripts/gdn/tests/test_gdnctl_profile_env.py -q`
+    - result: `24 passed, 1 warning in 0.04s`
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `88 passed, 2 skipped in 232.85s (0:03:52)`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - Fresh hybrid rerun:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_s2_i10_hybrid_shellsplit --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s2_i10_hybrid_shellsplit_gdn3of4_130m_ch128_seg16_2-a20292`
+    - profiler summary: `scratch/gdn_s2_i10_hybrid_shellsplit_summary_200.json`
+  - Fresh attention-only control:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_s2_i10_attn_shellsplit --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s2_i10_attn_shellsplit_attnonly_130m_ch128_seg16_20-a14e3a`
+    - profiler summary: `scratch/gdn_s2_i10_attn_shellsplit_summary_200.json`
+  - Combined attribution artifact:
+    - `scratch/gdn_s2_i10_shellsplit_attribution.json`
+  - Throughput metrics use the required history-window median over steps `10-18` (`9` points).
+
+- Refreshed attribution metrics (fresh attention-only control -> fresh hybrid rerun):
+  - `CE backend selected: pallas_tpu -> pallas_tpu`
+  - `CE bwd mode: pallas -> pallas`
+  - `gdn_layer_fraction: 0.000000 -> 0.833333`
+  - `Forward closed-call: 0.000000 ms -> 20.663650 ms`
+  - `Backward closed-call: 0.000000 ms -> 13.128330 ms`
+  - `while: 8.558775 ms -> 8.836909 ms`
+  - `conditional: 0.001157 ms -> 0.001370 ms`
+  - `CE-attributed while: 8.558775 ms -> 8.836909 ms`
+  - `Kernel budget: 0.000000 ms -> 33.791981 ms`
+  - `Control budget: 8.559932 ms -> 8.838279 ms`
+  - `Train-path budget: 8.559932 ms -> 42.630260 ms`
+  - `Decoder-layer shell budget: 20.124841 ms -> 20.390259 ms`
+  - `AD shell budget: 0.000000 ms -> 6.983694 ms`
+  - `Sharding shell budget: 11.795047 ms -> 13.243783 ms`
+  - `Layout shell budget: 0.868348 ms -> 2.179427 ms`
+  - `Residual/add shell budget: 0.324999 ms -> 2.322127 ms`
+  - `Step duration: 57.130479 ms -> 167.381340 ms`
+  - `Remainder budget: 48.570547 ms -> 124.751080 ms`
+  - `Upper-bound gap: 0.000000 ms -> 110.250861 ms`
+  - `Gap explained by train-path: 0.00% -> 38.67%`
+  - `Gap explained by decoder-layer shell: 0.00% -> 18.49%`
+  - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call 5.214298 ms; HackableDecoderLayer/closed_call/shard_map 4.521973 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.003600 ms; HackableDecoderLayer/reshape 1.832694 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any 1.789335 ms`
+  - `residual_add_shell_topk: transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any 1.789335 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/jit(silu)/add_any 0.532793 ms`
+  - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call 5.214298 ms; HackableDecoderLayer/closed_call/shard_map 4.521973 ms; CE forward pallas_call 2.703175 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.003600 ms; HackableDecoderLayer/reshape 1.832694 ms`
+  - Hybrid `throughput/mfu=6.051613`, `throughput/tokens_per_second=195768.536687`, `throughput/duration=0.167381340 s`
+  - Control `throughput/mfu=21.355772`, `throughput/tokens_per_second=573564.243988`, `throughput/duration=0.057130479 s`
+
+- Interpretation:
+  - The fresh hybrid rerun lands close to the carried fixed-CE shell baseline on the current head:
+    - `train_path_budget_ms: 42.654889 -> 42.630260` (`-0.024629 ms`)
+    - `decoder_layer_shell_budget_ms: 20.390503 -> 20.390259` (`-0.000244 ms`)
+    - `step_duration_ms: 165.623327 -> 167.381340` (`+1.758013 ms`)
+    - `remainder_budget_ms: 122.968438 -> 124.751080` (`+1.782642 ms`)
+    - This is informative but not promotable: executable code is unchanged apart from attribution tooling.
+  - The new residual/add split shows that residual/add work is real but secondary:
+    - hybrid residual/add shell budget `2.322127 ms`
+    - control residual/add shell budget `0.324999 ms`
+    - matched delta `+1.997128 ms`
+    - this is visibly smaller than the hybrid AD shell (`6.983694 ms`) and sharding shell (`13.243783 ms`)
+  - The highest-information finding is that the current broad `HackableDecoderLayer/*` family is **too broad** to stand in for “hybrid-only shell tax” by itself:
+    - the fresh attention-only control still carries `20.124841 ms` inside that family,
+    - and its top buckets are normal attention/MLP body ops under `HackableDecoderLayer/Attention/*` and `HackableDecoderLayer/HackableMlp/*`,
+    - while the hybrid run is dominated by the generic scaffold buckets the loop actually cares about: `shard_map/pallas_call`, `closed_call/shard_map`, `reshape`, `add_any`, `select_n`, and `scatter-add`
+  - This means the right mainline question changed slightly:
+    - the generic `HackableDecoderLayer/*` prefix family still explains about `18.49%` of the matched hybrid-vs-attention gap,
+    - but that high-teens share is not cleanly hybrid-only because the attention-only control also pays substantial non-shell layer-body cost under the same prefix
+  - CE stayed bounded:
+    - `CE-attributed while` moved only `8.558775 -> 8.836909 ms`
+    - `CE forward pallas_call` stayed flat near `2.703 ms`
+  - Fresh vs governance-fixed upper bound:
+    - the fresh attention-only control came in faster than the fixed governance ceiling (`57.130479 ms` vs `58.229379 ms`)
+    - so the matched-pair gap is `110.250861 ms`, while the gap against the fixed governance ceiling is `109.151961 ms`
+  - Required whole-layer questions answered:
+    - the whole decoder-layer prefix family still lands in the high teens of the hybrid-vs-attention gap, but it is not a clean hybrid-only shell proxy
+    - sharding remains the largest hybrid shell sub-budget, AD is second, and residual/add plus layout are secondary but visible
+    - this candidate does not shorten the full step; it only improves attribution
+    - no outer control structure changed here; the value is that future `L2`/`P2` work should target the hybrid-specific generic shell buckets rather than all `HackableDecoderLayer/*` indiscriminately
+    - this is justified after the whole-layer-shell evidence because it narrows the shell target rather than spending another iteration on same-boundary GDN math
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `88 passed, 2 skipped in 232.85s (0:03:52)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `Forward closed-call: 0.000000 ms -> 20.663650 ms`
+    - `Backward closed-call: 0.000000 ms -> 13.128330 ms`
+    - `while: 8.558775 ms -> 8.836909 ms`
+    - `conditional: 0.001157 ms -> 0.001370 ms`
+    - `CE-attributed while: 8.558775 ms -> 8.836909 ms`
+    - `Kernel budget: 0.000000 ms -> 33.791981 ms`
+    - `Control budget: 8.559932 ms -> 8.838279 ms`
+    - `Train-path budget: 8.559932 ms -> 42.630260 ms`
+    - `Decoder-layer shell budget: 20.124841 ms -> 20.390259 ms`
+    - `AD shell budget: 0.000000 ms -> 6.983694 ms`
+    - `Sharding shell budget: 11.795047 ms -> 13.243783 ms`
+    - `Layout shell budget: 0.868348 ms -> 2.179427 ms`
+    - `Step duration: 57.130479 ms -> 167.381340 ms`
+    - `Remainder budget: 48.570547 ms -> 124.751080 ms`
+    - `Upper-bound gap: 0.000000 ms -> 110.250861 ms`
+    - `Gap explained by train-path: 0.00% -> 38.67%`
+    - `Gap explained by decoder-layer shell: 0.00% -> 18.49%`
+    - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call 5.214298 ms; HackableDecoderLayer/closed_call/shard_map 4.521973 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.003600 ms; HackableDecoderLayer/reshape 1.832694 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any 1.789335 ms`
+    - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call 5.214298 ms; HackableDecoderLayer/closed_call/shard_map 4.521973 ms; CE forward pallas_call 2.703175 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map 2.003600 ms; HackableDecoderLayer/reshape 1.832694 ms`
+    - `throughput/mfu=6.051613`, `throughput/tokens_per_second=195768.536687`, `throughput/duration=0.167381340 s`
+  - Governance:
+    - This is a validated `S2` attribution slot, so it is informative rather than promotable.
+    - CE stayed fixed at `pallas_tpu` + `pallas`.
+    - Rejected as a speedup candidate because `step_duration_ms` regressed relative to the carried fixed-CE shell baseline.
+    - Rejected as a speedup candidate because `remainder_budget_ms` grew relative to the carried fixed-CE shell baseline.
+    - `decoder_layer_shell_budget_ms` stayed effectively flat relative to the carried fixed-CE shell baseline, so the result does not justify promotion.
+    - This is **not** `wrong-boundary progress`; the executable path did not claim a faster train path or a shell reduction. The value is that it narrows which decoder-layer buckets future `L2`/`P2` work should actually attack.
+
+- Assessment: **validated, attribution-only, and high-information**. The widened split makes residual/add measurable, but the more important result is that the current `HackableDecoderLayer/*` family is not a clean hybrid-only shell proxy because the attention-only control still carries about `20 ms` there from normal layer body compute. Future whole-layer work should therefore target the generic hybrid buckets (`shard_map/pallas_call`, `closed_call/shard_map`, `reshape`, `add_any`, `select_n`, `scatter-add`) rather than treating every `HackableDecoderLayer/*` op as shell tax.
+- Next bold hypothesis:
+  - Keep CE fixed and tighten `decoder_layer_shell_budget_ms` to a hybrid-specific generic shell family before spending another `L2` or `P2` iteration.
+  - When whole-layer work resumes, make it beat the concrete generic buckets above, not the whole `HackableDecoderLayer/*` prefix family.

@@ -447,10 +447,14 @@ def test_profile_summary_attribution_computes_decoder_layer_shell_budgets() -> N
     assert result["ad_shell_budget_ms"] == pytest.approx(3.0)
     assert result["sharding_shell_budget_ms"] == pytest.approx(3.0)
     assert result["layout_shell_budget_ms"] == pytest.approx(4.0)
+    assert result["residual_add_shell_budget_ms"] == pytest.approx(2.0)
     assert result["gap_explained_by_decoder_layer_shell"] == pytest.approx(9.0 / 50.0)
     topk = result["decoder_layer_shell_topk"]
     assert isinstance(topk, list)
     assert topk[0]["path"] == "HackableDecoderLayer/reshape:"
+    residual_add_topk = result["residual_add_shell_topk"]
+    assert isinstance(residual_add_topk, list)
+    assert residual_add_topk == [{"path": "HackableDecoderLayer/add_any:", "ms": 2.0}]
 
 
 def test_profile_summary_attribution_counts_decoder_block_shell_budgets() -> None:
@@ -484,6 +488,7 @@ def test_profile_summary_attribution_counts_decoder_block_shell_budgets() -> Non
     assert result["ad_shell_budget_ms"] == pytest.approx(3.0)
     assert result["sharding_shell_budget_ms"] == pytest.approx(3.0)
     assert result["layout_shell_budget_ms"] == pytest.approx(2.0)
+    assert result["residual_add_shell_budget_ms"] == pytest.approx(0.0)
     topk = result["decoder_layer_shell_topk"]
     assert isinstance(topk, list)
     assert [row["path"] for row in topk] == [

@@ -145,6 +145,7 @@ PROFILE_SUMMARY_AD_SHELL_PREFIXES = (
     "transpose(jvp(HackableTransformer))/HackableDecoderLayer/",
     "transpose(jvp(HackableTransformer))/HackableDecoderBlock/",
 )
+PROFILE_SUMMARY_DECODER_ADD_SHELL_RE = re.compile(r"(^|/)add(_any)?(?::|/|$)")
 
 
 def _echo_cmd(cmd: Sequence[str]) -> None:
@@ -774,6 +775,8 @@ def _normalize_iteration_metric_label(label: str) -> str | None:
         return "sharding_shell_budget_ms"
     if normalized.startswith("layout shell budget"):
         return "layout_shell_budget_ms"
+    if normalized.startswith("residual/add shell budget") or normalized.startswith("add shell budget"):
+        return "residual_add_shell_budget_ms"
     if normalized.startswith("shard_map"):
         return "shard_map_ms"
     if normalized.startswith("all-gather"):
@@ -2611,6 +2614,10 @@ def _is_layout_shell_bucket(path: str) -> bool:
     return any(token in path for token in ("/reshape", "/transpose", "reshape:", "transpose:"))
 
 
+def _is_residual_add_shell_bucket(path: str) -> bool:
+    return _is_decoder_layer_shell_bucket(path) and PROFILE_SUMMARY_DECODER_ADD_SHELL_RE.search(path) is not None
+
+
 def _profile_summary_attribution(
     summary: dict[str, object],
     *,
@@ -2685,6 +2692,10 @@ def _profile_summary_attribution(
         decoder_layer_shell_bucket_ms,
         include_predicate=_is_layout_shell_bucket,
     )
+    residual_add_shell_bucket_ms = _profile_summary_bucket_subset(
+        decoder_layer_shell_bucket_ms,
+        include_predicate=_is_residual_add_shell_bucket,
+    )
 
     hotspot_metrics: dict[str, object] = {
         "per_step_divisor": divisor,
@@ -2712,6 +2723,9 @@ def _profile_summary_attribution(
         "layout_shell_budget_ms": sum(layout_shell_bucket_ms.values()),
         "layout_shell_bucket_ms": layout_shell_bucket_ms,
         "layout_shell_topk": _profile_summary_top_buckets(layout_shell_bucket_ms, top_k=top_k),
+        "residual_add_shell_budget_ms": sum(residual_add_shell_bucket_ms.values()),
+        "residual_add_shell_bucket_ms": residual_add_shell_bucket_ms,
+        "residual_add_shell_topk": _profile_summary_top_buckets(residual_add_shell_bucket_ms, top_k=top_k),
     }
     hotspot_metrics["train_path_budget_ms"] = float(hotspot_metrics["kernel_budget_ms"]) + float(
         hotspot_metrics["control_budget_ms"]
