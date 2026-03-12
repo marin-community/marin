@@ -1,4 +1,4 @@
-// Copyright 2025 The Marin Authors
+// Copyright The Marin Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -78,6 +78,30 @@ message ListActorsResponse {
   repeated ActorInfo actors = 1;
 }
 
+// ============ Long-Running Operations ============
+// For methods that take a long time (e.g. run_pipeline), clients use
+// StartOperation + GetOperation polling instead of a blocking Call RPC.
+
+message Operation {
+  string operation_id = 1;
+
+  enum State {
+    PENDING = 0;
+    RUNNING = 1;
+    SUCCEEDED = 2;
+    FAILED = 3;
+    CANCELLED = 4;
+  }
+  State state = 2;
+
+  bytes serialized_result = 3;   // set on SUCCEEDED
+  ActorError error = 4;          // set on FAILED
+}
+
+message OperationId {
+  string operation_id = 1;
+}
+
 // ============ Actor Service ============
 // Each ActorServer exposes this service
 
@@ -86,4 +110,9 @@ service ActorService {
   rpc HealthCheck(Empty) returns (HealthResponse);
   rpc ListMethods(ListMethodsRequest) returns (ListMethodsResponse);
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse);
+
+  // Long-running operations
+  rpc StartOperation(ActorCall) returns (Operation);
+  rpc GetOperation(OperationId) returns (Operation);
+  rpc CancelOperation(OperationId) returns (Operation);
 }

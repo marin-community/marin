@@ -1,7 +1,6 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 #
 # SPDX-License-Identifier: Apache-2.0
-
 
 # Support for FP8
 # Much of this is lifted from FLAX

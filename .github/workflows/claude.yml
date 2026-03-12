@@ -34,6 +34,7 @@ jobs:
         github.event.issue.author_association == 'MEMBER' ||
         github.event.issue.author_association == 'COLLABORATOR') &&
        (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -47,19 +48,155 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
+          claude_args: |
+            --model opus
+            --max-turns 250
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
+            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. In any follow-up comments on issues or PRs, state how you tested your changes (which tests you ran and their results)."
 
-          # Allow rebase and pre-commit operations
-          claude_args: '--allowed-tools "Bash(git *)" "Bash(./infra/pre-commit.py:*)" "Bash(uv *)" "Bash(pytest *)" "Bash(gh *)"'
+  triage:
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'opened' &&
+      (github.event.issue.author_association == 'OWNER' ||
+       github.event.issue.author_association == 'MEMBER' ||
+       github.event.issue.author_association == 'COLLABORATOR') &&
+      !contains(github.event.issue.body, '@claude') &&
+      !contains(github.event.issue.title, '@claude')
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Triage Issue
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          additional_permissions: |
+            actions: read
+          prompt: |
+            ISSUE: #${{ github.event.issue.number }}
+            TITLE: ${{ github.event.issue.title }}
+
+            Read AGENTS.md and .agents/skills/fix-issue/SKILL.md.
+
+            ## Step 1: Relevance Check
+            Read the issue title and body. If the issue is NOT obviously about a code change
+            (e.g. "run experiment X", "suggest an alternative backend for Y", "benchmark Z",
+            "investigate performance of W", feature discussions, research questions, or operational requests),
+            then exit immediately without posting any comment.
+
+            ## Step 2: Scope Assessment
+            Investigate the codebase to understand the issue. Determine whether the fix is
+            small and self-contained (e.g. a bug fix, adding a small feature, changing styles,
+            config tweaks) or whether it requires broader design work.
+
+            ## Step 3a: Small Fix
+            If the change is small and self-contained, follow the fix-issue skill workflow
+            (already loaded above). Post a brief comment on the issue summarizing your fix
+            and linking the PR when done.
+
+            ## Step 3b: Research Report
+            If the change is larger or needs design input:
+            - Analyze the codebase: identify affected files, modules, and interfaces
+            - Use web search if the issue involves external libraries or standards
+            - Post a comment (prefixed "🤖 Research Report:") covering:
+              * Affected files and modules
+              * Viable design directions with trade-offs
+              * Your recommended approach
+            - Do not attempt implementation
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 100
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*),Bash(cat:*)"
+
+  autofix:
+    if: |
+      github.event_name == 'pull_request_review' &&
+      (github.event.review.author_association == 'OWNER' ||
+       github.event.review.author_association == 'MEMBER' ||
+       github.event.review.author_association == 'COLLABORATOR') &&
+      contains(github.event.review.body, 'autofix') &&
+      !contains(github.event.review.body, '@claude')
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Apply Autofix
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          prompt: |
+            PR: #${{ github.event.pull_request.number }}
+            REVIEW: ${{ github.event.review.body }}
+
+            A reviewer has requested autofix. Read AGENTS.md.
+
+            1. Fetch the full review with inline comments: `gh pr view ${{ github.event.pull_request.number }} --json reviews,comments`
+            2. Fetch inline PR review comments: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
+            3. Apply ALL actionable changes from the review comments to the code.
+            4. Run ./infra/pre-commit.py --all-files --fix
+            5. Run uv run pytest -m 'not slow' on affected tests
+            6. Commit and push changes to the PR branch
+            7. Post a comment summarizing what was changed, prefixed with "🤖 Autofix:"
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 100
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"

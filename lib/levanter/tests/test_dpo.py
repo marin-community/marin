@@ -1,12 +1,8 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import os
-import subprocess
-import sys
 import tempfile
-import textwrap
 from pathlib import Path
 
 import equinox as eqx
@@ -14,15 +10,29 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
+import numpy as np
 import pytest
 from transformers import AutoTokenizer
 
 import haliax as hax
+from haliax import Axis
+from haliax.partitioning import set_mesh
 from haliax.quantization import apply_updates, partition_for_grad_overwrite
 from haliax.jax_utils import is_jax_array_like
+from jax.sharding import Mesh
 
-from levanter.data.text import DpoExample, PreferenceChatProcessor, PreferencePairDataset
-from levanter.main.train_dpo import DpoModel, _logp_sum, dpo_loss_from_logps
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.mixture import MixtureDataset
+from levanter.data.text import (
+    DatasetComponent,
+    DpoExample,
+    PreferenceChatLmDatasetFormat,
+    PreferenceChatProcessor,
+    PreferenceLmDataConfig,
+    PreferencePairDataset,
+    TextLmDatasetFormat,
+)
+from levanter.main.train_dpo import DpoModel, _build_dpo_dataset, _logp_sum, dpo_loss_from_logps
 from levanter.metrics import Metric
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.lm_model import LmExample
@@ -162,6 +172,53 @@ def test_preference_chat_processor_skips_invalid_rows(tokenizer_path: Path):
 
     result = processor(batch)
     assert len(result) == 1
+
+
+def test_preference_lm_data_config_rejects_non_preference_format():
+    with pytest.raises(ValueError, match="requires preference_chat"):
+        PreferenceLmDataConfig(components={"train": DatasetComponent(format=TextLmDatasetFormat())})
+
+
+def test_preference_lm_data_config_rejects_packed_preference_format():
+    with pytest.raises(ValueError, match="Packed preference_chat datasets are not supported"):
+        PreferenceLmDataConfig(
+            components={
+                "train": DatasetComponent(format=PreferenceChatLmDatasetFormat(pack=True)),
+            }
+        )
+
+
+def test_preference_lm_data_config_rejects_non_raise_slice_strategy():
+    with pytest.raises(ValueError, match="slice_strategy must be 'raise'"):
+        PreferenceLmDataConfig(
+            components={
+                "train": DatasetComponent(format=PreferenceChatLmDatasetFormat(slice_strategy="left")),
+            }
+        )
+
+
+def test_build_dpo_dataset_with_strict_preference_config(monkeypatch):
+    config = PreferenceLmDataConfig(
+        components={
+            "pref": DatasetComponent(format=PreferenceChatLmDatasetFormat()),
+        },
+        shuffle=False,
+    )
+
+    monkeypatch.setattr(
+        PreferenceLmDataConfig,
+        "build_caches",
+        lambda self, split: {"pref": object()},
+    )
+
+    monkeypatch.setattr(
+        "levanter.main.train_dpo.dataset_for_preference_format",
+        lambda format, Pos, cache: ListAsyncDataset([0]),
+    )
+
+    dataset = _build_dpo_dataset(config, hax.Axis("position", 8), key=jrandom.PRNGKey(0))
+    assert isinstance(dataset, MixtureDataset)
+    assert set(dataset.datasets.keys()) == {"pref"}
 
 
 def test_dpo_loss_decreases_with_margin():
@@ -322,52 +379,21 @@ def test_eval_model_fills_missing_namedarrays_from_model():
 
 
 def test_vmapped_init_with_sharding_handles_layer_axis():
-    script = textwrap.dedent(
-        """
-        import numpy as np
-        import jax
-        import haliax as hax
-        from haliax import Axis
-        from haliax.partitioning import set_mesh
-        from jax.sharding import Mesh
+    devices = jax.devices()
+    if len(devices) < 4:
+        pytest.skip(f"requires at least 4 JAX devices; found {len(devices)}")
 
-        Embed = Axis("embed", 32)
-        Qkv = Axis("qkv", 3)
-        Heads = Axis("heads", 4)
-        HeadSize = Axis("head_size", 8)
-        Layers = Axis("layers", 5)
+    Embed = Axis("embed", 32)
+    Qkv = Axis("qkv", 3)
+    Heads = Axis("heads", 4)
+    HeadSize = Axis("head_size", 8)
+    Layers = Axis("layers", 5)
 
-        def init_fn(key):
-            return hax.random.truncated_normal(key, (Embed, Qkv, Heads, HeadSize), -3, 3)
+    def init_fn(key):
+        return hax.random.truncated_normal(key, (Embed, Qkv, Heads, HeadSize), -3, 3)
 
-        devices = jax.devices()
-        assert len(devices) == 4, f"Expected 4 devices, got {len(devices)}"
-        mesh = Mesh(np.array(devices).reshape((4, 1)), ("data", "model"))
-
-        with set_mesh(mesh), hax.axis_mapping({"embed": "data", "heads": "model"}):
-            keys = jax.random.split(jax.random.PRNGKey(0), Layers.size)
-            out = hax.vmap(init_fn, Layers)(keys)
-            assert out.axes[0].name == "layers"
-        """
-    )
-    env = os.environ.copy()
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    env.setdefault("JAX_PLATFORM_NAME", "cpu")
-    repo_root = Path(__file__).resolve().parents[2]
-    pythonpath = os.pathsep.join(
-        [
-            str(repo_root / "lib" / "haliax" / "src"),
-            str(repo_root / "lib" / "levanter" / "src"),
-            env.get("PYTHONPATH", ""),
-        ]
-    )
-    env["PYTHONPATH"] = pythonpath
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr + result.stdout
+    mesh = Mesh(np.array(devices[:4]).reshape((4, 1)), ("data", "model"))
+    with set_mesh(mesh), hax.axis_mapping({"embed": "data", "heads": "model"}):
+        keys = jax.random.split(jax.random.PRNGKey(0), Layers.size)
+        out = hax.vmap(init_fn, Layers)(keys)
+        assert out.axes[0].name == "layers"

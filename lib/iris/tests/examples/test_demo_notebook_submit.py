@@ -1,24 +1,13 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
 
 import pytest
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager
-from iris.cluster.vm.config import IrisConfig
+from iris.cluster.config import IrisConfig
+from iris.cluster.controller.local import LocalController
 from iris.rpc import config_pb2
 
 
@@ -26,33 +15,29 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig()
     cpu_sg = config.scale_groups["cpu"]
     cpu_sg.name = "cpu"
-    cpu_sg.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
     cpu_sg.min_slices = 0
     cpu_sg.max_slices = 1
-    cpu_sg.slice_size = 1
-    cpu_sg.resources.cpu = 1
+    cpu_sg.num_vms = 1
+    cpu_sg.resources.cpu_millicores = 1000
     cpu_sg.resources.memory_bytes = 1024**3
     cpu_sg.resources.disk_bytes = 0
-    cpu_sg.resources.gpu_count = 0
-    cpu_sg.resources.tpu_count = 0
+    cpu_sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    cpu_sg.resources.device_count = 0
     return IrisConfig(config).as_local().proto
 
 
 @pytest.fixture
 def demo_client() -> IrisClient:
-    manager = ClusterManager(_make_demo_config())
-    manager.start()
+    controller = LocalController(_make_demo_config())
+    address = controller.start()
     try:
-        controller_url = manager.controller.discover()
-        assert controller_url is not None
-
         client = IrisClient.remote(
-            controller_url,
+            address,
             workspace=Path(__file__).resolve().parents[3],
         )
         yield client
     finally:
-        manager.stop()
+        controller.stop()
 
 
 def test_demo_notebook_hello_world_submit(demo_client: IrisClient) -> None:
@@ -84,7 +69,7 @@ def test_demo_notebook_name_normalizes_to_absolute_job_id(demo_client: IrisClien
     # to absolute job IDs before reaching the controller.
     status = job.wait(timeout=30.0, raise_on_failure=False)
     assert status is not None
-    assert job.job_id.to_wire() == "/notebook-hello"
+    assert job.job_id.to_wire().endswith("/notebook-hello")
 
 
 def test_demo_notebook_job_tasks_returns_tasks(demo_client: IrisClient) -> None:

@@ -1,28 +1,11 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+from zephyr import load_vortex
 
 from pathlib import Path
 
 import pytest
-from fray.job import create_job_ctx, fray_default_job_ctx
 from zephyr.readers import load_jsonl
-
-
-@pytest.fixture(scope="module")
-def sync_backend(request):
-    with fray_default_job_ctx(create_job_ctx("sync")):
-        yield
 
 
 @pytest.fixture(scope="module")
@@ -48,3 +31,16 @@ def load_dedup_outputs(output_dir: str) -> dict[str, dict]:
     for output_file in output_files:
         results.extend(load_jsonl(str(output_file)))
     return {r["id"]: r for r in results}
+
+
+def load_dedup_vortex_outputs(output_dir: str) -> dict[str, list[dict]]:
+    """Load all dedup vortex output files keyed by output filename stem.
+
+    Returns:
+        Dictionary mapping output file stem (e.g. "test_shard_0") to list of records.
+    """
+    output_files = sorted(Path(output_dir).glob("**/*.vortex"))
+    by_file: dict[str, list[dict]] = {}
+    for output_file in output_files:
+        by_file[output_file.stem] = list(load_vortex(str(output_file)))
+    return by_file

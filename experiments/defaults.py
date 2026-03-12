@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 This file represents the best practices for each stage of the pipeline.
@@ -25,11 +14,18 @@ from functools import lru_cache
 from typing import Any
 
 import jmp
+from fray.v2 import ResourceConfig
+from marin.execution.remote import remote
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, TextLmDatasetFormat
+from levanter.data.text import (
+    BlockShuffleConfig,
+    LmDatasetFormatBase,
+    LMMixtureDatasetConfig,
+    PreferenceLmDataConfig,
+    TextLmDatasetFormat,
+)
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -39,7 +35,6 @@ from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
 
 from experiments.evals.task_configs import (
@@ -51,6 +46,7 @@ from experiments.paloma import paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from levanter.utils.mesh import MeshConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
@@ -60,12 +56,14 @@ from marin.execution.executor import (
     ensure_versioned,
     this_output_path,
     unwrap_versioned_value,
+    versioned,
 )
 from marin.processing.tokenize import (
     HfDatasetSpec,
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
+    get_vocab_size_for_tokenizer,
     lm_data_config,
     tokenize,
 )
@@ -77,7 +75,15 @@ from marin.training.training import (
     run_levanter_train_lm,
 )
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_NEW_RUN_DATA_SHUFFLE = BlockShuffleConfig(
+    io_block_size=256,
+    window_blocks=512,
+    perm_type="feistel",
+)
+"""Hierarchical block-shuffle default for newly constructed training runs."""
 
 
 def _truncate_wandb_name(name: str) -> str:
@@ -216,7 +222,17 @@ def default_tokenize(
     return ExecutorStep(
         name=os.path.join("tokenized", name),
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=tokenize,
+        fn=remote(
+            tokenize,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
+            pip_dependency_groups=["cpu"],
+            env_vars={
+                "TRANSFORMERS_NO_TORCH": "1",
+                "TRANSFORMERS_NO_TORCHVISION": "1",
+                "USE_TORCH": "0",
+                "TORCH_DISABLE_GLOBAL_DEPS": "1",
+            },
+        ),
         config=config,
     )
 
@@ -334,7 +350,7 @@ def default_train(
         per_device_eval_parallelism = train_config.per_device_eval_parallelism
 
     schedule = BatchSchedule(unwrap_versioned_value(train_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
+    total_examples = schedule.global_data_offset_by_step(unwrap_versioned_value(train_config.num_train_steps))
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
     hf_checkpoint_path_to_load_from = train_config.initialize_from_hf
@@ -352,6 +368,7 @@ def default_train(
                 name=wandb_name,
                 tags=[*tags],
                 group=wandb_group,
+                replicate_path=this_output_path(),
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
@@ -379,8 +396,6 @@ def default_train(
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
             profiler=train_config.profiler,
-            profiler_start_step=train_config.profiler_start_step,
-            profiler_num_steps=train_config.profiler_num_steps,
             use_explicit_mesh_axes=train_config.explicit_mesh_axes,
         ),
         initialize_from_checkpoint_path=(
@@ -440,8 +455,8 @@ def default_train(
         name=os.path.join("checkpoints", name),
         description=(
             f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
-            f"{train_config.num_train_steps} (steps) * "
-            f"{train_config.train_batch_size} (batch_size) * "
+            f"{unwrap_versioned_value(train_config.num_train_steps)} (steps) * "
+            f"{unwrap_versioned_value(train_config.train_batch_size)} (batch_size) * "
             f"{train_length} (train_seq_len) "
             f"= {total_examples * train_length} tokens."
         ),
@@ -559,8 +574,9 @@ def default_dpo(
         raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation=False)
-    pretraining_data = dataclasses.replace(pretraining_data, permutation_type="feistel")
-    vocab_size = _get_vocab_size(pretraining_data)
+    preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
+    preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
+    vocab_size = _get_vocab_size(preference_data)
 
     name = _truncate_wandb_name(name)
 
@@ -577,7 +593,7 @@ def default_dpo(
         raise ValueError("reference_model_path must be set for DPO training.")
 
     inner_config = TrainDpoConfig(
-        data=pretraining_data,
+        data=preference_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project=dpo_config.wandb_project or "marin",
@@ -648,15 +664,9 @@ def default_dpo(
     )
 
 
-@lru_cache
-def _cached_load_tokenizer(tokenizer_name: str):
-    return load_tokenizer(tokenizer_name)
-
-
 def _get_vocab_size(pretraining_data):
     tokenizer = unwrap_versioned_value(pretraining_data.tokenizer)
-    vocab_size = _cached_load_tokenizer(tokenizer).vocab_size
-    return vocab_size
+    return get_vocab_size_for_tokenizer(tokenizer)
 
 
 def _prepare_data_config(
@@ -681,7 +691,7 @@ def _prepare_data_config(
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
-            permutation_type="feistel",
+            shuffle=versioned(DEFAULT_NEW_RUN_DATA_SHUFFLE),
         )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures

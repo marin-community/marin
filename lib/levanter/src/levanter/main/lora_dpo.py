@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """LoRA-DPO training script.
@@ -28,7 +28,12 @@ from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
-from levanter.data.text import DpoExample, LmDataConfig, PreferenceChatLmDatasetFormat, dataset_for_preference_format
+from levanter.data.text import (
+    DpoExample,
+    PreferenceChatLmDatasetFormat,
+    PreferenceLmDataConfig,
+    dataset_for_preference_format,
+)
 from levanter.lora import (
     LoraConfig,
     lora_trainable_params_filter,
@@ -40,7 +45,6 @@ from levanter.lora import (
 from levanter.main.train_dpo import (
     _build_dpo_dataset,
     _build_validation_split,
-    _validate_preference_chat_formats,
     dpo_loss_from_logps,
     _logp_sum,
 )
@@ -57,7 +61,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LoraDpoConfig:
-    data: LmDataConfig = field(default_factory=LmDataConfig)
+    data: PreferenceLmDataConfig = field(default_factory=PreferenceLmDataConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     lora: LoraConfig = field(default_factory=LoraConfig)
@@ -96,8 +100,6 @@ def main(config: LoraDpoConfig):
             "Set lora.zero_init_b: true in your config to silence this warning."
         )
         config = dataclasses.replace(config, lora=dataclasses.replace(config.lora, zero_init_b=True))
-
-    _validate_preference_chat_formats(config.data)
 
     tokenizer = config.data.the_tokenizer
 

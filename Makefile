@@ -19,7 +19,7 @@ help:
 init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
-	uv sync
+	uv sync --extra cpu
 	huggingface-cli login
 
 clean:

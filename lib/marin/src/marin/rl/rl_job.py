@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Unified RL job interface for configuring and running RL training.
@@ -27,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
@@ -45,6 +34,7 @@ from marin.training.training import _add_run_env_variables
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer, PreTrainedTokenizer
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -215,16 +205,16 @@ class RLJob:
 
         def train_worker_task():
             with remove_tpu_lockfile_on_exit():
-                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+
+                configure_logging(level=logging.INFO)
                 worker = TrainWorker(config=train_worker_config)
                 worker.train()
 
         def make_inference_task(worker_idx: int):
             def inference_worker_task():
                 with remove_tpu_lockfile_on_exit():
-                    logging.basicConfig(
-                        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True
-                    )
+
+                    configure_logging(level=logging.INFO)
                     # use deterministic seed based on worker index
 
                     config = dataclasses.replace(

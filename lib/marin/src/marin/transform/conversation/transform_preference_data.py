@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Transform any HuggingFace preference dataset (for DPO, etc) to a standard format within each preference "column".
@@ -36,7 +25,8 @@ import datasets
 import draccus
 import fsspec
 from datasets import get_dataset_config_info
-from zephyr import Backend, Dataset, write_jsonl_file
+from iris.marin_fs import url_to_fs
+from zephyr import Dataset, ZephyrContext, write_jsonl_file
 
 from marin.utils import is_path_like
 
@@ -98,7 +88,7 @@ def _to_fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
 
 def _find_split_files(input_path: str, subset: str | None, split: str, filetype: str) -> list[str]:
     """Find split shard files under an fsspec path."""
-    fs, base_path = fsspec.core.url_to_fs(input_path)
+    fs, base_path = url_to_fs(input_path)
     roots = [base_path]
     if subset and subset != "default":
         roots.append(os.path.join(base_path, subset))
@@ -118,7 +108,7 @@ def _find_split_files(input_path: str, subset: str | None, split: str, filetype:
 
 def _infer_splits_from_files(input_path: str, subsets: list[str | None], filetype: str) -> list[str]:
     """Infer split names from filenames in an fsspec path."""
-    fs, base_path = fsspec.core.url_to_fs(input_path)
+    fs, base_path = url_to_fs(input_path)
     roots = [base_path]
     roots.extend(os.path.join(base_path, subset) for subset in subsets if subset)
     candidates = []
@@ -303,7 +293,8 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
 
     # Process all tasks in parallel
     pipeline = Dataset.from_list(tasks).map(process_split_task)
-    results = Backend.execute(pipeline)
+    ctx = ZephyrContext(name="transform-preference")
+    results = ctx.execute(pipeline)
 
     # Log summary
     for result in results:

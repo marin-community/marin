@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Iris backend for fray v2.
 
@@ -24,22 +13,32 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
+
+import cloudpickle
 
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
+from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import Constraint, EnvironmentSpec, ResourceSpec
+from iris.cluster.constraints import (
+    Constraint,
+    device_variant_constraint,
+    preemptible_constraint,
+    region_constraint,
+)
+from iris.cluster.types import EnvironmentSpec, ResourceSpec
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
+    ActorConfig,
     CpuConfig,
     DeviceConfig,
     EnvironmentConfig,
@@ -54,16 +53,6 @@ from fray.v2.types import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Shared thread pool for async actor RPC calls
-_shared_executor: ThreadPoolExecutor | None = None
-
-
-def _get_shared_executor() -> ThreadPoolExecutor:
-    global _shared_executor
-    if _shared_executor is None:
-        _shared_executor = ThreadPoolExecutor(max_workers=32)
-    return _shared_executor
 
 
 def _convert_device(device: DeviceConfig) -> cluster_pb2.DeviceConfig | None:
@@ -98,17 +87,20 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
         memory=resources.ram,
         disk=resources.disk,
         device=_convert_device(resources.device),
-        regions=resources.regions,
     )
 
 
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray v2 ResourceConfig."""
-    from iris.cluster.types import preemptible_constraint
-
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
+    if resources.regions:
+        constraints.append(region_constraint(resources.regions))
+    if resources.device_alternatives:
+        if isinstance(resources.device, (TpuConfig, GpuConfig)):
+            all_variants = [resources.device.variant, *resources.device_alternatives]
+            constraints.append(device_variant_constraint(all_variants))
     return constraints
 
 
@@ -125,16 +117,20 @@ def convert_entrypoint(entrypoint: Entrypoint_v2) -> IrisEntrypoint:
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
 
 
-def convert_environment(env: EnvironmentConfig | None) -> EnvironmentSpec | None:
+def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | None = None) -> EnvironmentSpec | None:
     """Convert fray v2 EnvironmentConfig to Iris EnvironmentSpec."""
-    if env is None:
+    env_vars = dict(env.env_vars) if env is not None else {}
+    if device is not None:
+        for key, value in device.default_env_vars().items():
+            env_vars.setdefault(key, value)
+    if env is None and not env_vars:
         return None
     from iris.cluster.types import EnvironmentSpec
 
     return EnvironmentSpec(
-        pip_packages=list(env.pip_packages),
-        env_vars=dict(env.env_vars),
-        extras=list(env.extras),
+        pip_packages=list(env.pip_packages) if env is not None else [],
+        env_vars=env_vars,
+        extras=list(env.extras) if env is not None else [],
     )
 
 
@@ -177,6 +173,7 @@ class IrisJobHandle:
         except Exception:
             if raise_on_failure:
                 raise
+            logger.warning("Job %s failed with exception (raise_on_failure=False)", self.job_id, exc_info=True)
         return self.status()
 
     def terminate(self) -> None:
@@ -260,8 +257,53 @@ class IrisActorHandle:
         return _IrisActorMethod(self, method_name)
 
 
+class OperationFuture:
+    """Polling-based future backed by an Iris long-running operation.
+
+    Satisfies the ``ActorFuture`` protocol. Each call to ``result()`` polls
+    the server via short ``GetOperation`` RPCs until the operation completes,
+    fails, or the caller's timeout expires.
+    """
+
+    def __init__(self, client: ActorClient, operation_id: str, poll_interval: float = 1.0):
+        self._client = client
+        self._op_id = operation_id
+        self._poll_interval = poll_interval
+
+    def result(self, timeout: float | None = None) -> Any:
+        from iris.rpc import actor_pb2
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            op = self._client.poll_operation_status(self._op_id)
+
+            if op.state == actor_pb2.Operation.SUCCEEDED:
+                return cloudpickle.loads(op.serialized_result)
+
+            if op.state == actor_pb2.Operation.FAILED:
+                if op.error.serialized_exception:
+                    raise cloudpickle.loads(op.error.serialized_exception)
+                raise RuntimeError(f"{op.error.error_type}: {op.error.message}")
+
+            if op.state == actor_pb2.Operation.CANCELLED:
+                raise RuntimeError(f"Operation {self._op_id} was cancelled")
+
+            if deadline is not None and time.monotonic() >= deadline:
+                self._client.cancel_operation(self._op_id)
+                raise TimeoutError(f"Operation {self._op_id} timed out after {timeout}s")
+
+            time.sleep(self._poll_interval)
+
+
 class _IrisActorMethod:
-    """Wraps a method on an Iris actor. remote() dispatches via thread pool."""
+    """Wraps a method on an Iris actor.
+
+    ``remote()`` uses long-running operations: a fast ``StartOperation`` RPC
+    returns an operation ID, and ``OperationFuture.result()`` polls via
+    ``GetOperation``. No client-side thread pool is needed.
+
+    ``__call__()`` uses the existing blocking ``Call`` RPC for simplicity.
+    """
 
     def __init__(self, handle: IrisActorHandle, method_name: str):
         self._handle = handle
@@ -269,9 +311,8 @@ class _IrisActorMethod:
 
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
-        executor = _get_shared_executor()
-        future = executor.submit(lambda: getattr(client, self._method)(*args, **kwargs))
-        return future
+        op_id = client.start_operation(self._method, *args, **kwargs)
+        return OperationFuture(client, op_id)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         client = self._handle._resolve()
@@ -361,6 +402,8 @@ class IrisActorGroup:
         allowing the caller to start work immediately and discover more
         workers later via discover_new().
         """
+        from iris.cluster.types import is_job_finished
+
         target = count if count is not None else self._count
         start = time.monotonic()
         sleep_secs = 0.5
@@ -370,6 +413,19 @@ class IrisActorGroup:
 
             if len(self._discovered_names) >= target:
                 return list(self._handles[:target])
+
+            # Fail fast if the underlying job has terminated (e.g. crash, OOM,
+            # missing interpreter). Without this check we'd spin for the full
+            # timeout waiting for endpoints that will never appear.
+            client = self._get_client()
+            job_status = client.status(self._job_id)
+            if is_job_finished(job_status.state):
+                error = job_status.error or "unknown error"
+                raise RuntimeError(
+                    f"Actor job {self._job_id} finished before all actors registered "
+                    f"({len(self._discovered_names)}/{target} ready). "
+                    f"Job state={job_status.state}, error={error}"
+                )
 
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
@@ -395,15 +451,15 @@ class FrayIrisClient:
         self,
         controller_address: str,
         workspace: Path | None = None,
-        bundle_gcs_path: str | None = None,
+        bundle_id: str | None = None,
     ):
         logger.info(
-            "FrayIrisClient connecting to %s (workspace=%s, bundle_gcs_path=%s)",
+            "FrayIrisClient connecting to %s (workspace=%s, bundle_id=%s)",
             controller_address,
             workspace,
-            bundle_gcs_path,
+            bundle_id,
         )
-        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
+        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_id=bundle_id)
 
     @staticmethod
     def from_iris_client(iris_client: IrisClientLib) -> FrayIrisClient:
@@ -416,12 +472,12 @@ class FrayIrisClient:
         instance._iris = iris_client
         return instance
 
-    def submit(self, request: JobRequest) -> IrisJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
         from iris.cluster.types import CoschedulingConfig
 
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
-        iris_environment = convert_environment(request.environment)
+        iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
         # Auto-enable coscheduling for multi-host TPU jobs.
@@ -432,15 +488,23 @@ class FrayIrisClient:
         if isinstance(request.resources.device, TpuConfig) and replicas > 1:
             coscheduling = CoschedulingConfig(group_by="tpu-name")
 
-        job = self._iris.submit(
-            entrypoint=iris_entrypoint,
-            name=request.name,
-            resources=iris_resources,
-            environment=iris_environment,
-            constraints=iris_constraints if iris_constraints else None,
-            coscheduling=coscheduling,
-            replicas=replicas,
-        )
+        try:
+            job = self._iris.submit(
+                entrypoint=iris_entrypoint,
+                name=request.name,
+                resources=iris_resources,
+                environment=iris_environment,
+                constraints=iris_constraints if iris_constraints else None,
+                coscheduling=coscheduling,
+                replicas=replicas,
+                max_retries_failure=request.max_retries_failure,
+                max_retries_preemption=request.max_retries_preemption,
+            )
+        except IrisJobAlreadyExists as e:
+            if adopt_existing:
+                logger.info("Job %s already exists, adopting existing job", request.name)
+                return IrisJobHandle(e.job)
+            raise FrayJobAlreadyExists(request.name, handle=IrisJobHandle(e.job)) from e
         return IrisJobHandle(job)
 
     def create_actor(
@@ -449,6 +513,7 @@ class FrayIrisClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
         group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
@@ -461,6 +526,7 @@ class FrayIrisClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> IrisActorGroup:
         """Submit a single Iris job with N replicas, each hosting an instance of actor_class.
@@ -482,6 +548,11 @@ class FrayIrisClient:
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
         entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+
+        retry_kwargs: dict[str, Any] = {}
+        if actor_config.max_task_retries is not None:
+            retry_kwargs["max_retries_failure"] = actor_config.max_task_retries
+
         job = self._iris.submit(
             entrypoint=entrypoint,
             name=name,
@@ -490,6 +561,7 @@ class FrayIrisClient:
             constraints=iris_constraints if iris_constraints else None,
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
+            **retry_kwargs,
         )
 
         return IrisActorGroup(

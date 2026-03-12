@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """Script to generate static leaderboard data."""
 
@@ -21,7 +10,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import fsspec
+from iris.marin_fs import filesystem as marin_filesystem
 
 CURRENT_FILE = Path(__file__).resolve()
 
@@ -77,16 +66,20 @@ EXCLUDED_SPEEDRUNS = {
 
 
 def find_speedrun_results(base_path: str) -> list[str]:
-    fs = fsspec.filesystem(base_path.split("://", 1)[0] if "://" in base_path else "file")
-    pattern = f"{base_path}/**/speedrun_results.json"
-    all_results = fs.glob(pattern)
+    if "://" in base_path:
+        fs = marin_filesystem(base_path.split("://", 1)[0])
+        pattern = f"{base_path}/**/speedrun_results.json"
+        all_results = fs.glob(pattern)
+    else:
+        # fsspec's local glob doesn't recurse with **, so use pathlib instead.
+        all_results = [str(p) for p in Path(base_path).glob("**/speedrun_results.json")]
 
     # Filter out excluded speedruns by checking the run name (directory name)
     return [path for path in all_results if Path(path).parent.name not in EXCLUDED_SPEEDRUNS]
 
 
 def load_results_file(path: str) -> dict:
-    fs = fsspec.filesystem(path.split("://", 1)[0] if "://" in path else "file")
+    fs = marin_filesystem(path.split("://", 1)[0] if "://" in path else "file")
     with fs.open(path, "r") as f:
         data = json.load(f)
         return {"runs": [data]} if "runs" not in data else data

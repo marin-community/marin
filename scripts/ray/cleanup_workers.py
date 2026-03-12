@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Cleanup Ray TPU workers: handle preempted TPUs and low disk space.
@@ -266,6 +255,9 @@ def process_cluster(config_path: str, threshold: int, dry_run: bool, parallel: i
     deleted = cleanup_preempted_tpus(zone, project, dry_run)
     if deleted:
         logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs")
+
+    if threshold <= 0:
+        return True
 
     tpu_names = list_cluster_workers(zone, project)
     if not tpu_names:

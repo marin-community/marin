@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Usage:
@@ -37,8 +26,8 @@ from typing import Any
 import click
 import yaml
 
-from fray.cluster.ray.auth import maybe_fetch_local_ray_token, ray_auth_secret
-from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
+from fray.v1.cluster.ray.auth import ray_auth_secret
+from fray.v1.cluster.ray.dashboard import DashboardConfig, ray_dashboard
 from marin.cluster import gcp
 from marin.cluster.config import (
     RayClusterConfig,
@@ -725,23 +714,27 @@ def cluster_update_configs(ctx):
 @cli.command("ssh-tpu")
 @click.argument("target")
 @click.option("--project", help="GCP project ID")
-@click.option("--zone", help="GCP zone")
+@click.option("--zone", help="GCP zone (searches all zones by default)")
 @click.argument("extra_args", nargs=-1)
 @click.pass_context
 def ssh_connect(ctx, target, project, zone, extra_args):
-    """SSH to TPU node by IP address."""
-    project = project or gcp.get_project_id()
-    zone = zone or gcp.get_default_zone()
+    """SSH to TPU node by IP address.
 
-    if not project or not zone:
-        print("Error: Could not determine project or zone", file=sys.stderr)
+    Searches all zones for the TPU matching the given internal IP.
+    """
+    project = project or gcp.get_project_id()
+
+    if not project:
+        print("Error: Could not determine project", file=sys.stderr)
         sys.exit(1)
 
-    # Find TPU by IP and SSH to it
+    # Search all zones by default (zone="-"), matching ssh_tpu behavior
+    zone = zone or "-"
+
     tpu_result = gcp.find_tpu_by_ip(target, project, zone)
     if tpu_result:
         tpu_name, tpu_zone, worker_id = tpu_result
-        print(f"Connecting to TPU {tpu_name} worker {worker_id} at IP {target}")
+        print(f"Found TPU: {tpu_name} in zone: {tpu_zone}")
         gcp.ssh_to_tpu(tpu_name, tpu_zone, project, list(extra_args) if extra_args else None, worker_id)
     else:
         print(f"Error: No TPU found with IP {target}", file=sys.stderr)
@@ -894,59 +887,13 @@ def init_worker(ctx, name):
     print("Worker initialized successfully!")
 
 
-def _auto_auth_open_browser(dashboard_url: str, token: str):
-    """Open the browser with a redirect that auto-sets the Ray auth cookie.
-
-    Starts a one-shot HTTP server on localhost that responds with a Set-Cookie
-    header for the ``ray-authentication-token`` cookie and a 302 redirect to
-    the actual dashboard URL.  Because cookies are scoped by domain (not port),
-    the cookie set by our ephemeral server is sent to the dashboard on the next
-    request, so the user is never prompted for a token.
-    """
-    import http.server
-    import threading
-
-    class _AuthRedirectHandler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(302)
-            self.send_header("Set-Cookie", f"ray-authentication-token={token}; Path=/")
-            self.send_header("Location", dashboard_url)
-            self.end_headers()
-
-        def log_message(self, fmt, *args):
-            pass  # suppress request logs
-
-    server = http.server.HTTPServer(("127.0.0.1", 0), _AuthRedirectHandler)
-    port = server.server_address[1]
-
-    thread = threading.Thread(target=server.handle_request, daemon=True)
-    thread.start()
-
-    auth_url = f"http://localhost:{port}"
-    if sys.platform == "darwin":
-        subprocess.run(["open", auth_url], check=False)
-    else:
-        subprocess.run(["xdg-open", auth_url], check=False)
-
-    thread.join(timeout=5)
-    server.server_close()
-
-
 @cli.command("dashboard")
 @click.pass_context
 def open_dashboard(ctx):
     """Open dashboard for all active Ray clusters."""
     config_obj = ctx.obj.config_obj
     if config_obj:
-        with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)) as conn:
-            cluster_name = next(iter(conn.clusters.keys()))
-            ports = conn.port_mappings[cluster_name]
-            dashboard_url = f"http://localhost:{ports.dashboard_port}"
-            token_path = maybe_fetch_local_ray_token()
-            token = Path(token_path).read_text().strip()
-            _auto_auth_open_browser(dashboard_url, token)
-            print(f"Dashboard: {dashboard_url} (auto-authenticated)")
-            print("\nPress Ctrl+C to stop")
+        with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
             try:
                 time.sleep(86400)
             except KeyboardInterrupt:
@@ -959,25 +906,16 @@ def open_dashboard(ctx):
             return
 
         print(f"Connected to {len(conn.clusters)} clusters:")
-        first_dashboard_url = None
         for name, info in conn.clusters.items():
             ports = conn.port_mappings[name]
-            dashboard_url = f"http://localhost:{ports.dashboard_port}"
-            if first_dashboard_url is None:
-                first_dashboard_url = dashboard_url
-            print(f"  {name} ({info.zone}) - {dashboard_url}")
+            direct_url = f"http://localhost:{ports.dashboard_port}"
+            print(f"  {name} ({info.zone}) - {direct_url}")
             print(f"    IP: {info.external_ip} ({info.head_ip})")
+            dashboard_url = f"http://localhost:{ports.dashboard_port}"
             gcs_url = f"localhost:{ports.gcs_port}"
             api_url = f"localhost:{ports.api_port}"
             print(f"    Dashboard: {dashboard_url} | GCS: {gcs_url} | API: {api_url}")
             print()
-
-        # Auto-authenticate the first cluster's dashboard in the browser
-        if first_dashboard_url:
-            token_path = maybe_fetch_local_ray_token()
-            token = Path(token_path).read_text().strip()
-            _auto_auth_open_browser(first_dashboard_url, token)
-            print("Browser opened with auto-authentication.")
 
         print("\nPress Ctrl+C to stop")
         try:

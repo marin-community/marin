@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import jax
@@ -11,9 +11,6 @@ def create_datasets():
     ds1 = ListAsyncDataset([1, 2, 3, 4, 5])
     ds2 = ListAsyncDataset([10, 20, 30, 40, 50])
     ds3 = ListAsyncDataset([100, 200, 300, 400, 500])
-    ds1.finalize()
-    ds2.finalize()
-    ds3.finalize()
     return {"ds1": ds1, "ds2": ds2, "ds3": ds3}
 
 

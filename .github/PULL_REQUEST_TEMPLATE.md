@@ -1,8 +1,8 @@
-Include a summary of the changes and the related issue if any.
+<!-- See .agents/skills/pull-request/ for full PR guidelines. -->
 
-A good description is a paragraph or so describing the changes you made and the
-motivation. You may follow this with a few bullets for specific changes, but
-try to keep it concise.
+Describe what changed and why. Follow with bullets for
+specific changes if needed. Keep it concise — this text becomes the squash-merge
+commit message, so avoid markdown formatting (headers, tables, images).
 
 e.g.
 

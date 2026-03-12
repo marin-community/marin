@@ -1,16 +1,5 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 
 # nodryrun
 import argparse
@@ -28,13 +17,14 @@ from experiments.llama import llama3_tokenizer
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
+from levanter.callbacks.profiler import ProfilerConfig
 from levanter.infra.cli_helpers import load_config
 from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Shared experiment knobs (mirrors the dense baseline for flop matching)
@@ -113,7 +103,6 @@ nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
 nemotron_cc_mixture = lm_mixture_data_config(
     components=nemotron_cc_steps,
     weights=NEMOTRON_WEIGHTS,
-    permutation_type="linear",
 )
 
 DATASET_OPTIONS = {
@@ -144,7 +133,6 @@ def nemotron_only_speedrun(
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=[],
-            permutation_type="linear",
         )
     else:
         pretraining_data = config.tokenized_dataset
@@ -247,9 +235,7 @@ def make_speedrun_config(
             weight_decay=WEIGHT_DECAY,
             steps_per_eval=STEPS_PER_EVAL,
             steps_per_export=STEPS_PER_EXPORT,
-            profiler=profiler,
-            profiler_start_step=profiler_start_step,
-            profiler_num_steps=profiler_num_steps,
+            profiler=ProfilerConfig(enabled=profiler, start_step=profiler_start_step, num_steps=profiler_num_steps),
         ),
         tokenized_dataset=tokenized_dataset,
     )
@@ -383,8 +369,8 @@ if __name__ == "__main__":
     if args.profile:
         logger.info(
             "Profiler enabled: start_step=%s num_steps=%s",
-            run_config.train_config.profiler_start_step,
-            run_config.train_config.profiler_num_steps,
+            run_config.train_config.profiler.start_step,
+            run_config.train_config.profiler.num_steps,
         )
     run_suffix = (
         args.run_suffix

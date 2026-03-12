@@ -1,224 +1,57 @@
-# Agent Tips
+# Iris Agent Notes
 
-* Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate_protos.py to regenerate files after changing the `.proto` files.
-* Prefer _shallow_, _functional_ code which returns control quickly to the user, vs callbacks or inheritance.
+Distributed job orchestration replacing Ray with simpler primitives. Start with the shared instructions in `/AGENTS.md`; only Iris-specific conventions are below.
 
-```
-class Scheduler:
-  def add_job():
-  def add_worker():
-  def compute_schedule() -> ScheduledJobs:
+## Key Docs
 
-class Runner:
-  def run_jobs(ScheduledJobs)
-```
+- `README.md` — overview + quick start
+- `OPS.md` — operating / troubleshooting a live cluster
+- `TESTING.md` — testing policy, markers, and commands
+- `docs/autoscaler-v2.md` — autoscaler design + terminology
+- `docs/controller-flow.md`, `docs/worker-flow.md` — controller/worker lifecycle
+- `docs/task-states.md` — task state machine + retry semantics
+- `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
+- `docs/image-push.md` — multi-region image push/pull architecture
+- `docs/constraints.md` — constraint system design
 
-is preferable to:
+## Development
 
-```
-class Scheduler:
-  def __init__(self, job_creator: JobCreator):
-    self.job_creator = job_creator
-  def run(self):
-    ... self.job_creator.create_job()
+```bash
+# Unit tests
+uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
 ```
 
-* Tests should test stable behavior, not implementation details.
+See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
 
-ABSOLUTELY DO NOT test things that are trivially caught by the type checker.
-Explicitly that means:
+### Dashboard
 
-- No tests for "constant = constant"
-- No tests for "method exists"
-- No tests for "create an object(x, y, z) and attributes are x, y, z"
+The Vue 3 dashboard lives in `dashboard/`. To type-check and build:
 
-These tests have negative value - they make our code more brittle.
+```bash
+cd lib/iris/dashboard && npm run build:check   # vue-tsc + rsbuild
+```
 
-Test _stable behavior_ instead. You can use mocks as needed to isolate
-environments (e.g.  mock around a remote API), but prefer "fakes" -- e.g. create
-a real database but with fake data -- when reasonable.
+Or use the Iris CLI which handles `npm ci` automatically:
 
-## Documentation
+```bash
+uv run iris build dashboard
+```
 
-ALWAYS read the docs for the appropriate area.
-IF they disagree with the code, ALWAYS add a task to update them.
+Always run `build:check` after editing `.vue` or `.ts` files to catch type errors before committing.
 
-Documentation should be kept up-to-date as code changes. When implementing new features or making significant changes, update the relevant documentation files:
+## Code Conventions
 
-@README.md - Main overview, CLI reference, and quick start
-
-## Protocols and Testing
-
-Non-trivial public classes should define a protocol which represents their
-_important_ interface characteristics. Use this protocol in type hints for
-when the class is used instead of the concrete class.
-
-Test to this protocol, not the concrete class: the protocol should describe the
-interesting behavior of the class, but not betray the implementation details.
-
-(You may of course _instantiate_ the concrete class for testing.)
-
-## Imports
-
-Don't use TYPE_CHECKING. Use the real import. If there is a circular dependency:
-
-* Prefer to resolve it with refactoring when sensible
-* Otherwise use a protocol if you simply need the type information
-
-## RPC/API Accessibility
-
-Any functionality exposed by the worker or controller dashboards must also be
-available via RPC. The dashboards should be a friendly interface on top of the
-machine accessible RPC API, and should not use internal APIs (except for
-efficiency). For example, if we wanted to show the scheduling status for a task,
-we should define a new RPC endpoint `/TestSchedule(task_id)` and use that from
-the dashboard, rather than creating a scheduler and running it manually.
+- Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
+- After changing `.proto` files, regenerate via `scripts/generate_protos.py`.
+- Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
+- Dashboards must be a thin UI over the RPC API, not a second implementation path.
+- Use `iris.time_utils` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.
+- Use `concurrent.futures.ThreadPoolExecutor` (not asyncio) for concurrent platform operations, with hard timeouts.
+- Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
+- Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
 
 ## Architecture Notes
 
-## Planning
+Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
 
-Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
-
-Step 1:
-* Add the minimal changes to the `.proto` file
-* Add the server stub code
-* Add a client wiring
-* Add an end-to-end test
-
-Step 2:
-* Extend proto with additional field
-* Update server code
-* Update client code
-* Update tests
-
-...
-
-That is _each stage of the plan_ should be a independently testable,
-self-contained unit of work. THis is preferable to plans which attempt to make
-all of the changes for one area (e.g. all proto changes, then all server
-changes, etc.)
-
-When adding new modules or significant features:
-1. Update the README with a brief overview and usage examples
-2. Add detailed documentation to the appropriate docs/ file
-3. Reference the documentation from this AGENTS.md file
-
-**Key documentation areas:**
-
-| Area | File | Description |
-|------|------|-------------|
-| Architecture | README.md | High-level architecture, CLI reference, quick start |
-| Autoscaler Design | docs/autoscaler-v0-design.md | Technical specification, threading model |
-| Thread Safety | docs/thread-safety.md | Thread management, test synchronization best practices |
-| Original Design | docs/fray-zero.md | Rationale and design decisions |
-
-## Key Modules
-
-### Time Utilities
-
-Use `iris.time_utils` for all time-related operations instead of raw `datetime` or `time`:
-
-| Class | Purpose |
-|-------|---------|
-| `Timestamp` | Point in time (epoch-based). Use for created_at, timestamps in logs, etc. |
-| `Duration` | Time interval. Use for timeouts, intervals, configuration values. |
-| `Deadline` | Monotonic deadline for timeout checks. Use in polling loops. |
-| `Timer` | Elapsed time measurement. Use for performance tracking. |
-| `ExponentialBackoff` | Retry/polling with backoff. Use `wait_until()` for condition polling. |
-
-Example:
-```python
-from iris.time_utils import Timestamp, Duration, Deadline
-
-created_at = Timestamp.now()
-timeout = Duration.from_seconds(30.0)
-deadline = Deadline.from_now(timeout)
-deadline.wait_for(condition)
-
-while not deadline.expired():
-    if condition():
-        break
-    time.sleep(0.1)
-```
-
-### Autoscaler and VM Management
-
-The autoscaler runs inside the Controller process and manages cloud VMs based on pending task demand. Key files:
-
-```
-src/iris/
-├── cli/                         # CLI package (cluster, build, run, debug commands)
-│   ├── main.py                  # Top-level iris group
-│   ├── cluster.py               # Cluster lifecycle, controller, VM ops, dashboard
-│   ├── build.py                 # Image build commands
-│   ├── debug.py                 # Debugging & validation
-│   ├── run.py                   # Command passthrough job submission
-│   └── rpc.py                   # Dynamic RPC CLI
-├── cluster/
-│   ├── controller/
-│   │   ├── controller.py        # Controller with integrated autoscaler
-│   │   └── main.py              # Controller daemon CLI (serve command)
-│   └── vm/
-│       ├── autoscaler.py        # Core scaling logic
-│       ├── scaling_group.py     # Per-group state tracking
-│       ├── gcp.py               # GCP TPU management
-│       ├── manual.py            # Pre-existing host management
-│       └── config.py            # Config loading + factory functions
-```
-
-See [README.md](README.md) for CLI usage and configuration examples.
-
-### Dashboard Frontend
-
-The controller and worker dashboards are client-side SPAs using Preact + HTM.
-
-**Directory structure:**
-```
-src/iris/cluster/static/
-├── controller/          # Controller dashboard
-│   ├── app.js           # Main app (tabs, state, data fetching)
-│   ├── jobs-tab.js      # Jobs table with pagination/sorting/tree view
-│   ├── job-detail.js    # Job detail page with task list
-│   ├── workers-tab.js   # Workers table
-│   └── vms-tab.js       # VM management table
-├── shared/              # Shared utilities
-│   ├── rpc.js           # Connect RPC client wrapper
-│   ├── utils.js         # Formatting (dates, durations)
-│   └── styles.css       # Consolidated CSS
-├── vendor/              # Third-party ES modules
-│   ├── preact.mjs       # UI framework
-│   └── htm.mjs          # HTML template literals
-└── worker/              # Worker dashboard components
-```
-
-**Key patterns:**
-- All data fetched via Connect RPC (e.g., `ListJobs`, `GetJobStatus`)
-- No REST endpoints - RPC only
-- State management with Preact hooks (`useState`, `useEffect`)
-- HTML templates via `htm.bind(h)` tagged template literals
-- Jobs displayed as a hierarchical tree based on name structure
-
-**When modifying the dashboard:**
-1. Test locally with `uv run lib/iris/scripts/screenshot-dashboard.py --stay-open`
-2. Ensure any new UI features have corresponding RPC endpoints
-3. Follow existing component patterns (functional components, hooks)
-
-## Debugging Container Failures
-
-**Exit code 137** = 128 + 9 = SIGKILL, typically OOM. Check:
-- `ContainerStatus.oom_killed` field (from `docker inspect .State.OOMKilled`)
-- Job's `resources.memory_bytes` vs what was requested
-- Resource flow: `JobRequest.resources` → Iris protobuf → `ContainerConfig` → `docker --memory`
-
-**Resource propagation path:**
-```
-fray.v2.ResourceConfig → iris.cluster.types.ResourceSpec.to_proto()
-  → cluster_pb2.ResourceSpecProto → docker.py _docker_create() --memory/--cpus
-```
-
-**Key files for container debugging:**
-- `cluster/runtime/docker.py`: Docker CLI wrapper, resource limits at lines 396-403
-- `cluster/runtime/types.py`: ContainerStatus with oom_killed field
-- `cluster/worker/task_attempt.py`: _format_exit_error() interprets signals
+The controller is a plain GCE VM (or K8s Deployment on CoreWeave) with no zone affinity to workers. See `docs/coreweave.md` for CoreWeave-specific deployment topology and `docs/image-push.md` for the GHCR → AR remote repo image pipeline.
