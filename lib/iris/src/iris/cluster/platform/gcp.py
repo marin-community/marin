@@ -44,6 +44,7 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from typing import cast
 
 from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
@@ -326,10 +327,19 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
 
     Uses GceRemoteExec for SSH via `gcloud compute ssh`.
     Supports terminate, set_labels, and set_metadata operations.
+
+    _vm_id is the Iris worker ID (may differ from GCE instance name after
+    construct_worker_id). gcloud commands use _gce_vm_name which is the real
+    GCE instance name from the underlying GceRemoteExec.
     """
 
     _zone: str = ""
     _project_id: str = ""
+
+    @property
+    def _gce_vm_name(self) -> str:
+        """Real GCE instance name for gcloud commands."""
+        return cast(GceRemoteExec, self._remote_exec).vm_name
 
     def status(self) -> WorkerStatus:
         cmd = [
@@ -337,7 +347,7 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             "compute",
             "instances",
             "describe",
-            self._vm_id,
+            self._gce_vm_name,
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--format=value(status)",
@@ -359,12 +369,12 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             "compute",
             "instances",
             "reset",
-            self._vm_id,
+            self._gce_vm_name,
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
         ]
-        logger.info("Rebooting GCE instance: %s", self._vm_id)
+        logger.info("Rebooting GCE instance: %s", self._gce_vm_name)
         logger.info("gcloud command: %s", cmd)
         subprocess.run(cmd, capture_output=True, text=True, check=True)
 
@@ -374,18 +384,18 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             "compute",
             "instances",
             "delete",
-            self._vm_id,
+            self._gce_vm_name,
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             "--quiet",
         ]
-        logger.info("Deleting GCE instance: %s", self._vm_id)
+        logger.info("Deleting GCE instance: %s", self._gce_vm_name)
         logger.info("gcloud command: %s", cmd)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error = result.stderr.strip()
             if "not found" not in error.lower():
-                logger.warning("Failed to delete GCE instance %s: %s", self._vm_id, error)
+                logger.warning("Failed to delete GCE instance %s: %s", self._gce_vm_name, error)
 
     def set_labels(self, labels: dict[str, str]) -> None:
         cmd = [
@@ -393,16 +403,16 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             "compute",
             "instances",
             "update",
-            self._vm_id,
+            self._gce_vm_name,
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             f"--update-labels={_format_labels(labels)}",
         ]
-        logger.info("Setting labels on GCE instance: %s", self._vm_id)
+        logger.info("Setting labels on GCE instance: %s", self._gce_vm_name)
         logger.info("gcloud command: %s", cmd)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            logger.warning("Failed to set labels on %s: %s", self._vm_id, result.stderr.strip())
+            logger.warning("Failed to set labels on %s: %s", self._gce_vm_name, result.stderr.strip())
 
     def set_metadata(self, metadata: dict[str, str]) -> None:
         metadata_str = ",".join(f"{k}={v}" for k, v in metadata.items())
@@ -411,12 +421,12 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             "compute",
             "instances",
             "add-metadata",
-            self._vm_id,
+            self._gce_vm_name,
             f"--project={self._project_id}",
             f"--zone={self._zone}",
             f"--metadata={metadata_str}",
         ]
-        logger.info("Setting metadata on GCE instance: %s", self._vm_id)
+        logger.info("Setting metadata on GCE instance: %s", self._gce_vm_name)
         logger.info("gcloud command: %s", cmd)
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
