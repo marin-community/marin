@@ -48,7 +48,9 @@ def _summary_with_ce_forward_divisor() -> dict[str, object]:
             {
                 "count": 8,
                 "total_duration": 12000.0,
-                "tf_op_path": "jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/add:",
+                "tf_op_path": (
+                    "jit(_train_step)/jvp(HackableTransformer)/HackableDecoderLayer/closed_call/shard_map/add:"
+                ),
             },
             {
                 "count": 8,
