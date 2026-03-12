@@ -274,7 +274,7 @@ For the full LLO workflow (flags, artifact layout, comparison checklist, and rep
 ## Starter References
 
 - `lib/levanter/src/levanter/kernels/pallas/template_kernel.py`
-- `lib/levanter/tests/kernels/test_template_kernel.py`
+- `lib/levanter/tests/kernels/test_pallas_template_kernel.py`
 - `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss`
 
 ## Tokamax Notes (Optional)
