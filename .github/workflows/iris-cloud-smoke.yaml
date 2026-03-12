@@ -1,0 +1,213 @@
+name: Iris - Cloud Smoke Test
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  statuses: write  # post commit status from issue_comment trigger
+
+concurrency:
+  group: iris-cloud-smoke
+  cancel-in-progress: false  # never kill a running cloud test — would leak GCP resources
+
+jobs:
+  cloud-smoke-test:
+    # Run on /iris-smoke comment from a repo member/collaborator, or manual dispatch
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '/iris-smoke') &&
+        (
+          github.event.comment.author_association == 'MEMBER' ||
+          github.event.comment.author_association == 'COLLABORATOR' ||
+          github.event.comment.author_association == 'OWNER'
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LABEL_PREFIX: smoke-ci
+
+    steps:
+      - name: Set commit status to pending
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
+            -f state=pending \
+            -f context="Iris Cloud Smoke Test" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('lib/iris/pyproject.toml') }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd lib/iris && uv run playwright install --with-deps chromium
+
+      - name: Install Playwright system deps
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: cd lib/iris && uv run playwright install-deps chromium
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Write SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.MARIN_SSH_KEY }}" > ~/.ssh/marin_ray_cluster.pem
+          chmod 600 ~/.ssh/marin_ray_cluster.pem
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run cloud smoke tests
+        env:
+          IRIS_SCREENSHOT_DIR: ${{ github.workspace }}/iris-cloud-screenshots
+          PYTHONASYNCIODEBUG: "1"
+        run: |
+          mkdir -p ${{ github.workspace }}/iris-cloud-screenshots
+          cd lib/iris && uv run --group dev python -m pytest \
+            tests/e2e/test_smoke.py \
+            -m e2e \
+            --iris-config examples/smoke.yaml \
+            --iris-mode full \
+            --iris-label-prefix "$LABEL_PREFIX" \
+            -o "addopts=" \
+            --tb=short -v \
+            --timeout=1200
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iris-cloud-smoke-screenshots
+          path: iris-cloud-screenshots/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Separate job so cleanup runs even if the test job times out or is killed.
+  # Skipped when cloud-smoke-test was skipped (e.g. non-matching comment).
+  cleanup:
+    needs: cloud-smoke-test
+    if: ${{ always() && needs.cloud-smoke-test.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LABEL_PREFIX: smoke-ci
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Tear down cluster (iris stop)
+        run: |
+          cd lib/iris && uv run --group dev iris -v \
+            --config=examples/smoke.yaml \
+            cluster stop --label "$LABEL_PREFIX" || true
+
+      - name: Failsafe GCP resource cleanup
+        run: |
+          MANAGED_LABEL="iris-${LABEL_PREFIX}-managed"
+          PROJECT="${{ secrets.GCP_PROJECT_ID }}"
+
+          echo "Cleaning up GCE instances with label ${MANAGED_LABEL}=true..."
+          gcloud compute instances list \
+            --project="$PROJECT" \
+            --filter="labels.${MANAGED_LABEL}=true" \
+            --format="csv[no-heading](name,zone)" 2>/dev/null \
+          | while IFS=, read -r name zone; do
+              [ -z "$name" ] && continue
+              echo "Deleting instance $name ($zone)"
+              gcloud compute instances delete "$name" \
+                --project="$PROJECT" --zone="$zone" --quiet || true
+            done
+
+          echo "Cleaning up TPU VMs with label ${MANAGED_LABEL}=true..."
+          gcloud compute tpus tpu-vm list \
+            --project="$PROJECT" --zone=- \
+            --filter="labels.${MANAGED_LABEL}=true" \
+            --format="csv[no-heading](name,zone)" 2>/dev/null \
+          | while IFS=, read -r name zone; do
+              [ -z "$name" ] && continue
+              echo "Deleting TPU $name ($zone)"
+              gcloud compute tpus tpu-vm delete "$name" \
+                --project="$PROJECT" --zone="$zone" --quiet || true
+            done
+
+      - name: Set commit status to result
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          if [ "${{ needs.cloud-smoke-test.result }}" = "success" ]; then
+            state=success
+          else
+            state=failure
+          fi
+          gh api repos/${{ github.repository }}/statuses/"$sha" \
+            -f state="$state" \
+            -f context="Iris Cloud Smoke Test" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
