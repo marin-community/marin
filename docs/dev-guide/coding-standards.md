@@ -12,7 +12,7 @@ Every rule includes a rationale and a concrete bad/good example.
 
 ### 1.1 Imports
 
-All imports at the top of the file. No mid-function imports 
+All imports at the top of the file. No mid-function imports
 except to guard optional third-party packages. Fix circular imports
 by refactoring to a common package instead of hacking around them.
 
