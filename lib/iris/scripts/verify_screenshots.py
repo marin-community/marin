@@ -15,8 +15,9 @@ def verify_screenshot(image_path: Path, description: str) -> tuple[bool, str]:
         f"the following description.\n\n"
         f"Description: {description}\n\n"
         f"Reply with exactly OK if the screenshot matches, or NOT_OK followed by "
-        f"a brief explanation. Be lenient about exact text but verify structural "
-        f"elements (badges, tables, cards, charts) are present."
+        f"a brief explanation. Be lenient about exact text matches etc but verify structural "
+        f"elements (badges, tables, cards, charts) are present. We're trying to test for big failures"
+        f"not minor structural changes or individual log lines."
     )
     result = subprocess.run(
         ["claude", "--print", prompt],
