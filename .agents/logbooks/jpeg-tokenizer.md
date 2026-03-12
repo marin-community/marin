@@ -986,3 +986,48 @@
     total bits/image
   - exact symbols remain the best non-coefficient whole-image JPEG representation
   - bytes are still worst, and removing headers still does not matter
+
+### 2026-03-11 22:23 - Longer-run and larger-model JPEG sweeps launched
+
+- Goal:
+  - first test whether the current ordering survives more training at the same small model
+  - then test whether the ordering is just a small-model artifact by staging a modestly larger SWA model on the same
+    three representations
+- Code:
+  - commit:
+    `d9be3644f` (`Stage JPEG long-run and large-model sweeps`)
+  - added a larger baseline model in
+    `experiments/jpeg_tokenizer/base/model.py`:
+    `hidden_dim=768`, `intermediate_dim=2688`, `num_layers=8`, `num_heads=12`
+  - added long-run resume steps and larger-model smoke steps in
+    `experiments/jpeg_tokenizer/base/launch.py`
+- Current long-run jobs:
+  - `ray-run-dlwh-launch-20260312-052159`
+    - `tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-long`
+    - resumes from
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial-7e3e81/checkpoints`
+    - target steps:
+      `8000`
+  - `ray-run-dlwh-launch-20260312-052212`
+    - `tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-long`
+    - resumes from
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3/checkpoints`
+    - target steps:
+      `8000`
+  - `ray-run-dlwh-launch-20260312-052225`
+    - `tokexplore/jpeg-tokenizer-bytes-whole-swa4096-long`
+    - resumes from
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-swa4096-trial-7cc718/checkpoints`
+    - target steps:
+      `8000`
+- Current larger-model smokes:
+  - `ray-run-dlwh-launch-20260312-052055`
+    - `tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-large-swa4096-smoke`
+  - `ray-run-dlwh-launch-20260312-052237`
+    - `tokexplore/jpeg-tokenizer-k64-libjpeg-large-swa4096-smoke`
+  - `ray-run-dlwh-launch-20260312-052250`
+    - `tokexplore/jpeg-tokenizer-bytes-whole-large-swa4096-smoke`
+- Initial cluster check:
+  - all six are controller-`RUNNING`
+  - I only submitted the larger-model variants as smokes because batch must stay divisible by the 8-way TPU mesh and
+    the larger model may still hit memory limits at these sequence lengths
