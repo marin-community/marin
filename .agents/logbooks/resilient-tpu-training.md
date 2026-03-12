@@ -726,3 +726,28 @@
   - commit this patch
   - stop `0312f` and relaunch a fresh executor-dispatched run with the same benchmark settings
   - monitor the new run to confirm publish warnings disappear and syncs proceed
+
+### 2026-03-12 11:43 - Rolled `0312f` and relaunched `0312g` with staged-publish patch
+- Hypothesis:
+  - once the staged-publish patch is in the launched workspace, elastic workers should avoid the deleted-buffer skip loop seen in `0312f` and resume real sync behavior as soon as TPU capacity admits workers.
+- Command:
+  - stopped:
+    - `uv run iris --config lib/iris/examples/marin.yaml job stop /dlwh/resilient-1e19-0312f-diloco-adam100-executor-parent`
+  - launched:
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --region us-central1 --job-name resilient-1e19-0312g-diloco-adam100-executor-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare_executor --benchmark-id resilient-1e19-0312g-diloco-adam100 --output-root gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-1e19-0312g-diloco-adam100 --region us-central1 --sync-every 100 --publish-every 100 --steps-per-eval 500 --max-eval-batches 1 --outer-optimizer adam --outer-learning-rate 0.05`
+  - monitor snapshots:
+    - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /dlwh/resilient-1e19-0312g-diloco-adam100-executor-parent`
+    - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 900 --include-children /dlwh/resilient-1e19-0312g-diloco-adam100-executor-parent | rg -n "wandb|Skipping elastic transfer publish|Array has been deleted|Traceback"`
+- Result:
+  - previous run tree `0312f` was terminated successfully.
+  - new executor parent is running:
+    - `/dlwh/resilient-1e19-0312g-diloco-adam100-executor-parent`
+  - both launchers are running, but all TPU training children are still capacity-pending:
+    - baseline `train_lm` pending on `tpu_v5p_32-us-central1-a`
+    - elastic workers `w000..w003` pending on `tpu_v5p_8-us-central1-a`
+  - no new training logs yet (no W&B run links or publish/sync lines) because TPU workers have not started.
+- Interpretation:
+  - rollout is complete; live verification of the staged-publish fix is now blocked on TPU admission rather than software failure.
+- Next action:
+  - continue monitoring `0312g` until at least one elastic worker starts
+  - as soon as workers run, verify that the previous `Skipping elastic transfer publish` loop does not recur
