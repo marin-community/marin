@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Subprocess-based container runtime for local execution.
@@ -25,13 +25,15 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import uuid
 import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import build_device_env_vars
 from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
@@ -40,11 +42,17 @@ from iris.cluster.runtime.profile import (
     resolve_cpu_spec,
     resolve_memory_spec,
 )
-from iris.cluster.runtime.types import ContainerConfig, ContainerStats, ContainerStatus
+from iris.cluster.runtime.profile import run_pyspy_dump
+from iris.cluster.runtime.types import (
+    ContainerConfig,
+    ContainerPhase,
+    ContainerStats,
+    ContainerStatus,
+    RuntimeLogReader,
+)
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +268,67 @@ class ProcessContainer:
             self._exit_code = 137  # 128 + SIGKILL
 
 
+def _read_proc_memory_mb(pid: int) -> int | None:
+    """Read RSS memory in MB for a process.
+
+    On Linux reads /proc/{pid}/statm directly. On macOS shells out to ps.
+    Returns None if the process doesn't exist or the read fails.
+    """
+    if sys.platform == "linux":
+        try:
+            with open(f"/proc/{pid}/statm") as f:
+                parts = f.read().split()
+            resident_pages = int(parts[1])
+            return (resident_pages * os.sysconf("SC_PAGE_SIZE")) // (1024 * 1024)
+        except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+            return None
+    else:
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "rss=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            rss_kb = int(result.stdout.strip())
+            return rss_kb // 1024
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            return None
+
+
+def _read_proc_cpu_percent(
+    pid: int,
+    prev_total: float,
+    prev_utime: float,
+) -> tuple[int, float, float]:
+    """Compute delta CPU usage percentage between calls.
+
+    On Linux reads /proc/{pid}/stat and /proc/stat. On other platforms returns 0.
+    Returns (cpu_percent, new_total, new_utime).
+    """
+    if sys.platform != "linux":
+        return (0, prev_total, prev_utime)
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().split()
+        utime = int(fields[13]) + int(fields[14])
+
+        with open("/proc/stat") as f:
+            cpu_line = f.readline()
+        total = sum(int(x) for x in cpu_line.split()[1:])
+
+        delta_total = total - prev_total
+        delta_utime = utime - prev_utime
+        if delta_total <= 0 or prev_total == 0:
+            return (0, total, utime)
+        pct = int((delta_utime / delta_total) * 100)
+        return (pct, total, utime)
+    except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+        return (0, prev_total, prev_utime)
+
+
 def _cpu_profile_stub(cpu_format: int) -> bytes:
     """Return a minimal stub CPU profile for when py-spy is unavailable."""
     if cpu_format == cluster_pb2.CpuProfile.FLAMEGRAPH:
@@ -289,6 +358,22 @@ def _memory_profile_stub(memory_format: int) -> bytes:
         return b'{"error": "memray unavailable in local mode"}'
 
 
+class ProcessLogReader:
+    """Index-based incremental log reader for ProcessContainer._logs."""
+
+    def __init__(self, logs: list[LogLine]) -> None:
+        self._logs = logs
+        self._index: int = 0
+
+    def read(self) -> list[LogLine]:
+        new_lines = self._logs[self._index :]
+        self._index = len(self._logs)
+        return new_lines
+
+    def read_all(self) -> list[LogLine]:
+        return list(self._logs)
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -301,6 +386,8 @@ class ProcessContainerHandle:
     runtime: ProcessRuntime
     _container: ProcessContainer | None = field(default=None, repr=False)
     _container_id: str | None = field(default=None, repr=False)
+    _prev_cpu_total: float = field(default=0.0, repr=False)
+    _prev_cpu_utime: float = field(default=0.0, repr=False)
 
     @property
     def container_id(self) -> str | None:
@@ -345,9 +432,6 @@ class ProcessContainerHandle:
                     break
             remapped_cmd.append(arg)
 
-        # Create container with remapped environment and command
-        from dataclasses import replace
-
         updated_config = replace(config, env=env)
 
         self._container_id = f"local-{uuid.uuid4().hex[:8]}"
@@ -372,39 +456,49 @@ class ProcessContainerHandle:
     def status(self) -> ContainerStatus:
         """Check container status (running, exit code, error)."""
         if not self._container:
-            return ContainerStatus(running=False, error="Container not started")
+            return ContainerStatus(phase=ContainerPhase.STOPPED, error="Container not started")
         return ContainerStatus(
-            running=self._container._running,
+            phase=ContainerPhase.RUNNING if self._container._running else ContainerPhase.STOPPED,
             exit_code=self._container._exit_code,
             error=self._container._error,
         )
 
-    def logs(self, since: Timestamp | None = None) -> list[LogLine]:
-        """Get container logs since timestamp."""
-        if not self._container:
-            return []
-        if since:
-            since_dt = datetime.fromtimestamp(since.epoch_seconds(), tz=timezone.utc)
-            return [log for log in self._container._logs if log.timestamp > since_dt]
-        return self._container._logs
+    def log_reader(self) -> RuntimeLogReader:
+        """Create an incremental log reader for this container."""
+        return ProcessLogReader(self._container._logs if self._container else [])
 
     def stats(self) -> ContainerStats:
-        """Get resource usage statistics."""
-        return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
+        """Get resource usage statistics from the underlying subprocess."""
+        if not self._container or not self._container._process or self._container._process.poll() is not None:
+            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+
+        pid = self._container._process.pid
+        memory_mb = _read_proc_memory_mb(pid)
+        cpu_pct, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_percent(
+            pid, self._prev_cpu_total, self._prev_cpu_utime
+        )
+        return ContainerStats(
+            memory_mb=memory_mb or 0,
+            cpu_percent=cpu_pct,
+            process_count=1,
+            available=memory_mb is not None,
+        )
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory), with fallback stubs."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
 
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
 
-        # Dispatch to CPU or memory profiling
-        if profile_type.HasField("cpu"):
+        if profile_type.HasField("threads"):
+            pid = str(self._container._process.pid)
+            return run_pyspy_dump(pid)
+        elif profile_type.HasField("cpu"):
             return self._profile_cpu(duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
             return self._profile_memory(duration_seconds, profile_type.memory)
         else:
-            raise RuntimeError("ProfileType must specify either cpu or memory profiler")
+            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
     def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""
@@ -413,8 +507,6 @@ class ProcessContainerHandle:
 
         output_path = None
         try:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
                 output_path = f.name
 
@@ -422,8 +514,12 @@ class ProcessContainerHandle:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
             if result.returncode == 0:
                 return Path(output_path).read_bytes()
-        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError):
-            logger.warning("py-spy profiling failed for PID %s; falling back to stub", pid, exc_info=True)
+        except FileNotFoundError:
+            logger.warning("py-spy not found; falling back to stub profile for PID %s", pid)
+        except subprocess.TimeoutExpired:
+            logger.warning("py-spy timed out; falling back to stub profile for PID %s", pid)
+        except PermissionError:
+            logger.warning("py-spy lacks permission to attach; falling back to stub profile for PID %s", pid)
         finally:
             if output_path is not None:
                 Path(output_path).unlink(missing_ok=True)
@@ -438,8 +534,6 @@ class ProcessContainerHandle:
         trace_path = None
         output_path = None
         try:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
                 trace_path = f.name
 
@@ -464,8 +558,14 @@ class ProcessContainerHandle:
             else:
                 return result.stdout.encode("utf-8")
 
-        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, OSError, RuntimeError):
-            logger.warning("memray profiling failed for PID %s; falling back to stub", pid, exc_info=True)
+        except FileNotFoundError:
+            logger.warning("memray not found; falling back to stub profile for PID %s", pid)
+        except subprocess.TimeoutExpired:
+            logger.warning("memray timed out; falling back to stub profile for PID %s", pid)
+        except PermissionError:
+            logger.warning("memray lacks permission to attach; falling back to stub profile for PID %s", pid)
+        except RuntimeError:
+            logger.warning("memray failed for PID %s; falling back to stub", pid, exc_info=True)
         finally:
             if trace_path is not None:
                 Path(trace_path).unlink(missing_ok=True)
@@ -502,6 +602,19 @@ class ProcessRuntime:
         handle = ProcessContainerHandle(config=config, runtime=self)
         self._handles.append(handle)
         return handle
+
+    def stage_bundle(
+        self,
+        *,
+        bundle_id: str,
+        workdir: Path,
+        workdir_files: dict[str, bytes],
+        bundle_store: BundleStore,
+    ) -> None:
+        """Stage bundle and workdir files on worker-local filesystem."""
+        if bundle_id:
+            bundle_store.extract_bundle_to(bundle_id, workdir)
+        bundle_store.write_workdir_files(workdir, workdir_files)
 
     def list_containers(self) -> list[ProcessContainerHandle]:
         """List all managed container handles."""

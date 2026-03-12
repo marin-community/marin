@@ -1,11 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Fake implementations for testing.
 
 Provides:
-- FakePlatform / FakeSliceHandle / FakeVmHandle: In-memory Platform that
-  simulates VM lifecycle with configurable delays and failure injection.
+- FakePlatform / FakeSliceHandle / FakeWorkerHandle: In-memory Platform that
+  simulates worker lifecycle with configurable delays and failure injection.
 - FakeGcloud: In-memory gcloud CLI fake that intercepts subprocess.run calls,
   simulating TPU and GCE instance lifecycle for testing GcpPlatform.
 
@@ -36,11 +36,11 @@ import pytest
 
 from iris.cluster.platform.base import (
     CloudSliceState,
-    CloudVmState,
+    CloudWorkerState,
     CommandResult,
     QuotaExhaustedError,
     SliceStatus,
-    VmStatus,
+    WorkerStatus,
 )
 from iris.cluster.types import get_tpu_topology
 from iris.rpc import config_pb2
@@ -57,8 +57,8 @@ class FailureMode(Enum):
     QUOTA_EXCEEDED = auto()
 
 
-class FakeVmHandle:
-    """In-memory VmHandle that simulates state transitions.
+class FakeWorkerHandle:
+    """In-memory worker handle that simulates state transitions.
 
     State transitions happen during explicit tick() calls on FakeSliceHandle,
     making tests deterministic.
@@ -74,7 +74,7 @@ class FakeVmHandle:
     ):
         self._vm_id = vm_id
         self._address = address
-        self._state = CloudVmState.UNKNOWN  # Starts as "not yet running"
+        self._state = CloudWorkerState.UNKNOWN  # Starts as "not yet running"
         self._state_changed_at_ms = created_at_ms
         self._boot_delay_ms = boot_delay_ms
         self._init_delay_ms = init_delay_ms
@@ -92,6 +92,10 @@ class FakeVmHandle:
         return self._vm_id
 
     @property
+    def worker_id(self) -> str:
+        return self._vm_id
+
+    @property
     def internal_address(self) -> str:
         return self._address
 
@@ -99,8 +103,8 @@ class FakeVmHandle:
     def external_address(self) -> str | None:
         return None
 
-    def status(self) -> VmStatus:
-        return VmStatus(state=self._state)
+    def status(self) -> WorkerStatus:
+        return WorkerStatus(state=self._state)
 
     def wait_for_connection(self, timeout: Duration, poll_interval: Duration = Duration.from_seconds(5)) -> bool:
         return self._wait_for_connection_succeeds
@@ -133,11 +137,11 @@ class FakeVmHandle:
             if elapsed >= self._init_delay_ms:
                 self._iris_state_initializing = False
                 self._iris_state_ready = True
-                self._state = CloudVmState.RUNNING
+                self._state = CloudWorkerState.RUNNING
                 self._state_changed_at_ms = ts
 
     def set_terminated(self) -> None:
-        self._state = CloudVmState.TERMINATED
+        self._state = CloudWorkerState.TERMINATED
         self._iris_state_booting = False
         self._iris_state_initializing = False
         self._iris_state_ready = False
@@ -146,7 +150,7 @@ class FakeVmHandle:
 class FakeSliceHandle:
     """In-memory SliceHandle for testing.
 
-    Holds FakeVmHandle instances and computes status from their states.
+    Holds FakeWorkerHandle instances and computes status from their states.
     State transitions happen during tick() calls.
     """
 
@@ -155,9 +159,10 @@ class FakeSliceHandle:
         slice_id: str,
         scale_group: str,
         zone: str,
-        vms: list[FakeVmHandle],
+        vms: list[FakeWorkerHandle],
         labels: dict[str, str] | None = None,
         created_at_ms: int | None = None,
+        worker_config: config_pb2.WorkerConfig | None = None,
     ):
         self._slice_id = slice_id
         self._scale_group = scale_group
@@ -166,6 +171,8 @@ class FakeSliceHandle:
         self._labels = labels or {}
         self._created_at = Timestamp.from_ms(created_at_ms) if created_at_ms is not None else Timestamp.now()
         self._terminated = False
+        self._worker_config = worker_config
+        self._bootstrapped = False
 
     @property
     def slice_id(self) -> str:
@@ -189,10 +196,15 @@ class FakeSliceHandle:
 
     def describe(self) -> SliceStatus:
         if self._terminated:
-            return SliceStatus(state=CloudSliceState.DELETING, vm_count=len(self._vms), vms=list(self._vms))
-        all_running = all(vm._state == CloudVmState.RUNNING for vm in self._vms)
-        state = CloudSliceState.READY if all_running else CloudSliceState.CREATING
-        return SliceStatus(state=state, vm_count=len(self._vms), vms=list(self._vms))
+            return SliceStatus(state=CloudSliceState.DELETING, worker_count=len(self._vms), workers=list(self._vms))
+        all_running = all(vm._state == CloudWorkerState.RUNNING for vm in self._vms)
+        if all_running and self._worker_config and not self._bootstrapped:
+            state = CloudSliceState.BOOTSTRAPPING
+        elif all_running and (not self._worker_config or self._bootstrapped):
+            state = CloudSliceState.READY
+        else:
+            state = CloudSliceState.CREATING
+        return SliceStatus(state=state, worker_count=len(self._vms), workers=list(self._vms))
 
     def terminate(self) -> None:
         for vm in self._vms:
@@ -200,9 +212,15 @@ class FakeSliceHandle:
         self._terminated = True
 
     def tick(self, ts: int) -> None:
-        """Advance VM state transitions."""
+        """Advance VM state transitions and simulate bootstrap when configured."""
         for vm in self._vms:
             vm.tick(ts)
+        if self._worker_config and not self._bootstrapped:
+            all_running = all(vm._state == CloudWorkerState.RUNNING for vm in self._vms)
+            if all_running:
+                for vm in self._vms:
+                    vm._bootstrap_count += 1
+                self._bootstrapped = True
 
 
 @dataclass
@@ -228,7 +246,7 @@ class FakePlatform:
     """In-memory Platform for testing.
 
     Implements the Platform protocol. Creates FakeSliceHandle instances with
-    FakeVmHandle that transition states during tick() calls.
+    FakeWorkerHandle that transition states during tick() calls.
 
     Thread-safe for use in concurrent tests.
     """
@@ -239,11 +257,23 @@ class FakePlatform:
         self._slices: dict[str, FakeSliceHandle] = {}
         self._slice_counter = 0
 
+    def resolve_image(self, image: str, zone: str | None = None) -> str:
+        return image
+
     def create_vm(self, config: config_pb2.VmConfig):
         raise NotImplementedError("FakePlatform does not support standalone VMs")
 
-    def create_slice(self, config: config_pb2.SliceConfig) -> FakeSliceHandle:
-        """Create a new fake slice."""
+    def create_slice(
+        self,
+        config: config_pb2.SliceConfig,
+        worker_config: config_pb2.WorkerConfig | None = None,
+    ) -> FakeSliceHandle:
+        """Create a new fake slice.
+
+        When worker_config is provided, the slice starts in CREATING state and
+        transitions through BOOTSTRAPPING to READY during tick(). Without it,
+        slices go straight from CREATING to READY (no bootstrap simulation).
+        """
         if self._config.failure_mode == FailureMode.QUOTA_EXCEEDED:
             raise QuotaExhaustedError(f"Quota exceeded for {self._config.config.name}")
         if self._config.failure_mode == FailureMode.CREATE_FAILS:
@@ -254,33 +284,37 @@ class FakePlatform:
             slice_id = f"fake-slice-{self._config.config.name}-{self._slice_counter}"
             ts = Timestamp.now().epoch_ms()
 
-            topology = get_tpu_topology(self._config.config.accelerator_variant)
+            device_variant = (
+                self._config.config.resources.device_variant if self._config.config.HasField("resources") else ""
+            )
+            topology = get_tpu_topology(device_variant)
             vm_count = topology.vm_count
             zone = self._config.config.slice_template.gcp.zone or "us-central1-a"
 
-            vms = []
+            workers = []
             for i in range(vm_count):
-                vm = FakeVmHandle(
+                worker = FakeWorkerHandle(
                     vm_id=f"{slice_id}-vm-{i}",
                     address=f"10.128.0.{self._slice_counter * 10 + i}",
                     created_at_ms=ts,
                     boot_delay_ms=self._config.boot_delay_ms,
                     init_delay_ms=self._config.init_delay_ms,
                 )
-                vms.append(vm)
+                workers.append(worker)
 
             labels = dict(config.labels) if config.labels else {}
             fake_slice = FakeSliceHandle(
                 slice_id=slice_id,
                 scale_group=self._config.config.name,
                 zone=zone,
-                vms=vms,
+                vms=workers,
                 labels=labels,
                 created_at_ms=ts,
+                worker_config=worker_config,
             )
             self._slices[slice_id] = fake_slice
 
-            logger.debug("Created fake slice %s with %d VMs", slice_id, vm_count)
+            logger.debug("Created fake slice %s with %d workers", slice_id, vm_count)
             return fake_slice
 
     def list_slices(
@@ -319,6 +353,16 @@ class FakePlatform:
         with self._lock:
             for fake_slice in self._slices.values():
                 fake_slice.tick(ts)
+
+    def inject_slice(self, handle: FakeSliceHandle) -> None:
+        """Add a slice without going through create_slice(). Simulates pre-existing cloud slices."""
+        with self._lock:
+            self._slices[handle.slice_id] = handle
+
+    def remove_slice(self, slice_id: str) -> None:
+        """Remove a slice without calling terminate(). Simulates termination during restart."""
+        with self._lock:
+            self._slices.pop(slice_id, None)
 
     def set_failure_mode(self, mode: FailureMode) -> None:
         """Set the failure mode for subsequent operations."""
@@ -390,6 +434,10 @@ class FakeGcloud:
     _tpus: dict[tuple[str, str], dict] = field(default_factory=dict)
     _vms: dict[tuple[str, str], dict] = field(default_factory=dict)
     _failures: dict[str, tuple[str, int]] = field(default_factory=dict)
+    # Serial port output per VM, appended to by tests to simulate startup-script progress.
+    _serial_output: dict[tuple[str, str], str] = field(default_factory=dict)
+    # Cloud Logging entries keyed by TPU name, for testing _fetch_bootstrap_logs.
+    _cloud_log_entries: dict[str, list[str]] = field(default_factory=dict)
 
     def set_failure(self, operation: str, error: str, code: int = 1) -> None:
         """Make a specific operation type fail on the next call.
@@ -452,6 +500,10 @@ class FakeGcloud:
             return self._vm_update(cmd, tokens[3])
         if _matches_gcloud(tokens, ["compute", "instances", "add-metadata", None]):
             return self._vm_add_metadata(cmd, tokens[3])
+        if _matches_gcloud(tokens, ["compute", "instances", "get-serial-port-output", None]):
+            return self._vm_get_serial_port_output(cmd, tokens[3])
+        if len(tokens) >= 2 and tokens[0] == "logging" and tokens[1] == "read":
+            return self._logging_read(cmd)
 
         raise ValueError(f"FakeGcloud: unrecognized command: {cmd}")
 
@@ -489,13 +541,31 @@ class FakeGcloud:
         if labels_str:
             labels = _parse_labels_string(labels_str)
 
+        # Parse --metadata-from-file=key=path and read file contents into metadata.
+        metadata: dict[str, str] = {}
+        metadata_from_file_str = _parse_flag(cmd, "metadata-from-file")
+        if metadata_from_file_str and "=" in metadata_from_file_str:
+            key, path = metadata_from_file_str.split("=", 1)
+            try:
+                with open(path) as f:
+                    metadata[key] = f.read()
+            except OSError:
+                pass
+
         idx = len(self._tpus)
+        try:
+            topology = get_tpu_topology(accel_type)
+            vm_count = topology.vm_count
+        except ValueError:
+            vm_count = 1
+        endpoints = [{"ipAddress": f"10.0.{idx}.{i + 1}"} for i in range(vm_count)]
         tpu_data = {
             "name": name,
             "state": "READY",
             "acceleratorType": accel_type,
             "labels": labels,
-            "networkEndpoints": [{"ipAddress": f"10.0.0.{idx + 1}"}],
+            "metadata": metadata,
+            "networkEndpoints": endpoints,
             "createTime": "2024-01-15T10:30:00.000Z",
         }
         self._tpus[(name, zone)] = tpu_data
@@ -565,6 +635,16 @@ class FakeGcloud:
 
         metadata_str = _parse_flag(cmd, "metadata")
         metadata = _parse_labels_string(metadata_str) if metadata_str else {}
+
+        # Parse --metadata-from-file=key=path and read file contents into metadata.
+        metadata_from_file_str = _parse_flag(cmd, "metadata-from-file")
+        if metadata_from_file_str and "=" in metadata_from_file_str:
+            key, path = metadata_from_file_str.split("=", 1)
+            try:
+                with open(path) as f:
+                    metadata[key] = f.read()
+            except OSError:
+                pass
 
         idx = len(self._vms) + 1
         vm_data = {
@@ -650,6 +730,42 @@ class FakeGcloud:
             self._vms[key].setdefault("metadata", {}).update(new_metadata)
 
         return FakeResult(returncode=0)
+
+    def _vm_get_serial_port_output(self, cmd: list[str], name: str) -> FakeResult:
+        zone = _parse_flag(cmd, "zone")
+        key = (name, zone)
+        if key not in self._vms:
+            return FakeResult(returncode=1, stderr="NOT_FOUND")
+
+        full_output = self._serial_output.get(key, "")
+        start_str = _parse_flag(cmd, "start")
+        start = int(start_str) if start_str else 0
+        return FakeResult(returncode=0, stdout=full_output[start:])
+
+    def append_serial_output(self, name: str, zone: str, text: str) -> None:
+        """Append text to a VM's serial port output buffer for testing."""
+        key = (name, zone)
+        self._serial_output[key] = self._serial_output.get(key, "") + text
+
+    # -------------------------------------------------------------------------
+    # Cloud Logging handler
+    # -------------------------------------------------------------------------
+
+    def _logging_read(self, cmd: list[str]) -> FakeResult:
+        """Handle `gcloud logging read <filter>` by returning stored log entries."""
+        if failure := self._check_failure("logging_read"):
+            return failure
+
+        # Return all log entries that match any TPU name in _cloud_log_entries.
+        # In tests we key by TPU name for simplicity.
+        all_lines: list[str] = []
+        for entries in self._cloud_log_entries.values():
+            all_lines.extend(entries)
+        return FakeResult(returncode=0, stdout="\n".join(all_lines))
+
+    def append_cloud_log(self, tpu_name: str, text: str) -> None:
+        """Append a Cloud Logging entry for a TPU, used for testing _fetch_bootstrap_logs."""
+        self._cloud_log_entries.setdefault(tpu_name, []).append(text)
 
 
 def _matches_gcloud(tokens: list[str], pattern: list[str | None]) -> bool:

@@ -1,7 +1,7 @@
-use crate::hashing::{HashAlgorithm, DEFAULT_HASH_ALGO};
+use crate::hashing::HashAlgorithm;
 use crate::minhash_ops;
 use crate::ops;
-use arrow::array::{Array, StringBuilder};
+use arrow::array::Array;
 use arrow::datatypes::{Field, Schema};
 use arrow::pyarrow::PyArrowType;
 use arrow::record_batch::RecordBatch;
@@ -13,11 +13,6 @@ use std::sync::Arc;
 #[derive(Clone)]
 #[pyclass(module = "dupekit")]
 pub enum Transformation {
-    ResolveIds {
-        text_col: String,
-        id_col: String,
-        output_col: String,
-    },
     SplitParagraphs {
         text_col: String,
         id_col: String,
@@ -51,16 +46,6 @@ pub enum Transformation {
 
 #[pymethods]
 impl Transformation {
-    #[staticmethod]
-    #[pyo3(name = "ResolveIds")]
-    fn resolve_ids(text_col: String, id_col: String, output_col: String) -> Transformation {
-        Self::ResolveIds {
-            text_col,
-            id_col,
-            output_col,
-        }
-    }
-
     #[staticmethod]
     #[pyo3(name = "SplitParagraphs")]
     fn split_paragraphs(text_col: String, id_col: String) -> Transformation {
@@ -127,36 +112,6 @@ impl Transformation {
 
 fn apply_transformation(batch: RecordBatch, step: &Transformation) -> PyResult<RecordBatch> {
     match step {
-        Transformation::ResolveIds {
-            text_col,
-            id_col,
-            output_col,
-        } => {
-            let text_arr = ops::get_string_array(&batch, text_col)?;
-            let maybe_id_arr = if batch.column_by_name(id_col).is_some() {
-                Some(ops::get_string_array(&batch, id_col)?)
-            } else {
-                None
-            };
-            let algo = DEFAULT_HASH_ALGO; // Default for ID imputation
-
-            let mut builder = StringBuilder::with_capacity(batch.num_rows(), batch.num_rows() * 16);
-            for i in 0..batch.num_rows() {
-                if let Some(id_arr) = &maybe_id_arr {
-                    if id_arr.is_valid(i) {
-                        builder.append_value(id_arr.value(i));
-                        continue;
-                    }
-                }
-                if text_arr.is_valid(i) {
-                    builder.append_value(algo.hash_to_hex(text_arr.value(i).as_bytes()));
-                } else {
-                    builder.append_null();
-                }
-            }
-            ops::add_column(&batch, output_col, Arc::new(builder.finish()))
-        }
-
         Transformation::SplitParagraphs { text_col, id_col } => {
             let text_arr = ops::get_string_array(&batch, text_col)?;
             let id_arr = ops::get_string_array(&batch, id_col)?;

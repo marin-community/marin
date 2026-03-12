@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the fray v2 Ray backend that run WITHOUT a real Ray cluster.
@@ -231,6 +231,37 @@ def test_build_runtime_env_tpu_clears_jax_platforms():
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
 
 
+@pytest.mark.parametrize(
+    "tpu_type",
+    ["v5litepod-8", "v5p-8", "v6e-8"],
+)
+def test_build_runtime_env_tpu_sets_default_libtpu_init_args(tpu_type):
+    from fray.v2.ray_backend.backend import build_runtime_env
+
+    request = JobRequest(
+        name="tpu-libtpu-default-test",
+        entrypoint=Entrypoint.from_callable(lambda: None),
+        resources=ResourceConfig(device=TpuConfig(variant=tpu_type)),
+    )
+    env = build_runtime_env(request)
+    assert "LIBTPU_INIT_ARGS" in env["env_vars"]
+    assert env["env_vars"]["LIBTPU_INIT_ARGS"]
+
+
+def test_build_runtime_env_tpu_preserves_user_libtpu_init_args():
+    from fray.v2.ray_backend.backend import build_runtime_env
+    from fray.v2.types import create_environment
+
+    request = JobRequest(
+        name="tpu-libtpu-user-test",
+        entrypoint=Entrypoint.from_callable(lambda: None),
+        resources=ResourceConfig(device=TpuConfig(variant="v5p-8")),
+        environment=create_environment(env_vars={"LIBTPU_INIT_ARGS": "--user-specified"}),
+    )
+    env = build_runtime_env(request)
+    assert env["env_vars"]["LIBTPU_INIT_ARGS"] == "--user-specified"
+
+
 def test_build_runtime_env_gpu_clears_jax_platforms():
     from fray.v2.ray_backend.backend import build_runtime_env
 
@@ -262,3 +293,51 @@ def test_actor_options_non_preemptible_pins_head_node():
     options = _actor_ray_options(ResourceConfig(preemptible=False))
     assert options["num_cpus"] == 1
     assert options["resources"] == {"head_node": 0.0001}
+    assert "max_restarts" not in options
+
+
+def test_actor_options_preemptible_sets_max_restarts():
+    from fray.v2.ray_backend.backend import _actor_ray_options
+
+    options = _actor_ray_options(ResourceConfig(preemptible=True))
+    assert options["max_restarts"] == -1
+    assert "resources" not in options
+
+
+def test_actor_options_explicit_max_restarts_overrides_preemptible():
+    from fray.v2.ray_backend.backend import _actor_ray_options
+    from fray.v2.types import ActorConfig
+
+    options = _actor_ray_options(ResourceConfig(preemptible=True), ActorConfig(max_restarts=0))
+    assert options["max_restarts"] == 0
+    assert "resources" not in options
+
+
+# ---------------------------------------------------------------------------
+# Named actor host (_get_named_actor_host)
+# ---------------------------------------------------------------------------
+
+
+def test_named_actor_host_uses_given_name():
+    from fray.v2.ray_backend.backend import _get_named_actor_cls
+
+    cls = _get_named_actor_cls("my_workers")
+    # ray.remote() returns an ActorClass wrapper; __ray_metadata__.class_name
+    # is what Ray uses for process titles and the dashboard.
+    assert cls.__ray_metadata__.class_name == "my_workers"
+
+
+def test_named_actor_host_caches_by_name():
+    from fray.v2.ray_backend.backend import _get_named_actor_cls
+
+    cls1 = _get_named_actor_cls("cached_test")
+    cls2 = _get_named_actor_cls("cached_test")
+    assert cls1 is cls2
+
+
+def test_named_actor_host_different_names_differ():
+    from fray.v2.ray_backend.backend import _get_named_actor_cls
+
+    cls_a = _get_named_actor_cls("group_a")
+    cls_b = _get_named_actor_cls("group_b")
+    assert cls_a is not cls_b

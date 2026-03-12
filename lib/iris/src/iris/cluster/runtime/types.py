@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Container runtime protocols and data types.
@@ -17,12 +17,42 @@ too many concurrent uv sync operations.
 """
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
-from iris.time_utils import Timestamp
+
+
+class ContainerInfraError(RuntimeError):
+    """Container operation failed due to infrastructure issues (expired credentials,
+    unreachable registry, docker daemon problems). Uses preemption retry budget."""
+
+    pass
+
+
+class ContainerErrorKind(StrEnum):
+    """Structured category for container/runtime errors."""
+
+    NONE = "none"
+    USER_CODE = "user_code"
+    INFRA_NOT_FOUND = "infra_not_found"
+    RUNTIME_ERROR = "runtime_error"
+
+
+class ContainerPhase(StrEnum):
+    """Lifecycle phase of a container from the runtime's perspective.
+
+    PENDING: container created but not yet executing (K8s pod scheduling, image pull).
+    RUNNING: container is executing the main command.
+    STOPPED: container has exited (check exit_code/error for details).
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    STOPPED = "stopped"
 
 
 @dataclass
@@ -38,18 +68,24 @@ class ContainerConfig:
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     network_mode: str = "host"  # e.g. "host" for --network=host
     task_id: str | None = None
+    attempt_id: int | None = None
     job_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
-        if not self.resources or not self.resources.cpu:
+        if not self.resources or not self.resources.cpu_millicores:
             return None
-        return self.resources.cpu * 1000
+        return self.resources.cpu_millicores
 
     def get_memory_mb(self) -> int | None:
         if not self.resources or not self.resources.memory_bytes:
             return None
         return self.resources.memory_bytes // (1024 * 1024)
+
+    def get_disk_bytes(self) -> int | None:
+        if not self.resources or not self.resources.disk_bytes:
+            return None
+        return self.resources.disk_bytes
 
 
 @dataclass
@@ -75,9 +111,10 @@ class ContainerStats:
 class ContainerStatus:
     """Container state from runtime inspection."""
 
-    running: bool
+    phase: ContainerPhase
     exit_code: int | None = None
     error: str | None = None
+    error_kind: ContainerErrorKind = ContainerErrorKind.NONE
     oom_killed: bool = False
 
 
@@ -85,6 +122,23 @@ class ContainerStatus:
 class ImageInfo:
     tag: str
     created_at: str
+
+
+class RuntimeLogReader(Protocol):
+    """Opaque incremental log reader created by a ContainerHandle.
+
+    Each runtime owns the deduplication strategy (byte offsets, timestamps,
+    list indices, etc.). Callers simply call read() in a loop to get new
+    lines without duplicates.
+    """
+
+    def read(self) -> list[LogLine]:
+        """Return new log lines since the last read. Advances the cursor."""
+        ...
+
+    def read_all(self) -> list[LogLine]:
+        """Return all logs from the beginning (for error reporting)."""
+        ...
 
 
 class ContainerHandle(Protocol):
@@ -146,8 +200,8 @@ class ContainerHandle(Protocol):
         """Check container status (running, exit code, error)."""
         ...
 
-    def logs(self, since: "Timestamp | None" = None) -> list[LogLine]:
-        """Get container logs since timestamp."""
+    def log_reader(self) -> RuntimeLogReader:
+        """Create an incremental log reader for this container."""
         ...
 
     def stats(self) -> ContainerStats:
@@ -155,11 +209,11 @@ class ContainerHandle(Protocol):
         ...
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU) or memray (memory).
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
         Args:
-            duration_seconds: How long to sample
-            profile_type: ProfileType message with oneof cpu/memory profiler config
+            duration_seconds: How long to sample (ignored for threads)
+            profile_type: ProfileType message with oneof cpu/memory/threads profiler config
 
         Returns:
             Raw profile output (SVG/HTML/JSON/text depending on profiler and format)
@@ -189,8 +243,32 @@ class ContainerRuntime(Protocol):
         """
         ...
 
+    def stage_bundle(
+        self,
+        *,
+        bundle_id: str,
+        workdir: Path,
+        workdir_files: dict[str, bytes],
+        bundle_store: BundleStore,
+    ) -> None:
+        """Materialize task bundle/workdir files for this runtime.
+
+        Runtimes that execute from worker-local paths (docker/process)
+        stage the bundle into ``workdir`` directly. Kubernetes runtime may no-op
+        and materialize inside the task Pod instead.
+        """
+        ...
+
     def list_containers(self) -> list[ContainerHandle]:
         """List all managed containers."""
+        ...
+
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        """List IDs of all iris-managed containers/sandboxes."""
+        ...
+
+    def remove_all_iris_containers(self) -> int:
+        """Force remove all iris-managed containers/sandboxes. Returns count removed."""
         ...
 
     def cleanup(self) -> None:

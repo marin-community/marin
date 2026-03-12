@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Cluster interface and type definitions for job scheduling."""
@@ -250,6 +250,9 @@ class CpuConfig:
         """CPU FLOPS not tracked."""
         raise NotImplementedError("CPU FLOPS not available")
 
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": "cpu"}
+
 
 @dataclass(frozen=True)
 class GpuConfig:
@@ -275,6 +278,9 @@ class GpuConfig:
     def total_flops(self, dtype: str = "bf16") -> float:
         """Total peak FLOP/s across all GPUs."""
         return self.device_flops(dtype) * self.count
+
+    def default_env_vars(self) -> dict[str, str]:
+        return {"JAX_PLATFORMS": ""}
 
 
 @dataclass(frozen=True)
@@ -310,6 +316,14 @@ class TpuConfig:
     def total_flops(self, dtype: str = "bf16") -> float:
         """Total peak FLOP/s across all TPU chips."""
         return self.device_flops(dtype) * self.chip_count()
+
+    def default_env_vars(self) -> dict[str, str]:
+        defaults: dict[str, str] = {"JAX_PLATFORMS": ""}
+        if self.variant.startswith(("v5litepod-", "v5e-", "v5p-")):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=50000"
+        elif self.variant.startswith("v6e-"):
+            defaults["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=98304"
+        return defaults
 
 
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
@@ -358,7 +372,7 @@ class ResourceConfig:
         return ResourceConfig(device=device, replicas=slice_count, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs) -> ResourceConfig:
+    def with_gpu(gpu_type: str, count: int = 1, **kwargs) -> ResourceConfig:
         device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 

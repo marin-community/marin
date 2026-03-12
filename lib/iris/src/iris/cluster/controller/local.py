@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Local in-process controller for testing.
@@ -18,25 +18,35 @@ import threading
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.config import make_local_config
+from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
     ControllerConfig as _InnerControllerConfig,
     RpcWorkerStubFactory,
 )
-from iris.cluster.controller.lifecycle import ControllerStatus
-from iris.cluster.controller.scaling_group import ScalingGroup
-from iris.cluster.platform.local import LocalPlatform, find_free_port
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.vm_lifecycle import ControllerStatus
+from iris.cluster.controller.scaling_group import (
+    DEFAULT_SCALE_DOWN_RATE_LIMIT,
+    DEFAULT_SCALE_UP_RATE_LIMIT,
+    ScalingGroup,
+)
+from iris.cluster.platform.base import find_free_port
+from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
-from iris.rpc import config_pb2
-from iris.time_utils import Duration
+from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Duration, ExponentialBackoff
 
 
 def create_local_autoscaler(
     config: config_pb2.IrisClusterConfig,
     controller_address: str,
     threads: ThreadContainer | None = None,
+    db: ControllerDB | None = None,
 ) -> tuple[Autoscaler, tempfile.TemporaryDirectory]:
     """Create Autoscaler with LocalPlatform for all scale groups.
 
@@ -64,6 +74,22 @@ def create_local_autoscaler(
 
     port_allocator = PortAllocator()
 
+    # Extract worker attributes and GPU counts from each scale group config so
+    # that LocalPlatform can propagate them to local workers.
+    worker_attributes_by_group: dict[str, dict[str, str | int | float]] = {}
+    gpu_count_by_group: dict[str, int] = {}
+    for name, sg_config in config.scale_groups.items():
+        attrs: dict[str, str | int | float] = {}
+        if sg_config.HasField("resources"):
+            attrs.update(worker_attributes_from_resources(sg_config.resources))
+        if sg_config.HasField("worker") and sg_config.worker.attributes:
+            attrs.update(sg_config.worker.attributes)
+        worker_attributes_by_group[name] = attrs
+        if sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and sg_config.resources.device_count > 0:
+            gpu_count_by_group[name] = sg_config.resources.device_count
+
+    storage_prefix = config.storage.bundle_prefix or ""
+
     platform = LocalPlatform(
         label_prefix=label_prefix,
         threads=threads,
@@ -71,10 +97,12 @@ def create_local_autoscaler(
         cache_path=cache_path,
         fake_bundle=fake_bundle,
         port_allocator=port_allocator,
+        worker_attributes_by_group=worker_attributes_by_group,
+        gpu_count_by_group=gpu_count_by_group,
+        storage_prefix=storage_prefix,
     )
 
     scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
-    scale_down_delay = Duration.from_proto(config.defaults.autoscaler.scale_down_delay)
 
     scale_groups: dict[str, ScalingGroup] = {}
     for name, sg_config in config.scale_groups.items():
@@ -83,7 +111,9 @@ def create_local_autoscaler(
             platform=platform,
             label_prefix=label_prefix,
             scale_up_cooldown=scale_up_delay,
-            scale_down_cooldown=scale_down_delay,
+            scale_up_rate_limit=sg_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
+            scale_down_rate_limit=sg_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
+            db=db,
         )
 
     autoscaler = Autoscaler.from_config(
@@ -91,6 +121,7 @@ def create_local_autoscaler(
         config=config.defaults.autoscaler,
         platform=platform,
         threads=threads,
+        db=db,
     )
     return autoscaler, temp_dir
 
@@ -104,6 +135,7 @@ class _InProcessController(Protocol):
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
+    def restore_from_checkpoint(self) -> bool: ...
 
     @property
     def url(self) -> str: ...
@@ -114,6 +146,10 @@ class LocalController:
 
     Runs Controller + Autoscaler(LocalPlatform) in the current process.
     Workers are threads, not VMs. No Docker, no GCS, no SSH.
+
+    A single instance can be stopped and restarted via restart(). The controller
+    DB lives in a persistent _db_dir created at construction time, so checkpoints
+    written before stop() are found and restored on the next start().
     """
 
     def __init__(
@@ -128,6 +164,8 @@ class LocalController:
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
         self._stopped = threading.Event()
+        # Persistent across stop()/start() so checkpoints survive restart().
+        self._db_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_db_")
 
     def start(self) -> str:
         self._stopped = threading.Event()
@@ -142,30 +180,31 @@ class LocalController:
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
+        db = ControllerDB(db_path=Path(self._db_dir.name) / "controller.sqlite3")
+
         # Autoscaler creates its own temp dirs for worker resources
         self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
             self._config,
             address,
             threads=autoscaler_threads,
+            db=db,
         )
 
-        worker_timeout = (
-            Duration.from_proto(self._config.controller.worker_timeout)
-            if self._config.controller.worker_timeout.milliseconds > 0
-            else Duration.from_seconds(60.0)
-        )
         self._controller = _InnerController(
             config=_InnerControllerConfig(
                 host="127.0.0.1",
                 port=port,
-                bundle_prefix=self._config.controller.bundle_prefix or f"file://{bundle_dir}",
-                worker_timeout=worker_timeout,
+                bundle_prefix=self._config.storage.bundle_prefix or f"file://{bundle_dir}",
+                heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
+                log_dir=Path(self._db_dir.name),
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,
             threads=controller_threads,
+            db=db,
         )
+        self._controller.restore_from_checkpoint()
         self._controller.start()
         return self._controller.url
 
@@ -183,6 +222,11 @@ class LocalController:
             self._temp_dir.cleanup()
             self._temp_dir = None
 
+    def close(self) -> None:
+        """Stop the controller and release all resources including the DB dir."""
+        self.stop()
+        self._db_dir.cleanup()
+
     def wait(self) -> None:
         """Block until stop() is called."""
         self._stopped.wait()
@@ -190,9 +234,6 @@ class LocalController:
     def restart(self) -> str:
         self.stop()
         return self.start()
-
-    def reload(self) -> str:
-        return self.restart()
 
     def discover(self) -> str | None:
         return self._controller.url if self._controller else None
@@ -208,3 +249,53 @@ class LocalController:
 
     def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
         return "(local controller — no startup logs)"
+
+
+def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
+    """Build a fully-configured IrisClusterConfig for local execution.
+
+    Creates a minimal base config and transforms it via make_local_config()
+    to ensure local defaults (fast autoscaler timings, etc.) are applied
+    consistently from config.py.
+    """
+    base_config = config_pb2.IrisClusterConfig()
+
+    sg = config_pb2.ScaleGroupConfig(
+        name="local-cpu",
+        min_slices=1,
+        max_slices=max_workers,
+        num_vms=1,
+        resources=config_pb2.ScaleGroupResources(
+            cpu_millicores=8000,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=50 * 1024**3,
+            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        ),
+    )
+    base_config.scale_groups["local-cpu"].CopyFrom(sg)
+
+    return make_local_config(base_config)
+
+
+def wait_for_worker_registration(controller_address: str, timeout: float = 10.0) -> None:
+    """Poll the controller until at least one worker has registered.
+
+    Args:
+        controller_address: Address of the controller to poll.
+        timeout: Maximum time to wait in seconds.
+
+    Raises:
+        TimeoutError: If no worker registers within the timeout.
+    """
+    temp_client = ControllerServiceClientSync(
+        address=controller_address,
+        timeout_ms=30000,
+    )
+    try:
+        ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
+            lambda: bool(temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers),
+            timeout=Duration.from_seconds(timeout),
+            error_message="Worker failed to register with controller",
+        )
+    finally:
+        temp_client.close()

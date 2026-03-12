@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""SSH into a GCP node (TPU or GCE VM) by internal IP address.
+
+Searches all zones for the node automatically.
+
+Usage:
+  scripts/gcp_ssh 10.128.0.42
+  scripts/gcp_ssh 10.128.0.42 --project my-project
+  scripts/gcp_ssh 10.128.0.42 -- ls -la
+"""
+
+import sys
+
+import click
+
+from marin.cluster import gcp
+
+
+@click.command(context_settings={"ignore_unknown_options": True})
+@click.argument("ip")
+@click.option("--project", help="GCP project ID (default: current gcloud project)")
+@click.argument("extra_args", nargs=-1, type=click.UNPROCESSED)
+def main(ip: str, project: str | None, extra_args: tuple[str, ...]):
+    """SSH into a GCP node by internal IP, searching all zones.
+
+    Tries TPU first, then falls back to GCE VM.
+    """
+    project = project or gcp.get_project_id()
+    if not project:
+        print("Error: Could not determine GCP project. Set it with: gcloud config set project <project>", file=sys.stderr)
+        sys.exit(1)
+
+    args = list(extra_args) if extra_args else None
+
+    # Try TPU first
+    tpu_result = gcp.find_tpu_by_ip(ip, project, zone="-")
+    if tpu_result:
+        tpu_name, tpu_zone, worker_id = tpu_result
+        print(f"Found TPU: {tpu_name} (zone: {tpu_zone}, worker: {worker_id})")
+        gcp.ssh_to_tpu(tpu_name, tpu_zone, project, args, worker_id)
+        return
+
+    # Try GCE VM
+    vm_result = gcp.find_vm_by_ip(ip, project)
+    if vm_result:
+        vm_name, vm_zone = vm_result
+        print(f"Found VM: {vm_name} (zone: {vm_zone})")
+        gcp.ssh_to_vm(vm_name, vm_zone, project, args)
+        return
+
+    print(f"Error: No TPU or VM found with internal IP {ip}", file=sys.stderr)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

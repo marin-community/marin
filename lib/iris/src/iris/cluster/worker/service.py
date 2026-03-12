@@ -1,10 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """WorkerService RPC implementation using Connect RPC."""
 
 import logging
-import re
 import time
 from typing import Protocol
 
@@ -13,8 +12,10 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.chaos import chaos
+from iris.cluster.log_store import LogStore
+from iris.cluster.process_status import get_process_status as _get_process_status
+from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
 from iris.cluster.worker.worker_types import TaskInfo
-from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
 from iris.time_utils import Timer
@@ -32,17 +33,22 @@ class TaskProvider(Protocol):
     def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def get_logs(self, task_id: str, start_line: int = 0, attempt_id: int = -1) -> list[cluster_pb2.Worker.LogEntry]: ...
     def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
-    def profile_task(self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes: ...
+    def profile_task(
+        self, task_id: str, duration_seconds: int, profile_type: cluster_pb2.ProfileType, attempt_id: int | None = None
+    ) -> bytes: ...
 
 
 class WorkerServiceImpl:
     """Implementation of WorkerService RPC interface."""
 
-    def __init__(self, provider: TaskProvider, log_buffer: LogBuffer | None = None):
+    def __init__(
+        self,
+        provider: TaskProvider,
+        log_store: LogStore | None = None,
+    ):
         self._provider = provider
-        self._log_buffer = log_buffer
+        self._log_store = log_store
         self._timer = Timer()
 
     def get_task_status(
@@ -55,12 +61,7 @@ class WorkerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
 
-        status = task.to_proto()
-        if request.include_result and task.result:
-            # TaskStatus doesn't have serialized_result field, but we could add it
-            # For now, result is available via the task object
-            pass
-        return status
+        return task.to_proto()
 
     def list_tasks(
         self,
@@ -72,42 +73,6 @@ class WorkerServiceImpl:
         return cluster_pb2.Worker.ListTasksResponse(
             tasks=[task.to_proto() for task in tasks],
         )
-
-    def fetch_task_logs(
-        self,
-        request: cluster_pb2.Worker.FetchTaskLogsRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.FetchTaskLogsResponse:
-        """Fetch logs for a task, optionally filtered by attempt."""
-        start_line = request.filter.start_line if request.filter.start_line else 0
-        # attempt_id=0 is valid (first attempt), so use the value directly
-        # Convention: -1 means "all attempts", caller sets explicitly
-        attempt_id = request.attempt_id
-        logs = self._provider.get_logs(request.task_id, start_line=start_line, attempt_id=attempt_id)
-
-        # Apply additional filters
-        result = []
-        for entry in logs:
-            # Time range filter (start_ms is exclusive for incremental polling)
-            if request.filter.start_ms and entry.timestamp.epoch_ms <= request.filter.start_ms:
-                continue
-            if request.filter.end_ms and entry.timestamp.epoch_ms > request.filter.end_ms:
-                continue
-            # TODO: Regex filter is vulnerable to DoS via catastrophic backtracking.
-            # Malicious regex like (a+)+ can cause minutes of CPU time. Consider using
-            # the re2 library or adding timeout/complexity limits.
-            # Regex filter
-            if request.filter.regex:
-                if not re.search(request.filter.regex, entry.data):
-                    continue
-
-            result.append(entry)
-
-            # Max lines limit
-            if request.filter.max_lines and len(result) >= request.filter.max_lines:
-                break
-
-        return cluster_pb2.Worker.FetchTaskLogsResponse(logs=result)
 
     def health_check(
         self,
@@ -125,28 +90,26 @@ class WorkerServiceImpl:
         response.uptime.milliseconds = self._timer.elapsed_ms()
         return response
 
-    def get_process_logs(
+    def fetch_logs(
         self,
-        request: cluster_pb2.Worker.GetProcessLogsRequest,
+        request: cluster_pb2.FetchLogsRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.GetProcessLogsResponse:
-        """Get worker process logs from the in-memory ring buffer."""
-        if not self._log_buffer:
-            return cluster_pb2.Worker.GetProcessLogsResponse(records=[])
-        prefix = request.prefix or None
-        limit = request.limit if request.limit > 0 else 200
-        records = self._log_buffer.query(prefix=prefix, limit=limit)
-        return cluster_pb2.Worker.GetProcessLogsResponse(
-            records=[
-                cluster_pb2.ProcessLogRecord(
-                    timestamp=r.timestamp,
-                    level=r.level,
-                    logger_name=r.logger_name,
-                    message=r.message,
-                )
-                for r in records
-            ]
+    ) -> cluster_pb2.FetchLogsResponse:
+        """Fetch logs from the worker's LogStore by key with filtering."""
+        if not self._log_store:
+            return cluster_pb2.FetchLogsResponse(entries=[], cursor=0)
+
+        max_lines = request.max_lines if request.max_lines > 0 else 1000
+        result = self._log_store.get_logs(
+            request.source,
+            since_ms=request.since_ms,
+            cursor=request.cursor,
+            substring_filter=request.substring,
+            max_lines=max_lines,
+            tail=request.tail,
+            min_level=request.min_level,
         )
+        return cluster_pb2.FetchLogsResponse(entries=result.entries, cursor=result.cursor)
 
     def heartbeat(
         self,
@@ -171,22 +134,44 @@ class WorkerServiceImpl:
             # Delegate to worker for reconciliation
             return self._provider.handle_heartbeat(request)
 
+    def get_process_status(
+        self,
+        request: cluster_pb2.GetProcessStatusRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.GetProcessStatusResponse:
+        """Return local process info and recent process logs."""
+        return _get_process_status(request, self._log_store, self._timer)
+
     def profile_task(
         self,
         request: cluster_pb2.ProfileTaskRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.ProfileTaskResponse:
-        """Profile a running task using py-spy (CPU) or memray (memory)."""
+        """Profile a running task or the worker process itself.
+
+        The target field determines what to profile:
+        - /system/process: the worker process itself
+        - /job/.../task/N:A: a specific task attempt (delegated to TaskProvider)
+        """
         with rpc_error_handler("profile_task"):
             try:
-                # Validate profile_type
                 if not request.HasField("profile_type"):
                     raise ValueError("profile_type is required")
 
+                duration = request.duration_seconds or 10
+
+                # /system/process: profile the worker process itself using py-spy/memray
+                if is_system_target(request.target):
+                    data = profile_local_process(duration, request.profile_type)
+                    return cluster_pb2.ProfileTaskResponse(profile_data=data)
+
+                # Task target: parse optional :attempt_id and delegate to the container handle
+                target = parse_profile_target(request.target)
                 data = self._provider.profile_task(
-                    request.task_id,
-                    duration_seconds=request.duration_seconds or 10,
+                    target.task_id.to_wire(),
+                    duration_seconds=duration,
                     profile_type=request.profile_type,
+                    attempt_id=target.attempt_id,
                 )
                 return cluster_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for task attempt log preservation and attempt-aware routing.
@@ -25,7 +25,7 @@ from iris.rpc import cluster_pb2
 from pathlib import Path
 
 IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 def _fail_then_succeed(attempt_marker: str):
@@ -252,12 +252,18 @@ class TestAttemptLogs:
         # Should have 2 attempts: attempt 0 (failed) and attempt 1 (succeeded)
         assert len(task_status.attempts) >= 2, f"Expected at least 2 attempts, got {len(task_status.attempts)}"
 
-        # First attempt should have failed
+        # First attempt should have failed. Depending on heartbeat timing, the
+        # controller may record either TASK_STATE_FAILED (task reported its own
+        # failure) or TASK_STATE_WORKER_FAILED (worker reported "task not found"
+        # before the task's failure was processed).
         attempt_0 = task_status.attempts[0]
         assert attempt_0.attempt_id == 0
-        assert attempt_0.state == cluster_pb2.TASK_STATE_FAILED
+        assert attempt_0.state in (
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        ), f"Expected failed state, got {attempt_0.state}"
 
-        # Second attempt should have succeeded
-        attempt_1 = task_status.attempts[1]
-        assert attempt_1.attempt_id == 1
-        assert attempt_1.state == cluster_pb2.TASK_STATE_SUCCEEDED
+        # Last attempt should have succeeded (may not be attempts[1] if
+        # transient worker failures caused extra retry cycles)
+        last_attempt = task_status.attempts[-1]
+        assert last_attempt.state == cluster_pb2.TASK_STATE_SUCCEEDED
