@@ -19,6 +19,7 @@ from levanter.elastic import (
     _remove_if_exists,
     _aggregate_progress_metrics,
     _flatten_transfer_payload,
+    _is_deleted_array_runtime_error,
     _restore_transfer_payload,
     read_completion,
 )
@@ -241,3 +242,42 @@ def test_remove_if_exists_ignores_gcs_not_found_races(monkeypatch):
     )
 
     _remove_if_exists("gs://bucket/path")
+
+
+def test_jax_transfer_publish_ignores_deleted_array_runtime_error(tmp_path):
+    elastic_root = str(tmp_path / "elastic")
+    mesh = _single_device_mesh()
+    controller = FileBackedPeerSyncController(
+        config=ElasticTrainingConfig(
+            enabled=True,
+            group_id="run",
+            worker_id="w000",
+            state_path=elastic_root,
+            sync_interval_steps=1,
+            publish_interval_steps=1,
+            sync=PeerAveragingSyncConfig(),
+        ),
+        checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w000"),
+        run_id="run-w000",
+        axis_mapping={},
+        mesh=mesh,
+    )
+
+    class _FailingTransferRuntime:
+        def publish(self, *, step: int, payload: dict[str, object]) -> dict[str, object]:
+            raise RuntimeError("Array has been deleted with shape=float32[128256,768].")
+
+    controller.transport_kind = "jax_transfer"
+    controller._transfer_runtime = _FailingTransferRuntime()  # type: ignore[assignment]
+
+    controller._publish_state(
+        DummyState(step=0, model={"weight": jnp.array([1.0], dtype=jnp.float32)}),
+        step=0,
+    )
+    assert read_completion(controller.paths.completion_path) is None
+
+
+def test_deleted_array_error_detection():
+    assert _is_deleted_array_runtime_error(RuntimeError("Array has been deleted with shape=float32[1]."))
+    assert _is_deleted_array_runtime_error(RuntimeError("Buffer has been deleted or donated"))
+    assert not _is_deleted_array_runtime_error(RuntimeError("unrelated runtime error"))

@@ -369,6 +369,11 @@ class ElasticTrainingFinished(RuntimeError):
         )
 
 
+def _is_deleted_array_runtime_error(exc: RuntimeError) -> bool:
+    message = str(exc)
+    return "Array has been deleted" in message or "Buffer has been deleted" in message
+
+
 def _get_local_ip_from_hostname() -> str:
     return socket.gethostbyname(socket.gethostname())
 
@@ -748,7 +753,17 @@ class FileBackedPeerSyncController:
     def _publish_state(self, state: S, step: int) -> None:
         if self.transport_kind == "jax_transfer":
             assert self._transfer_runtime is not None
-            metadata = self._transfer_runtime.publish(step=step, payload=self._shareable_state(state))
+            try:
+                metadata = self._transfer_runtime.publish(step=step, payload=self._shareable_state(state))
+            except RuntimeError as exc:
+                if not _is_deleted_array_runtime_error(exc):
+                    raise
+                logger.warning(
+                    "Skipping elastic transfer publish at step %d due to transient donated/deleted array: %s",
+                    step,
+                    exc,
+                )
+                return
             if jax.process_index() == 0:
                 write_worker_status(
                     self.paths.worker_status_path(self.worker_id),
