@@ -3146,7 +3146,7 @@ dev = [
 
 [[package]]
 name = "harbor"
-version = "0.1.42"
+version = "0.1.43"
 source = { editable = "lib/harbor" }
 dependencies = [
     { name = "claude-agent-sdk" },
@@ -3188,7 +3188,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "kubernetes", specifier = ">=32.0.0" },
     { name = "litellm", specifier = ">=1.80.8" },
-    { name = "modal", specifier = ">=1.3.0.post1" },
+    { name = "modal", specifier = ">=1.3.2" },
     { name = "packaging", specifier = ">=25.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
@@ -5970,7 +5970,7 @@ wheels = [
 
 [[package]]
 name = "modal"
-version = "1.3.1"
+version = "1.3.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -5988,9 +5988,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f1/3e/97805b561e37eaac6b8baae7ee58bf203225bde6e98c4969652c8c6178a9/modal-1.3.1.tar.gz", hash = "sha256:c15e9218d59f9b04224ab55561eba131c1c657ff02d0f797776f9be699145774", size = 659259, upload-time = "2026-01-22T16:15:52.638Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/32/fd/f4a684209dab54d7dc9d92f48d779b30d04aa8b4c6dd1395d6c61967ee34/modal-1.3.5.tar.gz", hash = "sha256:2e320e7dbc8995ce0769796a9027248a8b976b519469cc4599d6855a1a53a123", size = 655193, upload-time = "2026-03-03T18:13:06.22Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/bb/6ad9a6df012cfc5adecfb639622b525c2b4d82833ff800cb62b7c462599a/modal-1.3.1-py3-none-any.whl", hash = "sha256:aae46d83d9b034e2ec28c82b0cbdd2e74e21aca3db18dbeb708e3ba36f726209", size = 755322, upload-time = "2026-01-22T16:15:50.668Z" },
+    { url = "https://files.pythonhosted.org/packages/10/39/aa5c773a4dddef833f1c846bb4204b442588b99a1d15ab7818157e66b32c/modal-1.3.5-py3-none-any.whl", hash = "sha256:67e5d3635c2c355d63b3e30f9012dd2bc9c38d5747349335c7ba9da65edca1cb", size = 755272, upload-time = "2026-03-03T18:13:03.323Z" },
 ]
 
 [[package]]
