@@ -122,7 +122,47 @@
   - Topics: NMI **0.439** < 0.5 and ARI **0.242** < 0.4 → **no-go**. Results barely changed with 2.7x more data, confirming this is a real signal ceiling. Highly imbalanced oracle labels (148 vs 12) may contribute.
   - Key insight: Quality signal improves substantially with more data; topic signal does not. The quality probe is promising for further investigation.
 - Next actions:
-  - Try non-linear probes (MLP) for quality — could push Spearman > 0.8
-  - Compare with higher-dimensional embeddings (e.g., Arctic, BGE-large)
-  - Investigate whether topic clustering improves with PCA or UMAP dimensionality reduction
+  - Try non-linear probes (MLP) for quality → see EE-003
+  - Investigate PCA/UMAP for topic clustering → see EE-003
+
+### 2026-03-12 — MLP probe and dimensionality reduction (EE-003)
+- Hypothesis: (a) MLP could push quality Spearman past 0.8; (b) PCA/UMAP could improve topic clustering
+- Setup: Ran locally on cached v7 embeddings/oracle data (Fray Iris detection broken on current cluster)
+- Config:
+  - MLP architectures: (128,), (128, 64), (256, 128); early_stopping, max_iter=500
+  - PCA: n_components=[8, 16, 32, 64, 128]
+  - UMAP: n_components=[8, 16, 32]
+- **Results**:
+
+  **Quality MLP vs RidgeCV**:
+  | Model | Spearman ρ | Kendall τ | R² |
+  |---|---|---|---|
+  | RidgeCV (v7) | **0.698** | **0.560** | **0.472** |
+  | MLP (256, 128) | 0.603 | 0.473 | 0.366 |
+  | MLP (128, 64) | 0.566 | 0.440 | 0.299 |
+  | MLP (128,) | 0.512 | 0.390 | 0.217 |
+
+  MLP performs **worse** than linear RidgeCV. With 800 train / 192 features, MLPs overfit despite early stopping. The linear probe captures the quality signal better.
+
+  **Topic Clustering with Dimensionality Reduction**:
+  | Method | d | ARI | NMI |
+  |---|---|---|---|
+  | Baseline | 192 | 0.242 | 0.439 |
+  | PCA | 16 | 0.247 | **0.442** |
+  | PCA | 8 | 0.214 | 0.408 |
+  | PCA | 32 | 0.228 | 0.423 |
+  | PCA | 64 | 0.212 | 0.426 |
+  | PCA | 128 | 0.218 | 0.422 |
+  | UMAP | 16 | 0.237 | 0.429 |
+  | UMAP | 8 | 0.213 | 0.415 |
+  | UMAP | 32 | 0.222 | 0.417 |
+
+  Neither PCA nor UMAP improves clustering. Best (PCA d=16) gives NMI 0.442 vs baseline 0.439 — essentially flat. First 16 PCA components capture 39.3% of variance.
+
+- **Conclusions**:
+  - Quality: Linear probe (RidgeCV) is the right model for this embedding space. MLP hurts. Spearman 0.698 appears to be the ceiling for Luxical 192-dim on this task.
+  - Topics: The NMI ~0.44 ceiling is robust across all dimensionality reduction methods. This is a fundamental limitation of Luxical embeddings for topic separation, not a noise/dimensionality issue.
+  - The quality probe verdict remains **"investigate"** (0.6-0.8). Improving further likely requires higher-dimensional or task-specialized embeddings, not better probes.
+- Next actions:
+  - Compare with higher-dimensional embeddings (Arctic 1024-dim, BGE-large 1024-dim) to test whether dim=192 is the bottleneck
   - Report findings in issue #3535
