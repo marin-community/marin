@@ -19,7 +19,7 @@ from iris.cluster.client import get_job_info
 from iris.marin_fs import marin_temp_bucket
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
-from levanter.elastic import ElasticTrainingConfig
+from levanter.elastic import DiLoCoSyncConfig, ElasticTrainingConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
@@ -51,8 +51,8 @@ class ElasticBudgetCompareConfig:
     sync_every: int = 200
     baseline_global_batch_size: int = 128
     elastic_local_batch_size: int = 32
-    mixing_rate: float = 0.25
-    share_optimizer_state: bool = False
+    outer_learning_rate: float = 0.25
+    outer_optimizer: Literal["adam", "sgd"] = "sgd"
     max_peers: int | None = None
 
 
@@ -302,8 +302,8 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
             },
             "sync_every": config.sync_every,
             "publish_every": config.publish_every,
-            "mixing_rate": config.mixing_rate,
-            "share_optimizer_state": config.share_optimizer_state,
+            "outer_learning_rate": config.outer_learning_rate,
+            "outer_optimizer": config.outer_optimizer,
             "max_peers": max_peers,
         },
     }
@@ -359,8 +359,10 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
                     transport="jax_transfer",
                     sync_interval_steps=config.sync_every,
                     publish_interval_steps=config.publish_every,
-                    mixing_rate=config.mixing_rate,
-                    share_optimizer_state=config.share_optimizer_state,
+                    sync=DiLoCoSyncConfig(
+                        outer_learning_rate=config.outer_learning_rate,
+                        outer_optimizer=config.outer_optimizer,
+                    ),
                     max_peers=max_peers,
                     transfer_timeout=timedelta(minutes=10),
                     request_poll_interval_seconds=0.1,
@@ -395,8 +397,8 @@ def _parse_args() -> ElasticBudgetCompareConfig:
     parser.add_argument("--sync-every", type=int, default=200)
     parser.add_argument("--baseline-global-batch-size", type=int, default=128)
     parser.add_argument("--elastic-local-batch-size", type=int, default=32)
-    parser.add_argument("--mixing-rate", type=float, default=0.25)
-    parser.add_argument("--share-optimizer-state", action="store_true")
+    parser.add_argument("--outer-learning-rate", type=float, default=0.25)
+    parser.add_argument("--outer-optimizer", choices=("adam", "sgd"), default="sgd")
     parser.add_argument("--max-peers", type=int, default=None)
     args = parser.parse_args()
 
@@ -417,8 +419,8 @@ def _parse_args() -> ElasticBudgetCompareConfig:
         sync_every=args.sync_every,
         baseline_global_batch_size=args.baseline_global_batch_size,
         elastic_local_batch_size=args.elastic_local_batch_size,
-        mixing_rate=args.mixing_rate,
-        share_optimizer_state=args.share_optimizer_state,
+        outer_learning_rate=args.outer_learning_rate,
+        outer_optimizer=args.outer_optimizer,
         max_peers=args.max_peers,
     )
 

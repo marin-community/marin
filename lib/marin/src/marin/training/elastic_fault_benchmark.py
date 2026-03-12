@@ -18,7 +18,7 @@ from iris.cluster.client import get_job_info
 from iris.marin_fs import REGION_TO_DATA_BUCKET
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
-from levanter.elastic import ElasticTrainingConfig
+from levanter.elastic import DiLoCoSyncConfig, ElasticTrainingConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.tracker.wandb import WandbConfig
 
@@ -54,8 +54,8 @@ class ElasticFaultBenchmarkConfig:
     sync_every: int = 100
     steps_per_eval: int = 500
     max_eval_batches: int = 1
-    mixing_rate: float = 0.5
-    share_optimizer_state: bool = True
+    outer_learning_rate: float = 0.25
+    outer_optimizer: Literal["adam", "sgd"] = "sgd"
     fault_steps_w001: tuple[int, ...] = (400, 1200)
 
 
@@ -368,8 +368,10 @@ def run_elastic_fault_benchmark(config: ElasticFaultBenchmarkConfig) -> dict[str
                     transport="jax_transfer",
                     sync_interval_steps=config.sync_every,
                     publish_interval_steps=config.publish_every,
-                    mixing_rate=config.mixing_rate,
-                    share_optimizer_state=config.share_optimizer_state,
+                    sync=DiLoCoSyncConfig(
+                        outer_learning_rate=config.outer_learning_rate,
+                        outer_optimizer=config.outer_optimizer,
+                    ),
                     transfer_timeout=timedelta(minutes=5),
                     request_poll_interval_seconds=0.1,
                 ),
@@ -406,9 +408,8 @@ def _parse_args() -> ElasticFaultBenchmarkConfig:
     parser.add_argument("--sync-every", type=int, default=100)
     parser.add_argument("--steps-per-eval", type=int, default=500)
     parser.add_argument("--max-eval-batches", type=int, default=1)
-    parser.add_argument("--mixing-rate", type=float, default=0.5)
-    parser.add_argument("--share-optimizer-state", action="store_true", default=True)
-    parser.add_argument("--no-share-optimizer-state", dest="share_optimizer_state", action="store_false")
+    parser.add_argument("--outer-learning-rate", type=float, default=0.25)
+    parser.add_argument("--outer-optimizer", choices=("adam", "sgd"), default="sgd")
     parser.add_argument("--fault-steps-w001", default="400,1200")
     args = parser.parse_args()
 
@@ -431,8 +432,8 @@ def _parse_args() -> ElasticFaultBenchmarkConfig:
         sync_every=args.sync_every,
         steps_per_eval=args.steps_per_eval,
         max_eval_batches=args.max_eval_batches,
-        mixing_rate=args.mixing_rate,
-        share_optimizer_state=args.share_optimizer_state,
+        outer_learning_rate=args.outer_learning_rate,
+        outer_optimizer=args.outer_optimizer,
         fault_steps_w001=tuple(int(step.strip()) for step in args.fault_steps_w001.split(",") if step.strip()),
     )
 

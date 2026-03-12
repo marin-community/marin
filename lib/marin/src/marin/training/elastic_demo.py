@@ -24,7 +24,7 @@ from fray.v2 import Entrypoint, JobRequest, JobStatus, ResourceConfig, create_en
 from iris.cluster.client import get_job_info
 from iris.marin_fs import marin_temp_bucket
 from levanter.callbacks import StepInfo
-from levanter.elastic import ElasticTrainingConfig, FileBackedPeerSyncController
+from levanter.elastic import ElasticTrainingConfig, FileBackedPeerSyncController, PeerAveragingSyncConfig
 from levanter.utils import fsspec_utils
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,7 @@ def run_elastic_transfer_worker(config: ElasticTransferWorkerConfig) -> dict[str
             state_path=fsspec_utils.join_path(config.state_root, "elastic"),
             sync_interval_steps=1,
             publish_interval_steps=1,
+            sync=PeerAveragingSyncConfig(),
             transport="jax_transfer",
             transfer_timeout=timedelta(seconds=int(config.timeout_seconds)),
             request_poll_interval_seconds=0.05,

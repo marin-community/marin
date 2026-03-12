@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import abc
 import dataclasses
 import json
 import logging
@@ -21,6 +22,8 @@ import jax
 import jax.tree_util as jtu
 import numpy as np
 import optax
+import draccus
+import equinox as eqx
 from draccus import field
 from haliax.jax_utils import is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
@@ -28,6 +31,7 @@ from jax.sharding import Mesh
 
 import haliax as hax
 from levanter.checkpoint import load_checkpoint, save_checkpoint
+from levanter.trainer_state import init_optimizer_for_trainables, trainables_only
 from levanter.utils import fsspec_utils
 from levanter.utils.jax_utils import shape_dtype_struct_tree
 from levanter.utils.tree_utils import key_path_to_str
@@ -43,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 S = TypeVar("S", bound="TrainerState")
 ElasticTransportMode = Literal["auto", "checkpoint", "jax_transfer"]
+DiLoCoOuterOptimizer = Literal["adam", "sgd"]
 
 MARIN_ELASTIC_GROUP_ID_ENV = "MARIN_ELASTIC_GROUP_ID"
 MARIN_ELASTIC_WORKER_ID_ENV = "MARIN_ELASTIC_WORKER_ID"
@@ -75,6 +80,47 @@ def _remove_if_exists(path: str, *, recursive: bool = False) -> None:
         return
 
 
+class ElasticSyncConfig(draccus.ChoiceRegistry, abc.ABC):
+    @classmethod
+    def default_choice_name(cls) -> str | None:
+        return "peer_average"
+
+
+@ElasticSyncConfig.register_subclass("peer_average")
+@dataclass(frozen=True)
+class PeerAveragingSyncConfig(ElasticSyncConfig):
+    mixing_rate: float = 0.5
+    share_optimizer_state: bool = False
+
+    def __post_init__(self):
+        if not 0.0 < self.mixing_rate <= 1.0:
+            raise ValueError(f"mixing_rate must be in (0, 1], got {self.mixing_rate}")
+
+
+@ElasticSyncConfig.register_subclass("diloco")
+@dataclass(frozen=True)
+class DiLoCoSyncConfig(ElasticSyncConfig):
+    outer_learning_rate: float = 1.0
+    outer_optimizer: DiLoCoOuterOptimizer = "adam"
+    outer_beta1: float = 0.9
+    outer_beta2: float = 0.95
+    outer_epsilon: float = 1e-8
+    outer_weight_decay: float = 0.0
+    reset_inner_optimizer_on_sync: bool = False
+
+    def __post_init__(self):
+        if self.outer_learning_rate <= 0:
+            raise ValueError(f"outer_learning_rate must be positive, got {self.outer_learning_rate}")
+        if self.outer_epsilon <= 0:
+            raise ValueError(f"outer_epsilon must be positive, got {self.outer_epsilon}")
+        if not 0.0 <= self.outer_beta1 < 1.0:
+            raise ValueError(f"outer_beta1 must be in [0, 1), got {self.outer_beta1}")
+        if not 0.0 <= self.outer_beta2 < 1.0:
+            raise ValueError(f"outer_beta2 must be in [0, 1), got {self.outer_beta2}")
+        if self.outer_weight_decay < 0:
+            raise ValueError(f"outer_weight_decay must be non-negative, got {self.outer_weight_decay}")
+
+
 @dataclass(frozen=True)
 class ElasticTrainingConfig:
     """Configuration for peer-synchronized elastic training across single-slice cohorts."""
@@ -89,8 +135,7 @@ class ElasticTrainingConfig:
     peer_timeout: timedelta = timedelta(minutes=30)
     max_peer_staleness_steps: int | None = None
     max_peers: int = 1
-    mixing_rate: float = 0.5
-    share_optimizer_state: bool = False
+    sync: ElasticSyncConfig = field(default_factory=PeerAveragingSyncConfig)
     bootstrap_from_peers: bool = True
     keep_published_checkpoints: int = 2
     transport: ElasticTransportMode = "auto"
@@ -109,8 +154,6 @@ class ElasticTrainingConfig:
             raise ValueError(f"max_peer_staleness_steps must be non-negative, got {self.max_peer_staleness_steps}")
         if self.max_peers <= 0:
             raise ValueError(f"max_peers must be positive, got {self.max_peers}")
-        if not 0.0 < self.mixing_rate <= 1.0:
-            raise ValueError(f"mixing_rate must be in (0, 1], got {self.mixing_rate}")
         if self.keep_published_checkpoints <= 0:
             raise ValueError(f"keep_published_checkpoints must be positive, got {self.keep_published_checkpoints}")
         if self.request_poll_interval_seconds <= 0:
@@ -119,6 +162,12 @@ class ElasticTrainingConfig:
             )
         if self.transfer_timeout <= timedelta(0):
             raise ValueError(f"transfer_timeout must be positive, got {self.transfer_timeout}")
+
+
+@dataclass
+class _DiLoCoState:
+    anchor_model: Any
+    outer_opt_state: Any
 
 
 @dataclass(frozen=True)
@@ -481,6 +530,7 @@ class FileBackedPeerSyncController:
             if self.transport_kind == "jax_transfer"
             else None
         )
+        self._diloco_state: _DiLoCoState | None = None
 
     def close(self) -> None:
         self._manager.wait_until_finished()
@@ -488,6 +538,9 @@ class FileBackedPeerSyncController:
             self._transfer_runtime.close()
 
     def bootstrap_state(self, state: S) -> S:
+        if isinstance(self.config.sync, DiLoCoSyncConfig):
+            self._ensure_diloco_state(state)
+
         if not self.config.bootstrap_from_peers or int(state.step) != 0:
             return state
 
@@ -505,7 +558,7 @@ class FileBackedPeerSyncController:
         )
         shareable_state, source_step = self._load_shareable_state(state, peer)
         self._last_applied_peer = (peer.worker_id, source_step)
-        return self._apply_shareable_state(state, shareable_state, mixing_rate=1.0)
+        return self._apply_shareable_state(state, shareable_state, force_copy=True)
 
     def maybe_update_state(self, info: "StepInfo[S]") -> "StepInfo[S]":
         if info.next_step % self.control_interval_steps == 0:
@@ -544,8 +597,11 @@ class FileBackedPeerSyncController:
         if not shareable_states:
             return info
 
-        averaged_peer_state = _average_shareable_states(shareable_states)
-        new_state = self._apply_shareable_state(info.state, averaged_peer_state, mixing_rate=self.config.mixing_rate)
+        if isinstance(self.config.sync, DiLoCoSyncConfig):
+            new_state = self._apply_diloco_sync(info.state, shareable_states)
+        else:
+            averaged_peer_state = _average_shareable_states(shareable_states)
+            new_state = self._apply_shareable_state(info.state, averaged_peer_state)
 
         if newest_peer is not None:
             self._last_applied_peer = newest_peer
@@ -632,11 +688,13 @@ class FileBackedPeerSyncController:
         return candidates[: self.config.max_peers]
 
     def _shareable_state(self, state: S) -> dict[str, Any]:
-        opt_state = state.opt_state if self.config.share_optimizer_state else None
+        sync_state = self._sync_state_payload(state)
+        opt_state = state.opt_state if self._share_optimizer_state else None
         return {
             "model": state.model,
             "model_averaging": state.model_averaging,
             "opt_state": opt_state,
+            "sync_state": sync_state,
         }
 
     def _publish_state(self, state: S, step: int) -> None:
@@ -715,8 +773,15 @@ class FileBackedPeerSyncController:
         state: S,
         shareable_state: dict[str, Any],
         *,
-        mixing_rate: float,
+        force_copy: bool = False,
     ) -> S:
+        if isinstance(self.config.sync, DiLoCoSyncConfig):
+            self._update_diloco_state_from_shareable(shareable_state, state=state)
+            model = shareable_state["model"] if force_copy else self._diloco_anchor_model(state)
+            return dataclasses.replace(state, model=model)
+
+        sync_config = cast(PeerAveragingSyncConfig, self.config.sync)
+        mixing_rate = 1.0 if force_copy else sync_config.mixing_rate
         model = _merge_tree(state.model, shareable_state["model"], mixing_rate)
         model_averaging = state.model_averaging
         peer_model_averaging = shareable_state["model_averaging"]
@@ -727,16 +792,130 @@ class FileBackedPeerSyncController:
 
         opt_state = state.opt_state
         peer_opt_state = shareable_state["opt_state"]
-        if self.config.share_optimizer_state and peer_opt_state is not None:
+        if self._share_optimizer_state and peer_opt_state is not None:
             opt_state = _merge_tree(state.opt_state, peer_opt_state, mixing_rate)
 
         return dataclasses.replace(state, model=model, model_averaging=model_averaging, opt_state=opt_state)
+
+    @property
+    def _share_optimizer_state(self) -> bool:
+        sync_config = self.config.sync
+        if isinstance(sync_config, PeerAveragingSyncConfig):
+            return sync_config.share_optimizer_state
+        return False
+
+    def _sync_state_payload(self, state: S) -> dict[str, Any] | None:
+        if not isinstance(self.config.sync, DiLoCoSyncConfig):
+            return None
+        diloco_state = self._ensure_diloco_state(state)
+        return {
+            "anchor_model": diloco_state.anchor_model,
+            "outer_opt_state": diloco_state.outer_opt_state,
+        }
+
+    def _ensure_diloco_state(self, state: S) -> _DiLoCoState:
+        if self._diloco_state is None:
+            trainable_anchor = self._trainable_model(state.model, state)
+            self._diloco_state = _DiLoCoState(
+                anchor_model=state.model,
+                outer_opt_state=self._diloco_outer_optimizer.init(trainable_anchor),
+            )
+        return self._diloco_state
+
+    def _diloco_anchor_model(self, state: S) -> Any:
+        return self._ensure_diloco_state(state).anchor_model
+
+    @property
+    def _diloco_outer_optimizer(self) -> optax.GradientTransformation:
+        sync_config = cast(DiLoCoSyncConfig, self.config.sync)
+        if sync_config.outer_optimizer == "sgd":
+            components: list[optax.GradientTransformation] = []
+        else:
+            components = [
+                optax.scale_by_adam(
+                    sync_config.outer_beta1,
+                    sync_config.outer_beta2,
+                    sync_config.outer_epsilon,
+                )
+            ]
+        if sync_config.outer_weight_decay > 0:
+            components.append(optax.add_decayed_weights(sync_config.outer_weight_decay))
+        components.append(optax.scale(-sync_config.outer_learning_rate))
+        return optax.chain(*components)
+
+    def _apply_diloco_sync(self, state: S, peer_shareable_states: list[dict[str, Any]]) -> S:
+        sync_config = cast(DiLoCoSyncConfig, self.config.sync)
+        self._update_diloco_state_from_shareable(peer_shareable_states[0], state=state)
+        diloco_state = self._ensure_diloco_state(state)
+
+        models = [state.model, *(peer_state["model"] for peer_state in peer_shareable_states)]
+        mean_model = _average_trees(models)
+        anchor_model = self._diloco_anchor_model(state)
+        anchor_trainable = self._trainable_model(anchor_model, state)
+        mean_trainable = self._trainable_model(mean_model, state)
+        pseudo_grads = _tree_difference(anchor_trainable, mean_trainable)
+        updates, new_outer_opt_state = self._diloco_outer_optimizer.update(
+            pseudo_grads,
+            diloco_state.outer_opt_state,
+            params=anchor_trainable,
+        )
+        updated_trainable = optax.apply_updates(anchor_trainable, updates)
+        updated_model = self._merge_trainable_model(updated_trainable, anchor_model)
+        self._diloco_state = _DiLoCoState(anchor_model=updated_model, outer_opt_state=new_outer_opt_state)
+
+        opt_state = state.opt_state
+        if sync_config.reset_inner_optimizer_on_sync and hasattr(state, "optimizer"):
+            opt_state = init_optimizer_for_trainables(state.optimizer, self._trainable_model(updated_model, state))
+
+        return dataclasses.replace(state, model=updated_model, opt_state=opt_state)
+
+    def _update_diloco_state_from_shareable(self, shareable_state: dict[str, Any], *, state: S) -> None:
+        sync_state = shareable_state.get("sync_state")
+        if sync_state is None:
+            self._ensure_diloco_state(state)
+            return
+        self._diloco_state = _DiLoCoState(
+            anchor_model=sync_state["anchor_model"],
+            outer_opt_state=sync_state["outer_opt_state"],
+        )
+
+    def _trainable_model(self, model: Any, state: S) -> Any:
+        if hasattr(state, "is_trainable"):
+            return trainables_only(model, state.is_trainable)
+        return model
+
+    def _merge_trainable_model(self, trainable_model: Any, base_model: Any) -> Any:
+        try:
+            return eqx.combine(trainable_model, base_model)
+        except Exception:
+            return trainable_model
 
 
 def _merge_tree(current: Any, incoming: Any, mixing_rate: float) -> Any:
     if mixing_rate == 1.0:
         return incoming
     return optax.incremental_update(incoming, current, mixing_rate)
+
+
+def _average_trees(trees: list[Any]) -> Any:
+    if not trees:
+        raise ValueError("trees must be non-empty")
+    if len(trees) == 1:
+        return trees[0]
+
+    average = trees[0]
+    for i, tree in enumerate(trees[1:], start=2):
+        average = _merge_tree(average, tree, 1.0 / i)
+    return average
+
+
+def _tree_difference(lhs: Any, rhs: Any) -> Any:
+    def subtract(a: Any, b: Any) -> Any:
+        if a is None or b is None:
+            return a
+        return a - b
+
+    return jtu.tree_map(subtract, lhs, rhs)
 
 
 def _average_shareable_states(shareable_states: list[dict[str, Any]]) -> dict[str, Any]:

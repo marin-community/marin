@@ -11,7 +11,7 @@ import pytest
 from jax.sharding import Mesh
 
 from levanter.callbacks import StepInfo
-from levanter.elastic import ElasticTrainingConfig, FileBackedPeerSyncController
+from levanter.elastic import ElasticTrainingConfig, FileBackedPeerSyncController, PeerAveragingSyncConfig
 
 
 @dataclasses.dataclass
@@ -45,6 +45,7 @@ def test_jax_transfer_peer_sync_smoke(tmp_path):
         state_path=elastic_root,
         sync_interval_steps=1,
         publish_interval_steps=1,
+        sync=PeerAveragingSyncConfig(),
         transport="jax_transfer",
         transfer_timeout=timedelta(seconds=30),
         request_poll_interval_seconds=0.05,

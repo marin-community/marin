@@ -11,8 +11,10 @@ from jax.sharding import Mesh
 
 from levanter.callbacks import StepInfo
 from levanter.elastic import (
+    DiLoCoSyncConfig,
     ElasticTrainingConfig,
     FileBackedPeerSyncController,
+    PeerAveragingSyncConfig,
     _flatten_transfer_payload,
     _restore_transfer_payload,
     read_completion,
@@ -44,6 +46,7 @@ def test_peer_sync_bootstrap_and_merge(tmp_path):
             state_path=elastic_root,
             sync_interval_steps=1,
             publish_interval_steps=1,
+            sync=PeerAveragingSyncConfig(),
         ),
         checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w001"),
         run_id="run-w001",
@@ -58,7 +61,7 @@ def test_peer_sync_bootstrap_and_merge(tmp_path):
             state_path=elastic_root,
             sync_interval_steps=1,
             publish_interval_steps=1,
-            mixing_rate=0.5,
+            sync=PeerAveragingSyncConfig(mixing_rate=0.5),
         ),
         checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w000"),
         run_id="run-w000",
@@ -145,3 +148,59 @@ def test_transfer_payload_filters_non_arrays_and_restores_template():
     assert restored["model_averaging"]["tot_weight"] == 3.0
     assert int(restored["opt_state"]["count"]) == 30
     assert restored["opt_state"]["should_skip"] is True
+
+
+def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path):
+    elastic_root = str(tmp_path / "elastic")
+    mesh = _single_device_mesh()
+
+    peer_controller = FileBackedPeerSyncController(
+        config=ElasticTrainingConfig(
+            enabled=True,
+            group_id="run",
+            worker_id="w001",
+            state_path=elastic_root,
+            sync_interval_steps=1,
+            publish_interval_steps=1,
+            sync=DiLoCoSyncConfig(outer_optimizer="sgd", outer_learning_rate=0.25),
+        ),
+        checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w001"),
+        run_id="run-w001",
+        axis_mapping={},
+        mesh=mesh,
+    )
+    local_controller = FileBackedPeerSyncController(
+        config=ElasticTrainingConfig(
+            enabled=True,
+            group_id="run",
+            worker_id="w000",
+            state_path=elastic_root,
+            sync_interval_steps=1,
+            publish_interval_steps=1,
+            sync=DiLoCoSyncConfig(outer_optimizer="sgd", outer_learning_rate=0.25),
+        ),
+        checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w000"),
+        run_id="run-w000",
+        axis_mapping={},
+        mesh=mesh,
+    )
+
+    initial_state = DummyState(step=0, model={"weight": jnp.array([0.0], dtype=jnp.float32)})
+    peer_controller.bootstrap_state(initial_state)
+    local_controller.bootstrap_state(initial_state)
+
+    peer_controller._publish_state(  # noqa: SLF001
+        DummyState(step=1, model={"weight": jnp.array([3.0], dtype=jnp.float32)}),
+        step=0,
+    )
+    peer_controller._manager.wait_until_finished()  # noqa: SLF001
+
+    synced_info = local_controller.maybe_update_state(
+        StepInfo(
+            state=DummyState(step=1, model={"weight": jnp.array([1.0], dtype=jnp.float32)}),
+            loss=0.0,
+            step_duration=0.0,
+        )
+    )
+
+    assert float(synced_info.state.model["weight"][0]) == pytest.approx(0.5)

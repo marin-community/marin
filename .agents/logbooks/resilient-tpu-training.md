@@ -441,3 +441,39 @@
     - keep monitoring and simply relaunch
     - add explicit worker-loss accounting/reporting to the benchmark
     - or harden the elastic path further around peer disappearance during in-flight transfer
+
+### 2026-03-11 22:34 - First DiLoCo-style sync mode wired into elastic controller
+- Hypothesis:
+  - the current optimization gap versus synchronous baseline is mostly algorithmic, not systems overhead, so replacing generic peer averaging with an explicit outer-optimizer sync mode should be the right next step.
+- Command:
+  - patched `lib/levanter/src/levanter/elastic.py`
+  - patched:
+    - `lib/levanter/tests/test_elastic.py`
+    - `lib/levanter/tests/test_elastic_jax_transfer.py`
+    - `lib/marin/src/marin/training/elastic_demo.py`
+    - `lib/marin/src/marin/training/elastic_fault_benchmark.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare.py`
+  - `uv run --with pytest python -m pytest --import-mode=importlib lib/levanter/tests/test_elastic.py -q`
+  - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py -q`
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/elastic.py lib/levanter/tests/test_elastic.py lib/levanter/tests/test_elastic_jax_transfer.py lib/marin/src/marin/training/elastic_demo.py lib/marin/src/marin/training/elastic_fault_benchmark.py lib/marin/src/marin/training/elastic_budget_compare.py tests/test_training.py`
+- Result:
+  - `ElasticTrainingConfig` now takes an explicit sync strategy config instead of ad hoc averaging knobs.
+  - Added:
+    - `peer_average` sync mode for the existing behavior
+    - `diloco` sync mode with an outer anchor plus outer optimizer state
+  - The first DiLoCo-style implementation currently supports:
+    - outer optimizer `sgd` or `adam`
+    - outer learning rate / beta configuration
+    - optional inner-optimizer reset on sync
+    - persistence of anchor + outer optimizer state through the elastic payload path
+  - Updated the elastic benchmark launchers to use the new DiLoCo-style sync mode by default.
+  - Added a deterministic controller test that proves the outer sync path moves the anchor through the configured outer optimizer instead of simple parameter mixing.
+  - Verification:
+    - `lib/levanter/tests/test_elastic.py`: passed
+    - `tests/test_training.py`: passed
+    - targeted lint/type checks: passed
+- Interpretation:
+  - this is still not a paper-faithful end state, but it upgrades the elastic algorithm from “just average peers every N steps” to “maintain a persistent outer anchor and update it with an explicit outer optimizer.”
+  - that is much closer to the shape we actually want for stable local-batch elastic training.
+- Next action:
+  - run a smaller elastic benchmark with the new `diloco` mode and compare its loss trajectory against the previous peer-averaging path before spending more TPU on another large comparison.
