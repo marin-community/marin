@@ -337,6 +337,72 @@ def test_fused_cross_entropy_xla_caps_requested_batch_block_size_to_legal_diviso
     assert captured == {"block_size": 4, "batch_block_size": 6}
 
 
+def test_fused_cross_entropy_xla_infer_uses_tuned_batch_block_size_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+    captured: dict[str, int] = {}
+
+    monkeypatch.setattr(fused_xla, "infer_xla_v_block_size", lambda b, h, v, dtype: 4)
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
+    monkeypatch.setattr(
+        fused_xla,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (fused_api.BlockSizes(b_block_size=3, h_block_size=4, v_block_size=8), True),
+    )
+
+    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
+        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+        captured["block_size"] = block_size
+        captured["batch_block_size"] = batch_block_size
+        return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
+
+    monkeypatch.setattr(fused_xla, "_linear_softmax_cross_entropy_loss_streaming_custom_vjp", fake_custom_vjp)
+
+    fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+
+    assert captured == {"block_size": 4, "batch_block_size": 3}
+
+
+def test_fused_cross_entropy_xla_infer_falls_back_when_tuned_batch_block_size_is_unsafe(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+
+    monkeypatch.setattr(fused_xla, "infer_xla_v_block_size", lambda b, h, v, dtype: 4_194_304)
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
+    monkeypatch.setattr(
+        fused_xla,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (fused_api.BlockSizes(b_block_size=1024, h_block_size=4, v_block_size=8), True),
+    )
+
+    loss, lse = fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+    loss_ref, lse_ref = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+
+    assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(lse, lse_ref, atol=1e-5, rtol=1e-5)
+
+
 def test_fused_cross_entropy_xla_rejects_unsafe_explicit_batch_block_size():
     x = jnp.zeros((1024, 4), dtype=jnp.float32)
     w = jnp.zeros((4, 4_194_304), dtype=jnp.float32)
@@ -1253,9 +1319,9 @@ def test_infer_block_sizes_tpu_v5p_updated_tuning(
     ("b", "h", "v", "expected"),
     [
         (1024, 512, 16_384, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
-        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
-        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048)),
-        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
+        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024)),
+        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048)),
+        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024)),
         (8_192, 4_096, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
         (16_384, 2_048, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
     ],
@@ -1280,9 +1346,9 @@ def test_infer_block_sizes_tpu_v5e_updated_tuning(
     ("b", "h", "v", "expected"),
     [
         (1024, 512, 16_384, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048)),
-        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=1024)),
-        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048)),
-        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024)),
+        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=1024, v_block_size=1024)),
+        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=4096, h_block_size=512, v_block_size=2048)),
+        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=256, v_block_size=1024)),
         (8_192, 4_096, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
         (16_384, 2_048, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
     ],
@@ -1299,6 +1365,33 @@ def test_infer_block_sizes_tpu_v6_updated_tuning(
         v=v,
         dtype=jnp.bfloat16,
         device_kind="TPU v6e",
+    )
+    assert block_sizes == expected
+
+
+@pytest.mark.parametrize(
+    ("b", "h", "v", "expected"),
+    [
+        (1024, 512, 16_384, fused_api.BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512)),
+        (16_384, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)),
+        (65_536, 512, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512)),
+        (262_144, 1024, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=256)),
+        (8_192, 4_096, 128_256, fused_api.BlockSizes(b_block_size=8192, h_block_size=512, v_block_size=1024)),
+        (16_384, 2_048, 128_256, fused_api.BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024)),
+    ],
+)
+def test_infer_block_sizes_tpu_v4_updated_tuning(
+    b: int,
+    h: int,
+    v: int,
+    expected: fused_api.BlockSizes,
+):
+    block_sizes = infer_block_sizes(
+        b=b,
+        h=h,
+        v=v,
+        dtype=jnp.bfloat16,
+        device_kind="TPU v4",
     )
     assert block_sizes == expected
 

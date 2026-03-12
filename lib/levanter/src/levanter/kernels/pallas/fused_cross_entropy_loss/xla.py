@@ -10,7 +10,12 @@ from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
 from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
-from .tuned_block_sizes import _largest_divisor_at_most, infer_xla_b_block_size, infer_xla_v_block_size
+from .tuned_block_sizes import (
+    _largest_divisor_at_most,
+    infer_block_sizes_with_tuned_match,
+    infer_xla_b_block_size,
+    infer_xla_v_block_size,
+)
 
 _XLA_MAX_TILE_WORDS = 2**31 - 1
 
@@ -23,19 +28,44 @@ def _materialize_cotangent(
     return jnp.asarray(cotangent, dtype=reference.dtype)
 
 
-def _resolve_xla_batch_block_size(b_dim: int, v_block_size: int, block_sizes: BlockSizes | None) -> int:
+def _resolve_xla_batch_block_size(
+    b_dim: int,
+    v_block_size: int,
+    requested_b_block_size: int | None,
+    *,
+    strict: bool,
+) -> int:
     inferred = infer_xla_b_block_size(b_dim, v_block_size)
-    if block_sizes is None:
+    if requested_b_block_size is None:
         return inferred
 
-    requested = block_sizes.b_block_size
+    requested = requested_b_block_size
     if requested <= 0:
-        raise ValueError(f"XLA batch block size must be positive, got {requested}.")
+        if strict:
+            raise ValueError(f"XLA batch block size must be positive, got {requested}.")
+        return inferred
+
+    if v_block_size <= 0:
+        if strict:
+            raise ValueError(f"XLA vocab block size must be positive, got {v_block_size}.")
+        return inferred
+
+    max_b_block_size = _XLA_MAX_TILE_WORDS // v_block_size
+    if max_b_block_size <= 0:
+        if strict:
+            raise ValueError(
+                "XLA batch/vocab tile exceeds TPU/XLA int32 word-count limit: "
+                f"b_block_size={requested}, v_block_size={v_block_size}."
+            )
+        return 1
+
     if requested * v_block_size > _XLA_MAX_TILE_WORDS:
-        raise ValueError(
-            "XLA batch/vocab tile exceeds TPU/XLA int32 word-count limit: "
-            f"b_block_size={requested}, v_block_size={v_block_size}."
-        )
+        if strict:
+            raise ValueError(
+                "XLA batch/vocab tile exceeds TPU/XLA int32 word-count limit: "
+                f"b_block_size={requested}, v_block_size={v_block_size}."
+            )
+        requested = max_b_block_size
 
     if requested <= b_dim and b_dim % requested == 0:
         return requested
@@ -44,6 +74,28 @@ def _resolve_xla_batch_block_size(b_dim: int, v_block_size: int, block_sizes: Bl
     # Preserve that intent by shrinking to the largest valid divisor of B instead
     # of rejecting smaller local batches outright.
     return _largest_divisor_at_most(b_dim, min(requested, inferred))
+
+
+def _infer_tuned_xla_batch_block_size(
+    b_dim: int,
+    h_dim: int,
+    v_dim: int,
+    *,
+    dtype: Optional[jnp.dtype],
+    x_dtype: jnp.dtype,
+    w_dtype: jnp.dtype,
+) -> int | None:
+    tuned_block_sizes, has_tuned_match = infer_block_sizes_with_tuned_match(
+        b_dim,
+        h_dim,
+        v_dim,
+        dtype=dtype,
+        x_dtype=x_dtype,
+        w_dtype=w_dtype,
+    )
+    if not has_tuned_match:
+        return None
+    return tuned_block_sizes.b_block_size
 
 
 def _linear_softmax_cross_entropy_loss_streaming_fwd(
@@ -352,9 +404,22 @@ def linear_softmax_cross_entropy_loss_xla(
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     if block_sizes is None:
         v_block_size = infer_xla_v_block_size(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
+        b_block_size = _resolve_xla_batch_block_size(
+            x.shape[0],
+            v_block_size,
+            _infer_tuned_xla_batch_block_size(
+                x.shape[0],
+                x.shape[1],
+                w.shape[1],
+                dtype=dtype,
+                x_dtype=x.dtype,
+                w_dtype=w.dtype,
+            ),
+            strict=False,
+        )
     else:
         v_block_size = block_sizes.v_block_size
-    b_block_size = _resolve_xla_batch_block_size(x.shape[0], v_block_size, block_sizes)
+        b_block_size = _resolve_xla_batch_block_size(x.shape[0], v_block_size, block_sizes.b_block_size, strict=True)
     if v_block_size >= w.shape[1]:
         return linear_softmax_cross_entropy_loss_reference(
             x,
