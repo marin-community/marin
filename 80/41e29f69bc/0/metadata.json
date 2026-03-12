@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "8041e29f69bc",
+  "session_id": "2520200f-fb9b-4d39-b558-582ef0c3bc90",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T21:37:10.268254661Z",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "entire_haiku2.txt"
+  ],
+  "agent": "Claude Code",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 5051,
+    "cache_read_tokens": 85917,
+    "output_tokens": 65,
+    "api_call_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T21:37:10.226708382Z",
+    "agent_lines": 0,
+    "human_added": 214283,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 214286,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-test-entire/2520200f-fb9b-4d39-b558-582ef0c3bc90.jsonl"
+}

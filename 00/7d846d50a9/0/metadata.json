@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "007d846d50a9",
+  "session_id": "ddf33627-f45d-423d-ba09-1b633d30ed87",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-17T18:50:43.697819Z",
+  "branch": "rav-trigger-review-via-comment",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/workflows/claude-review.yml"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "301c172e-63c7-433c-ad7c-e9e80049d290",
+  "checkpoint_transcript_start": 20,
+  "transcript_lines_at_start": 20,
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 7823,
+    "cache_read_tokens": 561220,
+    "output_tokens": 567,
+    "api_call_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-17T18:50:43.651691Z",
+    "agent_lines": 23,
+    "human_added": 2,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 25,
+    "agent_percentage": 92
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/ddf33627-f45d-423d-ba09-1b633d30ed87.jsonl"
+}

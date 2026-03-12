@@ -1,0 +1,3034 @@
+Implement the following plan:
+
+# Plan: Remove All ExecutorSteps — Full Migration to StepSpec
+
+## Context
+
+PR #2494 introduced `StepSpec`, `StepRunner`, and `Artifact` as a no-magic replacement for the `ExecutorStep` framework. The old system uses config dataclasses with magic marker types (`InputName`, `OutputName`, `THIS_OUTPUT_PATH`, `VersionedValue`) that get resolved at runtime. The new system uses plain-argument functions with explicit `deps` and `hash_attrs`.
+
+This plan completes the migration: all library code, all 100+ experiment files, all tests, and removes the old `ExecutorStep` system entirely.
+
+## Translation Cheat Sheet
+
+| Old Pattern | New Pattern |
+|---|---|
+| `ExecutorStep(name=..., fn=f, config=C(...))` | `StepSpec(name=..., hash_attrs={...}, deps=[...], fn=lambda out: f(..., output_path=out))` |
+| `executor_main(steps=[...])` | `StepRunner().run([...])` |
+| `output_path_of(step)` / `step.cd("sub")` | `step.output_path` / `os.path.join(step.output_path, "sub")` |
+| `this_output_path()` / `THIS_OUTPUT_PATH` | `output_path` arg from lambda |
+| `versioned(x)` | Put `x` in `hash_attrs` |
+| `InputName.hardcoded(path)` | Just use the path string |
+| `InputName(step, name).nonblocking()` | Use path string, don't add to `deps` |
+| `Artifact.load(step, Type)` | `Artifact.load(step, Type)` (unchanged — works with StepSpec) |
+
+## Phase 1: Library Code — Plain-Argument Entry Points
+
+Make every library function callable without executor imports. For each file: add a `_fn()` plain-arg function, remove `THIS_OUTPUT_PATH`/`InputName`/`VersionedValue` from config defaults.
+
+### 1A. `lib/marin/src/marin/download/huggingface/download_hf.py`
+- Add `download_hf_fn(hf_dataset_id, revision, output_path, ...)` wrapping `download_hf(DownloadConfig(...))`
+- Remove `THIS_OUTPUT_PATH` default from `DownloadConfig.gcs_output_path`
+
+### 1B. `lib/marin/src/marin/processing/classification/decon.py`
+- Add `decontaminate_fn(input_path, output_path, mode, ...)` wrapping `decontaminate(DeconConfig(...))`
+- Remove `THIS_OUTPUT_PATH` default from `DeconConfig.output_path`
+
+### 1C. `lib/marin/src/marin/export/levanter_checkpoint.py`
+- Add `convert_checkpoint_to_hf_fn(checkpoint_path, output_path, trainer, model, ...)`
+- Remove `InputName | VersionedValue` from `ConvertCheckpointStepConfig.checkpoint_path` type
+
+### 1D. `lib/marin/src/marin/evaluation/log_probs.py`
+- Add `evaluate_lm_log_probs_fn(checkpoint_path, model, datasets, resource_config, output_path, ...)`
+- Remove `this_output_path` default from `EvalLmConfig.output_path`
+
+### 1E. `lib/marin/src/marin/processing/tokenize/download_pretokenized.py`
+- Add `download_pretokenized_cache_fn(hf_repo_id, output_path, tokenizer, ...)`
+- Remove `THIS_OUTPUT_PATH` and `ensure_versioned` from config construction
+
+### 1F. `lib/marin/src/marin/processing/tokenize/data_configs.py`
+- Remove `TokenizerStep` type alias
+- Simplify `lm_data_config()` to accept `tuple[str, TokenizedMetadata]` only (remove `ExecutorStep | InputName` branches)
+- Same for `lm_mixture_data_config()`, `step_to_lm_mixture_component()`, etc.
+- Remove `output_path_of`, `unwrap_versioned_value` imports
+
+### 1G. `lib/marin/src/marin/processing/tokenize/tokenize.py`
+- Remove `InputName`, `ExecutorStep`, `VersionedValue` isinstance checks from `_get_filepaths_to_tokenize`
+- Clean up `TokenizeConfigBase.as_lm_dataset_source_config` to only accept `str | None`
+
+### 1H. `lib/marin/src/marin/rl/rl_experiment_utils.py`
+- Add `run_rl_experiment_fn(output_path, name, config, curriculum)` replacing `OutputName(...)` with `os.path.join(output_path, ...)`
+
+### 1I. `lib/marin/src/marin/speedrun/speedrun.py`
+- Remove `ExecutorStep`, `InputName`, `output_path_of` usage
+- Add plain-arg functions for speedrun step creation
+
+### 1J. `lib/marin/src/marin/utilities/executor_utils.py`
+- Remove `InputName` branch from `ckpt_path_to_step_name()` — accept only `str`
+
+### 1K. Other library files with executor imports
+- `lib/marin/src/marin/download/nemotron_cc/download_nemotron_cc.py` — remove `THIS_OUTPUT_PATH`
+- `lib/marin/src/marin/download/uncheatable_eval/download.py` — add plain-arg function
+- `lib/marin/src/marin/transform/conversation/conversation_to_dolma.py` — remove `THIS_OUTPUT_PATH`
+- `lib/marin/src/marin/export/hf_upload.py` — add plain-arg function
+- `lib/marin/src/marin/tokenize/slice_cache.py` — remove executor imports
+- `lib/marin/src/marin/rl/scripts/evaluate_environment.py` — remove executor imports
+
+### 1L. `lib/marin/src/marin/training/training.py`
+- Already has `run_levanter_train_lm_fn()` — remove old `run_levanter_train_lm(config)` and `TrainLmOnPodConfig`
+- Remove `THIS_OUTPUT_PATH`, `InputName`, `VersionedValue` from all config types
+
+## Phase 2: Experiment Helpers — `experiments/defaults.py`
+
+This is the keystone file. Nearly every experiment imports from it.
+
+- Replace all `default_*` functions to return `StepSpec` instead of `ExecutorStep`/`InputName`
+- `default_download(name, hf_dataset_id, revision)` → returns `StepSpec`
+- `default_tokenize(name, dataset_path, tokenizer, ...)` → returns `StepSpec`
+- `default_hf_tokenize(name, dataset, tokenizer, ...)` → returns `StepSpec`
+- `default_train(name, tokenized, model_config, ...)` → returns `StepSpec`
+- `default_sft(name, tokenized, base_model, ...)` → returns `StepSpec`
+- `default_eval(step, evals, ...)` → returns `StepSpec`
+- Remove `this_output_path`, `output_path_of`, `versioned`, `ensure_versioned`, `unwrap_versioned_value` imports
+- Use `Artifact.load()` inside lambda closures for deferred metadata loading
+
+Also update:
+- `experiments/models.py` — convert model step definitions
+- `experiments/paloma.py` — convert Paloma step definitions
+- `experiments/eval_datasets.py` — convert eval dataset definitions
+- `experiments/evals/evals.py` — convert evaluation helper functions
+
+## Phase 3: Experiment File Migration (100+ files)
+
+Systematically convert all experiment files:
+
+### Tutorials (~8 files)
+- `experiments/tutorials/hello_world.py`
+- `experiments/tutorials/train_tiny_model_cpu.py`
+- `experiments/tutorials/train_tiny_model_gpu.py`
+- `experiments/tutorials/train_tiny_model_tpu.py`
+- `experiments/tutorials/train_tiny_sweep_dclm_tpu.py`
+- `experiments/tutorials/train_tiny_sweep_tpu.py`
+- `experiments/tutorials/exp1077_reproduce_dclm_1b1x.py`
+- `experiments/tutorials/exp1078_reproduce_dclm_7b1x.py`
+
+### Dataset experiments (~10 files)
+- `experiments/pretraining_datasets/dclm.py`
+- `experiments/pretraining_datasets/dolma.py`
+- `experiments/pretraining_datasets/dolmino.py`
+- `experiments/pretraining_datasets/nemotron.py`
+- `experiments/pretraining_datasets/simple.py`
+- `experiments/pretraining_datasets/main.py`
+- `experiments/midtraining_datasets.py`
+
+### Eval experiments (~8 files)
+- `experiments/evals/exp1600_uncheatable_evals.py`
+- `experiments/evals/exp1602_lm_eval_harness.py`
+- `experiments/evals/run_base_model_evals.py`
+- `experiments/evals/run_key_evals.py`
+- `experiments/evals/run_on_gpu.py`
+- `experiments/evals/run_sft_model_evals.py`
+
+### Speedrun experiments (~60 files in experiments/speedrun/)
+All files under `experiments/speedrun/`
+
+### Tootsie experiments (~40 files in experiments/tootsie/)
+All files under `experiments/tootsie/`
+
+### Other experiments (~15 files)
+- `experiments/exp2039_rl_math500.py`
+- `experiments/exp1880_sft_baseline.py`
+- `experiments/exp1994_32b_sft.py`
+- `experiments/exp808_sft_mixture.py`
+- `experiments/common_pile/tokenize_common_pile.py`
+- `experiments/dedup/`
+- `experiments/dolma/exp442_dolma.py`
+- `experiments/dclm/exp433_dclm_run.py`
+- `experiments/train_test_overlap/`
+- `experiments/two_stage/`
+- `experiments/isoflop_sweep.py`
+
+### Pattern for each file:
+1. Replace `from marin.execution import ExecutorStep, ...` with `from marin.execution.step_model import StepSpec`
+2. Replace `executor_main(steps=[...])` with `StepRunner().run([...])`
+3. Convert each `ExecutorStep(...)` to `StepSpec(...)` using the translation table
+4. Replace config dataclass instantiation with plain-arg lambda closures
+5. Replace `output_path_of(step)` with `step.output_path`
+6. Replace `versioned(x)` by moving x into `hash_attrs`
+
+## Phase 4: Test Migration
+
+### `tests/test_executor.py`
+- Rewrite tests to use `StepSpec` + `StepRunner` instead of `ExecutorStep` + `Executor`
+- Or remove if fully covered by `tests/test_step_runner.py`
+
+### `tests/test_executor_utils.py`
+- Update `ckpt_path_to_step_name` tests to use plain strings
+
+### `tests/integration_test.py`
+- Migrate to use StepSpec (or remove if `integration_nomagic_test.py` covers it)
+
+### Other test files
+- `tests/processing/tokenize/test_tokenize.py` — remove executor imports
+- `tests/processing/classification/deduplication/test_exact.py`
+- `tests/processing/classification/deduplication/test_fuzzy.py`
+- `tests/processing/classification/test_consolidate.py`
+- `tests/transform/test_html.py`
+
+## Phase 5: Cleanup — Remove Old Executor Code
+
+### `lib/marin/src/marin/execution/executor.py`
+- Remove: `ExecutorStep`, `InputName`, `OutputName`, `VersionedValue`
+- Remove: `this_output_path()`, `THIS_OUTPUT_PATH`, `output_path_of()`, `versioned()`, `ensure_versioned()`, `unwrap_versioned_value()`, `get_executor_step()`
+- Remove: `collect_dependencies_and_version()`, `instantiate_config()`, `asdict_without_description()`
+- Remove: `Executor` class, `ExecutorMainConfig`, `executor_main()`
+- Keep: `ExecutorStepInfo`, `ExecutorInfo` if needed for metadata reading
+- Keep: status constants if used by step_runner
+
+### `lib/marin/src/marin/execution/step_runner.py`
+- Remove: `resolve_executor_step()` function
+
+### `lib/marin/src/marin/execution/__init__.py`
+- Export only: `StepSpec`, `StepRunner`, `Artifact`, status constants
+
+### Documentation
+- `docs/references/executor-api.md` — update or remove
+- `docs/tutorials/executor-101.md` — rewrite for StepSpec
+
+## Verification
+
+1. `uv run pytest -m 'not slow'` — all tests pass
+2. `./infra/pre-commit.py --all-files --fix` — lint passes
+3. `tests/integration_nomagic_test.py` — E2E pipeline works
+4. No remaining imports of `ExecutorStep`, `InputName`, `OutputName`, `THIS_OUTPUT_PATH`, `VersionedValue` anywhere
+
+## New Branch
+
+`agent/20260216-remove-executor-steps`
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. The user provided a detailed plan for removing all ExecutorSteps and migrating to StepSpec in the Marin codebase.
+
+2. I created task tracking items for the 5 phases:
+   - Phase 1: Library code — plain-argument entry points
+   - Phase 2: Migrate experiments/defaults.py and helpers
+   - Phase 3: Migrate 100+ experiment files
+   - Phase 4: Migrate tests
+   - Phase 5: Remove old executor code and cleanup
+
+3. I created a new branch `agent/20260216-remove-executor-steps`
+
+4. I explored the codebase extensively:
+   - Read executor.py, step_model.py, step_runner.py, __init__.py
+   - Read defaults.py, models.py, paloma.py, eval_datasets.py, evals.py
+   - Read training.py, data_configs.py, tokenize.py, artifact.py
+   - Read integration_nomagic_test.py (key reference for the new pattern)
+   - Read hello_world.py, build_prebuilt_caches.py
+   - Read SimpleTrainConfig, simple_train_config.py
+   - Read test_executor.py
+
+5. I started making edits:
+   - data_configs.py: Changed TokenizerStep from ExecutorStep to StepSpec, removed ExecutorStep/InputName branches, simplified types
+   - defaults.py: Complete rewrite returning StepSpec instead of ExecutorStep/InputName
+   - models.py: Converted to use StepSpec
+   - paloma.py: Converted to use StepSpec
+   - hello_world.py: Converted to use StepSpec
+   - tokenize/__init__.py: Updated exports
+
+6. Launched two background agents:
+   - ab041b7: Bulk convert experiment files
+   - a1999c2: Clean up library executor imports
+
+7. Started reading test_executor.py for Phase 4
+
+Let me now compile the detailed technical information for the summary.
+
+Summary:
+1. Primary Request and Intent:
+   The user asked me to implement a detailed migration plan to remove ALL `ExecutorStep` usage from the Marin codebase and replace it with the new `StepSpec`/`StepRunner` system. The plan has 5 phases:
+   - Phase 1: Library code — add plain-argument entry points, remove executor imports from configs
+   - Phase 2: Migrate `experiments/defaults.py` and helper files (keystone)
+   - Phase 3: Migrate 100+ experiment files
+   - Phase 4: Migrate test files
+   - Phase 5: Remove old executor code entirely
+
+   The user also referenced a plan transcript at `/Users/rav/.claude/plans/toasty-jumping-hollerith.md` and a previous session transcript at `/Users/rav/.REDACTED.jsonl`.
+
+2. Key Technical Concepts:
+   - **ExecutorStep** (old): Config dataclass with magic marker types (`InputName`, `OutputName`, `THIS_OUTPUT_PATH`, `VersionedValue`) resolved at runtime
+   - **StepSpec** (new): Plain-argument functions with explicit `deps` list, `hash_attrs` dict, and `fn: Callable[[str], Any]` (output_path → result)
+   - **StepRunner**: New execution engine replacing `Executor` class and `executor_main()`
+   - **Artifact**: System for saving/loading step metadata (e.g., `TokenizedMetadata`) — used via `Artifact.load(step, Type)` inside lambda closures for deferred metadata loading
+   - **Translation patterns**:
+     - `ExecutorStep(name, fn, config)` → `StepSpec(name, hash_attrs={}, deps=[], fn=lambda out: fn(...))`
+     - `executor_main(steps=[...])` → `StepRunner().run([...])`
+     - `output_path_of(step)` / `step.cd("sub")` → `step.output_path` / `os.path.join(step.output_path, "sub")`
+     - `this_output_path()` / `THIS_OUTPUT_PATH` → `output_path` arg from lambda
+     - `versioned(x)` → put `x` in `hash_attrs`
+     - `InputName.hardcoded(path)` → just the path string
+   - **Frozen dataclass configs**: `TokenizeConfig`, `HfTokenizeConfig`, `TrainLmOnPodConfig`, `DownloadConfig`, `SimpleTrainConfig`
+   - **`TokenizedMetadata`**: Returned by `tokenize()`, loaded via `Artifact.load()` at execution time
+   - **`LMMixtureDatasetConfig`** / `lm_data_config()`: Bridges tokenized data to training configs
+
+3. Files and Code Sections:
+
+   - **`lib/marin/src/marin/execution/step_model.py`** — The new StepSpec class (unchanged, reference only):
+     ```python
+     @dataclass(frozen=True)
+     class StepSpec:
+         name: str
+         output_path_prefix: str | None = None
+         deps: "list[str | StepSpec]" = dataclasses.field(default_factory=list)
+         hash_attrs: dict[str, Any] = dataclasses.field(default_factory=dict)
+         override_output_path: str | None = None
+         fn: Callable[[str], Any] | None = None
+         resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
+         env_vars: dict[str, str] = dataclasses.field(default_factory=dict)
+         pip_dependency_groups: list[str] = dataclasses.field(default_factory=list)
+     ```
+
+   - **`lib/marin/src/marin/execution/artifact.py`** — Artifact system for saving/loading step metadata (unchanged, reference):
+     ```python
+     class Artifact:
+         @classmethod
+         def load(cls, base_path: str | StepSpec, artifact_type: type[T] | None = None) -> T | dict[str, Any]:
+             # Loads from {base_path}/.artifact
+         @classmethod
+         def save(cls, artifact: T, base_path: str) -> None:
+             # Saves to {base_path}/.artifact
+     ```
+
+   - **`lib/marin/src/marin/execution/executor.py`** — The old executor system (to be removed in Phase 5). Contains `ExecutorStep`, `InputName`, `OutputName`, `VersionedValue`, `THIS_OUTPUT_PATH`, `Executor`, `executor_main`, etc. ~1008 lines.
+
+   - **`lib/marin/src/marin/processing/tokenize/data_configs.py`** — MODIFIED. Key changes:
+     - Changed `TokenizerStep = ExecutorStep[TokenizeConfig]` → `TokenizerStep = StepSpec`
+     - Removed imports: `unwrap_versioned_value`, `ExecutorStep`, `InputName`, `output_path_of`
+     - Added import: `from marin.execution.step_model import StepSpec`
+     - `step_to_lm_mixture_component`: Removed `ExecutorStep` branch, now only accepts `TokenizeConfig | TokenizedMetadata`
+     - `lm_data_config`: Changed to only accept `tuple[str, TokenizedMetadata]` as training_set, `dict[str, TokenizedMetadata]` for validation_sets
+     - `lm_mixture_data_config`: Changed component type to `dict[str, TokenizeConfig | TokenizedMetadata]`
+     - `lm_varying_mixture_data_config`: Changed component type similarly
+     - `add_validation_sets_to_mixture`: Changed to accept `dict[str, TokenizeConfig | TokenizedMetadata]`
+     - `mixture_for_evaluation`: Changed input type from `dict[str, ExecutorStep]` to `dict[str, TokenizeConfig | TokenizedMetadata]`
+     - `get_vocab_size_for_tokenizer`: Removed `unwrap_versioned_value` call
+     - `_are_tokenizers_equivalent`: Removed `unwrap_versioned_value` calls
+     - `_verify_tokenizers_same`: Removed `ExecutorStep` isinstance checks, now only handles `TokenizeConfig | TokenizedMetadata`
+
+   - **`lib/marin/src/marin/processing/tokenize/__init__.py`** — MODIFIED. Added exports: `lm_varying_mixture_data_config`, `TokenizedMetadata`, `tokenize_fn`
+
+   - **`experiments/defaults.py`** — COMPLETELY REWRITTEN. This is the keystone file. Key changes:
+     - Removed imports: `ExecutorStep`, `InputName`, `VersionedValue`, `ensure_versioned`, `this_output_path`, `unwrap_versioned_value`
+     - Added imports: `Artifact`, `StepSpec`, `HfTokenizeConfig`, `TokenizeConfig`, `TokenizeConfigBase`, `TokenizedMetadata`, `tokenize`
+     - `default_download()`: Now returns `StepSpec` instead of `InputName`. Uses lambda with `DownloadConfig` construction inside.
+     - `default_tokenize()`: Now returns `StepSpec` instead of `ExecutorStep`. Uses named `fn` functions for each branch. Takes `StepSpec | str | HfDatasetSpec` for dataset parameter.
+     - `default_validation_sets()`: Returns `dict[str, StepSpec]` instead of `dict[str, TokenizerStep]`
+     - `default_train()`: Now returns `StepSpec`. Added required `tokenizer` parameter. All TrainLmConfig construction moved inside lambda `train_fn`. Uses `Artifact.load()` at execution time to resolve `TokenizedMetadata` from tokenize steps. `hash_attrs` captures model config, train params, tokenizer, eval tasks.
+     - `simulated_epoching_train()`: Added `tokenizer` parameter, uses `_simulated_epoching_budgets` tuple passed to `default_train`.
+     - `default_sft()`: Added `tokenizer` parameter, delegates to `default_train`.
+     - Removed `_prepare_data_config()` and `_get_tokenizer_for_train()` (no longer needed).
+     - `_get_vocab_size()` simplified to just take tokenizer string.
+
+   - **`experiments/models.py`** — MODIFIED:
+     - Changed import from `ExecutorStep, this_output_path, versioned` to `StepSpec`
+     - `download_model_step()` returns `StepSpec` instead of `ExecutorStep`
+     - Uses `hash_attrs` instead of `versioned()`, lambda with `DownloadConfig` instead of config with `this_output_path()`
+
+   - **`experiments/paloma.py`** — COMPLETELY REWRITTEN:
+     - Changed imports to `StepSpec`, `StepRunner`
+     - `paloma` is now a `StepSpec` with lambda fn instead of chained `ExecutorStep.with_output_path().cd()`
+     - `paloma_data_path = os.path.join(paloma.output_path, "65cd6fc")` — explicit path instead of `.cd()`
+     - `paloma_tokenized()` returns `dict[str, StepSpec]`, passes string paths to `default_tokenize`
+     - `__main__` uses `StepRunner().run()` instead of `executor_main()`
+
+   - **`experiments/tutorials/hello_world.py`** — COMPLETELY REWRITTEN:
+     - Removed config dataclasses (`GenerateDataConfig`, `ComputeStatsConfig`)
+     - Functions now take plain args instead of config objects
+     - Steps are `StepSpec` with lambdas instead of `ExecutorStep` with configs
+     - Uses `StepRunner().run()` instead of `executor_main()`
+
+   - **`tests/test_executor.py`** — READ but not yet modified. Contains ~651 lines of tests for the old Executor system including: `test_executor`, `test_force_run_failed`, `test_status_actor_one_executor_waiting_for_another`, `test_status_actor_multiple_steps_race_condition`, `test_parallelism`, `test_versioning`, `test_dedup_version`, `test_run_only_some_steps`, `test_collect_deps_skip_vs_block`, `test_parent_version_bubbles_into_skip_child`, `test_parent_doesnt_run_on_skip_parent`, `test_skippable_parent_will_run_if_asked`, `test_parent_will_run_if_some_child_is_not_skippable`, `test_status_file_takeover_stale_lock_then_refresh`
+
+   - **`tests/integration_nomagic_test.py`** — READ as reference. Already uses StepSpec pattern. Shows the canonical pattern for the new system including `Artifact.load()` usage.
+
+   - **`lib/marin/src/marin/training/training.py`** — READ. Already has `run_levanter_train_lm_fn()` plain-arg function. `TrainLmOnPodConfig` and `run_levanter_train_lm()` still used by defaults.py.
+
+   - **`lib/marin/src/marin/processing/tokenize/tokenize.py`** — READ. Has `tokenize_fn()` already. Contains `VersionedValue`/`InputName`/`ExecutorStep` isinstance checks in `_get_filepaths_to_tokenize()` and `_validate_train_urls()` that need cleanup.
+
+   - **`lib/marin/src/marin/execution/__init__.py`** — READ. Currently exports both old and new types. Will need cleanup in Phase 5.
+
+4. Errors and fixes:
+   - No explicit errors encountered yet. The migration is in progress. The key risk is that changes to `data_configs.py` (removing `ExecutorStep` support) will break any unconverted consumers. This is being addressed by converting all consumers in parallel.
+
+5. Problem Solving:
+   - **Chicken-and-egg problem**: `data_configs.py` depends on `ExecutorStep` types, but `defaults.py` depends on `data_configs.py`. Solved by converting both simultaneously.
+   - **Deferred metadata resolution**: In the old system, `_prepare_data_config()` could peek into `ExecutorStep.config.tokenizer` at step-creation time. In the new system, `StepSpec` doesn't carry config. Solved by: (1) requiring explicit `tokenizer` parameter in `default_train()`, (2) using `Artifact.load()` inside lambdas for deferred metadata loading at execution time.
+   - **Validation sets**: Old system passed `dict[str, ExecutorStep]` for validation. New system collects validation `StepSpec`s as deps, then loads `TokenizedMetadata` via `Artifact.load()` inside the train lambda.
+   - **Hash computation**: Old system recursively traversed config dataclasses for versioning. New system uses explicit `hash_attrs` dict. For `default_train`, key training parameters are explicitly listed in hash_attrs, with `dataclasses.asdict(model_config)` for the model.
+
+6. All user messages:
+   - "Implement the following plan: # Plan: Remove All ExecutorSteps — Full Migration to StepSpec [detailed 5-phase plan with translation cheat sheet, file-by-file instructions for ~100+ files]"
+   - (System reminder about task tools)
+   - (System reminder about agent progress + exited plan mode)
+
+7. Pending Tasks:
+   - **Task #1 (in_progress)**: Phase 1: Library code — plain-argument entry points. Background agent `a1999c2` is working on cleaning up library files (download_hf.py, tokenize.py, etc.)
+   - **Task #2 (pending→effectively in_progress)**: Phase 2: Migrate experiments/defaults.py and helpers — defaults.py, models.py, paloma.py are done. eval_datasets.py and evals/evals.py still need conversion (background agent `ab041b7` is working on these)
+   - **Task #3 (pending→effectively in_progress)**: Phase 3: Migrate 100+ experiment files — Background agent `ab041b7` is working on bulk conversion
+   - **Task #4 (pending)**: Phase 4: Migrate tests — test_executor.py has been read but not modified. test_executor_utils.py, integration_test.py, and other test files still need migration.
+   - **Task #5 (pending)**: Phase 5: Remove old executor code and cleanup — Remove ExecutorStep, InputName, OutputName, VersionedValue, etc. from executor.py; update __init__.py exports; remove resolve_executor_step from step_runner.py; update docs.
+
+8. Current Work:
+   Two background agents are running:
+   - **Agent `ab041b7`**: Bulk converting experiment files (evals/evals.py, eval_datasets.py, pretraining_datasets, speedrun, tootsie, and all other experiment files). Was actively reading step_model.py and eval files when last checked.
+   - **Agent `a1999c2`**: Cleaning up library files under `lib/marin/src/marin/` that still import old executor types (download_hf.py, tokenize.py, etc.)
+   
+   I had just finished reading `tests/test_executor.py` (all 651 lines) to prepare for Phase 4 test migration when the summary was requested.
+
+9. Optional Next Step:
+   Wait for both background agents (`ab041b7` and `a1999c2`) to complete, then:
+   1. Review their work for correctness
+   2. Address any files they missed
+   3. Continue with Phase 4: Migrate test files (test_executor.py needs rewriting to use StepSpec+StepRunner, or removal if covered by test_step_runner.py; other test files need executor import cleanup)
+   4. Then Phase 5: Remove old executor code from executor.py, update __init__.py, clean up step_runner.py's `resolve_executor_step()`
+   5. Run `uv run pytest -m 'not slow'` and `./infra/pre-commit.py --all-files --fix` to verify everything works
+   
+   The branch is `agent/20260216-remove-executor-steps`.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Session Start**: This is a continuation from a previous conversation that ran out of context. The system provided a detailed summary of the previous work, including a 5-phase plan to remove all ExecutorSteps and migrate to StepSpec.
+
+2. **Previous Session Summary**: The user had asked to implement a detailed migration plan. Key work already done:
+   - Created branch `agent/20260216-remove-executor-steps`
+   - Modified: data_configs.py, defaults.py, models.py, paloma.py, hello_world.py, tokenize/__init__.py
+   - Two background agents were running: ab041b7 (bulk experiment files) and a1999c2 (library cleanup)
+
+3. **Current Session Actions**:
+
+   a. First, I checked task status and git diff — found 12 files modified, both agents still running.
+   
+   b. Read TaskOutput for both agents (both still running) and read test_executor.py (651 lines of old executor tests).
+   
+   c. Read test_step_runner.py, test_executor_utils.py, integration_test.py to understand test landscape.
+   
+   d. Read executor_utils.py (already cleaned up to only accept str) and integration_nomagic_test.py (already uses StepSpec).
+   
+   e. Grepped for executor imports in tests directory.
+   
+   f. Read tests/processing/tokenize/test_tokenize.py — has InputName tests that need removal.
+
+   g. **Phase 4 Test Migration Work**:
+   
+   - **test_executor_utils.py**: Rewrote to remove InputName tests, keep only string tests.
+   
+   - **test_tokenize.py**: Removed InputName import and all InputName test functions (test_inputname_variants, test_mixed_paths_one_invalid_inputname).
+   
+   - **test_executor.py**: Completely rewrote to keep only StatusFile tests (test_status_file_reads_legacy_format, test_status_file_takeover_stale_lock_then_refresh), removing all ExecutorStep/Executor tests.
+   
+   - **test_step_runner.py**: 
+     - Removed ExecutorStep import
+     - Removed resolve_executor_step import and tests
+     - Added 4 new versioning tests: test_hash_attrs_affect_output_path, test_same_hash_attrs_give_same_output_path, test_dep_hash_affects_output_path, test_override_output_path_ignores_hash
+
+   h. **Error**: test_hash_attrs_affect_output_path failed because StepSpec uses `_` as separator not `-`. Fixed by changing assertion from `step-` to `step_`. All 19 tests then passed.
+
+   i. **Agent a1999c2 completed**: Library cleanup done for 14 files including download_hf.py, tokenize.py, nemotron_cc, conversation_to_dolma, hf_upload.py, slice_cache.py, executor_utils.py, levanter_checkpoint.py, log_probs.py, decon.py, rl_experiment_utils.py, speedrun.py, evaluate_environment.py, download_pretokenized.py.
+
+   j. **Additional library cleanup** I did manually:
+   - dedup_commons.py: Removed THIS_OUTPUT_PATH import and default
+   - visualize.py: Removed this_output_path import and default
+   - transform_conversation.py: Removed unwrap_versioned_value import and replaced all calls with identity
+   - download/uncheatable_eval/download.py: Converted from ExecutorStep to StepSpec, removed VersionedValue types from config
+
+   k. **Agent ab041b7 completed**: Bulk-converted all experiment files from `executor_main(steps=[...])` to `StepRunner().run([...])`. Fixed defaults.py syntax error (dangling @lru_cache). Removed unused code. Pre-commit passes. No `executor_main` references remain in experiments.
+
+   l. **Discovery**: 26 experiment files still import from `marin.execution.executor` and create `ExecutorStep` objects. They need full conversion to StepSpec.
+
+   m. Launched agent aac346f to handle the remaining 26 experiment files.
+
+   n. **Phase 5 cleanup started**:
+   - Removed `resolve_executor_step` from step_runner.py
+   - Removed TYPE_CHECKING import of ExecutorStep
+   - Removed `from typing import TYPE_CHECKING, Any` (simplified to just needed imports)
+   - Updated module docstring to remove ExecutorStep reference
+
+4. **User Messages**: 
+   - The only user message was the initial continuation prompt asking to continue from where we left off without asking questions.
+
+5. **Current State**:
+   - Agent aac346f is still running, converting 26 remaining experiment files
+   - Phase 5 cleanup partially done (step_runner.py cleaned)
+   - Tests all pass (19 tests across 3 test files)
+   - Pre-commit was passing before my latest step_runner.py changes
+
+Summary:
+1. Primary Request and Intent:
+   The user asked to continue implementing a 5-phase migration plan to remove ALL `ExecutorStep` usage from the Marin codebase and replace with the new `StepSpec`/`StepRunner` system. This is a continuation from a previous session that ran out of context. The plan involves:
+   - Phase 1: Library code — plain-argument entry points (completed)
+   - Phase 2: Migrate experiments/defaults.py and helpers (completed)
+   - Phase 3: Migrate 100+ experiment files (in progress)
+   - Phase 4: Migrate tests (completed)
+   - Phase 5: Remove old executor code and cleanup (in progress)
+   
+   The plan is documented at `/Users/rav/.claude/plans/toasty-jumping-hollerith.md`.
+   Branch: `agent/20260216-remove-executor-steps`
+
+2. Key Technical Concepts:
+   - **ExecutorStep** (old): Config dataclass with magic marker types (`InputName`, `OutputName`, `THIS_OUTPUT_PATH`, `VersionedValue`) resolved at runtime
+   - **StepSpec** (new): Plain-argument functions with explicit `deps`, `hash_attrs`, and `fn: Callable[[str], Any]`
+   - **StepRunner**: New execution engine replacing `Executor` class and `executor_main()`
+   - **Artifact**: System for saving/loading step metadata via `Artifact.load(step, Type)` and `Artifact.save(artifact, path)`
+   - **Translation patterns**:
+     - `ExecutorStep(name, fn, config)` → `StepSpec(name, hash_attrs={}, deps=[], fn=lambda out: fn(...))`
+     - `executor_main(steps=[...])` → `StepRunner().run([...])`
+     - `output_path_of(step)` → `step.output_path`
+     - `this_output_path()` / `THIS_OUTPUT_PATH` → `output_path` arg from lambda
+     - `versioned(x)` → put `x` in `hash_attrs`
+     - `InputName.hardcoded(path)` → just the path string
+   - **StepSpec hash separator**: Uses `_` (underscore) not `-` (dash) between name and hash in output_path
+
+3. Files and Code Sections:
+
+   - **`tests/test_executor_utils.py`** — Rewrote to remove InputName tests
+     - Removed `from marin.execution.executor import InputName`, `make_input_name` helper, and 3 InputName tests
+     - Kept 4 string-only tests for `ckpt_path_to_step_name`
+
+   - **`tests/test_executor.py`** — Stripped down to only StatusFile tests
+     - Removed all ExecutorStep/Executor tests (test_executor, test_force_run_failed, test_versioning, etc.)
+     - Kept `test_status_file_reads_legacy_format` and `test_status_file_takeover_stale_lock_then_refresh`
+     - Imports now only: `json`, `time`, `StatusFile` from executor_step_status
+
+   - **`tests/test_step_runner.py`** — Cleaned up and added versioning tests
+     - Removed `ExecutorStep` import, `resolve_executor_step` import
+     - Removed `test_resolve_executor_step_binds_config` and `test_resolve_executor_step_preserves_deps`
+     - Added 4 new tests:
+     ```python
+     def test_hash_attrs_affect_output_path(tmp_path: Path):
+         prefix = tmp_path.as_posix()
+         step_a = StepSpec(name="step", output_path_prefix=prefix, hash_attrs={"value": 1}, fn=lambda output_path: None)
+         step_b = StepSpec(name="step", output_path_prefix=prefix, hash_attrs={"value": 2}, fn=lambda output_path: None)
+         assert step_a.output_path != step_b.output_path
+         assert step_a.output_path.startswith(f"{prefix}/step_")
+         assert step_b.output_path.startswith(f"{prefix}/step_")
+
+     def test_same_hash_attrs_give_same_output_path(tmp_path: Path):
+         # Identical hash_attrs → same output_path
+
+     def test_dep_hash_affects_output_path(tmp_path: Path):
+         # Changing parent hash_attrs → child output_path changes
+
+     def test_override_output_path_ignores_hash(tmp_path: Path):
+         # override_output_path bypasses hash computation
+     ```
+
+   - **`tests/processing/tokenize/test_tokenize.py`** — Removed InputName tests
+     - Removed `from marin.execution import InputName`
+     - Removed `test_inputname_variants` (6 parametrized cases) and `test_mixed_paths_one_invalid_inputname`
+
+   - **`lib/marin/src/marin/processing/classification/deduplication/dedup_commons.py`** — Removed THIS_OUTPUT_PATH
+     - Removed `from marin.execution.executor import THIS_OUTPUT_PATH`
+     - Changed `output_path: str = THIS_OUTPUT_PATH` → `output_path: str = ""`
+
+   - **`lib/marin/src/marin/evaluation/visualize.py`** — Removed this_output_path
+     - Removed `from marin.execution.executor import this_output_path`
+     - Changed `output_path: str = dataclasses.field(default_factory=this_output_path)` → `output_path: str = ""`
+
+   - **`lib/marin/src/marin/transform/conversation/transform_conversation.py`** — Removed unwrap_versioned_value
+     - Removed `from marin.execution import unwrap_versioned_value`
+     - Replaced all `unwrap_versioned_value(cfg.field)` calls with just `cfg.field` (8 occurrences)
+
+   - **`lib/marin/src/marin/download/uncheatable_eval/download.py`** — Full conversion to StepSpec
+     - Changed import from old executor types to `from marin.execution.step_model import StepSpec`
+     - Removed `VersionedValue` types from `UncheatableEvalDownloadConfig` fields
+     - Converted `make_uncheatable_eval_step()` from returning `ExecutorStep` to returning `StepSpec`:
+     ```python
+     def make_uncheatable_eval_step(...) -> StepSpec:
+         return StepSpec(
+             name=name,
+             hash_attrs={"repo_owner": repo_owner, "repo_name": repo_name, "data_path": data_path, "branch": branch},
+             fn=lambda output_path: download_latest_uncheatable_eval(
+                 UncheatableEvalDownloadConfig(output_path=output_path, repo_owner=repo_owner, ...)
+             ),
+         )
+     ```
+
+   - **`lib/marin/src/marin/execution/step_runner.py`** — Removed resolve_executor_step
+     - Removed `from typing import TYPE_CHECKING, Any` → `from collections.abc import Iterable; from threading import Event, Thread`
+     - Removed `if TYPE_CHECKING: from marin.execution.executor import ExecutorStep`
+     - Removed entire `resolve_executor_step()` function (~40 lines)
+     - Updated module docstring to remove ExecutorStep reference
+
+   - **Files modified by background agent a1999c2** (library cleanup):
+     - download_hf.py: Removed THIS_OUTPUT_PATH default
+     - tokenize.py: Removed InputName/ExecutorStep/VersionedValue handling, simplified type signatures
+     - nemotron_cc/download_nemotron_cc.py: Removed THIS_OUTPUT_PATH
+     - conversation_to_dolma.py: Removed THIS_OUTPUT_PATH
+     - hf_upload.py: Removed ExecutorStep/InputName, changed to direct function call
+     - slice_cache.py: Removed THIS_OUTPUT_PATH/InputName (kept ExecutorStep as it's still used in factory)
+     - executor_utils.py: Removed InputName branch from ckpt_path_to_step_name
+     - levanter_checkpoint.py: Removed old types, simplified to plain-arg function
+     - log_probs.py: Removed old types (kept ExecutorStep for now)
+     - decon.py: Removed THIS_OUTPUT_PATH
+     - rl_experiment_utils.py: Removed OutputName
+     - speedrun.py: Cleaned imports
+     - evaluate_environment.py: Cleaned imports
+     - download_pretokenized.py: Removed old types
+
+   - **Files modified by background agent ab041b7** (experiment conversion):
+     - Bulk-converted ALL experiment files from `executor_main(steps=[...])` to `StepRunner().run([...])`
+     - Fixed defaults.py syntax error (dangling @lru_cache decorator after function was removed)
+     - Removed unused code from defaults.py (_get_vocab_size, _cached_load_tokenizer, unused variables)
+     - Updated tests/test_dry_run.py to handle both old and new patterns
+     - Updated docstrings referencing executor_main
+     - Pre-commit passes cleanly after fixes
+
+4. Errors and fixes:
+   - **test_hash_attrs_affect_output_path assertion failure**: StepSpec uses `_` (underscore) as separator between name and hash in output_path, not `-` (dash). The assertion `step_a.output_path.startswith(f"{prefix}/step-")` failed because actual path was `step_7f892d3e`. Fixed by changing to `f"{prefix}/step_"`.
+   - **defaults.py syntax error**: Agent ab041b7's script left a dangling `@lru_cache` decorator after removing the function below it. Fixed by removing the dangling decorator line.
+
+5. Problem Solving:
+   - **Solved**: All tests pass (19 tests across test_executor.py, test_executor_utils.py, test_step_runner.py)
+   - **Solved**: Pre-commit passes after agent ab041b7's fixes
+   - **Solved**: No experiment files reference `executor_main` anymore
+   - **In progress**: 26 experiment files still create ExecutorStep objects and need full conversion to StepSpec (agent aac346f working on this)
+   - **In progress**: Some library files under `lib/marin/src/marin/` still have ExecutorStep factory functions (speedrun/paloma_local_download.py, speedrun/speedrun.py, etc.) — these return ExecutorStep and are still used by callers
+
+6. All user messages:
+   - "This session is being continued from a previous conversation that ran out of context. [Detailed summary of previous work]. Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on."
+
+7. Pending Tasks:
+   - **Task #3 (in_progress)**: Phase 3 — Agent aac346f is converting 26 remaining experiment files from ExecutorStep to StepSpec
+   - **Task #5 (in_progress)**: Phase 5 — Remove old executor code. Started with step_runner.py cleanup (resolve_executor_step removed). Still need to:
+     - Clean up `lib/marin/src/marin/execution/__init__.py` exports
+     - Eventually remove ExecutorStep, InputName, OutputName, VersionedValue from executor.py
+     - Remove remaining ExecutorStep factory functions in library code (log_probs.py, slice_cache.py, download_pretokenized.py, etc.)
+     - Run full test suite and pre-commit to verify everything works
+
+8. Current Work:
+   I was working on Phase 5 cleanup when the summary was requested. Specifically, I had just:
+   1. Removed `resolve_executor_step` function from `step_runner.py`
+   2. Removed the `TYPE_CHECKING` import of `ExecutorStep` from `step_runner.py`
+   3. Updated the module docstring in `step_runner.py`
+   
+   Background agent aac346f is still running, converting 26 remaining experiment files from ExecutorStep to StepSpec.
+
+9. Optional Next Step:
+   Wait for agent aac346f to complete its conversion of the 26 remaining experiment files. Then:
+   1. Review its work for correctness
+   2. Run `./infra/pre-commit.py --all-files --fix` to verify lint passes
+   3. Run `.venv/bin/python -m pytest tests/test_executor.py tests/test_executor_utils.py tests/test_step_runner.py -x -v` to verify tests still pass
+   4. Continue Phase 5 cleanup: clean up `__init__.py` exports, remove remaining factory functions that still use ExecutorStep in library code
+   5. Verify no remaining imports of old types in the codebase
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation to build a comprehensive summary.
+
+1. **Session Start**: This is a continuation from a previous conversation that ran out of context. The system provided a detailed summary of previous work on a 5-phase migration plan to remove all ExecutorSteps and replace with StepSpec/StepRunner.
+
+2. **Previous Session Summary Key Points**:
+   - Branch: `agent/20260216-remove-executor-steps`
+   - Plan at: `/Users/rav/.claude/plans/toasty-jumping-hollerith.md`
+   - Phases 1, 2, 4 completed
+   - Phase 3 (experiment files) and Phase 5 (cleanup) in progress
+   - Agent aac346f was running to convert 26 remaining experiment files
+   - I had already removed `resolve_executor_step` from step_runner.py
+
+3. **Current Session Actions**:
+
+   a. Checked git diff stats (163 files changed) and agent aac346f status (still running)
+   
+   b. Grepped for old executor imports in library code - found 7 files still importing old types
+   
+   c. Read all 7 library files:
+      - paloma_local_download.py
+      - speedrun.py
+      - slice_cache.py
+      - rl_experiment_utils.py
+      - evaluate_environment.py
+      - download_pretokenized.py
+      - log_probs.py
+   
+   d. Converted log_probs.py: Changed `ExecutorStep` → `StepSpec`, wrapped config in lambda
+   
+   e. Converted evaluate_environment.py: Changed `ExecutorStep` → `StepSpec`, added hash_attrs
+   
+   f. Converted rl_experiment_utils.py: Changed `ExecutorStep` → `StepSpec`, wrapped RLJob call
+   
+   g. Converted download_pretokenized.py: Changed `ExecutorStep` → `StepSpec`, wrapped download in lambda
+   
+   h. Converted slice_cache.py: Changed `ExecutorStep` → `StepSpec`, wrapped slice config in lambda
+   
+   i. Converted paloma_local_download.py: Removed `this_output_path`/`versioned`, created StepSpec, fixed `speedrun_paloma_tokenized` to not pass `paloma_raw` (which `paloma_tokenized` doesn't accept)
+   
+   j. Converted speedrun.py (most complex):
+      - Replaced `ExecutorStep`/`InputName`/`output_path_of` with `StepSpec`
+      - Removed `_get_tokenizer_for_train` import (function was already removed)
+      - Added `tokenizer` field to `SpeedrunConfig` with default `"stanford-crfm/marin-tokenizer"`
+      - Changed `SpeedrunConfig.tokenized_dataset` type from `InputName | LMMixtureDatasetConfig` to `StepSpec | LMMixtureDatasetConfig`
+      - Converted `default_speedrun` to return `Sequence[StepSpec]`
+      - Changed wandb entity/project to be resolved directly instead of via train_step.config
+      - Changed `use_default_validation=False` to `True` to preserve validation set behavior
+      - Removed `speedrun_paloma_tokenized` import
+   
+   k. Verified all library files clean: `from marin.execution.executor import` → No matches in lib/
+   
+   l. Grepped for remaining experiment file imports - found 22 still importing old types
+   
+   m. Converted tests/integration_test.py:
+      - Complete rewrite from ExecutorStep to StepSpec
+      - All steps now use lambda closures with explicit output_path
+      - Dependencies expressed via deps=[...]
+      - .cd("data") → os.path.join(step.output_path, "data")
+      - Removed unused imports (SimpleHtmlToMdConfig, TrainFasttextClassifierConfig)
+   
+   n. **Error**: Tests failed because `executor.py` still imports `resolve_executor_step` from `step_runner.py`
+      - Fixed by removing the import from executor.py
+      - Fixed __init__.py to not re-export resolve_executor_step
+      - But executor.py's `_resolve_steps` method still called `resolve_executor_step`
+      - Inlined the function as `_resolve_one` method on the Executor class
+   
+   o. Tests pass: 19 passed
+   
+   p. **Error**: test_dry_run failed with `AttributeError: 'StepSpec' object has no attribute 'get_source_config'`
+      - This is in data_configs.py where `step_to_lm_mixture_component` receives a StepSpec but expects TokenizeConfig or TokenizedMetadata
+      - This was the last error shown before the summary was requested
+
+4. **User Messages**:
+   - Only one user message: The continuation prompt asking to continue from where we left off without asking questions.
+
+5. **Agent aac346f Progress**:
+   - Still running, converting experiment files
+   - Had converted: exp1880, exp808, tootsie/exp1063, tootsie/exp826, common_pile (31 download steps), two_stage/data.py, two_stage/two_stage_config.py, dedup/reference.py, exp934_hq_vs_pt.py
+   - Still working on remaining files
+
+6. **Current State**:
+   - 19 core tests pass
+   - test_dry_run has 1 failure (data_configs.py StepSpec handling)
+   - Agent aac346f still running on experiment files
+   - All library files converted (0 old executor imports in lib/)
+   - ~22 experiment files still have old imports (agent working on these)
+
+Summary:
+1. Primary Request and Intent:
+   The user asked to continue implementing a 5-phase migration plan to remove ALL `ExecutorStep` usage from the Marin codebase and replace with the new `StepSpec`/`StepRunner` system. This is a continuation across multiple sessions. The plan is documented at `/Users/rav/.claude/plans/toasty-jumping-hollerith.md`. Branch: `agent/20260216-remove-executor-steps`.
+
+   The 5 phases are:
+   - Phase 1: Library code — plain-argument entry points (completed)
+   - Phase 2: Migrate experiments/defaults.py and helpers (completed)
+   - Phase 3: Migrate 100+ experiment files (in progress - agent aac346f handling)
+   - Phase 4: Migrate tests (completed)
+   - Phase 5: Remove old executor code and cleanup (in progress)
+
+2. Key Technical Concepts:
+   - **ExecutorStep** (old): Config dataclass with magic marker types (`InputName`, `OutputName`, `THIS_OUTPUT_PATH`, `VersionedValue`) resolved at runtime
+   - **StepSpec** (new): Plain-argument functions with explicit `deps`, `hash_attrs`, and `fn: Callable[[str], Any]`
+   - **StepRunner**: New execution engine replacing `Executor` class and `executor_main()`
+   - **Artifact**: System for saving/loading step metadata via `Artifact.load(step, Type)` and `Artifact.save(artifact, path)`
+   - **Translation patterns**:
+     - `ExecutorStep(name, fn, config)` → `StepSpec(name, hash_attrs={}, deps=[], fn=lambda out: fn(...))`
+     - `executor_main(steps=[...])` → `StepRunner().run([...])`
+     - `output_path_of(step)` → `step.output_path`
+     - `this_output_path()` / `THIS_OUTPUT_PATH` → `output_path` arg from lambda
+     - `versioned(x)` → put `x` in `hash_attrs`
+     - `InputName.hardcoded(path)` → just the path string
+     - `.cd("subdir")` → `os.path.join(step.output_path, "subdir")`
+   - **StepSpec hash separator**: Uses `_` (underscore) not `-` (dash) between name and hash in output_path
+
+3. Files and Code Sections:
+
+   - **`lib/marin/src/marin/evaluation/log_probs.py`**
+     - Converted `default_lm_log_probs` from returning `ExecutorStep` to `StepSpec`
+     - Changed import from `marin.execution import ExecutorStep` to `marin.execution.step_model import StepSpec`
+     - Key change: wrapped config in lambda, moved checkpoint to hash_attrs, passed output_path into EvalLmConfig
+     ```python
+     return StepSpec(
+         name=step_name,
+         hash_attrs={"checkpoint": checkpoint, "checkpoint_is_hf": checkpoint_is_hf},
+         fn=lambda output_path: evaluate_lm_log_probs(
+             EvalLmConfig(name=name, checkpoint_path=checkpoint, model=model, datasets=data,
+                          log_entropy=True, resource_config=resource_config, checkpoint_is_hf=checkpoint_is_hf,
+                          per_device_batch_size=per_device_batch_size, max_samples_per_dataset=max_samples_per_dataset,
+                          output_path=output_path, wandb_tags=wandb_tags)
+         ),
+     )
+     ```
+
+   - **`lib/marin/src/marin/rl/scripts/evaluate_environment.py`**
+     - Converted `evaluate_environment` from returning `ExecutorStep` to `StepSpec`
+     - Changed return type annotation and docstring
+     ```python
+     return StepSpec(
+         name=f"evaluate-{env_name}-{model_identifier}-{env_id}",
+         hash_attrs={"checkpoint": checkpoint, "env_class": env_config.env_class, "env_id": env_id},
+         override_output_path=output_path,
+         pip_dependency_groups=["rl"],
+         fn=lambda out: _run_evaluation(EnvironmentEvalConfig(
+             checkpoint=checkpoint, env_config=env_config, model_config=model_config,
+             output_path=out, tpu_type=tpu_type,
+         )),
+     )
+     ```
+
+   - **`lib/marin/src/marin/rl/rl_experiment_utils.py`**
+     - Converted `make_rl_step` from returning `ExecutorStep` to `StepSpec`
+     ```python
+     step_fn = RLJob.make_step_fn()
+     return StepSpec(
+         name=f"rl_testing/{name}",
+         hash_attrs={"name": name, "model": config.model_config.name},
+         pip_dependency_groups=["vllm", "math"],
+         fn=lambda output_path: step_fn(job_config),
+     )
+     ```
+
+   - **`lib/marin/src/marin/processing/tokenize/download_pretokenized.py`**
+     - Converted `download_pretokenized_cache` from returning `ExecutorStep[PretokenizedCacheDownloadConfig]` to `StepSpec`
+     - Moved config construction inside the lambda
+     ```python
+     return StepSpec(
+         name=os.path.join("tokenized", "subcache", output_cache_path_name),
+         hash_attrs={"hf_repo_id": hf_repo_id, "hf_revision": hf_revision, "tokenizer": tokenizer},
+         fn=lambda output_path: _actually_download_pretokenized_cache(
+             PretokenizedCacheDownloadConfig(cache_path=output_path, tokenizer=tokenizer, hf_repo_id=hf_repo_id,
+                                             hf_revision=hf_revision, hf_repo_type_prefix="datasets",
+                                             hf_token=hf_token, tags=tags or [], format=format)
+         ),
+     )
+     ```
+
+   - **`lib/marin/src/marin/tokenize/slice_cache.py`**
+     - Converted `slice_cache` from returning `ExecutorStep[SliceCacheConfig]` to `StepSpec`
+     ```python
+     return StepSpec(
+         name=output_path,
+         hash_attrs={"num_tokens": num_tokens, "seed": seed, "tokenizer": tokenizer_spec},
+         fn=lambda out: _slice_cache_in_ray(
+             SliceCacheConfig(input_config=input_config, num_tokens=num_tokens, seed=seed,
+                              tokenizer=tokenizer_spec, cache_path=out)
+         ),
+     )
+     ```
+
+   - **`lib/marin/src/marin/speedrun/paloma_local_download.py`**
+     - Converted module-level `paloma_speedrun` from `ExecutorStep` to `StepSpec`
+     - Removed `this_output_path`, `versioned` imports
+     - Fixed `speedrun_paloma_tokenized` — removed `paloma_raw` argument (not accepted by `paloma_tokenized`)
+     ```python
+     paloma_speedrun = StepSpec(
+         name="raw/paloma-speedrun",
+         hash_attrs={"hf_dataset_id": "allenai/paloma", "revision": "65cd6fc"},
+         fn=lambda output_path: download_hf(HfDownloadConfig(
+             hf_dataset_id="allenai/paloma", revision="65cd6fc",
+             gcs_output_path=output_path, wait_for_completion=True, append_sha_to_path=True,
+         )),
+     )
+     def speedrun_paloma_tokenized(tokenizer: str = llama3_tokenizer):
+         return paloma_tokenized(tokenizer=tokenizer)
+     ```
+
+   - **`lib/marin/src/marin/speedrun/speedrun.py`** (most complex conversion)
+     - Replaced imports: `ExecutorStep, InputName, output_path_of` → `StepSpec`
+     - Removed `_get_tokenizer_for_train` import (function no longer exists)
+     - Removed `speedrun_paloma_tokenized` import (no longer needed)
+     - Changed `SpeedrunConfig.tokenized_dataset` type: `InputName | LMMixtureDatasetConfig` → `StepSpec | LMMixtureDatasetConfig`
+     - Added `tokenizer: str = "stanford-crfm/marin-tokenizer"` field to `SpeedrunConfig`
+     - Converted `default_speedrun` return type: `Sequence[ExecutorStep]` → `Sequence[StepSpec]`
+     - Changed `use_default_validation=False` → `True` to preserve validation behavior
+     - Constructed wandb entity/project directly instead of via train_step.config
+     - Results step now uses `os.path.join(train_step.output_path, "speedrun_results.json")`
+     ```python
+     def default_speedrun(name, config, tags=None, override_output_path=None) -> Sequence[StepSpec]:
+         train_step = default_train(
+             name=f"speedrun/{name}", tokenized=config.tokenized_dataset,
+             model_config=config.model_config, train_config=train_config,
+             tags=run_tags, eval_harness_tasks=None, override_output_path=override_output_path,
+             use_default_validation=True, tokenizer=tokenizer,
+         )
+         wandb_entity = _default_wandb_entity()
+         wandb_project = WANDB_PROJECT
+         if override_output_path:
+             wandb_run_id = override_output_path.split("/")[-1]
+         else:
+             wandb_run_id = train_step.output_path
+         results_output = os.path.join(train_step.output_path, "speedrun_results.json")
+         results_step = StepSpec(
+             name=f"speedrun/{name}-speedrun_results",
+             hash_attrs={"train_step": train_step.output_path},
+             deps=[train_step],
+             fn=lambda output_path: speedrun_results(SpeedrunResultsConfig(
+                 wandb_run_id=wandb_run_id, wandb_entity=wandb_entity,
+                 wandb_project=wandb_project, speedrun_config=config, output_path=results_output,
+             )),
+         )
+         return [train_step, results_step]
+     ```
+
+   - **`tests/integration_test.py`**
+     - Complete rewrite from ExecutorStep to StepSpec pattern
+     - All steps use lambda closures with explicit output_path
+     - Dependencies expressed via `deps=[...]`
+     - `.cd("data")` → `os.path.join(step.output_path, "data")`
+     - Removed wrapper functions (`_html_to_md_with_config`, `_train_with_config`)
+     - Removed unused imports (`SimpleHtmlToMdConfig`, `TrainFasttextClassifierConfig`)
+
+   - **`lib/marin/src/marin/execution/executor.py`**
+     - Removed import of `resolve_executor_step` from step_runner
+     - Inlined `resolve_executor_step` as `_resolve_one` method on the `Executor` class
+     ```python
+     def _resolve_one(self, step: ExecutorStep) -> StepSpec:
+         import ray
+         config = self.configs[step]
+         output_path = self.output_paths[step]
+         deps = [self.output_paths[dep] for dep in self.dependencies[step]]
+         step_fn = step.fn
+         if isinstance(step_fn, ray.remote_function.RemoteFunction):
+             remote_fn = step_fn
+             def step_fn(*args, **kw):
+                 return ray.get(remote_fn.remote(*args, **kw))
+         assert step_fn is not None, f"Step {step.name} has no callable"
+         captured_fn = step_fn
+         captured_config = config
+         def resolved_fn(_output_path):
+             return captured_fn(captured_config)
+         return StepSpec(
+             name=step.name, deps=deps or [], override_output_path=output_path,
+             fn=resolved_fn, resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
+             env_vars=step.env_vars or {}, pip_dependency_groups=step.pip_dependency_groups or [],
+         )
+     ```
+
+   - **`lib/marin/src/marin/execution/__init__.py`**
+     - Removed `resolve_executor_step` from re-exports
+     - Still exports old ExecutorStep types for backward compatibility during migration
+
+4. Errors and fixes:
+   - **`ImportError: cannot import name 'resolve_executor_step' from 'marin.execution.step_runner'`**:
+     - Cause: I removed `resolve_executor_step` from step_runner.py in the previous session, but executor.py still imported it
+     - Fix: Removed the import from executor.py, removed from __init__.py exports, inlined the function as `_resolve_one` method on the Executor class
+   
+   - **`test_dry_run` failure: `AttributeError: 'StepSpec' object has no attribute 'get_source_config'`**:
+     - Cause: `step_to_lm_mixture_component` in data_configs.py receives a StepSpec from `dclm_components_llama3` but calls `.get_source_config()` which only exists on TokenizedMetadata/TokenizeConfig
+     - Status: **NOT YET FIXED** - this was the last error encountered before this summary was requested
+
+5. Problem Solving:
+   - **Solved**: All 7 library files converted from old executor imports to StepSpec (0 remaining old imports in lib/)
+   - **Solved**: tests/integration_test.py fully converted to StepSpec pattern
+   - **Solved**: `resolve_executor_step` removal and backward compatibility maintained via inline in executor.py
+   - **Solved**: 19 core tests pass (test_executor.py, test_executor_utils.py, test_step_runner.py)
+   - **In progress**: Agent aac346f converting ~22 remaining experiment files
+   - **Unsolved**: test_dry_run failure in data_configs.py where StepSpec is passed to `step_to_lm_mixture_component` which expects TokenizeConfig or TokenizedMetadata. The `lm_mixture_data_config` function in data_configs.py needs to handle StepSpec inputs.
+   - **Unsolved**: Docs (README.md, tutorials) still reference old executor patterns
+
+6. All user messages:
+   - "This session is being continued from a previous conversation that ran out of context. [Detailed summary of previous work]. Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on."
+
+7. Pending Tasks:
+   - **Task #3 (in_progress)**: Phase 3 — Agent aac346f is converting remaining experiment files from ExecutorStep to StepSpec
+   - **Task #5 (in_progress)**: Phase 5 — Remove old executor code and cleanup
+   - Fix test_dry_run failure (data_configs.py `step_to_lm_mixture_component` doesn't handle StepSpec)
+   - Update docs (README.md, tutorials) to remove old executor references
+   - Run `./infra/pre-commit.py --all-files --fix` to verify lint passes
+   - Eventually remove ExecutorStep, InputName, OutputName, VersionedValue from executor.py (once all callers migrated)
+
+8. Current Work:
+   I was working on Phase 5 cleanup and converting library files. All 7 library files have been converted. I ran the test suite and encountered a failure in `test_dry_run` where `step_to_lm_mixture_component` in `data_configs.py` receives a `StepSpec` object but tries to call `.get_source_config()` on it, which doesn't exist on StepSpec. The specific error trace:
+   ```
+   lib/marin/src/marin/processing/tokenize/data_configs.py:39: AttributeError
+   E   AttributeError: 'StepSpec' object has no attribute 'get_source_config'
+   ```
+   This happens because `dclm_components_llama3` in `experiments/pretraining_datasets/dclm.py` contains StepSpec objects that get passed to `lm_mixture_data_config`, which calls `step_to_lm_mixture_component`, which expects `TokenizeConfig | TokenizedMetadata` but receives `StepSpec`.
+
+   Agent aac346f is still running, converting experiment files including: common_pile, two_stage, dedup, exp934, and others.
+
+9. Optional Next Step:
+   Fix the `step_to_lm_mixture_component` function in `lib/marin/src/marin/processing/tokenize/data_configs.py` to handle `StepSpec` inputs. The function currently only handles `TokenizeConfig` and `TokenizedMetadata` — it needs a branch for `StepSpec` that loads the artifact metadata via `Artifact.load()` first, similar to how `default_train` in `experiments/defaults.py` handles StepSpec inputs at execution time. Then re-run tests to verify the fix. Also need to wait for agent aac346f to complete and verify its work.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation to build a comprehensive summary.
+
+1. **Session Start**: This is a continuation from TWO previous conversations that ran out of context. The system provided a detailed summary of all previous work on a 5-phase migration plan to remove all ExecutorSteps and replace with StepSpec/StepRunner.
+
+2. **Previous Sessions Summary Key Points**:
+   - Branch: `agent/20260216-remove-executor-steps`
+   - Plan at: `/Users/rav/.claude/plans/toasty-jumping-hollerith.md`
+   - Phases 1, 2, 4 completed
+   - Phase 3 (experiment files) and Phase 5 (cleanup) in progress
+   - Last error was `test_dry_run` failure with `AttributeError: 'StepSpec' object has no attribute 'get_source_config'`
+
+3. **Current Session Actions**:
+
+   a. Read `data_configs.py` and `dclm.py` to understand the `get_source_config` error
+   
+   b. Read `simple.py` to see that `tokenized` dict contains `StepSpec` objects (from `_tokenize_simple`)
+   
+   c. Read `TokenizedMetadata` class and `TokenizeConfig.as_lm_dataset_source_config` to understand the interface
+   
+   d. Fixed `data_configs.py`:
+      - Added `StepSpec` handling to `step_to_lm_mixture_component` - constructs `UrlDatasetSourceConfig` with `output_path` as `cache_dir`
+      - Added `_get_tokenizer_from_component` helper to extract tokenizer from `StepSpec.hash_attrs["tokenizer"]`
+      - Updated `_verify_tokenizers_same` to use the helper
+      - Updated type signatures across `lm_mixture_data_config`, `lm_varying_mixture_data_config`, `add_validation_sets_to_mixture`, `mixture_for_evaluation`
+      - Added imports: `TextLmDatasetFormat`, `UrlDatasetSourceConfig`
+   
+   e. Verified DCLM module imports successfully
+   
+   f. Fixed `exp1600_uncheatable_evals.py`: Removed `ExecutorStep` import, changed `list[ExecutorStep | StepSpec]` to `list[StepSpec]`
+   
+   g. Fixed `exp1984_convert_32b_phases.py`: 
+      - Replaced `_trainer_from_training_step(step: ExecutorStep)` which used `getattr` chains to access `step.config.train_config.trainer`
+      - Created `_trainer_from_simple_config(config: SimpleTrainConfig)` that builds a minimal `TrainerConfig` from `SimpleTrainConfig`
+      - Imported `SimpleTrainConfig` objects directly from experiment files
+      - Added imports: `SimpleTrainConfig`, `MeshConfig`, `ResourceAxis`, `haliax`
+   
+   h. Confirmed 0 remaining old executor imports in experiments/ and lib/
+   
+   i. Ran dry-run tests - initially failed on `isoflop_sweep.py` with `AttributeError: 'StepSpec' object has no attribute 'with_output_path'`
+   
+   j. Added `with_output_path` and `cd` methods to `StepSpec`:
+      ```python
+      def with_output_path(self, path: str) -> "StepSpec":
+          return dataclasses.replace(self, override_output_path=path)
+      
+      def cd(self, subpath: str) -> str:
+          return os.path.join(self.output_path, subpath)
+      ```
+   
+   k. Used agent a32728d to remove all 15 `.nonblocking()` calls across 10 experiment files
+   
+   l. Agent aac346f completed - converted 26 experiment files from ExecutorStep to StepSpec
+   
+   m. Re-ran dry-run tests - isoflop_sweep.py now failed with `RuntimeError` about unsatisfied dependencies (validation sets not in step list)
+   
+   n. Fixed `StepRunner.run` to handle missing deps in dry-run mode - treats unsatisfied deps as completed
+   
+   o. Re-ran all dry-run tests: 46 passed, 48 failed, 57 skipped
+   
+   p. Investigated failure in `exp1295_32b.py`: `TypeError: Object of type ScheduleStep is not JSON serializable` - this is in `StepSpec.hash_id` where `hash_attrs` contains non-JSON-serializable objects
+
+4. **User Messages**:
+   - Only one: The continuation prompt asking to continue from where we left off without asking questions.
+
+5. **Current State**:
+   - 19 core tests pass (test_executor, test_executor_utils, test_step_runner)
+   - 46 dry-run tests pass, 48 fail, 57 skipped
+   - Common failure patterns:
+     - `TypeError: Object of type ScheduleStep is not JSON serializable` - hash_attrs contain non-serializable objects (like `ScheduleStep` from batch size schedules)
+     - `AttributeError` - various files still using old patterns
+     - `ImportError` - some missing imports
+     - `ValueError` - various validation errors
+   - All old executor imports removed from experiments/ and lib/
+   - Agent aac346f completed its work
+   - 170 files changed, 3389 insertions, 4057 deletions
+
+Summary:
+1. Primary Request and Intent:
+   The user asked to continue implementing a 5-phase migration plan to remove ALL `ExecutorStep` usage from the Marin codebase and replace with the new `StepSpec`/`StepRunner` system. This is a continuation across THREE sessions. The plan is documented at `/Users/rav/.claude/plans/toasty-jumping-hollerith.md`. Branch: `agent/20260216-remove-executor-steps`.
+
+   The 5 phases are:
+   - Phase 1: Library code — plain-argument entry points (completed)
+   - Phase 2: Migrate experiments/defaults.py and helpers (completed)
+   - Phase 3: Migrate 100+ experiment files (in progress)
+   - Phase 4: Migrate tests (completed)
+   - Phase 5: Remove old executor code and cleanup (in progress)
+
+2. Key Technical Concepts:
+   - **ExecutorStep** (old): Config dataclass with magic marker types (`InputName`, `OutputName`, `THIS_OUTPUT_PATH`, `VersionedValue`) resolved at runtime
+   - **StepSpec** (new): Plain-argument functions with explicit `deps`, `hash_attrs`, and `fn: Callable[[str], Any]`
+   - **StepRunner**: New execution engine replacing `Executor` class and `executor_main()`
+   - **Translation patterns**:
+     - `ExecutorStep(name, fn, config)` → `StepSpec(name, hash_attrs={}, deps=[], fn=lambda out: fn(...))`
+     - `executor_main(steps=[...])` → `StepRunner().run([...])`
+     - `output_path_of(step)` → `step.output_path`
+     - `this_output_path()` / `THIS_OUTPUT_PATH` → `output_path` arg from lambda
+     - `versioned(x)` → put `x` in `hash_attrs`
+     - `.cd("subdir")` → `step.cd("subdir")` (returns string via `os.path.join`)
+     - `.nonblocking()` → just remove it (deps are explicit now)
+     - `.with_output_path(path)` → `step.with_output_path(path)` or `dataclasses.replace(step, override_output_path=path)`
+   - **StepSpec hash_attrs**: Must be JSON-serializable (current bug: `ScheduleStep` objects aren't)
+   - **data_configs.py StepSpec handling**: When `lm_mixture_data_config` receives StepSpec objects, constructs `UrlDatasetSourceConfig(cache_dir=step.output_path, format=TextLmDatasetFormat())` and gets tokenizer from `step.hash_attrs["tokenizer"]`
+
+3. Files and Code Sections:
+
+   - **`lib/marin/src/marin/execution/step_model.py`**
+     - Core StepSpec definition. Added `with_output_path` and `cd` convenience methods.
+     ```python
+     def with_output_path(self, path: str) -> "StepSpec":
+         """Return a copy of this step with a fixed output path."""
+         return dataclasses.replace(self, override_output_path=path)
+
+     def cd(self, subpath: str) -> str:
+         """Return a path under this step's output directory."""
+         return os.path.join(self.output_path, subpath)
+     ```
+
+   - **`lib/marin/src/marin/processing/tokenize/data_configs.py`**
+     - Critical file for data mixture configuration. Updated to handle `StepSpec` inputs alongside `TokenizeConfig` and `TokenizedMetadata`.
+     - Added imports: `TextLmDatasetFormat`, `UrlDatasetSourceConfig`
+     - New helper function:
+     ```python
+     def _get_tokenizer_from_component(step: TokenizeConfig | TokenizedMetadata | StepSpec) -> str:
+         """Extract the tokenizer name from a tokenize config, metadata, or StepSpec."""
+         if isinstance(step, StepSpec):
+             tokenizer = step.hash_attrs.get("tokenizer")
+             if tokenizer is None:
+                 raise ValueError(f"StepSpec {step.name} does not have a 'tokenizer' in hash_attrs")
+             return tokenizer
+         return step.tokenizer
+     ```
+     - Updated `step_to_lm_mixture_component` to handle StepSpec:
+     ```python
+     def step_to_lm_mixture_component(
+         step: TokenizeConfig | TokenizedMetadata | StepSpec, include_raw_paths: bool
+     ) -> DatasetComponent:
+         if isinstance(step, StepSpec):
+             source = UrlDatasetSourceConfig(
+                 cache_dir=step.output_path,
+                 format=TextLmDatasetFormat(),
+             )
+         elif isinstance(step, TokenizeConfig):
+             source = step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
+         else:
+             source = step.get_source_config()
+         return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
+     ```
+     - Updated `_verify_tokenizers_same` to use `_get_tokenizer_from_component`
+     - Updated type signatures on `lm_mixture_data_config`, `lm_varying_mixture_data_config`, `add_validation_sets_to_mixture`, `mixture_for_evaluation` to accept `StepSpec`
+
+   - **`lib/marin/src/marin/execution/step_runner.py`**
+     - Fixed dry-run mode to handle missing deps gracefully:
+     ```python
+     if dry_run:
+         # In dry-run mode, treat unsatisfied deps as completed
+         # (they may be external steps not in this list)
+         for s in waiting:
+             unmet = [d for d in s.deps if d not in completed and d not in failed]
+             for d in unmet:
+                 logger.info("[DRY RUN] Assuming dep %s is satisfied", _display_name(d))
+                 completed.add(d)
+         _flush_waiting()
+         continue
+     ```
+
+   - **`experiments/evals/exp1600_uncheatable_evals.py`**
+     - Removed `from marin.execution.executor import ExecutorStep`
+     - Changed `list[ExecutorStep | StepSpec]` to `list[StepSpec]`
+
+   - **`experiments/tootsie/exp1984_convert_32b_phases.py`**
+     - Major rewrite: replaced `_trainer_from_training_step(step: ExecutorStep)` which used `getattr` chains to access `step.config.train_config.trainer`
+     - New approach imports `SimpleTrainConfig` objects directly and builds minimal `TrainerConfig`:
+     ```python
+     def _trainer_from_simple_config(config: SimpleTrainConfig) -> TrainerConfig:
+         """Build a minimal TrainerConfig from a SimpleTrainConfig for checkpoint export."""
+         return TrainerConfig(
+             train_batch_size=config.train_batch_size,
+             per_device_parallelism=config.per_device_parallelism,
+             num_train_steps=config.num_train_steps,
+             mesh=MeshConfig(
+                 compute_mapping={
+                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                 }
+             ),
+         )
+     ```
+     - Imports changed to get configs directly: `llama_32b_train_config`, `muon_train_config`, `necro_train_config`, `qwen_32b_warmstart_train`
+
+   - **Multiple experiment files (via agent a32728d)**
+     - Removed `.nonblocking()` from 15 call sites across 10 files:
+       - `experiments/multilingual/exp1457_multilingual_cpt.py`
+       - `experiments/exp1994_32b_sft.py`
+       - `experiments/tootsie/exp1388_nadamw32b.py`
+       - `experiments/tootsie/exp1390_32b_necro.py`
+       - `experiments/tootsie/exp1395_qwen3_32b.py`
+       - `experiments/tootsie/exp1529_32b_bison_cooldown.py` (2 calls)
+       - `experiments/tootsie/exp1380_muon32b.py`
+       - `experiments/tootsie/exp2062_long_context_8b.py`
+       - `experiments/tootsie/exp1529_32b_mantis_cooldown.py`
+       - `experiments/tootsie/exp600_tootsie.py` (5 calls)
+
+   - **26 experiment files (via agent aac346f)**
+     - Bulk conversion of experiment files from ExecutorStep to StepSpec
+     - Files include: exp1880, exp808, tootsie/exp1063, tootsie/exp826, tootsie/exp883, common_pile/tokenize_common_pile (31 download steps), two_stage/data.py, two_stage/two_stage_config.py, dedup/reference.py, exp934_hq_vs_pt.py, midtraining_datasets.py, train_test_overlap files, posttrain files, multilingual_fineweb2_hq, dedup/isoflop_analysis, isoflop_sweep (partial), exp2166_scaling_ladder_analysis, speedrun/olmoe_1b7b_nemotron_40b
+     - Agent used `dataclasses.replace(step, override_output_path=path)` instead of `.with_output_path()` in some cases
+
+4. Errors and fixes:
+   - **`AttributeError: 'StepSpec' object has no attribute 'get_source_config'`**:
+     - Cause: `dclm_components_llama3` contains `StepSpec` objects passed to `lm_mixture_data_config` which calls `step_to_lm_mixture_component`, which only handled `TokenizeConfig | TokenizedMetadata`
+     - Fix: Updated `step_to_lm_mixture_component` and `_verify_tokenizers_same` in `data_configs.py` to handle `StepSpec` inputs
+
+   - **`AttributeError: 'StepSpec' object has no attribute 'with_output_path'`**:
+     - Cause: Many experiment files chain `.with_output_path()` on `default_train()` results which now return `StepSpec`
+     - Fix: Added `with_output_path` and `cd` methods to `StepSpec` class
+
+   - **`RuntimeError: Iterable exhausted with N step(s) with unsatisfied dependencies`**:
+     - Cause: In dry-run mode, validation set deps (paloma, uncheatable_eval) aren't in the step list and don't exist on disk
+     - Fix: Updated `StepRunner.run` to treat missing deps as satisfied in dry-run mode
+
+   - **`TypeError: Object of type ScheduleStep is not JSON serializable`** (CURRENT/UNFIXED):
+     - Cause: `StepSpec.hash_id` calls `json.dumps` on `hash_attrs`, but `SimpleTrainConfig` objects with `ScheduleStep` batch sizes get passed through `default_train` which includes them in `hash_attrs`
+     - Status: NOT YET FIXED - this is the most recent error encountered
+
+   - **`_trainer_from_training_step` accessing `step.config` on StepSpec**:
+     - Cause: `exp1984_convert_32b_phases.py` used `getattr(step, "config", None)` which doesn't work on StepSpec
+     - Fix: Imported `SimpleTrainConfig` objects directly and created `_trainer_from_simple_config` helper
+
+5. Problem Solving:
+   - **Solved**: data_configs.py StepSpec handling for tokenizer verification and mixture component creation
+   - **Solved**: `.with_output_path()` and `.cd()` methods added to StepSpec
+   - **Solved**: All 15 `.nonblocking()` calls removed
+   - **Solved**: Agent aac346f converted 26 experiment files
+   - **Solved**: StepRunner dry-run mode handles missing deps
+   - **Solved**: exp1984 TrainerConfig extraction from SimpleTrainConfig
+   - **Solved**: exp1600 ExecutorStep import removal
+   - **In progress**: 48 dry-run test failures remain (46 pass, 57 skipped)
+   - **Unsolved**: `ScheduleStep` JSON serialization in `StepSpec.hash_id` - many experiment files use `SimpleTrainConfig` with `ScheduleStep` objects in `train_batch_size`, which end up in `hash_attrs` and fail JSON serialization
+   - **Unsolved**: Various `AttributeError` and other failures in 48 experiment dry-run tests
+
+6. All user messages:
+   - "This session is being continued from a previous conversation that ran out of context. [Detailed summary of previous work]. Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on."
+
+7. Pending Tasks:
+   - **Task #3 (in_progress)**: Phase 3 — Convert remaining experiment files (48 dry-run failures)
+   - **Task #5 (in_progress)**: Phase 5 — Remove old executor code and cleanup
+   - Fix the 48 failing dry-run tests, most commonly:
+     - `TypeError: Object of type ScheduleStep is not JSON serializable` in `StepSpec.hash_id`
+     - Various `AttributeError` issues in experiment files
+   - Eventually remove `ExecutorStep`, `InputName`, `OutputName`, `VersionedValue` from `executor.py`
+   - Run `./infra/pre-commit.py --all-files --fix` to verify lint passes
+   - Update docs
+
+8. Current Work:
+   I was running the full dry-run test suite (`tests/test_dry_run.py`) to identify remaining failures after all the fixes. The results showed:
+   - 46 passed, 48 failed, 57 skipped (out of 151 collected)
+   
+   I then investigated the first failure (`exp1295_32b.py`) and found:
+   ```
+   TypeError: Object of type ScheduleStep is not JSON serializable
+   ```
+   This occurs in `StepSpec.hash_id` at `step_model.py:55` when `json.dumps` is called on `hash_attrs` that contain non-serializable objects. The root cause is that `default_train` in `experiments/defaults.py` includes the `SimpleTrainConfig` fields (like `train_batch_size` which can be a list of `ScheduleStep` objects) in `hash_attrs`.
+
+   The 48 failures appear to have several common patterns:
+   - `TypeError: Object of type ScheduleStep is not JSON serializable` (most common)
+   - `AttributeError` on various files
+   - `ImportError` on some files
+   - `ValueError` on tutorial files
+
+9. Optional Next Step:
+   Fix the `ScheduleStep` JSON serialization issue. This is the most impactful fix since it affects many of the 48 failures. The fix should be in `StepSpec.hash_id` to make the JSON serialization more robust, handling non-serializable types by converting them (e.g., using a custom JSON encoder that handles dataclasses, enums, etc.), OR fix `default_train` in `experiments/defaults.py` to ensure `hash_attrs` only contains JSON-serializable values.
+
+   After that, investigate and fix the remaining `AttributeError` and `ImportError` failures in the dry-run tests. The goal is to get all 151 dry-run tests either passing or correctly skipping.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+<task-notification>
+<task-id>aafea00</task-id>
+<status>completed</status>
+<summary>Agent "Find all executor imports" completed</summary>
+<result>Perfect! Now I have comprehensive information. Let me create the final summary organized by category:
+
+## Summary of marin.execution.executor Imports
+
+Based on my comprehensive search of the codebase, here's a detailed breakdown of all files importing from `marin.execution.executor` or `marin.execution`, organized by category:
+
+### LIBRARY FILES (under lib/marin/src/marin/)
+
+**Processing & Data:**
+- `/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/tokenize.py`
+  - Imports: `ExecutorStep`, `InputName`, `VersionedValue`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/data_configs.py`
+  - Imports: `unwrap_versioned_value` (from `marin.execution`), `ExecutorStep`, `InputName`, `output_path_of`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/download_pretokenized.py`
+  - Imports: `THIS_OUTPUT_PATH`, `ExecutorStep`, `InputName`, `ensure_versioned` (from `marin.execution`)
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/processing/classification/deduplication/dedup_commons.py`
+  - Imports: `THIS_OUTPUT_PATH`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/processing/classification/decon.py`
+  - Imports: `THIS_OUTPUT_PATH`
+
+**Execution & Utilities:**
+- `/Users/rav/projects/marin/lib/marin/src/marin/execution/step_runner.py`
+  - Imports: `ExecutorStep` (conditional import)
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/utilities/executor_utils.py`
+  - Imports: `InputName`
+
+**Transformation & Conversion:**
+- `/Users/rav/projects/marin/lib/marin/src/marin/transform/conversation/conversation_to_dolma.py`
+  - Imports: `THIS_OUTPUT_PATH`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/transform/conversation/transform_conversation.py`
+  - Imports: `unwrap_versioned_value` (from `marin.execution`)
+
+**RL (Reinforcement Learning):**
+- `/Users/rav/projects/marin/lib/marin/src/marin/rl/scripts/evaluate_environment.py`
+  - Imports: `ExecutorStep` (from `marin.execution`), `executor_main`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/rl/rl_experiment_utils.py`
+  - Imports: `ExecutorStep`, `OutputName`
+
+**Download/Export:**
+- `/Users/rav/projects/marin/lib/marin/src/marin/download/huggingface/download_hf.py`
+  - Imports: `THIS_OUTPUT_PATH`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/download/nemotron_cc/download_nemotron_cc.py`
+  - Imports: `THIS_OUTPUT_PATH` (from `marin.execution`)
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/download/uncheatable_eval/download.py`
+  - Imports: `THIS_OUTPUT_PATH`, `ExecutorStep`, `VersionedValue`, `ensure_versioned`, `this_output_path` (from `marin.execution`)
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/export/hf_upload.py`
+  - Imports: `ExecutorStep`, `InputName` (from `marin.execution`)
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/export/levanter_checkpoint.py`
+  - Imports: `ExecutorStep`, `InputName`, `VersionedValue`, `ensure_versioned`, `this_output_path`
+
+**Evaluation & Tokenization:**
+- `/Users/rav/projects/marin/lib/marin/src/marin/evaluation/log_probs.py`
+  - Imports: `ExecutorStep`, `InputName`, `this_output_path`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/evaluation/visualize.py`
+  - Imports: `this_output_path`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/evaluation/evaluators/evaluator.py`
+  - Imports: (symbols mentioned in grep results)
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/tokenize/slice_cache.py`
+  - Imports: `THIS_OUTPUT_PATH`, `ExecutorStep`, `InputName` (from `marin.execution`)
+
+**Speedrun & Other:**
+- `/Users/rav/projects/marin/lib/marin/src/marin/speedrun/paloma_local_download.py`
+  - Imports: `ExecutorStep`, `executor_main`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/lib/marin/src/marin/speedrun/speedrun.py`
+  - Imports: `ExecutorStep`, `InputName`, `output_path_of`
+
+---
+
+### EXPERIMENT FILES (under experiments/)
+
+**Dataset & Preprocessing (Major Users):**
+- `/Users/rav/projects/marin/experiments/pretraining_datasets/main.py`
+  - Imports: `ExecutorStep`, `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/pretraining_datasets/dclm.py`
+  - Imports: `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/pretraining_datasets/dolma.py`
+  - Imports: `ExecutorStep`, `this_output_path`, `versioned`, `InputName`
+  
+- `/Users/rav/projects/marin/experiments/pretraining_datasets/nemotron.py`
+  - Imports: `ExecutorStep`, `output_path_of`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/pretraining_datasets/dolmino.py`
+  - Imports: `ExecutorStep`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/pretraining_datasets/simple.py`
+  - Imports: `ExecutorStep`, `this_output_path`, `versioned`
+
+**Evaluation (evals/):**
+- `/Users/rav/projects/marin/experiments/evals/evals.py`
+  - Imports: `ExecutorStep`, `InputName`, `OutputName`, `executor_main`, `output_path_of`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/evals/run_base_model_evals.py`
+  - Imports: `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/evals/run_key_evals.py`
+  - Imports: `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/evals/run_sft_model_evals.py`
+  - Imports: `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/evals/exp1600_uncheatable_evals.py`
+  - Imports: `ExecutorStep`, `executor_main`, `output_path_of`
+  
+- `/Users/rav/projects/marin/experiments/evals/exp1602_lm_eval_harness.py`
+  - Imports: `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/evals/run_on_gpu.py`
+  - Imports: `executor_main`
+  
+- Additional evals files (evalchemy variants, exp_evalchemy_eval.py, etc.)
+
+**Training/Speedrun Experiments (majority import `executor_main`):**
+- Many files in `speedrun/` subdirectories (llama_*, mixtral_*, adamc_*, adamh_*, etc.) - all import `executor_main`
+- `/Users/rav/projects/marin/experiments/speedrun/build_prebuilt_caches.py`
+  - Imports: `executor_main` (from `marin.execution`)
+
+**Tutorial Files:**
+- `/Users/rav/projects/marin/experiments/tutorials/hello_world.py`
+  - Imports: `ExecutorStep`, `executor_main`, `output_path_of`, `this_output_path`
+  
+- `/Users/rav/projects/marin/experiments/tutorials/train_tiny_model_cpu.py`
+  - Imports: `executor_main`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/tutorials/train_tiny_model_gpu.py`
+  - Imports: `executor_main`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/tutorials/train_tiny_model_tpu.py`
+  - Imports: `executor_main`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/tutorials/train_tiny_sweep_tpu.py`
+  - Imports: `executor_main`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/tutorials/train_tiny_sweep_dclm_tpu.py`
+  - Imports: `executor_main`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/tutorials/exp1077_reproduce_dclm_1b1x.py`
+  - Imports: `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/tutorials/exp1078_reproduce_dclm_7b1x.py`
+  - Imports: `executor_main`
+
+**Default Configs & Helpers:**
+- `/Users/rav/projects/marin/experiments/defaults.py`
+  - Imports: `ExecutorStep`, `InputName`, `VersionedValue`, `ensure_versioned`, `this_output_path`, `unwrap_versioned_value`
+
+**Posttrain/SFT:**
+- `/Users/rav/projects/marin/experiments/posttrain/instruction_datasets.py`
+  - Imports: `ExecutorStep`, `executor_main`, `output_path_of`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/posttrain/preference_datasets.py`
+  - Imports: `ExecutorStep`, `executor_main`, `this_output_path`, `versioned`, `InputName`
+
+**Other Experiments:**
+- `/Users/rav/projects/marin/experiments/models.py`
+  - Imports: `ExecutorStep`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/paloma.py`
+  - Imports: `ExecutorStep`, `executor_main`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/eval_datasets.py`
+  - Imports: `ExecutorStep`, `executor_main`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/experiments/exp2039_rl_math500.py`
+  - Imports: `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/isoflop_sweep.py`
+  - Imports: `ExecutorStep`, `InputName`, `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/exp2166_scaling_ladder_analysis.py`
+  - Imports: `ExecutorStep`, `executor_main`, `this_output_path`
+  
+- `/Users/rav/projects/marin/experiments/exp808_sft_mixture.py`
+  - Imports: `ExecutorStep`, `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/exp934_hq_vs_pt.py`
+  - Imports: `ExecutorStep`, `this_output_path`, `versioned`
+
+**Two-Stage & Other Complex Experiments:**
+- `/Users/rav/projects/marin/experiments/two_stage/data.py`
+  - Imports: `ExecutorStep`, `this_output_path`
+  
+- `/Users/rav/projects/marin/experiments/two_stage/single_run.py`
+  - Imports: `executor_main`
+  
+- `/Users/rav/projects/marin/experiments/two_stage/two_stage_config.py`
+  - Imports: `ExecutorStep`, `this_output_path`
+
+---
+
+### TEST FILES (under tests/)
+
+- `/Users/rav/projects/marin/tests/test_executor.py`
+  - Imports: `THIS_OUTPUT_PATH`, `Executor`, `ExecutorStep`, `InputName`, `_get_info_path`, `collect_dependencies_and_version`, `output_path_of`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/tests/test_step_runner.py`
+  - Imports: `ExecutorStep`
+  
+- `/Users/rav/projects/marin/tests/integration_test.py`
+  - Imports: `ExecutorMainConfig`, `ExecutorStep`, `executor_main`, `this_output_path`, `versioned`
+  
+- `/Users/rav/projects/marin/tests/test_executor_utils.py`
+  - Imports: `InputName`
+  
+- `/Users/rav/projects/marin/tests/processing/tokenize/test_tokenize.py`
+  - Imports: `InputName` (from `marin.execution`)
+  
+- `/Users/rav/projects/marin/tests/test_dry_run.py`
+  - Imports: (symbols mentioned in grep results)
+
+---
+
+### SUMMARY OF KEY SYMBOLS USED
+
+**Most Frequently Used:**
+1. `executor_main` - Used in 60+ experiment files for launching execution
+2. `ExecutorStep` - Used throughout for defining pipeline steps
+3. `this_output_path()` - Used in ~40+ files for output path specification
+4. `versioned()` - Used in ~30+ files for versioning config values
+
+**Moderately Used:**
+5. `InputName` - Used in ~25 files for input references
+6. `output_path_of()` - Used in ~15 files for accessing upstream outputs
+7. `THIS_OUTPUT_PATH` - Used in ~10 files as a constant
+8. `ensure_versioned()` - Used in ~10 files for wrapping values
+9. `VersionedValue` - Used in ~8 files for type annotations
+10. `unwrap_versioned_value()` - Used in ~5 files to extract values
+
+**Less Frequently Used:**
+11. `OutputName` - Used in 2 files (evals.py, rl_experiment_utils.py)
+12. `get_executor_step()` - Mentioned in exports but not found in grep
+13. `Executor` - Used only in test_executor.py
+14. `ExecutorMainConfig` - Used in integration_test.py and defaults.py
+15. `_get_info_path()` - Used only in test_executor.py (internal function)
+16. `collect_dependencies_and_version()` - Used only in test_executor.py (internal function)</result>
+<usage>total_tokens: 67366
+tool_uses: 15
+duration_ms: 44041</usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/aafea00.output
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze this conversation, which is a continuation from TWO previous conversations that ran out of context.
+
+**Previous Sessions (from summary):**
+- Branch: `agent/20260216-remove-executor-steps`
+- 5-phase migration plan to remove all ExecutorSteps and replace with StepSpec/StepRunner
+- Phases 1, 2, 4 completed in previous sessions
+- Phase 3 (experiment files) and Phase 5 (cleanup) were in progress
+- 170 files changed, 3389 insertions, 4057 deletions at that point
+- Last error was `test_dry_run` failures - 48 failed, 46 passed, 57 skipped
+
+**Current Session Actions:**
+
+1. Started by reading key files to understand current state (step_runner.py, step_model.py, exp1984_convert_32b_phases.py, exp1600_uncheatable_evals.py)
+
+2. Investigated ScheduleStep JSON serialization issue via Explore agent - found that `StepSpec.hash_id` calls `json.dumps` without handling non-serializable types
+
+3. Fixed `StepSpec.hash_id` by adding `_HashEncoder` class in `step_model.py`:
+   - Handles Enum types (returns `.name`)
+   - Handles dataclasses (converts via `dataclasses.asdict`)
+   - Falls back to `str(o)` for unknown types
+
+4. Fixed `StepSpec / "path"` operator in `exp808_sft_mixture.py` - changed to `.cd()`
+
+5. Ran full dry-run tests: 38 failed (down from 48), 56 passed
+
+6. Categorized remaining errors:
+   - `EvalTaskConfig.task_name` → should be `.name` (~15 files)
+   - `tokenizer must be provided when tokenized is a StepSpec` (~7 files)
+   - `StepSpec / str` operator (~3 files)
+   - Various other individual issues
+
+7. Fixed `defaults.py:388` - changed `t.task_name` to `t.name`
+
+8. Fixed `defaults.py:284-289` - added tokenizer auto-extraction from `StepSpec.hash_attrs["tokenizer"]`
+
+9. Re-added `_prepare_data_config` function to `defaults.py` (was removed during migration but still needed by `two_stage_config.py`)
+
+10. Launched two parallel agents:
+    - Agent a45903f: Fixed `/` operator patterns and other experiment errors
+    - Agent a3c4c95: Fixed `.task_name` references
+
+11. Agent results:
+    - a3c4c95: Fixed `evals/evals.py:125` - the only remaining `.task_name` on EvalTaskConfig
+    - a45903f: Fixed `/` operator in `long_context_datasets.py` (2 places), verified no remaining issues
+
+12. After agents: 2 failures remained
+    - `exp2062_long_context_8b.py:135` - another `/` operator
+    - `build_prebuilt_caches.py` - `upload_dir_to_hf` was being called at module level with StepSpec
+
+13. Fixed `exp2062_long_context_8b.py` - changed `get_instruction_dataset(ds) / "**/*.jsonl.gz"` to `.cd()`
+
+14. Fixed `build_prebuilt_caches.py` - wrapped `upload_dir_to_hf` calls in `StepSpec` objects (the old function returned ExecutorStep, now it's a plain function)
+
+15. Fixed pyrefly type error: renamed `_HashEncoder.default` parameter from `obj` to `o` to match parent class
+
+16. Fixed two E501 line-too-long errors in `preference_datasets.py` and `olmoe_1b7b_nemotron_40b.py`
+
+17. Final result: 113 passed, 57 skipped, 0 failed. Pre-commit passes cleanly.
+
+**User Messages:**
+- Only the continuation prompt asking to continue from where we left off
+
+**Task Status:**
+- All 5 phases marked completed
+- No pending tasks remain
+
+Summary:
+1. Primary Request and Intent:
+   The user asked to continue implementing a 5-phase migration plan to remove ALL `ExecutorStep` usage from the Marin codebase and replace with the new `StepSpec`/`StepRunner` system. This is a continuation across THREE sessions. The plan is documented at `/Users/rav/.claude/plans/toasty-jumping-hollerith.md`. Branch: `agent/20260216-remove-executor-steps`.
+
+   The 5 phases are:
+   - Phase 1: Library code — plain-argument entry points (completed in prior sessions)
+   - Phase 2: Migrate experiments/defaults.py and helpers (completed in prior sessions)
+   - Phase 3: Migrate 100+ experiment files (completed this session)
+   - Phase 4: Migrate tests (completed in prior sessions)
+   - Phase 5: Remove old executor code and cleanup (completed this session)
+
+2. Key Technical Concepts:
+   - **ExecutorStep** (old): Config dataclass with magic marker types (`InputName`, `OutputName`, `THIS_OUTPUT_PATH`, `VersionedValue`) resolved at runtime
+   - **StepSpec** (new): Plain-argument functions with explicit `deps`, `hash_attrs`, and `fn: Callable[[str], Any]`
+   - **StepRunner**: New execution engine replacing `Executor` class and `executor_main()`
+   - **Translation patterns**:
+     - `ExecutorStep(name, fn, config)` → `StepSpec(name, hash_attrs={}, deps=[], fn=lambda out: fn(...))`
+     - `executor_main(steps=[...])` → `StepRunner().run([...])`
+     - `output_path_of(step)` → `step.output_path`
+     - `this_output_path()` / `THIS_OUTPUT_PATH` → `output_path` arg from lambda
+     - `versioned(x)` → put `x` in `hash_attrs`
+     - `step / "subpath"` → `step.cd("subpath")`
+     - `.nonblocking()` → just remove it (deps are explicit now)
+   - **StepSpec hash_attrs**: Must be JSON-serializable; custom `_HashEncoder` handles Enums, dataclasses, and unknown types
+   - **EvalTaskConfig**: Has `.name` field (not `.task_name`)
+   - **`default_tokenize`** puts `tokenizer` in `hash_attrs`, allowing `default_train` to auto-extract it
+
+3. Files and Code Sections:
+
+   - **`lib/marin/src/marin/execution/step_model.py`**
+     - Core StepSpec definition. Added `_HashEncoder` for JSON serialization of non-serializable hash_attrs, and convenience methods `with_output_path` and `cd`.
+     ```python
+     from enum import Enum
+     
+     class _HashEncoder(json.JSONEncoder):
+         """JSON encoder for hash_attrs that gracefully handles non-serializable types."""
+         def default(self, o):
+             if isinstance(o, Enum):
+                 return o.name
+             if dataclasses.is_dataclass(o) and not isinstance(o, type):
+                 return dataclasses.asdict(o)
+             return str(o)
+     
+     # In StepSpec.hash_id:
+     content = json.dumps(
+         {"name": self.name, "attrs": self.hash_attrs, "deps": sorted(self.deps)},
+         sort_keys=True,
+         cls=_HashEncoder,
+     )
+     
+     def with_output_path(self, path: str) -> "StepSpec":
+         return dataclasses.replace(self, override_output_path=path)
+     
+     def cd(self, subpath: str) -> str:
+         return os.path.join(self.output_path, subpath)
+     ```
+
+   - **`experiments/defaults.py`**
+     - Fixed `EvalTaskConfig.task_name` → `.name` at line 388
+     - Fixed tokenizer auto-extraction from StepSpec.hash_attrs at lines 284-289
+     - Re-added `_prepare_data_config` function at end of file
+     ```python
+     # Tokenizer auto-extraction fix:
+     if tokenizer is None:
+         if isinstance(tokenized, LMMixtureDatasetConfig):
+             tokenizer = tokenized.tokenizer
+         elif isinstance(tokenized, StepSpec) and "tokenizer" in tokenized.hash_attrs:
+             tokenizer = tokenized.hash_attrs["tokenizer"]
+         else:
+             raise ValueError("tokenizer must be provided when tokenized is a StepSpec without a 'tokenizer' hash_attr")
+     
+     # EvalTaskConfig fix:
+     hash_attrs["eval_tasks"] = [t.name for t in eval_harness_tasks]
+     
+     # Re-added _prepare_data_config:
+     def _prepare_data_config(
+         tokenized: StepSpec | LMMixtureDatasetConfig,
+         use_default_validation: bool = True,
+         tokenizer: str | None = None,
+     ) -> LMMixtureDatasetConfig:
+         # ... resolves tokenizer, adds validation sets
+     ```
+
+   - **`experiments/evals/evals.py`** (line 125)
+     - Fixed `e.task_name` → `e.name` in hash_attrs construction
+
+   - **`experiments/exp808_sft_mixture.py`** (line 43)
+     - Changed `dataset / "**/*.jsonl.gz"` to `dataset.cd("**/*.jsonl.gz")`
+
+   - **`experiments/posttrain/long_context_datasets.py`** (lines 30, 70, 88)
+     - Changed 3 instances of `step / "path"` to `step.cd("path")`
+
+   - **`experiments/tootsie/exp2062_long_context_8b.py`** (line 135)
+     - Changed `get_instruction_dataset(ds) / "**/*.jsonl.gz"` to `.cd("**/*.jsonl.gz")`
+
+   - **`experiments/speedrun/build_prebuilt_caches.py`**
+     - Wrapped `upload_dir_to_hf` calls in `StepSpec` objects since old function returned ExecutorStep
+     ```python
+     uploaded_cert_10B = StepSpec(
+         name="hf_upload/fineweb-edu-10B",
+         hash_attrs={"repo_id": fineweb_edu_10B_repo_id},
+         deps=[fineweb_edu_subcache_10B_created],
+         fn=lambda output_path: upload_dir_to_hf(
+             fineweb_edu_subcache_10B_created.output_path, repo_id=fineweb_edu_10B_repo_id
+         ),
+     )
+     ```
+
+   - **`experiments/posttrain/preference_datasets.py`** (line 139)
+     - Fixed E501 line-too-long by wrapping lambda body in parentheses
+
+   - **`experiments/speedrun/olmoe_1b7b_nemotron_40b.py`** (line 192)
+     - Fixed E501 line-too-long with `# noqa: E501` and reformatting
+
+4. Errors and fixes:
+   - **`TypeError: Object of type ScheduleStep is not JSON serializable`** (~15 tests):
+     - Cause: `StepSpec.hash_id` calls `json.dumps` without custom encoder; `SimpleTrainConfig` objects with `ScheduleStep` batch sizes end up in `hash_attrs`
+     - Fix: Added `_HashEncoder` class to `step_model.py` that handles Enums, dataclasses, and unknown types via `str()`
+   
+   - **`AttributeError: 'EvalTaskConfig' object has no attribute 'task_name'`** (~15 tests):
+     - Cause: `EvalTaskConfig` has field `.name`, not `.task_name`
+     - Fix: Changed `t.task_name` to `t.name` in `defaults.py:388` and `evals/evals.py:125`
+   
+   - **`ValueError: tokenizer must be provided when tokenized is a StepSpec`** (~7 tests):
+     - Cause: `default_train` couldn't extract tokenizer from StepSpec when no explicit tokenizer arg was given
+     - Fix: Added fallback to extract from `tokenized.hash_attrs["tokenizer"]` (set by `default_tokenize`)
+   
+   - **`TypeError: unsupported operand type(s) for /: 'StepSpec' and 'str'`** (5 files):
+     - Cause: Old `InputName` had `__truediv__` method; `StepSpec` does not
+     - Fix: Changed all `step / "path"` to `step.cd("path")` across 5 files
+   
+   - **`ImportError: cannot import name '_prepare_data_config'`** (1 file):
+     - Cause: Function was removed during migration but `two_stage_config.py` still imports it
+     - Fix: Re-added `_prepare_data_config` to `defaults.py` using new StepSpec-compatible implementation
+   
+   - **`ValueError: Provided path ... is not a directory`** (build_prebuilt_caches.py):
+     - Cause: `upload_dir_to_hf` was called at module level with `.output_path` string, which triggered actual upload attempt
+     - Fix: Wrapped in `StepSpec` with deferred lambda execution
+   
+   - **`bad-param-name-override` pyrefly error**:
+     - Cause: `_HashEncoder.default(self, obj)` parameter named `obj` instead of `o` (parent class uses `o`)
+     - Fix: Renamed parameter to `o`
+   
+   - **E501 line-too-long** (2 files):
+     - Fix: Reformatted lambda bodies with parenthesized expressions
+
+5. Problem Solving:
+   - **All solved**: The migration from 48 failing dry-run tests to 0 failures was accomplished through systematic categorization and fixing of error patterns
+   - **Final test results**: 113 passed, 57 skipped, 0 failed
+   - **Pre-commit**: All lint checks pass cleanly
+   - All 5 phases of the migration plan are marked complete
+
+6. All user messages:
+   - "This session is being continued from a previous conversation that ran out of context. [Detailed summary of previous work]. Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on."
+   - (No other user messages in this session - only system reminders about task notifications and agent completions)
+
+7. Pending Tasks:
+   - All tasks are completed. No pending tasks remain.
+   - Task #1 (Phase 1): completed
+   - Task #2 (Phase 2): completed
+   - Task #3 (Phase 3): completed
+   - Task #4 (Phase 4): completed
+   - Task #5 (Phase 5): completed
+
+8. Current Work:
+   The final work was running all tests and pre-commit to verify everything passes cleanly. Results:
+   - `uv run pytest tests/test_dry_run.py tests/test_executor.py tests/test_executor_utils.py tests/test_step_runner.py` → 113 passed, 57 skipped
+   - `./infra/pre-commit.py --all-files --fix` → OK
+   
+   All 5 phases of the ExecutorStep → StepSpec migration are complete. The branch `agent/20260216-remove-executor-steps` has all changes.
+
+9. Optional Next Step:
+   The migration work is complete. The natural next step would be to commit the changes and create a PR, but the user has not explicitly requested this. The user should be consulted before proceeding with any further actions like committing or creating a PR.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+<task-notification>
+<task-id>a1999c2</task-id>
+<status>completed</status>
+<summary>Agent "Clean up library executor imports" completed</summary>
+<result>Everything looks good. Here is a summary of all the changes made:
+
+---
+
+## Summary of Changes
+
+### 1. `/Users/rav/projects/marin/lib/marin/src/marin/download/huggingface/download_hf.py`
+- Removed `from marin.execution.executor import THIS_OUTPUT_PATH`
+- Changed `gcs_output_path: str = THIS_OUTPUT_PATH` default to `gcs_output_path: str = ""`
+
+### 2. `/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/tokenize.py`
+- Removed `from marin.execution.executor import ExecutorStep, InputName, VersionedValue`
+- Changed `TokenizeConfigBase.as_lm_dataset_source_config` signature from `str | InputName | None` to `str | None`
+- Changed `TokenizeConfig.as_lm_dataset_source_config` signature from `str | InputName | None` to `str | None`
+- Removed docstring mention of "Since we often pass in an InputName, we need to resolve it to a string"
+- Changed `HfTokenizeConfig.as_lm_dataset_source_config` signature from `str | InputName | None` to `str | None`
+- Changed `__post_init__` assertions from `str | InputName` to just `str`
+- Simplified `_validate_train_urls` signature from `list[str | InputName]` to `list[str]`, removed `InputName` isinstance branch
+- Updated error messages to say "Training data URL" instead of "Training data URL or InputName"
+- Simplified `_get_filepaths_to_tokenize`: removed `VersionedValue` unwrapping and `InputName | ExecutorStep` early return
+
+### 3. `/Users/rav/projects/marin/lib/marin/src/marin/download/nemotron_cc/download_nemotron_cc.py`
+- Removed `from marin.execution import THIS_OUTPUT_PATH`
+- Changed `output_path: str = THIS_OUTPUT_PATH` default to `output_path: str = ""`
+
+### 4. `/Users/rav/projects/marin/lib/marin/src/marin/transform/conversation/conversation_to_dolma.py`
+- Removed `from marin.execution.executor import THIS_OUTPUT_PATH`
+- Changed `output_path: str = THIS_OUTPUT_PATH` default to `output_path: str = ""`
+
+### 5. `/Users/rav/projects/marin/lib/marin/src/marin/export/hf_upload.py`
+- Removed `from marin.execution import ExecutorStep, InputName`
+- Changed `UploadToHfConfig.input_path` type from `str | InputName` to `str`
+- Changed `upload_dir_to_hf` parameter `input_path` type from `str | InputName | ExecutorStep` to `str`
+- Removed `ExecutorStep` return type from `upload_dir_to_hf`
+- Removed `InputName`/`ExecutorStep` isinstance branch for certificate_path generation
+- Changed function body from wrapping in `ExecutorStep` to directly calling `_actually_upload_to_hf`
+
+### 6. `/Users/rav/projects/marin/lib/marin/src/marin/tokenize/slice_cache.py`
+- Replaced `from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName` with `from marin.execution import ExecutorStep` (kept `ExecutorStep` since it's actively used in `slice_cache()` factory)
+- Changed `cache_path: str = THIS_OUTPUT_PATH` default to `cache_path: str = ""`
+- Changed `as_lm_dataset_source_config` signature from `str | InputName | None` to `str | None`
+
+### 7. `/Users/rav/projects/marin/lib/marin/src/marin/utilities/executor_utils.py`
+- Removed `from marin.execution.executor import InputName`
+- Changed `ckpt_path_to_step_name` parameter type from `str | InputName` to `str`
+- Removed entire `InputName` isinstance branch and the `else` clause
+- Simplified to only handle `str` paths
+
+### 8. `/Users/rav/projects/marin/lib/marin/src/marin/export/levanter_checkpoint.py`
+- Removed import of `ExecutorStep`, `InputName`, `VersionedValue`, `ensure_versioned`, `this_output_path`
+- Changed `ConvertCheckpointStepConfig.checkpoint_path` type from `str | InputName | VersionedValue[str]` to `str`
+- Changed `output_path` default from `dataclasses.field(default_factory=this_output_path)` to `""`
+- Changed `convert_checkpoint_to_hf_step` parameter `checkpoint_path` type from `InputName | str` to `str`
+- Removed `VersionedValue`/`InputName` branching logic in `convert_checkpoint_to_hf_step`
+- Changed function to directly call `convert_checkpoint_to_hf(config)` instead of wrapping in `ExecutorStep`
+
+### 9. `/Users/rav/projects/marin/lib/marin/src/marin/evaluation/log_probs.py`
+- Replaced `from marin.execution.executor import ExecutorStep, InputName, this_output_path` with `from marin.execution import ExecutorStep` (kept `ExecutorStep` since it's actively used)
+- Changed `output_path` default from `dataclasses.field(default_factory=this_output_path)` to `""`
+- Changed `default_lm_log_probs` parameter `checkpoint` type from `str | InputName` to `str`
+
+### 10. `/Users/rav/projects/marin/lib/marin/src/marin/processing/classification/decon.py`
+- Removed `from marin.execution.executor import THIS_OUTPUT_PATH`
+- Changed `output_path: str = THIS_OUTPUT_PATH` default to `output_path: str = ""`
+
+### 11. `/Users/rav/projects/marin/lib/marin/src/marin/rl/rl_experiment_utils.py`
+- Replaced `from marin.execution.executor import ExecutorStep, OutputName` with `from marin.execution import ExecutorStep`
+- Changed `OutputName("checkpoints")` to `"checkpoints"` (plain string)
+- Changed `OutputName("rollouts")` to `"rollouts"` (plain string)
+
+### 12. `/Users/rav/projects/marin/lib/marin/src/marin/speedrun/speedrun.py`
+- Changed import from `from marin.execution.executor import ExecutorStep, InputName, output_path_of` to `from marin.execution import ExecutorStep, InputName, output_path_of` (moved to clean package-level import; these are still actively used in step-creation factories)
+
+### 13. `/Users/rav/projects/marin/lib/marin/src/marin/rl/scripts/evaluate_environment.py`
+- Consolidated `from marin.execution import ExecutorStep` and `from marin.execution.executor import executor_main` into single `from marin.execution import ExecutorStep, executor_main`
+
+### 14. `/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/download_pretokenized.py`
+- Replaced `from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned` with `from marin.execution import ExecutorStep` (kept `ExecutorStep` since it's actively used)
+- Changed `as_lm_dataset_source_config` signature from `str | InputName | None` to `str | None`
+- Changed `cache_path=THIS_OUTPUT_PATH` to `cache_path=""`
+- Changed `ensure_versioned(tokenizer)` to `tokenizer`, `ensure_versioned(hf_repo_id)` to `hf_repo_id`, `ensure_versioned(hf_revision)` to `hf_revision`</result>
+<usage>total_tokens: 99043
+tool_uses: 81
+duration_ms: 313079</usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/a1999c2.output
+
+---
+
+<task-notification>
+<task-id>ab041b7</task-id>
+<status>completed</status>
+<summary>Agent "Bulk convert experiment files" completed</summary>
+<result>All experiment files are clean. Let me do a comprehensive summary of the work completed.
+
+---
+
+## Summary of Changes
+
+The Level 1 conversion (replacing `executor_main` with `StepRunner().run()`) is now fully complete across all Python source files. Here is what was done in this session:
+
+### Files Modified in This Session
+
+1. **`/Users/rav/projects/marin/experiments/models.py`** (line 15)
+   - Updated docstring: `executor_main([download_step])` -> `StepRunner().run([download_step])`
+
+2. **`/Users/rav/projects/marin/experiments/tootsie/exp1063_upload_tootsie.py`** (line 22)
+   - Updated docstring: `executor_main([upload_step])` -> `StepRunner().run([upload_step])`
+
+3. **`/Users/rav/projects/marin/experiments/evals/exp_evalchemy_eval.py`** (lines 91-92)
+   - Updated comments: references to `executor_main` -> `StepRunner().run()`
+
+4. **`/Users/rav/projects/marin/experiments/evals/exp_evalchemy_eval_reproduce_openthoughts.py`** (lines 98-99)
+   - Updated comments: references to `executor_main` -> `StepRunner().run()`
+
+5. **`/Users/rav/projects/marin/experiments/speedrun/olmoe_eval.py`** (line 7)
+   - Updated docstring: `executor_main` -> `StepRunner`
+
+6. **`/Users/rav/projects/marin/experiments/pretraining_datasets/main.py`** (lines 73-80)
+   - Removed vestigial `--dry_run`, `--executor_info_base_path`, and `--prefix` hidden Click options that were only needed for the old test framework's draccus-based `executor_main` CLI arg passing
+
+7. **`/Users/rav/projects/marin/tests/test_dry_run.py`** (lines 25-70)
+   - Updated the dry-run test to detect both old (`executor_main(`) and new (`StepRunner().run(`) script patterns
+   - For new-style scripts: sets `MARIN_PREFIX` env var to a temp directory and monkeypatches `StepRunner.run` to force `dry_run=True`
+   - For old-style scripts (none currently exist): keeps the old draccus CLI arg approach
+
+8. **`/Users/rav/projects/marin/experiments/defaults.py`**
+   - Removed unused `vocab_size = _get_vocab_size(tokenizer)` assignment (the description that used it was removed in a previous session)
+   - Removed unused `total_examples = schedule.global_data_offset_by_step(...)` assignment (same reason)
+   - Removed unused `_get_vocab_size` function and `_cached_load_tokenizer` function (with their `@lru_cache` decorator)
+   - Removed unused imports: `from levanter.compat.hf_checkpoints import load_tokenizer` and `from levanter.schedule import BatchSchedule`
+
+### Verification
+
+- Pre-commit (`./infra/pre-commit.py --all-files --fix`) passes cleanly with all checks OK
+- No Python source files in `experiments/` reference `executor_main` anymore
+- The only remaining references to `executor_main` are:
+  - The function definition in `lib/marin/src/marin/execution/executor.py` (kept for backward compatibility)
+  - The re-export in `lib/marin/src/marin/execution/__init__.py` (kept for backward compatibility)  
+  - The test framework in `tests/test_dry_run.py` (handles both old and new patterns)</result>
+<usage>total_tokens: 88365
+tool_uses: 539
+duration_ms: 2256095</usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/ab041b7.output
+
+---
+
+<task-notification>
+<task-id>aac346f</task-id>
+<status>completed</status>
+<summary>Agent "Convert remaining 26 experiment files" completed</summary>
+<result>All conversions are complete. Here is a summary of all 26 files that were converted from `ExecutorStep` to `StepSpec`:
+
+---
+
+## Summary of Changes
+
+All 26 experiment files have been converted from the old `ExecutorStep` system to the new `StepSpec` system. Here is what was done for each file:
+
+### Files with simple import/type-hint changes only:
+
+1. **`/Users/rav/projects/marin/experiments/exp1880_sft_baseline.py`** - Changed `ExecutorStep` import to `StepSpec`, updated return type hint.
+
+2. **`/Users/rav/projects/marin/experiments/exp808_sft_mixture.py`** - Same as above.
+
+3. **`/Users/rav/projects/marin/experiments/multilingual/exp1457_multilingual_cpt_eval.py`** - Changed `ExecutorStep` to `StepSpec` in type hints.
+
+### Files with download step conversions:
+
+4. **`/Users/rav/projects/marin/experiments/common_pile/tokenize_common_pile.py`** - Replaced 31 inline `ExecutorStep` download steps with `default_download()` calls.
+
+5. **`/Users/rav/projects/marin/experiments/two_stage/data.py`** - Replaced `ExecutorStep` for `latxa_corpus` download with `default_download()`.
+
+6. **`/Users/rav/projects/marin/experiments/train_test_overlap/eval_datasets_overlap.py`** - Replaced `mmlu_raw` download with `default_download()`. Converted 18 dataset conversion `ExecutorStep` instances to `StepSpec` with `fn=lambda output_path: ...` pattern. Updated `EVAL_DATASET_STEPS` type hint.
+
+7. **`/Users/rav/projects/marin/experiments/posttrain/preference_datasets.py`** - Replaced `download_preference_dataset_step` to use `default_download()`. Converted `transform_preference_dataset_step` to return `StepSpec`. Replaced `output_path_of(download_step)` with `download_step.output_path`.
+
+8. **`/Users/rav/projects/marin/experiments/multilingual_fineweb2_hq/download_and_tokenize_fineweb2_hq.py`** - Replaced `fineweb2_raw` download with `default_download()` + `dataclasses.replace` for output path override. Converted tokenization loop to create `StepSpec` with lambda default args for loop variables. Replaced `output_path_of(fineweb2_raw, pattern)` with `os.path.join(fineweb2_raw.output_path, pattern)`.
+
+### Files with data processing step conversions:
+
+9. **`/Users/rav/projects/marin/experiments/midtraining_datasets.py`** - Converted `finemath` download, `stackv2_edu_filtered_python`, all lavita steps to `StepSpec`. Replaced `.with_output_path()` with `dataclasses.replace()`. Replaced `/` operator with `os.path.join()`.
+
+10. **`/Users/rav/projects/marin/experiments/exp934_hq_vs_pt.py`** - Converted 3 web processing `ExecutorStep` instances to `StepSpec`. Handled `.with_output_path().cd()` chain by splitting into a `StepSpec` and `os.path.join()` for subdirectory access. Replaced `versioned()` with `hash_attrs`. Replaced `.with_output_path()` with `dataclasses.replace()`.
+
+11. **`/Users/rav/projects/marin/experiments/posttrain/instruction_datasets.py`** - Converted `transform_dataset_step()` and `tulu_3_in_dolma` from `ExecutorStep` to `StepSpec`. Replaced `versioned()`, `this_output_path()`, and `output_path_of()`. Replaced `.with_output_path()` with `dataclasses.replace()`.
+
+### Files with training/evaluation step conversions:
+
+12. **`/Users/rav/projects/marin/experiments/tootsie/exp1063_upload_tootsie.py`** - Converted `upload_model_to_hf_step()` to return `StepSpec`.
+
+13. **`/Users/rav/projects/marin/experiments/tootsie/exp826_viz_tootsie.py`** - Converted two loops creating `ExecutorStep` to `StepSpec` with lambda default args.
+
+14. **`/Users/rav/projects/marin/experiments/tootsie/exp883_viz_compare_tootsie_llama.py`** - Same pattern as exp826.
+
+15. **`/Users/rav/projects/marin/experiments/tootsie/exp1984_convert_32b_phases.py`** - Converted to use `StepSpec` with `convert_checkpoint_to_hf` directly.
+
+16. **`/Users/rav/projects/marin/experiments/plantcad/exp1729_plantcad_eval.py`** - Converted evaluation step to `StepSpec`.
+
+17. **`/Users/rav/projects/marin/experiments/evals/exp1600_uncheatable_evals.py`** - Partial conversion (kept `ExecutorStep` import for `default_lm_log_probs` return type). Converted tokenize steps.
+
+18. **`/Users/rav/projects/marin/experiments/two_stage/two_stage_config.py`** - Converted `two_stage_train_step()` to return `StepSpec`. Changed `build_train_lm_on_pod_config()` to accept `output_path` parameter instead of using `this_output_path()`.
+
+19. **`/Users/rav/projects/marin/experiments/isoflop_sweep.py`** - Converted `create_isoflop_sweep_steps()` to return `list[StepSpec]`. Replaced `.with_output_path()` with `replace()`. Replaced `InputName` parameter type with `StepSpec | str`.
+
+20. **`/Users/rav/projects/marin/experiments/exp2166_scaling_ladder_analysis.py`** - Converted analysis step and optimal training loop to `StepSpec`. Replaced `.as_input_name()` with `.output_path`. Used lambda default args for loop variable capture.
+
+21. **`/Users/rav/projects/marin/experiments/speedrun/olmoe_1b7b_nemotron_40b.py`** - Converted `nemotron_only_speedrun()` return type and `results_step` to `StepSpec`. Replaced `InputName` isinstance check with `StepSpec`. Fixed env_vars access to use `StepSpec.env_vars` instead of `ExecutorStep.config.env_vars`.
+
+### Files with deduplication/overlap step conversions:
+
+22. **`/Users/rav/projects/marin/experiments/dedup/reference.py`** - Converted `build_dedup_step()` to return `StepSpec`. Changed `InputName` parameter to plain `str`.
+
+23. **`/Users/rav/projects/marin/experiments/dedup/isoflop_analysis.py`** - Converted dedup, consolidate, tokenize, and analysis steps to `StepSpec`. Replaced `.cd("data")` with `os.path.join(step.output_path, "data")`. Replaced `.as_input_name()` with `.output_path`.
+
+24. **`/Users/rav/projects/marin/experiments/train_test_overlap/train_test_proofpile.py`** - Converted `build_proofpile_step()` to return `StepSpec`.
+
+25. **`/Users/rav/projects/marin/experiments/train_test_overlap/train_test_total.py`** - Converted `build_step()` to return `StepSpec` with lambda default args.
+
+26. **`/Users/rav/projects/marin/experiments/train_test_overlap/aggregate_total.py`** - Converted `build_aggregate_total_step()` to return `StepSpec`. Updated type hints throughout.
+
+### Translation patterns applied across all files:
+
+| Old Pattern | New Pattern |
+|---|---|
+| `ExecutorStep(name=..., fn=f, config=C(...))` | `StepSpec(name=..., hash_attrs={...}, deps=[...], fn=lambda output_path: f(C(...)))` |
+| `this_output_path()` | `output_path` (lambda parameter) |
+| `versioned(x)` | Put `x` in `hash_attrs` dict |
+| `output_path_of(step)` | `step.output_path` |
+| `step.cd("sub")` | `os.path.join(step.output_path, "sub")` |
+| `step.as_input_name()` | `step.output_path` |
+| `InputName(step, name)` | `step.output_path` (string) |
+| `step.with_output_path(p)` | `dataclasses.replace(step, override_output_path=p)` |
+| `step / "path"` | `os.path.join(step.output_path, "path")` |
+
+### Notes:
+- Two files retain `ExecutorStep` imports: `exp1984_convert_32b_phases.py` (reads config from pre-existing ExecutorStep objects) and `exp1600_uncheatable_evals.py` (interacts with `default_lm_log_probs` which still returns ExecutorStep).
+- Lambda closures in loops use default arguments to capture loop variables by value.
+- `StepRunner().run()` calls were preserved as-is since StepRunner works with both old and new step types.</result>
+<usage>total_tokens: 152965
+tool_uses: 173
+duration_ms: 1217026</usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/aac346f.output
+
+---
+
+<task-notification>
+<task-id>baf46a2</task-id>
+<output-file>/private/tmp/claude-501/-Users-rav-projects-marin/tasks/baf46a2.output</output-file>
+<status>completed</status>
+<summary>Background command "Run all experiment dry-run tests" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/baf46a2.output
+
+---
+
+<task-notification>
+<task-id>b4a33f8</task-id>
+<output-file>/private/tmp/claude-501/-Users-rav-projects-marin/tasks/b4a33f8.output</output-file>
+<status>completed</status>
+<summary>Background command "Run all experiment dry-run tests again" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/b4a33f8.output
+
+---
+
+<task-notification>
+<task-id>ba956c0</task-id>
+<output-file>/private/tmp/claude-501/-Users-rav-projects-marin/tasks/ba956c0.output</output-file>
+<status>completed</status>
+<summary>Background command "Run all experiment dry-run tests" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/ba956c0.output
+
+---
+
+<task-notification>
+<task-id>a3c4c95</task-id>
+<status>completed</status>
+<summary>Agent "Fix tootsie and ferry experiment errors" completed</summary>
+<result>The fix is in place.
+
+---
+
+Here is a summary of my findings and the fix applied:
+
+## Summary
+
+### The Fix
+
+**File**: `/Users/rav/projects/marin/experiments/evals/evals.py`, line 125
+
+**Change**: `e.task_name` changed to `e.name`
+
+```python
+# Before:
+hash_attrs={"evals": [e.task_name for e in evals], "max_eval_instances": max_eval_instances},
+
+# After:
+hash_attrs={"evals": [e.name for e in evals], "max_eval_instances": max_eval_instances},
+```
+
+This was the **only** remaining `.task_name` attribute access on `EvalTaskConfig` objects in the entire codebase. The `EvalTaskConfig` dataclass (defined in `/Users/rav/projects/marin/lib/marin/src/marin/evaluation/evaluation_config.py`) uses `.name` as the field name, not `.task_name`.
+
+### Other `task_name` References (All Correct)
+
+The following references to `task_name` exist but are NOT attribute accesses on `EvalTaskConfig` objects:
+
+- **`experiments/evals/task_configs.py`**: `task_name` is used as a loop variable in list comprehensions (e.g., `for task_name, alias in ...`) and passed as the first positional argument to `EvalTaskConfig(task_name, ...)`, which correctly maps to the `name` parameter.
+
+- **`experiments/evals/evals.py`**: `task_name` is used as a local parameter/variable in `compile_evalchemy_results()` and `build_evalchemy_eval_steps()`, referring to a plain string used for naming wandb runs and output paths -- not an `EvalTaskConfig` attribute.
+
+- **`experiments/evals/evalchemy_results_compiler.py`**: `_task_name`, `config_task_name` are local variables and dict key accesses, unrelated to `EvalTaskConfig`.
+
+- **`lib/marin/src/marin/evaluation/evaluators/`**: `task_name` is used as a function parameter/local variable in the evaluator implementations, not as an `EvalTaskConfig` attribute access.
+
+### Files Checked
+
+All 21 files listed in the request were examined (those that exist on disk). The previously fixed location in `experiments/defaults.py` line 390 already uses `.name`. No other `.task_name` attribute accesses on `EvalTaskConfig` objects were found anywhere in the codebase.</result>
+<usage>total_tokens: 85154
+tool_uses: 51
+duration_ms: 147015</usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/a3c4c95.output
+
+---
+
+<task-notification>
+<task-id>a45903f</task-id>
+<status>completed</status>
+<summary>Agent "Fix StepSpec / operator and other experiment errors" completed</summary>
+<result>All looks correct. Let me now provide a comprehensive summary.
+
+---
+
+Here is a summary of all the fixes applied:
+
+## 1. StepSpec `/` operator errors -- replaced with `.cd()`
+
+**`/Users/rav/projects/marin/experiments/exp606_sft.py`** (line 33):
+- Changed `tulu_3_dataset / "**/*.jsonl.gz"` to `tulu_3_dataset.cd("**/*.jsonl.gz")`
+
+**`/Users/rav/projects/marin/experiments/exp1880_sft_baseline.py`** (line 113):
+- Changed `dataset / "**/*.jsonl.gz"` to `dataset.cd("**/*.jsonl.gz")`
+
+**`/Users/rav/projects/marin/experiments/posttrain/long_context_datasets.py`** (lines 70, 88):
+- Changed `finepdfs_eng_raw / "data/eng_Latn/train/*.parquet"` to `finepdfs_eng_raw.cd("data/eng_Latn/train/*.parquet")`
+- Changed `finepdfs_edu_eng_raw / "data/eng_Latn/train/*.parquet"` to `finepdfs_edu_eng_raw.cd("data/eng_Latn/train/*.parquet")`
+
+## 2. `lm_data_config()` signature change -- StepSpec no longer accepted directly
+
+The `lm_data_config` function now requires `training_set: tuple[str, TokenizedMetadata]` instead of accepting a bare `StepSpec`. All callers that passed a `StepSpec` directly were migrated to use `lm_mixture_data_config(components={name: step}, weights={name: 1.0})` instead.
+
+**`/Users/rav/projects/marin/experiments/exp606_sft.py`** (line 39):
+- Changed `lm_data_config(tulu3_llama_tokenize_step)` to `lm_mixture_data_config(components={"tulu_sft_v3_llama3_instruct_tokenizer": tulu3_llama_tokenize_step}, weights={"tulu_sft_v3_llama3_instruct_tokenizer": 1.0})`
+- Updated import from `lm_data_config` to `lm_mixture_data_config`
+
+**`/Users/rav/projects/marin/experiments/dedup/isoflop_analysis.py`** (lines 59, 130):
+- Two calls to `lm_data_config(tokenize_step)` replaced with `lm_mixture_data_config(components={name: tokenize_step}, weights={name: 1.0})`
+- Updated import from `lm_data_config` to `lm_mixture_data_config`
+
+**`/Users/rav/projects/marin/experiments/speedrun/olmoe_1b7b_nemotron_40b.py`** (line 133):
+- Changed `lm_data_config(training_set=config.tokenized_dataset, ...)` to `lm_mixture_data_config(components={...}, weights={...})` in the StepSpec branch
+- Removed unused `lm_data_config` import
+
+**`/Users/rav/projects/marin/experiments/defaults.py`** (`_prepare_data_config` function, line 617):
+- Changed `lm_data_config(training_set=tokenized, ...)` to `lm_mixture_data_config(...)` with proper validation set handling
+- Added `lm_mixture_data_config` to the import from `marin.processing.tokenize`
+
+## 3. `exp_1246_upload_datasets.py` -- `upload_dir_to_hf` returns None, not a StepSpec
+
+**`/Users/rav/projects/marin/experiments/tootsie/exp_1246_upload_datasets.py`**:
+- The old code called `upload_dir_to_hf()` directly at module scope, which returns `None`. The result was then passed to `StepRunner().run([None])` causing the `AttributeError`.
+- Rewrote to wrap the upload call in a `StepSpec` so it executes lazily through the step runner.
+
+## 4. Issues that were already resolved
+
+- **`experiments/evals/evals.py:125`**: Already uses `e.name` (not `e.task_name`). No fix needed.
+- **`experiments/speedrun/single_run.py`**: File does not exist at this path. A similar file exists at `/Users/rav/projects/marin/experiments/two_stage/single_run.py` but has no import errors.
+
+## 5. Files checked with no code-level issues found
+
+- **`experiments/exp1775_nanochat_three_stage.py`**: Uses `.output_path` and `.with_output_path()` correctly. No `/` operator usage.
+- **`experiments/multilingual/exp1457_multilingual_cpt.py`**: Uses `.cd()` correctly on line 50. All imports resolve correctly.
+- **`experiments/multilingual/exp1457_multilingual_cpt_eval.py`**: Depends on `evals.py` which was already fixed. No code-level issues.
+- **`experiments/plantcad/exp1729_plantcad_train.py`**: Code structure is correct for StepSpec migration. The `NotImplementedError` for non-GPU/CPU backends is intentional design.
+- **`experiments/evals/exp1602_lm_eval_harness.py`**: All calls are correct. Import chain is valid.</result>
+<usage>total_tokens: 151959
+tool_uses: 133
+duration_ms: 591651</usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-rav-projects-marin/tasks/a45903f.output
+
+---
+
+commit and create a PR
+
+---
+
+[Request interrupted by user]
+
+---
+
+ok, I have a question, in the code below:
+
+---
+
+```
+        fn=lambda output_path, _b=_budget: run_optimal_training(
+            OptimalTrainingConfig(
+                analysis_output_path=analysis_step.output_path,
+                target_budget=_b,
+                label=LABEL,
+                output_path=output_path,
+                tokenized=nemotron_mix,
+                validation_configs=validation_configs,
+            )
+        ),
+```
+
+why are you using `_b=_budget` instead of just bassing `_budget`?
+
+---
+
+ok, right. how about it the `_get_deduped_data_mixture`:
+
+
+```
+def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism: int = 1024) -> LMMixtureDatasetConfig:
+    """Dedup fineweb-edu mixture"""
+    dedup_step = StepSpec(
+        name=f"dedup/{variant}_{mode.lower()}",
+        hash_attrs={
+            "input_paths": downloads[variant],
+            "mode": mode,
+            "processes": max_parallelism,
+        },
+        fn=lambda output_path, _v=variant, _m=mode: deduplicate(
+            DedupConfig(
+                input_paths=downloads[_v],
+                mode=_m,
+                processes=max_parallelism,
+            )
+        ),
+    )
+
+    dedup_mode_to_filter_type = {
+        DedupMode.EXACT_PARAGRAPH: FilterType.REMOVE_SPANS,
+        DedupMode.EXACT_DOCUMENT: FilterType.REMOVE_DOC,
+        DedupMode.FUZZY_DOCUMENT: FilterType.REMOVE_DOC,
+    }
+
+    consolidate_step = StepSpec(
+        name=f"clean/{variant}_{mode.lower()}",
+        hash_attrs={
+            "input_path": downloads[variant],
+            "filetype": "parquet",
+            "mode": str(mode),
+        },
+        deps=[dedup_step],
+        fn=lambda output_path, _v=variant, _m=mode, _ds=dedup_step: consolidate(
+            ConsolidateConfig(
+                input_path=downloads[_v],
+                output_path=output_path,
+                filetype="parquet",
+                filters=[
+                    FilterConfig(
+                        type=dedup_mode_to_filter_type[_m],
+                        attribute_path=os.path.join(_ds.output_path, "data"),
+                        name=str(_m),
+                    ),
+                ],
+            )
+        ),
+    )
+```
+
+There's no loop here for multiple `variant` or `dedup_step` ?
+
+---
+
+yes, please clean that up. check all the files that were commited in the head commit
+
+---
+
+ok, now I want you to update all the functions to avoid the pattern of config objects, instead just pass the parameters as arguments directly. Do you agree that would be more idiomatic?
+
+---
+
+got it, actually, first I want you to write a migration doc that documents your original plan, decisions and high level steps. put it in @docs/. Make the doc verbose enough such that if you had to do this again, you would likely get the same result.
+
+---
+
+ok, now I want you to go back to the previous point about the config objects. and follow the option A. But first update the migration doc with your plan, and then execute it. Try to make the code more python idiomatic as part of you work.
+
+---
+
+yes, and I want you to double check if other code paths can follow this pattern, also update the migration doc
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Session Start**: This is a continuation from previous sessions. The branch is `agent/20260216-remove-executor-steps`. The migration from ExecutorStep to StepSpec was completed across 5 phases, with 172 files changed, all tests passing (113 passed, 57 skipped).
+
+2. **Multiple task completion notifications**: Several background agents completed (a1999c2, ab041b7, aac346f, a45903f, a3c4c95) - all related to the previous ExecutorStep migration work.
+
+3. **Background test runs**: Multiple background test runs completed - some showed failures due to stale .pyc caches, but fresh runs showed all tests passing (113 passed, 57 skipped, 0 failed).
+
+4. **User asks about lambda default-arg pattern**: User pointed to code using `_b=_budget` in a lambda and asked why. I explained the Python closure gotcha with loop variables.
+
+5. **User asks about `_get_deduped_data_mixture`**: User noticed the same `_x=x` pattern was used outside of loops (in function bodies) where it's unnecessary. I agreed it was unnecessary.
+
+6. **User asks to clean up unnecessary lambda default args**: I found and cleaned up 7 lambdas across 6 files where the pattern was unnecessary (not in loops). Kept it in 10 lambdas across 7 files where it's genuinely needed (inside for loops). Tests passed, pre-commit clean.
+
+7. **User asks to commit and create PR** (interrupted): Started to respond but user interrupted.
+
+8. **User asks about config object pattern**: User pointed to config-object-in-lambda pattern and asked if passing parameters directly would be more idiomatic.
+
+9. **I pushed back partially**: Explained tradeoffs - agreed for simple wrappers but noted blast radius for doing everything at once. Offered 3 options (A: do everything, B: incremental, C: skip for now).
+
+10. **User asks to write a migration doc first**: User asked me to write a detailed migration doc in `docs/` documenting the original ExecutorStep→StepSpec plan, decisions, and steps. I wrote `docs/design/executor-to-stepspec-migration.md`.
+
+11. **User chooses Option A**: User wants to remove config objects from ALL functions, update migration doc with plan, then execute.
+
+12. **Enter plan mode**: I explored the codebase extensively with 3 parallel agents to catalog all config-in-lambda patterns, find config class definitions, and understand defaults.py patterns.
+
+13. **Key findings**:
+    - 4 functions already have `_fn()` wrappers with TODO comments: `tokenize_fn`, `deduplicate_fn`, `consolidate_fn`, `run_levanter_train_lm_fn`
+    - ~11 more functions need plain-arg wrappers: `download_hf`, `hf_dataset_to_jsonl`, `download_nemotron_cc`, `decontaminate`, `speedrun_results`, `transform_hf_dataset`, `transform_hf_preference_dataset`, etc.
+    - Some configs too complex to flatten: `TrainLmConfig`, `EvaluationConfig`
+    - `@draccus.wrap()` decorated functions need special handling
+
+14. **Design plan**: Created a 2-phase plan (promote existing `_fn` wrappers + add new plain-arg wrappers). Wrote to plan file.
+
+15. **Updated migration doc**: Added Phase 6 to `docs/design/executor-to-stepspec-migration.md`.
+
+16. **User feedback on `_impl` pattern**: User asked if we really need both `tokenize` and `_tokenize_impl`. I explained we could eliminate `_impl` by updating internal callers too.
+
+17. **User asks to verify**: "yes, and I want you to double check if other code paths can follow this pattern, also update the migration doc"
+
+18. **Launched explore agent**: Found that ALL 11 functions can eliminate config-based signatures entirely:
+    - 4 with existing `_fn()` wrappers: just rename
+    - For draccus-wrapped functions: keep draccus wrapper thin, make plain-arg the primary
+    - Only `download_nemotron_cc` was unclear (possibly unused)
+
+19. **Current state**: The explore agent completed, I need to update the plan file AND migration doc to reflect the "no _impl" approach, then exit plan mode.
+
+Key files involved:
+- `/Users/rav/projects/marin/docs/design/executor-to-stepspec-migration.md` - Migration doc (needs update)
+- `/Users/rav/.claude/plans/toasty-jumping-hollerith.md` - Plan file (needs update)
+- Various library files with config patterns
+- Various experiment files as callers
+
+The user's most recent explicit request was: "yes, and I want you to double check if other code paths can follow this pattern, also update the migration doc"
+
+I've completed the double-check (explore agent found all can follow the no-_impl pattern). I still need to:
+1. Update the plan file to reflect no-_impl approach
+2. Update the migration doc to reflect no-_impl approach
+3. Exit plan mode for approval
+4. Execute the plan
+
+Summary:
+1. Primary Request and Intent:
+   The user's overarching project is migrating the Marin codebase from `ExecutorStep` to `StepSpec`. This session continues from previous sessions where the 5-phase migration was completed (172 files, 113 tests passing). The current session's requests, in order:
+   
+   - **Clean up unnecessary lambda default-arg patterns** (`_x=x`) in files from the HEAD commit — completed
+   - **Write a migration doc** at `docs/design/executor-to-stepspec-migration.md` documenting the original plan, decisions, and steps — completed
+   - **Remove config-object-in-lambda patterns** (Option A — do everything): Change library functions to accept plain keyword arguments instead of config dataclass objects, making `fn=lambda output_path: foo(Config(...))` become `fn=lambda output_path: foo(arg1=..., arg2=...)`
+   - **Update migration doc with the config-removal plan** before executing — partially done (Phase 6 added, but needs update for no-`_impl` approach)
+   - **Eliminate the `_impl` pattern**: User asked "do we really need both `tokenize` and `_tokenize_impl`?" — I agreed we don't
+   - **Double-check all code paths** can follow the no-`_impl` pattern and **update migration doc** — exploration done, doc update pending
+
+2. Key Technical Concepts:
+   - **StepSpec** — frozen dataclass with `name`, `deps`, `hash_attrs`, `fn: Callable[[str], Any]`
+   - **Config-in-lambda pattern** — `fn=lambda output_path: func(ConfigClass(...))` being replaced with `fn=lambda output_path: func(arg1=..., arg2=...)`
+   - **`_fn()` wrappers** — 4 library functions already have plain-arg wrappers (`tokenize_fn`, `deduplicate_fn`, `consolidate_fn`, `run_levanter_train_lm_fn`) with TODO comments to promote them
+   - **`@draccus.wrap()`** — CLI decorator on some functions (`transform_hf_dataset`, `transform_hf_preference_dataset`, `download_hf` main). The config must remain for CLI, but a plain-arg version becomes the programmatic API
+   - **Lambda default-arg capture** — `_x=x` pattern needed in loops but unnecessary in function bodies
+   - **No `_impl` pattern** — Instead of keeping `foo()` and `_foo_impl()`, just make `foo()` accept plain args and update all callers (including internal ones)
+
+3. Files and Code Sections:
+
+   - **`/Users/rav/projects/marin/docs/design/executor-to-stepspec-migration.md`** — Migration doc. Created with full documentation of phases 1-5, then Phase 6 added for config removal. Needs update to reflect no-`_impl` approach.
+   
+   - **`/Users/rav/projects/marin/experiments/dedup/isoflop_analysis.py`** — Cleaned up 4 unnecessary `_x=x` lambda default args (lines 48, 75, 98, 122). Example fix:
+     ```python
+     # Before
+     fn=lambda output_path, _v=variant: tokenize(TokenizeConfig(train_paths=[downloads[_v]], ...))
+     # After  
+     fn=lambda output_path: tokenize(TokenizeConfig(train_paths=[downloads[variant]], ...))
+     ```
+
+   - **`/Users/rav/projects/marin/experiments/posttrain/instruction_datasets.py`** (line 597) — Cleaned up `_cfg=dataset_cfg, _adapter=adapter` default args
+
+   - **`/Users/rav/projects/marin/experiments/posttrain/preference_datasets.py`** (line 139) — Cleaned up `_path=download_data_path, _cfg=dataset_cfg, _adapter=adapter_name` default args
+
+   - **`/Users/rav/projects/marin/experiments/speedrun/olmoe_1b7b_nemotron_40b.py`** (line 192) — Cleaned up 5 default args and fixed indentation:
+     ```python
+     # Before
+     fn=lambda output_path, _run_id=wandb_run_id, _entity=wandb_entity, _project=wandb_project, _cfg=config, _ts=train_step: (  # noqa: E501
+         speedrun_results(SpeedrunResultsConfig(wandb_run_id=_run_id, ...))
+     ),
+     # After
+     fn=lambda output_path: speedrun_results(
+         SpeedrunResultsConfig(wandb_run_id=wandb_run_id, ...)
+     ),
+     ```
+
+   - **`/Users/rav/projects/marin/experiments/train_test_overlap/train_test_total.py`** (line 98) — Cleaned up `_dc=dataset_config` (function parameter, not loop variable)
+
+   - **`/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/tokenize.py`** — Has `tokenize_fn()` at line 274 and `tokenize()` at line 306. TODO comment at line 273: "remove `tokenize` and `TokenizeConfig`". `tokenize()` handles both `TokenizeConfig` and `HfTokenizeConfig` via isinstance.
+
+   - **`/Users/rav/projects/marin/lib/marin/src/marin/processing/classification/deduplication/dedup_commons.py`** — Has `deduplicate_fn()` at line 89 and `deduplicate()` at line 124. TODO at line 88. Internal modules `exact.py`/`fuzzy.py` are called BY `deduplicate()`, not the reverse.
+
+   - **`/Users/rav/projects/marin/lib/marin/src/marin/processing/classification/consolidate.py`** — Has `consolidate_fn()` at line 315 and `consolidate()` at line 334. TODO at line 314.
+
+   - **`/Users/rav/projects/marin/lib/marin/src/marin/training/training.py`** — Has `run_levanter_train_lm_fn()` at line 169 and `run_levanter_train_lm()` at line 196. TODO at line 168.
+
+   - **`/Users/rav/projects/marin/lib/marin/src/marin/download/huggingface/download_hf.py`** — `download_hf(cfg: DownloadConfig)` at line 153. `DownloadConfig` has 8 fields. Has `@draccus.wrap()` main.
+
+   - **`/Users/rav/projects/marin/lib/marin/src/marin/transform/huggingface/dataset_to_eval.py`** — `hf_dataset_to_jsonl(cfg: DatasetConversionConfig)` at line 513. Config has ~18 fields. ~30+ callers.
+
+   - **`/Users/rav/projects/marin/experiments/defaults.py`** — Keystone file. `default_download` (line 84), `default_tokenize` (line 100), `default_train` (line 255). Uses `TokenizeConfig`, `HfTokenizeConfig`, `TrainLmOnPodConfig` in lambdas.
+
+   - **`/Users/rav/.claude/plans/toasty-jumping-hollerith.md`** — Plan file with Phase 1 (promote `_fn` wrappers) and Phase 2 (add new plain-arg wrappers). Needs update to reflect no-`_impl` decision.
+
+4. Errors and Fixes:
+   - **Stale `.pyc` caches**: Background test runs showed failures (`AttributeError: 'StepSpec' object has no attribute 'with_output_path'`) that passed when run fresh. Root cause was stale bytecode from before `with_output_path` was added to `StepSpec`.
+   - **Indentation mismatch on olmoe file**: After removing default args from the speedrun_results lambda, closing parens had wrong indentation. Fixed by adjusting from `                )` to `            )`.
+
+5. Problem Solving:
+   - **Lambda default-arg cleanup**: Systematically identified 17 lambdas with `_x=x` patterns, categorized into KEEP (10 in loops) and REMOVE (7 not in loops), fixed all 7.
+   - **Config removal exploration**: Thoroughly explored all 11 config-consuming functions to determine if `_impl` pattern can be eliminated entirely. Conclusion: YES for all — internal callers can be updated to use plain args too.
+
+6. All User Messages:
+   - "ok, I have a question, in the code below:" (asking about `_b=_budget` lambda pattern)
+   - "why are you using `_b=_budget` instead of just bassing `_budget`?"
+   - "how about it the `_get_deduped_data_mixture`: [...] There's no loop here for multiple `variant` or `dedup_step` ?"
+   - "yes, please clean that up. check all the files that were commited in the head commit"
+   - "ok, now I want you to update all the functions to avoid the pattern of config objects, instead just pass the parameters as arguments directly. Do you agree that would be more idiomatic?"
+   - "got it, actually, first I want you to write a migration doc that documents your original plan, decisions and high level steps. put it in @docs/. Make the doc verbose enough such that if you had to do this again, you would likely get the same result."
+   - "ok, now I want you to go back to the previous point about the config objects. and follow the option A. But first update the migration doc with your plan, and then execute it. Try to make the code more python idiomatic as part of you work."
+   - "did you update the migration doc as requested?" (when I tried to exit plan mode prematurely)
+   - "ok, question - for `_tokenize_impl` do we really need both `tokenize` and `_tokenize_impl`?"
+   - "yes, and I want you to double check if other code paths can follow this pattern, also update the migration doc"
+
+7. Pending Tasks:
+   - Update plan file (`toasty-jumping-hollerith.md`) to reflect no-`_impl` approach (just rename `_fn` to main, update all callers)
+   - Update migration doc (`docs/design/executor-to-stepspec-migration.md`) to reflect no-`_impl` decision
+   - Exit plan mode for user approval
+   - Execute the config-removal plan across all library functions and their callers
+   - Commit and create PR (deferred from earlier)
+
+8. Current Work:
+   I am in **plan mode**, working on the config-object removal plan. The last user message was: "yes, and I want you to double check if other code paths can follow this pattern, also update the migration doc"
+   
+   I launched an Explore agent that confirmed ALL 11 functions can eliminate the `_impl` pattern entirely:
+   - 4 with existing `_fn()`: just rename `_fn` → main function, update all callers
+   - Functions with `@draccus.wrap()`: keep thin draccus wrapper for CLI, make plain-arg the primary API
+   - No function requires a separate `_impl` helper
+   
+   I still need to:
+   1. Update the plan file to remove all mentions of `_impl`
+   2. Update the migration doc Phase 6 to remove `_impl` mentions
+   3. Exit plan mode
+
+9. Optional Next Step:
+   Update both the plan file and migration doc to reflect the no-`_impl` approach (per user's request: "yes, and I want you to double check if other code paths can follow this pattern, also update the migration doc"), then exit plan mode for approval.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Session Start**: This is a continuation from two previous sessions. The branch is `rav-step-poc`. The original work was migrating from ExecutorStep to StepSpec (completed in earlier sessions). This session continues with Phase 6: removing config-object-in-lambda patterns.
+
+2. **Previous session context**: 
+   - ExecutorStep → StepSpec migration completed (172 files, 113 tests passing)
+   - Lambda default-arg cleanup completed (7 unnecessary `_x=x` patterns removed)
+   - Migration doc written at `docs/design/executor-to-stepspec-migration.md`
+   - Plan created for removing config objects from lambda expressions
+   - User chose "Option A" (do everything)
+   - User asked "do we really need both `tokenize` and `_tokenize_impl`?" — agreed we don't
+   - User asked to "double check if other code paths can follow this pattern, also update the migration doc"
+
+3. **This session starts**: Plan file exists at `/Users/rav/.claude/plans/toasty-jumping-hollerith.md` with the old `_impl` approach. Need to update both plan and migration doc to no-`_impl` approach, then exit plan mode.
+
+4. **Plan and doc updates**: Updated both files to reflect no-`_impl` — config classes get eliminated from public API entirely, constructed internally only when needed.
+
+5. **Plan approved**: User approved the plan. Created task list with 7 tasks.
+
+6. **Phase 1A - tokenize**: 
+   - Read tokenize.py, __init__.py, data_configs.py, defaults.py, simple.py, dolma.py, dolmino.py, nemotron.py, test files
+   - Key insight: `tokenize()` has two code paths (file-based via TokenizeConfig, HF-based via HfTokenizeConfig)
+   - Created `_run_tokenize_pipeline()` private helper, `tokenize()` for files, `tokenize_hf()` for HF
+   - Changed `_tokenize_batches` to accept `format` directly instead of config
+   - Updated `__init__.py` exports
+   - Updated all callers: defaults.py (3 fn definitions), simple.py, dolma.py, dolmino.py, nemotron.py, fineweb2_hq, isoflop_analysis.py (2 places), integration_test.py, integration_nomagic_test.py, test_tokenize.py, test_hfdataset_spec.py
+   - Dropped unused `zephyr_num_cpus` and `zephyr_memory` params
+
+7. **Phase 1B - deduplicate**:
+   - Merged `deduplicate_fn()` and `deduplicate(config)` into single `deduplicate()` with plain args
+   - Internally constructs `DedupConfig` for dispatch to `exact.py`/`fuzzy.py`
+   - Used parallel agents to update experiment callers and test callers
+   - Updated: isoflop_analysis.py, reference.py, integration_test.py, integration_nomagic_test.py, test_exact.py, test_fuzzy.py, test_consolidate.py
+
+8. **Phase 1C - consolidate**:
+   - Merged `consolidate_fn()` and `consolidate(config)` into single `consolidate()` with plain args
+   - Internally constructs `ConsolidateConfig` for `calculate_percentile_thresholds`
+   - Used agent to update callers: isoflop_analysis.py, integration_test.py, integration_nomagic_test.py, test_consolidate.py
+
+9. **Phase 1D - run_levanter_train_lm**:
+   - Merged `run_levanter_train_lm_fn()` and `run_levanter_train_lm(config)` into single function
+   - Internally constructs `TrainLmOnPodConfig` since body extensively uses `config.*`
+   - Used agent to update callers: defaults.py, two_stage_config.py, integration_test.py, integration_nomagic_test.py, exp2166_scaling_ladder_analysis.py
+   - Agent also removed dead `build_train_lm_on_pod_config` method from two_stage_config.py
+
+10. **Dry-run test**: 94 passed, 57 skipped — all good.
+
+11. **Phase 2A started - download_hf**: Read the download_hf.py file to understand the config and function structure. Was about to proceed with flattening when the summary was requested.
+
+Key files modified:
+- `lib/marin/src/marin/processing/tokenize/tokenize.py` — major refactor
+- `lib/marin/src/marin/processing/tokenize/__init__.py` — export changes
+- `lib/marin/src/marin/processing/classification/deduplication/dedup_commons.py` — merged functions
+- `lib/marin/src/marin/processing/classification/consolidate.py` — merged functions
+- `lib/marin/src/marin/training/training.py` — merged functions
+- `experiments/defaults.py` — updated imports and callers for all 4 functions
+- `experiments/pretraining_datasets/simple.py`, `dolma.py`, `dolmino.py`, `nemotron.py` — tokenize callers
+- `experiments/dedup/isoflop_analysis.py` — tokenize, deduplicate, consolidate callers
+- `experiments/dedup/reference.py` — deduplicate caller
+- `experiments/multilingual_fineweb2_hq/download_and_tokenize_fineweb2_hq.py` — tokenize caller
+- `experiments/two_stage/two_stage_config.py` — run_levanter_train_lm caller
+- `experiments/exp2166_scaling_ladder_analysis.py` — run_levanter_train_lm caller
+- Various test files
+- `docs/design/executor-to-stepspec-migration.md` — updated Phase 6
+- Plan file updated
+
+Tasks remaining from the plan:
+- Phase 2A: download_hf (in progress, started reading)
+- Phase 2B-G: hf_dataset_to_jsonl, download_nemotron_cc, decontaminate, speedrun_results, transform_hf_dataset, transform_hf_preference_dataset
+- Verification
+
+No user messages in this session — everything was continuation from the previous session's approved plan.
+
+Summary:
+1. Primary Request and Intent:
+   The user's overarching project is migrating the Marin codebase from `ExecutorStep` to `StepSpec`. The ExecutorStep→StepSpec migration was completed in earlier sessions. This session continues with **Phase 6: removing config-object-in-lambda patterns** — changing library functions to accept plain keyword arguments instead of config dataclass objects, so that `fn=lambda output_path: foo(Config(...))` becomes `fn=lambda output_path: foo(arg1=..., arg2=...)`.
+
+   Key user decisions from prior sessions:
+   - Chose "Option A" — do everything, not incremental
+   - Rejected the `_impl()` indirection pattern: "do we really need both `tokenize` and `_tokenize_impl`?" — agreed we don't
+   - Asked to "double check if other code paths can follow this pattern, also update the migration doc"
+   - Approved the final plan after docs were updated
+
+2. Key Technical Concepts:
+   - **StepSpec** — frozen dataclass with `name`, `deps`, `hash_attrs`, `fn: Callable[[str], Any]`
+   - **Config-in-lambda pattern** — `fn=lambda output_path: func(ConfigClass(...))` being replaced with `fn=lambda output_path: func(arg1=..., arg2=...)`
+   - **No `_impl` pattern** — instead of keeping both `foo()` and `_foo_impl()`, make the plain-arg version the ONLY public API; construct config internally if needed
+   - **`_fn()` wrappers** — 4 library functions already had plain-arg wrappers (`tokenize_fn`, `deduplicate_fn`, `consolidate_fn`, `run_levanter_train_lm_fn`) with TODO comments to promote them
+   - **`@draccus.wrap()`** — CLI decorator; config classes kept only for CLI entry points
+   - **Internal config construction** — for functions where the body extensively uses `config.*`, construct the config object internally from plain args (pragmatic approach that keeps callers clean)
+
+3. Files and Code Sections:
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/tokenize.py`** — Major refactor of tokenization API
+   - Deleted old `tokenize_fn()` and `tokenize(config: TokenizeConfigBase)`
+   - Created `_run_tokenize_pipeline()` private helper shared between both paths
+   - Created `tokenize()` accepting plain args for file-based tokenization
+   - Created `tokenize_hf()` accepting plain args for HF dataset tokenization
+   - Changed `_tokenize_batches(*, config=...)` to `_tokenize_batches(*, format=...)`
+   - Updated draccus `main()` to extract plain args from config
+   - Key new signatures:
+   ```python
+   def tokenize(
+       train_paths: list[str],
+       validation_paths: list[str],
+       cache_path: str,
+       tokenizer: str,
+       tags: list[str] | None = None,
+       sample_count: int | None = None,
+       format: LmDatasetFormatBase = TextLmDatasetFormat(),
+       window_size_bytes: int = 10_000_000_000,
+       allow_test_in_train: bool = False,
+   ) -> TokenizedMetadata:
+
+   def tokenize_hf(
+       hf_dataset_id: str,
+       cache_path: str,
+       tokenizer: str,
+       hf_dataset_name: str | None = None,
+       hf_revision: str | None = None,
+       tags: list[str] | None = None,
+       sample_count: int | None = None,
+       format: LmDatasetFormatBase = TextLmDatasetFormat(),
+       window_size_bytes: int = 10_000_000_000,
+   ) -> TokenizedMetadata:
+   ```
+   - Dropped unused `zephyr_num_cpus` and `zephyr_memory` params (were stored but never used)
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/__init__.py`** — Updated exports
+   - Changed `tokenize_fn` to `tokenize_hf` in exports
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/processing/classification/deduplication/dedup_commons.py`** — Merged dedup functions
+   - Deleted `deduplicate_fn()` and old `deduplicate(config: DedupConfig)`
+   - New `deduplicate()` accepts plain args, constructs `DedupConfig` internally for dispatch
+   ```python
+   def deduplicate(
+       input_paths: str | list[str],
+       output_path: str,
+       filetypes: list[str] | None = None,
+       processes: int = 1,
+       mode: DedupMode = DedupMode.EXACT_PARAGRAPH,
+       text_field: str = "text",
+       ray_num_cpus: int = 2,
+       ray_memory: int = 64 * 1024**3,
+       fuzzy_minhash_num_perms: int = 286,
+       fuzzy_minhash_num_bands: int = 26,
+       fuzzy_minhash_ngram_size: int = 5,
+       fuzzy_minhash_seed: int = 42,
+   ) -> DedupMetadata:
+   ```
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/processing/classification/consolidate.py`** — Merged consolidate functions
+   - Deleted `consolidate_fn()` and old `consolidate(config)`
+   - New `consolidate()` accepts plain args, constructs `ConsolidateConfig` internally
+   ```python
+   def consolidate(
+       input_path: str,
+       output_path: str,
+       filters: list[FilterConfig],
+       filetype: str = "jsonl.gz",
+   ) -> PathsMetadata:
+   ```
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/training/training.py`** — Merged training functions
+   - Deleted `run_levanter_train_lm_fn()` and old `run_levanter_train_lm(config: TrainLmOnPodConfig)`
+   - New `run_levanter_train_lm()` accepts plain args, constructs `TrainLmOnPodConfig` internally
+   ```python
+   def run_levanter_train_lm(
+       train_config: train_lm.TrainLmConfig,
+       resources: ResourceConfig,
+       output_path: str | None = None,
+       impute_run_id_from_output_path: bool = True,
+       allow_out_of_region: tuple[str, ...] = (),
+       env_vars: dict[str, str] | None = None,
+       auto_build_caches: bool = False,
+   ) -> LevanterTrainMetadata:
+   ```
+
+   **`/Users/rav/projects/marin/experiments/defaults.py`** — Updated imports and callers for all 4 functions
+   - Removed `HfTokenizeConfig`, `TokenizeConfig` from imports; added `tokenize_hf`
+   - Removed `TrainLmOnPodConfig` from imports
+   - Updated `default_tokenize()` to use `tokenize()` and `tokenize_hf()` with plain args
+   - Updated `default_train()` to call `run_levanter_train_lm()` with plain args
+   - Updated `default_download()` still uses `DownloadConfig` (Phase 2A pending)
+
+   **`/Users/rav/projects/marin/experiments/pretraining_datasets/simple.py`** — Removed `TokenizeConfig` import, updated `_tokenize_simple` lambda
+
+   **`/Users/rav/projects/marin/experiments/pretraining_datasets/dolma.py`** — Removed `TokenizeConfig` import, updated `tokenize_dolma` lambda
+
+   **`/Users/rav/projects/marin/experiments/pretraining_datasets/dolmino.py`** — Removed `TokenizeConfig` import, updated both lambdas in `tokenize_dolmino` and `tokenize_dolmino_math`
+
+   **`/Users/rav/projects/marin/experiments/pretraining_datasets/nemotron.py`** — Removed `TokenizeConfig` import, updated lambda in `tokenize_nemotron`
+
+   **`/Users/rav/projects/marin/experiments/dedup/isoflop_analysis.py`** — Updated all three function calls (tokenize, deduplicate, consolidate) to use plain args. Removed `TokenizeConfig`, `DedupConfig`, `ConsolidateConfig` from imports.
+
+   **`/Users/rav/projects/marin/experiments/dedup/reference.py`** — Removed `DedupConfig` from import, updated deduplicate call
+
+   **`/Users/rav/projects/marin/experiments/multilingual_fineweb2_hq/download_and_tokenize_fineweb2_hq.py`** — Removed `TokenizeConfig` import, updated lambda
+
+   **`/Users/rav/projects/marin/experiments/two_stage/two_stage_config.py`** — Removed `TrainLmOnPodConfig` import, updated lambda to call `run_levanter_train_lm()` with plain args from `build_train_lm_config()` and `build_pod_config()`. Removed dead `build_train_lm_on_pod_config()` method.
+
+   **`/Users/rav/projects/marin/experiments/exp2166_scaling_ladder_analysis.py`** — Removed `TrainLmOnPodConfig` import, updated direct call
+
+   **`/Users/rav/projects/marin/tests/test_hfdataset_spec.py`** — Rewrote test to check `step.hash_attrs` instead of old `step.config` (which doesn't exist in StepSpec)
+
+   **`/Users/rav/projects/marin/tests/processing/tokenize/test_tokenize.py`** — Changed `tokenize(HfTokenizeConfig(...))` to `tokenize_hf(...)`
+
+   **`/Users/rav/projects/marin/tests/integration_test.py`** — Updated tokenize, deduplicate, consolidate, run_levanter_train_lm calls to plain args
+
+   **`/Users/rav/projects/marin/tests/integration_nomagic_test.py`** — Changed `tokenize_fn` to `tokenize`, `deduplicate_fn` to `deduplicate`, `consolidate_fn` to `consolidate`, `run_levanter_train_lm_fn` to `run_levanter_train_lm`
+
+   **`/Users/rav/projects/marin/tests/processing/classification/deduplication/test_exact.py`** — Updated deduplicate calls to plain args
+
+   **`/Users/rav/projects/marin/tests/processing/classification/deduplication/test_fuzzy.py`** — Updated deduplicate calls to plain args
+
+   **`/Users/rav/projects/marin/tests/processing/classification/test_consolidate.py`** — Updated consolidate calls to plain args (kept `ConsolidateConfig` import for `test_calculate_percentile_threshold` which tests internal function)
+
+   **`/Users/rav/projects/marin/docs/design/executor-to-stepspec-migration.md`** — Updated Phase 6 to reflect no-`_impl` approach
+
+   **`/Users/rav/.claude/plans/toasty-jumping-hollerith.md`** — Plan file updated to reflect no-`_impl` approach
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/download/huggingface/download_hf.py`** — Read but not yet modified (Phase 2A in progress). Current signature: `def download_hf(cfg: DownloadConfig) -> None:`. Has `@draccus.wrap()` main at bottom. `DownloadConfig` has 8 fields.
+
+4. Errors and fixes:
+   - No errors encountered in this session. All dry-run tests passed (94 passed, 57 skipped).
+   - From prior session context: stale `.pyc` caches caused `AttributeError` on `StepSpec` methods — fixed by running fresh.
+
+5. Problem Solving:
+   - **Two code paths in tokenize**: Solved by creating `tokenize()` and `tokenize_hf()` with a shared `_run_tokenize_pipeline()` helper, avoiding code duplication while eliminating the isinstance dispatch.
+   - **Config threading in run_levanter_train_lm**: The body uses `config.*` pervasively (15+ accesses). Solved by constructing `TrainLmOnPodConfig` internally from plain args — callers see plain args, body still uses config object.
+   - **Internal dispatch functions**: For `deduplicate`, internal functions like `dedup_exact_paragraph(config)` still accept `DedupConfig`. Solved by constructing config internally in `deduplicate()` before dispatching.
+
+6. All user messages:
+   - No direct user messages in this session — it was a continuation from a previous conversation that ran out of context. The user approved the plan (via ExitPlanMode approval) and the work proceeded from the approved plan.
+
+7. Pending Tasks:
+   - **Phase 2A**: Flatten `download_hf` (plain args, keep draccus for CLI) — ~30+ callers across eval_datasets.py, simple.py, defaults.py, models.py, paloma.py, midtraining_datasets.py
+   - **Phase 2B**: Flatten `hf_dataset_to_jsonl` (~30+ callers)
+   - **Phase 2C**: Flatten `download_nemotron_cc` (trivial, 2 fields)
+   - **Phase 2D**: Flatten `decontaminate` (10 fields)
+   - **Phase 2E**: Flatten `speedrun_results` (5 fields)
+   - **Phase 2F**: Flatten `transform_hf_dataset` (draccus wrapped)
+   - **Phase 2G**: Flatten `transform_hf_preference_dataset` (draccus wrapped)
+   - **Verification**: Run tests/test_dry_run.py, integration tests, unit tests, pre-commit
+
+8. Current Work:
+   Phase 2A (flatten `download_hf`) was just started. I had read the `download_hf.py` file (lines 1-30 and 130-200) to understand the structure:
+   - `DownloadConfig` has 8 fields (hf_dataset_id, revision, gcs_output_path, hf_urls_glob, append_sha_to_path, wait_for_completion, hf_repo_type_prefix, zephyr_max_parallelism)
+   - `download_hf(cfg: DownloadConfig)` is the main function at line 153
+   - There's a `@draccus.wrap()` main at the bottom for CLI
+   - ~30+ callers: `experiments/eval_datasets.py`, `experiments/pretraining_datasets/simple.py` (10+ download steps), `defaults.py`, `models.py`, `paloma.py`, `midtraining_datasets.py`, plus test files
+   
+   I was about to make the same transformation: change `download_hf(cfg: DownloadConfig)` to accept plain args, keep `DownloadConfig` only for draccus CLI.
+
+9. Optional Next Step:
+   Continue Phase 2A: Flatten `download_hf` — change the function signature to accept plain keyword arguments, update all ~30+ callers across experiment files. The plan specifies:
+   ```
+   Change `download_hf(cfg: DownloadConfig)` to accept plain args directly.
+   Keep `DownloadConfig` only for the `@draccus.wrap()` CLI `main()`.
+   ```
+   The new signature should be:
+   ```python
+   def download_hf(
+       hf_dataset_id: str,
+       revision: str,
+       gcs_output_path: str = "",
+       hf_urls_glob: list[str] | None = None,
+       append_sha_to_path: bool = False,
+       wait_for_completion: bool = True,
+       hf_repo_type_prefix: str = "datasets",
+       zephyr_max_parallelism: int = 32,
+   ) -> None:
+   ```
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Session Start**: This is a continuation from two previous sessions. The branch is `rav-step-poc`. The work is Phase 6 of the ExecutorStep → StepSpec migration: removing config-object-in-lambda patterns.
+
+2. **Previous session context** (from summary):
+   - ExecutorStep → StepSpec migration completed in earlier sessions
+   - Phase 1A-1D completed: tokenize, deduplicate, consolidate, run_levanter_train_lm all flattened
+   - Plan file exists at `/Users/rav/.claude/plans/toasty-jumping-hollerith.md`
+   - Dry-run tests: 94 passed, 57 skipped
+   - Phase 2A (download_hf) was just started - file was read but not yet modified
+
+3. **This session's work**:
+
+   **Phase 2A: download_hf** (completed)
+   - Read `download_hf.py` fully - function has 8 config fields, uses `cfg.*` throughout
+   - Changed `download_hf(cfg: DownloadConfig)` to accept plain keyword args
+   - Dropped `wait_for_completion` (never used in function body) and `zephyr_max_parallelism` (never used)
+   - Updated draccus CLI `main()` to extract args from config
+   - Updated `defaults.py` - removed DownloadConfig import, updated `default_download`
+   - Updated `models.py` - removed DownloadConfig import, updated `download_model_step`
+   - Updated `download_pretokenized.py` - removed HfDownloadConfig import, call download_hf with plain args
+   - Used agents to update: eval_datasets.py (14 calls), simple.py (11 calls), dolma.py, dolmino.py, paloma.py, midtraining_datasets.py, paloma_local_download.py, test_huggingface.py
+   - Kept `download/__init__.py` as-is (HfDownloadConfig alias still valid)
+   - Verified: 94 passed, 57 skipped
+
+   **Phase 2B: hf_dataset_to_jsonl** (completed)
+   - Read `dataset_to_eval.py` - complex function with 19 config fields, deeply coupled with helpers
+   - Changed `hf_dataset_to_jsonl(cfg: DatasetConversionConfig)` to accept plain keyword args
+   - Constructs DatasetConversionConfig internally from plain args
+   - Updated draccus CLI `main()`
+   - Used agents to update: eval_datasets.py (~14 calls), eval_datasets_overlap.py (~18 calls), test_huggingface_dataset_to_eval.py (2 tests)
+
+   **Phase 2C: download_nemotron_cc** (completed)
+   - Simple - only 2 fields (output_path, chunk_size)
+   - Changed `download_nemotron_cc(cfg: NemotronIngressConfig)` to accept plain args
+   - Updated nemotron.py and test_nemotron_cc.py (3 test functions)
+
+   **Phase 2D: decontaminate** (completed)
+   - 10 config fields, DeconConfig used extensively internally
+   - Changed `decontaminate(config: DeconConfig)` to accept plain args, construct config internally
+   - Updated draccus CLI `main()`
+   - Used agent to update: train_test_total.py, train_test_proofpile.py, test_decon.py
+
+   **Phase 2E: speedrun_results** (in progress - function changed, callers not yet updated)
+   - 5 fields, SpeedrunConfig is complex nested type kept as parameter
+   - Changed `speedrun_results(config: SpeedrunResultsConfig)` to accept plain args
+   - All `config.speedrun_config.*` → `speedrun_config.*`, `config.wandb_*` → `wandb_*`, `config.output_path` → `output_path`
+   - TWO callers need updating: one in speedrun.py itself (internal, around line 402), one in olmoe_1b7b_nemotron_40b.py (around line 192)
+   - These have NOT been updated yet
+
+4. **User messages**: There were no direct user messages in this session - everything was a continuation from the previous session's approved plan. The session start was a system-provided summary of the previous conversation.
+
+5. **Remaining tasks from the plan**:
+   - Phase 2E: speedrun_results - function changed, 2 callers need updating
+   - Phase 2F: transform_hf_dataset
+   - Phase 2G: transform_hf_preference_dataset
+   - Verification: run tests and pre-commit
+
+6. **Current work**: I just finished editing the `speedrun_results` function body in speedrun.py to accept plain args instead of SpeedrunResultsConfig. I still need to update the 2 callers (one internal in speedrun.py around line 402, one in olmoe_1b7b_nemotron_40b.py around line 192).
+
+Let me also note what task items exist:
+- #11 [in_progress] Phase 2B-G: Flatten remaining functions
+- #12 [pending] Verify: run tests and pre-commit
+
+Summary:
+1. Primary Request and Intent:
+   The user's overarching project is migrating the Marin codebase from `ExecutorStep` to `StepSpec`. The ExecutorStep→StepSpec migration was completed in earlier sessions. This session continues with **Phase 6: removing config-object-in-lambda patterns** — changing library functions to accept plain keyword arguments instead of config dataclass objects, so that `fn=lambda output_path: foo(Config(...))` becomes `fn=lambda output_path: foo(arg1=..., arg2=...)`.
+
+   Key user decisions from prior sessions:
+   - Chose "Option A" — do everything, not incremental
+   - Rejected the `_impl()` indirection pattern: "do we really need both `tokenize` and `_tokenize_impl`?" — agreed we don't
+   - Asked to "double check if other code paths can follow this pattern, also update the migration doc"
+   - Approved the final plan (via ExitPlanMode)
+
+2. Key Technical Concepts:
+   - **StepSpec** — frozen dataclass with `name`, `deps`, `hash_attrs`, `fn: Callable[[str], Any]`
+   - **Config-in-lambda pattern** — `fn=lambda output_path: func(ConfigClass(...))` being replaced with `fn=lambda output_path: func(arg1=..., arg2=...)`
+   - **No `_impl` pattern** — make the plain-arg version the ONLY public API; construct config internally if needed
+   - **`@draccus.wrap()`** — CLI decorator; config classes kept only for CLI entry points, with main() extracting plain args
+   - **Internal config construction** — for functions where the body extensively uses `config.*`, construct the config object internally from plain args
+   - **Dead parameter removal** — `wait_for_completion` and `zephyr_max_parallelism` were never used in `download_hf` body; dropped from new signature
+
+3. Files and Code Sections:
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/download/huggingface/download_hf.py`** — Core download function
+   - Changed from `download_hf(cfg: DownloadConfig)` to plain keyword args
+   - Dropped unused `wait_for_completion` and `zephyr_max_parallelism` params
+   - New signature:
+   ```python
+   def download_hf(
+       hf_dataset_id: str,
+       revision: str,
+       gcs_output_path: str = "",
+       hf_urls_glob: list[str] | None = None,
+       append_sha_to_path: bool = False,
+       hf_repo_type_prefix: str = "datasets",
+   ) -> None:
+   ```
+   - Updated draccus `main()` to extract args from config, including converting empty list to None for `hf_urls_glob`
+   - `DownloadConfig` class preserved only for draccus CLI
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/download/__init__.py`** — Left unchanged
+   - `HfDownloadConfig` alias and `download_hf` re-export still valid
+
+   **`/Users/rav/projects/marin/experiments/defaults.py`** — Updated `default_download`
+   - Removed `DownloadConfig` from import
+   - Changed lambda from `download_hf(DownloadConfig(...))` to `download_hf(hf_dataset_id=..., ...)`
+   - Removed `wait_for_completion=True` from call, kept `**kwargs` passthrough
+
+   **`/Users/rav/projects/marin/experiments/models.py`** — Updated `download_model_step`
+   - Removed `DownloadConfig` from import
+   - Flattened `download_hf(DownloadConfig(...))` to `download_hf(...)` with plain args
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/processing/tokenize/download_pretokenized.py`** — Updated internal download call
+   - Removed `HfDownloadConfig` import
+   - Changed from constructing `HfDownloadConfig` then calling `hf_download_logic(download_op_config)` to calling `hf_download_logic(hf_dataset_id=..., revision=..., ...)` directly
+
+   **`/Users/rav/projects/marin/experiments/eval_datasets.py`** — Updated by agent
+   - Removed `DownloadConfig` import (kept `download_hf`)
+   - Flattened 14 `download_hf(DownloadConfig(...))` calls to plain keyword args
+   - Removed all `wait_for_completion=True`
+   - Separately, removed `DatasetConversionConfig` import, flattened ~14 `hf_dataset_to_jsonl(DatasetConversionConfig(...))` calls
+
+   **`/Users/rav/projects/marin/experiments/pretraining_datasets/simple.py`** — Updated by agent
+   - Removed `DownloadConfig` import, flattened 11 download calls
+
+   **`/Users/rav/projects/marin/experiments/pretraining_datasets/dolma.py`** — Updated by agent
+   - Removed `DownloadConfig` import, flattened 1 download call
+
+   **`/Users/rav/projects/marin/experiments/pretraining_datasets/dolmino.py`** — Updated by agent
+   - Removed `DownloadConfig` import, flattened 1 download call
+
+   **`/Users/rav/projects/marin/experiments/paloma.py`** — Updated by agent
+   - Removed `HfDownloadConfig` import, flattened 1 download call
+
+   **`/Users/rav/projects/marin/experiments/midtraining_datasets.py`** — Updated by agent
+   - Removed `DownloadConfig` import, flattened 1 download call
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/speedrun/paloma_local_download.py`** — Updated by agent
+   - Removed `HfDownloadConfig` import, flattened 1 download call
+
+   **`/Users/rav/projects/marin/tests/download/test_huggingface.py`** — Updated by agent
+   - Removed `DownloadConfig` import, changed 2 tests to call `download_hf(...)` directly
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/transform/huggingface/dataset_to_eval.py`** — Phase 2B
+   - Changed from `hf_dataset_to_jsonl(cfg: DatasetConversionConfig)` to 20 plain keyword args
+   - Constructs `DatasetConversionConfig` internally (19 fields, deeply coupled with helper functions)
+   - New signature:
+   ```python
+   def hf_dataset_to_jsonl(
+       dataset_name: str,
+       subsets: list[str],
+       splits: list[str],
+       input_path: str,
+       hf_path: str,
+       output_path: str,
+       output_format: OutputFormatOptions,
+       prompt_key: str,
+       answer_text_key: str = "",
+       answer_idx_key: str = "",
+       answer_label_key: str = "",
+       answer_text_ignore: bool = False,
+       options_key: str = "",
+       options_keys: list[str] | None = None,
+       answer_labels: list[str] | None = None,
+       answer_labels_key: str = "",
+       exclude_subsets: list[str] | None = None,
+       revision: str | None = None,
+       token: str | bool = False,
+       trust_remote_code: bool = False,
+   ) -> None:
+   ```
+   - Updated draccus CLI `main()`
+
+   **`/Users/rav/projects/marin/experiments/train_test_overlap/eval_datasets_overlap.py`** — Updated by agent
+   - Removed `DatasetConversionConfig` import, flattened 18 calls
+
+   **`/Users/rav/projects/marin/tests/transform/test_huggingface_dataset_to_eval.py`** — Updated by agent
+   - Removed `DatasetConversionConfig` import, flattened 2 test calls
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/download/nemotron_cc/download_nemotron_cc.py`** — Phase 2C
+   - Changed from `download_nemotron_cc(cfg: NemotronIngressConfig)` to plain args
+   - New signature:
+   ```python
+   def download_nemotron_cc(output_path: str = "", chunk_size: int = 1048576):
+   ```
+
+   **`/Users/rav/projects/marin/experiments/pretraining_datasets/nemotron.py`** — Updated
+   - Removed `NemotronIngressConfig` import, flattened 1 call
+
+   **`/Users/rav/projects/marin/tests/download/test_nemotron_cc.py`** — Updated
+   - Removed `NemotronIngressConfig` import, flattened 3 test calls
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/processing/classification/decon.py`** — Phase 2D
+   - Changed from `decontaminate(config: DeconConfig)` to 10 plain keyword args
+   - Constructs `DeconConfig` internally
+   - New signature:
+   ```python
+   def decontaminate(
+       input_path: str | list[str],
+       output_path: str = "",
+       attribute_name: str = "duplicate_text",
+       estimated_doc_count: int = 1000000,
+       false_positive_rate: float = 0.001,
+       ngram: NGramConfig | None = None,
+       processes: int = 1,
+       mode: DeconMode = DeconMode.DECONTAMINATE,
+       decontaminate_source: str | None = None,
+       text_field: str = "text",
+   ):
+   ```
+   - Updated draccus CLI `main()`
+
+   **`/Users/rav/projects/marin/experiments/train_test_overlap/train_test_total.py`** — Updated by agent
+   - Removed `DeconConfig` import, updated `run_train_test_overlap` to accept `**kwargs`
+
+   **`/Users/rav/projects/marin/experiments/train_test_overlap/train_test_proofpile.py`** — Updated by agent
+   - Same changes as train_test_total.py
+
+   **`/Users/rav/projects/marin/tests/processing/classification/test_decon.py`** — Updated by agent
+   - Removed `DeconConfig` import, flattened 4 test calls to `decontaminate(...)` directly
+
+   **`/Users/rav/projects/marin/lib/marin/src/marin/speedrun/speedrun.py`** — Phase 2E (IN PROGRESS)
+   - Changed from `speedrun_results(config: SpeedrunResultsConfig)` to 5 plain keyword args
+   - New signature:
+   ```python
+   def speedrun_results(
+       wandb_run_id: str,
+       wandb_entity: str,
+       wandb_project: str,
+       speedrun_config: SpeedrunConfig,
+       output_path: str,
+   ):
+   ```
+   - All `config.speedrun_config.*` → `speedrun_config.*`
+   - All `config.wandb_*` → `wandb_*`
+   - `config.output_path` → `output_path`
+   - **CALLERS NOT YET UPDATED** — 2 callers need updating:
+     1. Internal caller in `speedrun.py` itself around line 402: `speedrun_results(SpeedrunResultsConfig(...))`
+     2. External caller in `experiments/speedrun/olmoe_1b7b_nemotron_40b.py` around line 192: `speedrun_results(SpeedrunResultsConfig(...))`
+
+4. Errors and fixes:
+   - No errors encountered in this session. All dry-run tests passed (94 passed, 57 skipped) after Phase 2A.
+   - Minor issue: tried to Edit a file without reading it first (nemotron.py) — got tool error, fixed by reading file first.
+
+5. Problem Solving:
+   - **Mutable default args**: Used `None` defaults for list parameters (e.g., `hf_urls_glob: list[str] | None = None`) to avoid Python's mutable default argument pitfall, converting internally with `or []`.
+   - **Complex config coupling**: For functions where config is deeply threaded through helpers (e.g., `hf_dataset_to_jsonl` with 19 fields, `decontaminate` with internal sub-config construction), used pragmatic approach of constructing config internally from plain args rather than changing all helper function signatures.
+   - **Dead parameter detection**: Found `wait_for_completion` and `zephyr_max_parallelism` in `download_hf` were never used in the function body — dropped them from the new signature and removed from all callers.
+   - **Different DownloadConfig classes**: Correctly identified that `test_ar5iv.py` and `test_dclm_hq.py` use different `DownloadConfig` classes from different modules, not related to `download_hf`.
+
+6. All user messages:
+   - The session started with a system-provided summary of the previous conversation (no direct user message).
+   - No direct user messages were sent during this session — all work was continuation of the previously approved plan.
+
+7. Pending Tasks:
+   - **Phase 2E callers**: Update 2 callers of `speedrun_results` (in `speedrun.py` internal and `olmoe_1b7b_nemotron_40b.py`) to use plain keyword args instead of `SpeedrunResultsConfig`
+   - **Phase 2F**: Flatten `transform_hf_dataset` (`lib/marin/src/marin/transform/conversation/transform_conversation.py`)
+   - **Phase 2G**: Flatten `transform_hf_preference_dataset` (`lib/marin/src/marin/transform/conversation/transform_preference_data.py`)
+   - **Verification**: Run `uv run pytest tests/test_dry_run.py`, integration tests, unit tests, `./infra/pre-commit.py --all-files --fix`
+
+   Task list status:
+   - #11 [in_progress] Phase 2B-G: Flatten remaining functions
+   - #12 [pending] Verify: run tests and pre-commit
+
+8. Current Work:
+   I just finished editing the `speedrun_results` function body in `/Users/rav/projects/marin/lib/marin/src/marin/speedrun/speedrun.py` (around line 226) to accept plain keyword args instead of `SpeedrunResultsConfig`. The function signature was changed and all internal `config.*` references were replaced with the plain parameter names. However, the **2 callers** that construct `SpeedrunResultsConfig(...)` and pass it to `speedrun_results()` have NOT been updated yet:
+
+   1. Internal caller in `speedrun.py` itself (around line 402):
+   ```python
+   fn=lambda output_path: speedrun_results(
+       SpeedrunResultsConfig(
+           wandb_run_id=wandb_run_id,
+           wandb_entity=wandb_entity,
+           wandb_project=wandb_project,
+           speedrun_config=config,
+           output_path=results_output,
+       )
+   ),
+   ```
+
+   2. External caller in `experiments/speedrun/olmoe_1b7b_nemotron_40b.py` (around line 192):
+   ```python
+   fn=lambda output_path: speedrun_results(
+       SpeedrunResultsConfig(
+           wandb_run_id=wandb_run_id,
+           wandb_entity=wandb_entity,
+           wandb_project=wandb_project,
+           speedrun_config=config,
+           output_path=os.path.join(train_step.output_path, "speedrun_results.json"),
+       )
+   ),
+   ```
+
+9. Optional Next Step:
+   Update the 2 callers of `speedrun_results` to use plain keyword args instead of `SpeedrunResultsConfig(...)`, then proceed to Phase 2F (transform_hf_dataset) and Phase 2G (transform_hf_preference_dataset), followed by verification. This directly continues the approved plan from the plan file at `/Users/rav/.claude/plans/toasty-jumping-hollerith.md`.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.

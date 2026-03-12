@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "2c229d339dfc",
+  "session_id": "96e4bc6d-d924-4c03-943d-c35d6463df65",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-17T21:58:28.345941Z",
+  "branch": "rav-step-poc",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "lib/marin/src/marin/execution/disk_cache.py",
+    "tests/test_disk_cache.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "f7920c9f-efdc-46e9-885e-46951a66dd36",
+  "token_usage": {
+    "input_tokens": 43,
+    "cache_creation_tokens": 60780,
+    "cache_read_tokens": 2019770,
+    "output_tokens": 4583,
+    "api_call_count": 33
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-17T21:58:28.153238Z",
+    "agent_lines": 242,
+    "human_added": 1,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 246,
+    "agent_percentage": 98.3739837398374
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/96e4bc6d-d924-4c03-943d-c35d6463df65.jsonl"
+}

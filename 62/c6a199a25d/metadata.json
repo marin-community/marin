@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "62c6a199a25d",
+  "strategy": "manual-commit",
+  "branch": "rav-optional-remote",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "lib/marin/src/marin/execution/remote.py",
+    "tests/execution/test_step_runner.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/62/c6a199a25d/0/metadata.json",
+      "transcript": "/62/c6a199a25d/0/full.jsonl",
+      "context": "/62/c6a199a25d/0/context.md",
+      "content_hash": "/62/c6a199a25d/0/content_hash.txt",
+      "prompt": "/62/c6a199a25d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 6355,
+    "cache_read_tokens": 711477,
+    "output_tokens": 2264,
+    "api_call_count": 9
+  }
+}

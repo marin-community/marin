@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "43a2e95f998c",
+  "session_id": "b1fccdb9-6000-450f-8b7e-7f40770bc5ca",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T20:51:11.382626Z",
+  "branch": "agent/20260304-fix-3246",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/marin/src/marin/processing/classification/deduplication/dedup_commons.py",
+    "lib/marin/src/marin/processing/classification/deduplication/exact.py",
+    "lib/marin/src/marin/processing/classification/deduplication/fuzzy.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "67a7c383-5b53-431f-9e4c-4d9a3606f21a",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 118440,
+    "cache_read_tokens": 1473869,
+    "output_tokens": 15696,
+    "api_call_count": 24
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T20:51:11.225406Z",
+    "agent_lines": 94,
+    "human_added": 17378,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 17478,
+    "agent_percentage": 0.5378189724224739
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/b1fccdb9-6000-450f-8b7e-7f40770bc5ca.jsonl"
+}

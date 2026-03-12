@@ -1,0 +1,25 @@
+file an issue for the problem below. WHen I run pytest we have custom hook to check if non-deamon threads are left over, when tests fail:
+
+```
+tests/test_dataset.py ..............................................................................................................................(_RayActorHost pid=10547) 2026-02-19 13:16:37,154 INFO zephyr.execution:546 Starting stage stage0-Map with 3 tasks
+(_RayActorHost pid=10547) 2026-02-19 13:16:37,154 INFO zephyr.execution:501 [stage0-Map] 0/3 tasks completed
+.................................F.....FFF.....                                                                                                                     [100%]
+⚠ 1 non-daemon threads still alive at session end:
+
+  Thread: ThreadPoolExecutor-1_0 (daemon=False, ident=14278324224)
+      File "/Users/rav/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib/python3.12/threading.py", line 1032, in _bootstrap
+    self._bootstrap_inner()
+      File "/Users/rav/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib/python3.12/threading.py", line 1075, in _bootstrap_inner
+    self.run()
+      File "/Users/rav/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib/python3.12/threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+      File "/Users/rav/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib/python3.12/concurrent/futures/thread.py", line 90, in _worker
+    work_item = work_queue.get(block=True)
+
+```
+
+it prevent pytest for telling me whihc tests failed, that should not happen.
+
+---
+
+ok, try to implement it

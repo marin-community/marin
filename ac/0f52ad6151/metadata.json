@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "ac0f52ad6151",
+  "strategy": "manual-commit",
+  "branch": "agent/20260223-fix-2982",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "lib/zephyr/pyproject.toml",
+    "lib/zephyr/src/zephyr/execution.py",
+    "lib/zephyr/tests/conftest.py",
+    "lib/zephyr/tests/test_execution.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ac/0f52ad6151/0/metadata.json",
+      "transcript": "/ac/0f52ad6151/0/full.jsonl",
+      "context": "/ac/0f52ad6151/0/context.md",
+      "content_hash": "/ac/0f52ad6151/0/content_hash.txt",
+      "prompt": "/ac/0f52ad6151/0/prompt.txt"
+    },
+    {
+      "metadata": "/ac/0f52ad6151/1/metadata.json",
+      "transcript": "/ac/0f52ad6151/1/full.jsonl",
+      "context": "/ac/0f52ad6151/1/context.md",
+      "content_hash": "/ac/0f52ad6151/1/content_hash.txt",
+      "prompt": "/ac/0f52ad6151/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 112927,
+    "cache_read_tokens": 7403676,
+    "output_tokens": 4984,
+    "api_call_count": 106
+  }
+}

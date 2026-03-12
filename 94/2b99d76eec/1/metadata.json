@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "942b99d76eec",
+  "session_id": "81d45af6-f9a0-44e2-9f42-914bc86bace8",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T01:57:56.734226Z",
+  "branch": "rav-optional-remote",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/fray/src/fray/v2/ray_backend/backend.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "296b67bb-a694-436a-b776-7789b252daff",
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 18110,
+    "cache_read_tokens": 63687,
+    "output_tokens": 1195,
+    "api_call_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T01:57:56.722861Z",
+    "agent_lines": 1,
+    "human_added": 12116,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12117,
+    "agent_percentage": 0.008252867871585376
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/81d45af6-f9a0-44e2-9f42-914bc86bace8.jsonl"
+}

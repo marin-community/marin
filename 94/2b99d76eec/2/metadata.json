@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "942b99d76eec",
+  "session_id": "8793d9f5-0bc1-4e1f-b1c9-bf8f1ce9d2bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T01:57:57.048265Z",
+  "branch": "rav-optional-remote",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "lib/marin/src/marin/processing/tokenize/tokenize.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "b26e88bb-40c0-4cbd-8b81-a78219b7397b",
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 31436,
+    "cache_read_tokens": 1102758,
+    "output_tokens": 1663,
+    "api_call_count": 24
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T01:57:56.881875Z",
+    "agent_lines": 14,
+    "human_added": 1223,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 1238,
+    "agent_percentage": 1.1308562197092082
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/8793d9f5-0bc1-4e1f-b1c9-bf8f1ce9d2bf.jsonl"
+}

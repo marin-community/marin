@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "dfc81120750b",
+  "session_id": "77a645c3-6e62-47c5-86b1-c0d284683f29",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T19:41:57.61673Z",
+  "branch": "rav-requeue-on-re-register",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "lib/fray/src/fray/v2/__init__.py",
+    "lib/fray/src/fray/v2/client.py",
+    "lib/fray/src/fray/v2/iris_backend.py",
+    "lib/fray/src/fray/v2/local_backend.py",
+    "lib/fray/src/fray/v2/ray_backend/backend.py",
+    "lib/fray/src/fray/v2/types.py",
+    "lib/fray/tests/test_v2_ray.py",
+    "lib/zephyr/src/zephyr/execution.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "4057c8ab-aa85-45a7-a582-f72fc036b353",
+  "token_usage": {
+    "input_tokens": 51,
+    "cache_creation_tokens": 73132,
+    "cache_read_tokens": 2942719,
+    "output_tokens": 3399,
+    "api_call_count": 43
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T19:41:57.367887Z",
+    "agent_lines": 53,
+    "human_added": 33,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 95,
+    "agent_percentage": 55.78947368421052
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/77a645c3-6e62-47c5-86b1-c0d284683f29.jsonl"
+}

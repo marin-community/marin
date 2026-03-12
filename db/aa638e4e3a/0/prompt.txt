@@ -1,0 +1,171 @@
+Implement the following plan:
+
+# Plan: StepRunner shouldn't launch tasks with Fray by default (#3035)
+
+## Context
+
+Every step in a Marin pipeline is currently submitted as a separate Fray job. In Iris, each Fray job creates a new container with RAM/CPU/Disk budgets, adding significant startup overhead. Most steps (downloads, orchestration, evals) don't need isolated containers — only steps with explicit resource requirements (tokenization with specific CPU/RAM, training on TPU, etc.) should go through Fray.
+
+This plan makes Fray submission opt-in: steps without explicit `resources` run locally in-thread; steps with `resources` set go through Fray as before.
+
+## Phase 1: Local execution by default
+
+### 1.1 `lib/marin/src/marin/execution/step_spec.py`
+
+Change `resources` from required-with-default to optional:
+
+```python
+# Before
+resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
+
+# After
+resources: ResourceConfig | None = None
+```
+
+Remove the `ResourceConfig` import if it becomes unused (it will still be needed as a type annotation, so change to `TYPE_CHECKING` guard).
+
+### 1.2 `lib/marin/src/marin/execution/step_runner.py`
+
+Add a local execution path in `_launch_step()`:
+
+```python
+# In __init__:
+from concurrent.futures import ThreadPoolExecutor
+self._local_pool = ThreadPoolExecutor(max_workers=8)
+
+# In _launch_step(), replace the unconditional fray_exec call:
+if step.resources is not None:
+    return fray_exec(
+        worker_fn, name=step_name, resources=step.resources,
+        env_vars=step.env_vars, pip_dependency_groups=step.pip_dependency_groups,
+        client=self.client,
+    )
+else:
+    from fray.v2.local_backend import LocalJobHandle
+    future = self._local_pool.submit(worker_fn)
+    return LocalJobHandle(f"local-{step_name}", future)
+```
+
+In `fray_exec()`, remove the `ResourceConfig.with_cpu()` fallback since it will only be called with non-None resources:
+
+```python
+# Before
+resources=resources or ResourceConfig.with_cpu(),
+
+# After
+resources=resources,
+```
+
+### 1.3 `lib/marin/src/marin/execution/executor.py`
+
+In `resolve_executor_step()`, pass through resources without defaulting:
+
+```python
+# Before
+resources=step.resources if step.resources is not None else ResourceConfig.with_cpu(),
+
+# After
+resources=step.resources,
+```
+
+### Impact on existing code
+
+| Step | `ExecutorStep.resources` | After change |
+|------|-------------------------|--------------|
+| `default_download` | `None` | Runs locally (was Fray CPU) |
+| `default_tokenize` | `ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g")` | Still Fray (explicit) |
+| `default_train` | `None` (TPU alloc inside fn) | Runs locally; fn handles its own Fray/Ray dispatch |
+| `default_eval` | `None` (GPU alloc inside fn) | Runs locally; fn handles its own Fray/Ray dispatch |
+| Experiment-specific steps with explicit resources | `ResourceConfig.with_tpu(...)` etc. | Still Fray (explicit) |
+
+No experiment files need modification.
+
+### Tests for Phase 1
+
+In `tests/execution/test_step_runner.py`:
+
+- Add test: step with `resources=None` runs locally (not through Fray client)
+- Add test: step with explicit `resources` still goes through `fray_exec`
+- Verify existing pipeline tests pass (they already use `LocalClient`, and `StepSpec` defaults will change to `None` which now means local thread execution — same observable behavior)
+
+## Phase 2: `@remote` decorator
+
+### 2.1 Create `lib/marin/src/marin/execution/remote.py`
+
+```python
+from fray.v2.types import ResourceConfig
+
+def remote(fn=None, *, resources=None):
+    """Mark a step function for remote execution via Fray.
+
+    Without @remote, steps run locally in-thread. With @remote,
+    they are submitted as Fray jobs with the specified resources.
+
+    Usage:
+        @remote
+        def tokenize(config): ...          # CPU defaults
+
+        @remote(resources=ResourceConfig.with_tpu("v4-128"))
+        def train(config): ...             # explicit resources
+    """
+    if resources is None:
+        resources = ResourceConfig.with_cpu()
+
+    def decorator(f):
+        f.__fray_resources__ = resources
+        return f
+
+    if fn is not None:
+        return decorator(fn)
+    return decorator
+```
+
+### 2.2 Update `lib/marin/src/marin/execution/executor.py`
+
+In `resolve_executor_step()`, detect `@remote` on the original function:
+
+```python
+step_fn = step.fn
+# ... existing ray.remote handling ...
+
+# Resolve resources: explicit ExecutorStep.resources > @remote decorator > None (local)
+resources = step.resources
+if resources is None and hasattr(step_fn, '__fray_resources__'):
+    resources = step_fn.__fray_resources__
+
+return StepSpec(..., resources=resources, ...)
+```
+
+### 2.3 Tests for Phase 2
+
+In `tests/execution/test_step_runner.py`:
+
+- Add test: `@remote` decorated function gets `resources` from decorator
+- Add test: `@remote(resources=...)` overrides with custom resources
+- Add test: explicit `ExecutorStep.resources` takes precedence over `@remote`
+
+## Files modified (summary)
+
+| File | Change |
+|------|--------|
+| `lib/marin/src/marin/execution/step_spec.py` | `resources` default → `None` |
+| `lib/marin/src/marin/execution/step_runner.py` | Add local thread pool, branch in `_launch_step()` |
+| `lib/marin/src/marin/execution/executor.py` | Pass through resources; detect `@remote` |
+| `lib/marin/src/marin/execution/remote.py` | **New** — `@remote` decorator |
+| `tests/execution/test_step_runner.py` | Tests for local execution + `@remote` |
+
+## Verification
+
+```bash
+# Run step_runner tests
+uv run pytest tests/execution/test_step_runner.py -v
+
+# Run all non-slow tests to check nothing breaks
+uv run pytest -m 'not slow'
+
+# Pre-commit checks
+./infra/pre-commit.py --all-files
+```
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/rav/.REDACTED.jsonl

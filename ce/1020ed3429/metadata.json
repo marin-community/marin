@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "ce1020ed3429",
+  "strategy": "manual-commit",
+  "branch": "rav-use-shared-data-again",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "lib/marin/src/marin/processing/tokenize/tokenize.py",
+    "lib/zephyr/src/zephyr/writers.py",
+    "lib/zephyr/tests/test_writers.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ce/1020ed3429/0/metadata.json",
+      "transcript": "/ce/1020ed3429/0/full.jsonl",
+      "context": "/ce/1020ed3429/0/context.md",
+      "content_hash": "/ce/1020ed3429/0/content_hash.txt",
+      "prompt": "/ce/1020ed3429/0/prompt.txt"
+    },
+    {
+      "metadata": "/ce/1020ed3429/1/metadata.json",
+      "transcript": "/ce/1020ed3429/1/full.jsonl",
+      "context": "/ce/1020ed3429/1/context.md",
+      "content_hash": "/ce/1020ed3429/1/content_hash.txt",
+      "prompt": "/ce/1020ed3429/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 62280,
+    "cache_read_tokens": 1146939,
+    "output_tokens": 1281,
+    "api_call_count": 28
+  }
+}

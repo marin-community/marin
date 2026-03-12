@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "f7494aa385b7",
+  "strategy": "manual-commit",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "OpenThoughts-Agent",
+    "ares",
+    "lib/harbor/adapters/parity_api_instructions.md",
+    "lib/harbor/examples/tasks/describe-image/environment/Dockerfile",
+    "lib/harbor/examples/tasks/describe-image/environment/image.png",
+    "lib/harbor/examples/tasks/describe-image/instruction.md",
+    "lib/harbor/examples/tasks/describe-image/solution/solve.sh",
+    "lib/harbor/examples/tasks/describe-image/task.toml",
+    "lib/harbor/examples/tasks/describe-image/tests/test.sh",
+    "lib/harbor/examples/tasks/hello-mcp/environment/Dockerfile",
+    "lib/harbor/examples/tasks/hello-mcp/environment/docker-compose.yaml",
+    "lib/harbor/examples/tasks/hello-mcp/environment/mcp-server/Dockerfile",
+    "lib/harbor/examples/tasks/hello-mcp/environment/mcp-server/server.py",
+    "lib/harbor/examples/tasks/hello-mcp/instruction.md",
+    "lib/harbor/examples/tasks/hello-mcp/solution/solve.sh",
+    "lib/harbor/examples/tasks/hello-mcp/task.toml",
+    "lib/harbor/examples/tasks/hello-mcp/tests/test.sh",
+    "lib/harbor/examples/tasks/hello-mcp/tests/test_outputs.py",
+    "lib/harbor/src/harbor/environments/daytona.py",
+    "lib/harbor/src/harbor/environments/docker/docker-compose-base.yaml",
+    "lib/harbor/src/harbor/environments/docker/docker-compose-no-network.yaml",
+    "lib/harbor/src/harbor/models/trajectories/content.py",
+    "lib/harbor/tests/unit/agents/installed/test_gemini_cli.py",
+    "lib/harbor/tests/unit/environments/__init__.py",
+    "lib/harbor/tests/unit/environments/test_docker.py",
+    "lib/harbor/tests/unit/llms/test_chat.py",
+    "lib/harbor/tests/unit/models/test_content.py",
+    "lib/harbor/viewer/app/components/trajectory/content-renderer.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f7/494aa385b7/0/metadata.json",
+      "transcript": "/f7/494aa385b7/0/full.jsonl",
+      "context": "/f7/494aa385b7/0/context.md",
+      "content_hash": "/f7/494aa385b7/0/content_hash.txt",
+      "prompt": "/f7/494aa385b7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 46556,
+    "cache_read_tokens": 2494815,
+    "output_tokens": 1701,
+    "api_call_count": 60
+  }
+}

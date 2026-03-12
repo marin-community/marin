@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "d4c16a414c78",
+  "strategy": "manual-commit",
+  "branch": "rav-fix-flaky-iris",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "lib/iris/tests/cluster/platform/test_scaling_group.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d4/c16a414c78/0/metadata.json",
+      "transcript": "/d4/c16a414c78/0/full.jsonl",
+      "context": "/d4/c16a414c78/0/context.md",
+      "content_hash": "/d4/c16a414c78/0/content_hash.txt",
+      "prompt": "/d4/c16a414c78/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 39,
+    "cache_creation_tokens": 38666,
+    "cache_read_tokens": 1445467,
+    "output_tokens": 5712,
+    "api_call_count": 29
+  }
+}

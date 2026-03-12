@@ -1,0 +1,8 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+In @lib/fray/src/fray/v2/ray_backend/backend.py apart from `run_on_pod_ray`, ray remote functions do not include `max_retries` - they should.
+

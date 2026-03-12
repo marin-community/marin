@@ -1,0 +1,14 @@
+last PR introduced some test failures in:
+
+
+```
+FAILED lib/zephyr/tests/test_execution.py::test_no_duplicate_results_on_heartbeat_timeout[local] - RuntimeError: current_actor() called outside of an actor context
+FAILED lib/zephyr/tests/test_execution.py::test_no_duplicate_results_on_heartbeat_timeout[iris] - RuntimeError: current_actor() called outside of an actor context
+FAILED lib/zephyr/tests/test_execution.py::test_no_duplicate_results_on_heartbeat_timeout[ray] - RuntimeError: current_actor() called outside of an actor context
+FAILED lib/zephyr/tests/test_execution.py::test_status_reports_alive_workers_not_total - RuntimeError: current_actor() called outside of an actor context
+FAILED lib/zephyr/tests/test_execution.py::test_coordinator_accepts_winner_ignores_stale - RuntimeError: current_actor() called outside of an actor context
+FAILED lib/zephyr/tests/test_execution.py::test_wait_for_stage_fails_when_all_workers_die - RuntimeError: current_actor() called outside of an actor context
+FAILED lib/zephyr/tests/test_execution.py::test_wait_for_stage_resets_dead_timer_on_recovery - RuntimeError: current_actor() called outside of an actor context
+```
+
+pls fix

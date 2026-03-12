@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "3745e053c711",
+  "session_id": "6ef2f338-8b9e-403c-82f8-5261bb727ad8",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T23:52:16.229676Z",
+  "branch": "rav-shrink-pool",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/zephyr/src/zephyr/execution.py",
+    "lib/zephyr/tests/test_execution.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "23d6e565-df39-4f2e-b70f-19e1a9f1b8d5",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 74872,
+    "cache_read_tokens": 1180476,
+    "output_tokens": 1563,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T23:52:15.889714Z",
+    "agent_lines": 66,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 1,
+    "total_committed": 66,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/6ef2f338-8b9e-403c-82f8-5261bb727ad8.jsonl"
+}

@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "942b99d76eec",
+  "strategy": "manual-commit",
+  "branch": "rav-optional-remote",
+  "checkpoints_count": 11,
+  "files_touched": [
+    "experiments/benchmarks/bench_tokenize_batch_size.py",
+    "experiments/benchmarks/plot_tokenize_bench.py",
+    "experiments/benchmarks/results/bench_tokenize_batch_size_20260224_202548.png",
+    "experiments/benchmarks/results/bench_tokenize_batch_size_20260224_233522.png",
+    "lib/fray/src/fray/v2/ray_backend/backend.py",
+    "lib/fray/tests/test_v2_ray.py",
+    "lib/marin/src/marin/processing/tokenize/tokenize.py",
+    "lib/zephyr/src/zephyr/__init__.py",
+    "lib/zephyr/src/zephyr/readers.py",
+    "lib/zephyr/tests/test_readers.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/94/2b99d76eec/0/metadata.json",
+      "transcript": "/94/2b99d76eec/0/full.jsonl",
+      "context": "/94/2b99d76eec/0/context.md",
+      "content_hash": "/94/2b99d76eec/0/content_hash.txt",
+      "prompt": "/94/2b99d76eec/0/prompt.txt"
+    },
+    {
+      "metadata": "/94/2b99d76eec/1/metadata.json",
+      "transcript": "/94/2b99d76eec/1/full.jsonl",
+      "context": "/94/2b99d76eec/1/context.md",
+      "content_hash": "/94/2b99d76eec/1/content_hash.txt",
+      "prompt": "/94/2b99d76eec/1/prompt.txt"
+    },
+    {
+      "metadata": "/94/2b99d76eec/2/metadata.json",
+      "transcript": "/94/2b99d76eec/2/full.jsonl",
+      "context": "/94/2b99d76eec/2/context.md",
+      "content_hash": "/94/2b99d76eec/2/content_hash.txt",
+      "prompt": "/94/2b99d76eec/2/prompt.txt"
+    },
+    {
+      "metadata": "/94/2b99d76eec/3/metadata.json",
+      "transcript": "/94/2b99d76eec/3/full.jsonl",
+      "context": "/94/2b99d76eec/3/context.md",
+      "content_hash": "/94/2b99d76eec/3/content_hash.txt",
+      "prompt": "/94/2b99d76eec/3/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 460,
+    "cache_creation_tokens": 249529,
+    "cache_read_tokens": 5707539,
+    "output_tokens": 9002,
+    "api_call_count": 96
+  }
+}

@@ -1,0 +1,21 @@
+open an issue for a flaky Iris test: https://github.com/marin-community/marin/actions/runs/22209723838/job/64241198248
+
+---
+
+[Request interrupted by user]
+
+---
+
+continue as you were
+
+---
+
+ok, now fix it on the current branch
+
+---
+
+pls add comment that say this process doesn't generate valid IP addresses but that is fine for now and research what that is fine
+
+---
+
+ok, commit and push

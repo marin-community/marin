@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "73652298045a",
+  "session_id": "0cd9a25d-dd2b-48e2-b0a2-706af237a682",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-15T19:58:01.432377788Z",
+  "branch": "kevin/test-entire",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "entire_haiku.txt"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "361c6ee6-b931-45bd-b587-8f609c51206a",
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 6246,
+    "cache_read_tokens": 155587,
+    "output_tokens": 77,
+    "api_call_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-15T19:58:01.370708708Z",
+    "agent_lines": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-home-kevin-marin-test-entire/0cd9a25d-dd2b-48e2-b0a2-706af237a682.jsonl"
+}

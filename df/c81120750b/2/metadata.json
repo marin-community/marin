@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "dfc81120750b",
+  "session_id": "e2f1b498-80a7-45e2-90fc-86a3aca12b0f",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T19:41:59.203967Z",
+  "branch": "rav-requeue-on-re-register",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "lib/fray/src/fray/v2/ray_backend/backend.py",
+    "lib/fray/src/fray/v2/types.py",
+    "lib/fray/tests/test_v2_ray.py",
+    "lib/iris/examples/demo.yaml",
+    "lib/zephyr/src/zephyr/execution.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "225bf1d8-e9d3-48a1-86f9-8d0ace09da9d",
+  "token_usage": {
+    "input_tokens": 11195,
+    "cache_creation_tokens": 475800,
+    "cache_read_tokens": 17038438,
+    "output_tokens": 42990,
+    "api_call_count": 173
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T19:41:58.149126Z",
+    "agent_lines": 0,
+    "human_added": 16524,
+    "human_modified": 66,
+    "human_removed": 0,
+    "total_committed": 16577,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/e2f1b498-80a7-45e2-90fc-86a3aca12b0f.jsonl"
+}

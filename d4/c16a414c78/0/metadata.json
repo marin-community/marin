@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "d4c16a414c78",
+  "session_id": "f8b8d887-0f05-4c4e-a1ac-a8750cee1ca8",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-20T03:46:18.856576Z",
+  "branch": "rav-fix-flaky-iris",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "lib/iris/tests/cluster/platform/test_scaling_group.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "5ada3bae-d7b2-48d0-a18f-0ed44f86bba2",
+  "token_usage": {
+    "input_tokens": 39,
+    "cache_creation_tokens": 38666,
+    "cache_read_tokens": 1445467,
+    "output_tokens": 5712,
+    "api_call_count": 29
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-20T03:46:18.769037Z",
+    "agent_lines": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/f8b8d887-0f05-4c4e-a1ac-a8750cee1ca8.jsonl"
+}

@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "be19b3f714cb",
+  "strategy": "manual-commit",
+  "branch": "kevin/agentic-sft",
+  "checkpoints_count": 16,
+  "files_touched": [
+    "experiments/exp2956_sft_swe_smith.py",
+    "experiments/exp2956_sft_swe_smith_qwen3_8b.py",
+    "experiments/qwen3.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/19b3f714cb/0/metadata.json",
+      "transcript": "/be/19b3f714cb/0/full.jsonl",
+      "context": "/be/19b3f714cb/0/context.md",
+      "content_hash": "/be/19b3f714cb/0/content_hash.txt",
+      "prompt": "/be/19b3f714cb/0/prompt.txt"
+    },
+    {
+      "metadata": "/be/19b3f714cb/1/metadata.json",
+      "transcript": "/be/19b3f714cb/1/full.jsonl",
+      "context": "/be/19b3f714cb/1/context.md",
+      "content_hash": "/be/19b3f714cb/1/content_hash.txt",
+      "prompt": "/be/19b3f714cb/1/prompt.txt"
+    },
+    {
+      "metadata": "/be/19b3f714cb/2/metadata.json",
+      "transcript": "/be/19b3f714cb/2/full.jsonl",
+      "context": "/be/19b3f714cb/2/context.md",
+      "content_hash": "/be/19b3f714cb/2/content_hash.txt",
+      "prompt": "/be/19b3f714cb/2/prompt.txt"
+    },
+    {
+      "metadata": "/be/19b3f714cb/3/metadata.json",
+      "transcript": "/be/19b3f714cb/3/full.jsonl",
+      "context": "/be/19b3f714cb/3/context.md",
+      "content_hash": "/be/19b3f714cb/3/content_hash.txt",
+      "prompt": "/be/19b3f714cb/3/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5105,
+    "cache_creation_tokens": 1822935,
+    "cache_read_tokens": 46618875,
+    "output_tokens": 202443,
+    "api_call_count": 532
+  }
+}

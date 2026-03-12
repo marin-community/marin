@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "af87d81319c9",
+  "session_id": "412dee3f-1a2a-4f38-a680-15541b0a2ecf",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-20T02:42:18.621407Z",
+  "branch": "rav-configure-zephyr-worker-wait",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/zephyr/src/zephyr/cli.py",
+    "lib/zephyr/src/zephyr/execution.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "59cafb22-17e1-4ab7-a9dd-c6d423c21b35",
+  "token_usage": {
+    "input_tokens": 37,
+    "cache_creation_tokens": 48824,
+    "cache_read_tokens": 1608401,
+    "output_tokens": 1522,
+    "api_call_count": 33
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-20T02:42:18.384417Z",
+    "agent_lines": 29,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 29,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/412dee3f-1a2a-4f38-a680-15541b0a2ecf.jsonl"
+}

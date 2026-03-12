@@ -1,0 +1,8 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+Now that we have https://github.com/marin-community/marin/pull/2986, we can use shared data again in tokenize, so we can largely revert the disk_cache change from https://github.com/marin-community/marin/pull/2984 ?
+

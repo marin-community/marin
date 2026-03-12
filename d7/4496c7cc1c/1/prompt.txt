@@ -1,0 +1,83 @@
+Implement the following plan:
+
+# Re-merge vendored lib/harbor from upstream
+
+## Context
+
+The vendored `lib/harbor/` was synced from upstream in commit `37cf3cbf0`, but that commit was a manual (non-git-merge) copy that missed changes — notably the mini-swe-agent PyPI install fix. We need to undo it and redo a proper merge that gets all latest upstream changes while preserving the Python 3.11 compatibility patches.
+
+**Key facts:**
+- `37cf3cbf0` is HEAD, only touches `lib/harbor/`, safe to reset
+- `harbor` remote = `AlienKevin/harbor.git` (fork); no remote for canonical `laude-institute/harbor`
+- py311 branch has 3 commits (`54c59a4dc`, `2b5a34e0c`, `02544b286`) on top of fork commit `cb0869e7e`
+- Fork `harbor/main` (`4031e7dc9`) is far behind canonical upstream (`265c303`)
+
+## Steps
+
+### 1. Safety: create backup branch
+```bash
+git branch backup/kevin-harbor-before-remerge
+```
+
+### 2. Undo the bad merge
+```bash
+git reset --hard HEAD~1  # back to 732f6d39d
+```
+
+### 3. Add canonical upstream as a remote and fetch
+```bash
+git remote add harbor-upstream https://github.com/laude-institute/harbor.git
+git fetch harbor-upstream main
+```
+
+### 4. Rebase py311 patches onto latest upstream main
+
+Create a temporary local branch from upstream HEAD, then cherry-pick the 3 py311 commits:
+
+```bash
+git checkout -b temp/harbor-py311-rebase harbor-upstream/main
+git cherry-pick 54c59a4dc  # Relax Python version to 3.11
+git cherry-pick 2b5a34e0c  # typing_extensions + __init__.py fix
+git cherry-pick 02544b286  # Remove redundant __main__.py
+```
+
+Resolve conflicts as needed — the patches are small (14 files, mostly mechanical: pyproject.toml version, TypedDict imports, f-string collapsing, try/except wrapping). Any **new** TypedDict usage or multiline f-strings added by upstream will need the same py311 treatment.
+
+### 5. Vendor the result into lib/harbor/
+
+```bash
+git checkout kevin/harbor
+git worktree add /tmp/harbor-py311-clean temp/harbor-py311-rebase
+rm -rf lib/harbor/*
+rsync -a --delete --exclude='.git' /tmp/harbor-py311-clean/ lib/harbor/
+git worktree remove /tmp/harbor-py311-clean
+```
+
+### 6. Commit
+```bash
+git add lib/harbor/
+git commit -m "Re-vendor lib/harbor from laude-institute/harbor main + py311 patches
+
+Replaces incomplete manual sync (37cf3cbf0) with a proper rebase of
+the 3 py311 compat patches onto laude-institute/harbor main (<sha>).
+"
+```
+
+### 7. Verify
+- `grep 'requires-python' lib/harbor/pyproject.toml` → `>=3.11`
+- `grep 'typing-extensions' lib/harbor/pyproject.toml` → present
+- `grep -r 'from typing_extensions import TypedDict' lib/harbor/src/` → 3+ files
+- `cat lib/harbor/src/harbor/agents/installed/install-mini-swe-agent.sh.j2` → `uv tool install mini-swe-agent` (PyPI, not git+)
+- `grep -Prn 'f"[^"]*\{$' lib/harbor/src/harbor/cli/jobs.py` → no multiline f-strings
+
+### 8. Cleanup
+```bash
+git branch -d temp/harbor-py311-rebase
+git branch -d backup/kevin-harbor-before-remerge  # after verifying
+```
+
+## Files modified
+- Everything under `lib/harbor/` (full re-vendor)
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kevin/.REDACTED.jsonl

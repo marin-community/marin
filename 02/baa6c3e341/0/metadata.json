@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "02baa6c3e341",
+  "session_id": "8db1d603-36f6-4cf7-a960-f5c54b997b11",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T03:52:02.09027Z",
+  "branch": "agent/20260220-fix-2943",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "lib/zephyr/src/zephyr/execution.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "ad8c3281-6931-47f9-a455-69925f02181d",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 41783,
+    "cache_read_tokens": 1217054,
+    "output_tokens": 3747,
+    "api_call_count": 26
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T03:52:01.81487Z",
+    "agent_lines": 8,
+    "human_added": 889,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 898,
+    "agent_percentage": 0.8908685968819599
+  },
+  "transcript_path": ".claude/projects/-Users-rav-projects-marin/8db1d603-36f6-4cf7-a960-f5c54b997b11.jsonl"
+}

@@ -1,0 +1,8 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+Take look at https://github.com/marin-community/marin/issues/2943, and follow @docs/recipes/fix_issue.md
+
