@@ -1031,3 +1031,52 @@
   - all six are controller-`RUNNING`
   - I only submitted the larger-model variants as smokes because batch must stay divisible by the 8-way TPU mesh and
     the larger model may still hit memory limits at these sequence lengths
+
+### 2026-03-11 22:34 - Large-model smoke outcomes and promoted trials
+
+- `symbols` larger-model smoke:
+  - Ray job:
+    `ray-run-dlwh-launch-20260312-052055`
+  - output:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-large-swa4096-smoke-1be3e2`
+  - W&B:
+    `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-symbols-whole-libjpeg-large-swa4096-smoke`
+  - final eval loss:
+    `4.066`
+  - status:
+    succeeded
+- `bytes` larger-model smoke:
+  - Ray job:
+    `ray-run-dlwh-launch-20260312-052250`
+  - output:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-large-swa4096-smoke-8f5fa3`
+  - W&B:
+    `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-bytes-whole-large-swa4096-smoke`
+  - final eval loss:
+    `5.458`
+  - status:
+    succeeded
+- `K=64` larger-model smoke:
+  - Ray job:
+    `ray-run-dlwh-launch-20260312-052237`
+  - output:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-large-swa4096-smoke-7603d1`
+  - current state:
+    controller `RUNNING`, executor launched, Fray training job submitted, but no worker-side W&B or checkpoint signal yet
+  - interpretation:
+    looks like delayed worker allocation / TPU scheduling rather than an immediate model crash
+- Promoted trials launched from the larger-model smoke results:
+  - `symbols` larger-model trial:
+    - Ray job:
+      `ray-run-dlwh-launch-20260312-052950`
+    - step:
+      `tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-large-swa4096-trial`
+  - `bytes` larger-model trial:
+    - Ray job:
+      `ray-run-dlwh-launch-20260312-053012`
+    - step:
+      `tokexplore/jpeg-tokenizer-bytes-whole-large-swa4096-trial`
+- Long same-model resumes still active:
+  - `ray-run-dlwh-launch-20260312-052159` (`K=64` long)
+  - `ray-run-dlwh-launch-20260312-052212` (`symbols` long)
+  - `ray-run-dlwh-launch-20260312-052225` (`bytes` long)
