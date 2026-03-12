@@ -369,7 +369,9 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         timeout=10000,
     )
     smoke_screenshot(
-        "task-logs-default", "Task detail page showing log viewer with lines including 'DONE: all lines emitted'"
+        "task-logs-default",
+        "Task detail page with a log viewer panel displaying log output lines. "
+        "Should have structural elements like a status card and resource info.",
     )
 
     # "validation failed" only appears in ERROR lines
@@ -379,7 +381,10 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "!document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )
-    smoke_screenshot("task-logs-filtered", "Task detail page with log filter showing only 'validation failed' lines")
+    smoke_screenshot(
+        "task-logs-filtered",
+        "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
+    )
 
 
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
