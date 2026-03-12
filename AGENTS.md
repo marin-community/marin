@@ -49,6 +49,7 @@ uv run pyrefly
 - NEVER credit yourself in commits.
 - When an agent creates a PR or issue, add the `agent-generated` label.
 - Agent comments on PRs/issues must begin with `🤖` unless the exact text was explicitly approved by the user.
+- When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style
 
