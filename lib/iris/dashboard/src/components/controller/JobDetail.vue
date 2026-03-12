@@ -374,21 +374,21 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                     :disabled="profilingTaskId === task.taskId"
                     @click="handleProfile(task.taskId, 'cpu', 'SPEEDSCOPE')"
                   >
-                    {{ profilingTaskId === task.taskId ? '\u23F3' : 'CPU' }}
+                    {{ profilingTaskId === task.taskId ? '⏳' : 'CPU' }}
                   </button>
                   <button
                     class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-success text-white hover:opacity-80 disabled:opacity-50"
                     :disabled="profilingTaskId === task.taskId"
                     @click="handleProfile(task.taskId, 'memory', 'FLAMEGRAPH')"
                   >
-                    {{ profilingTaskId === task.taskId ? '\u23F3' : 'MEM' }}
+                    {{ profilingTaskId === task.taskId ? '⏳' : 'MEM' }}
                   </button>
                   <button
                     class="px-2 py-0.5 text-[11px] font-semibold rounded bg-accent text-white hover:opacity-80 disabled:opacity-50"
                     :disabled="profilingTaskId === task.taskId"
                     @click="handleProfile(task.taskId, 'threads', null)"
                   >
-                    {{ profilingTaskId === task.taskId ? '\u23F3' : 'THR' }}
+                    {{ profilingTaskId === task.taskId ? '⏳' : 'THR' }}
                   </button>
                 </div>
                 <span v-else class="text-text-muted">&mdash;</span>
