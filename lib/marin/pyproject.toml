@@ -186,6 +186,10 @@ embed = [
     "sentence-transformers",
 ]
 
+oracle = [
+    "anthropic",
+]
+
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]

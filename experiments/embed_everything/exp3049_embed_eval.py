@@ -92,7 +92,7 @@ oracle_quality = StepSpec(
     name="oracle_quality",
     output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_quality],
-    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION},
+    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 2},
     fn=remote(
         lambda output_path: label_quality(
             output_path=output_path,
@@ -100,6 +100,7 @@ oracle_quality = StepSpec(
             backend=ORACLE_BACKEND,
         ),
         resources=ResourceConfig.with_cpu(),
+        pip_dependency_groups=["oracle"],
     ),
 )
 
@@ -107,7 +108,7 @@ oracle_topic = StepSpec(
     name="oracle_topic",
     output_path_prefix=_OUTPUT_PREFIX,
     deps=[sample_topic],
-    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION},
+    hash_attrs={"backend": str(ORACLE_BACKEND), "prompt_version": PROMPT_VERSION, "v": 2},
     fn=remote(
         lambda output_path: label_topics(
             output_path=output_path,
@@ -115,6 +116,7 @@ oracle_topic = StepSpec(
             backend=ORACLE_BACKEND,
         ),
         resources=ResourceConfig.with_cpu(),
+        pip_dependency_groups=["oracle"],
     ),
 )
 
