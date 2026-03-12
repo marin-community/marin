@@ -5,7 +5,8 @@
 - Primary metric(s):
   - Quality: Spearman rho and Kendall tau between linear probe predictions and Claude oracle scores
   - Topics: ARI and NMI between K-Means clusters and Claude oracle labels
-- Constraints: CPU-only execution, ~125 quality docs (25 per bucket), ~375 topic docs (25 per source)
+- Constraints: CPU-only execution
+- Sample sizes: v6: 125 quality / 375 topic; v7: 1000 quality / 1005 topic
 - Stop criteria:
   - Quality Spearman > 0.8 -> go; < 0.6 -> no-go; 0.6-0.8 -> investigate embeddings vs oracle
   - Topics ARI > 0.4 or NMI > 0.5 -> go; both below -> no-go
@@ -81,7 +82,47 @@
   - Topics: NMI 0.463 close to 0.5 threshold, ARI 0.227 < 0.4 -> **borderline no-go** for topic clustering
   - Context: NMI 0.463 matches WebOrganizer's 0.46 baseline, suggesting embeddings capture topic structure, but ARI is weak
 - Next actions:
-  - Consider larger sample sizes (current N is small, test set only 25 for quality)
-  - Try non-linear probes (MLP) for quality
+  - Scale up to ~1000 docs per problem to test whether v6 was underpowered → see EE-002
+
+### 2026-03-11 — Scale-up to ~1000 docs (EE-002)
+- Hypothesis: v6 quality results (Spearman 0.485) were underpowered due to small test set (n=25)
+- Setup: Same pipeline, larger sample sizes
+- Config:
+  - Quality: 200 docs x 5 buckets = 1000 docs, 800 train / 200 test
+  - Topics: 67 docs x 15 sources = 1005 docs
+  - All other settings unchanged from EE-001
+- Iris job: v7 (`/rav/iris-run-exp3049_embed_eval-20260312-005457`) — all 8 steps succeeded
+- **Results (v7)**:
+
+  **Quality Probe (RidgeCV on 192-dim embeddings)**:
+  | Metric | v6 (N=125) | v7 (N=1000) | Change |
+  |---|---|---|---|
+  | Spearman rho | 0.485 (p=0.014) | **0.698** (p=1.5e-30) | +0.213 |
+  | Kendall tau | 0.365 (p=0.018) | **0.560** (p=7.2e-26) | +0.195 |
+  | Bucket ordinal Spearman | 0.388 | **0.455** | +0.067 |
+  | R² | 0.221 | **0.472** | +0.251 |
+  | MSE | 1.079 | **0.601** | -0.478 |
+  | Ridge alpha | 100.0 | 100.0 | — |
+  | Train/Test | 100/25 | 800/200 | — |
+
+  **Topic Clustering (K-Means, k=15)**:
+  | Metric | v6 (N=375) | v7 (N=1005) | Change |
+  |---|---|---|---|
+  | ARI | 0.227 | **0.242** | +0.015 |
+  | NMI | 0.463 | **0.439** | -0.024 |
+  | Homogeneity | 0.477 | **0.449** | -0.028 |
+  | Completeness | 0.449 | **0.429** | -0.020 |
+  | V-measure | 0.463 | **0.439** | -0.024 |
+  | Documents | 375 | 1005 | — |
+
+  Oracle topic label distribution (v7): computer_science=148, cc/news=134, web_forum=100, code=88, natural_science=88, reference=85, business=61, mathematics=60, humanities=59, medicine=55, creative_writing=52, engineering=28, social_science=20, other=15, law=12
+
+- **Verdict against stop criteria**:
+  - Quality: Spearman **0.698** is in 0.6-0.8 "investigate" zone (major improvement from 0.485). v6 was indeed underpowered. A non-linear probe (MLP) or more training data might push this above 0.8.
+  - Topics: NMI **0.439** < 0.5 and ARI **0.242** < 0.4 → **no-go**. Results barely changed with 2.7x more data, confirming this is a real signal ceiling. Highly imbalanced oracle labels (148 vs 12) may contribute.
+  - Key insight: Quality signal improves substantially with more data; topic signal does not. The quality probe is promising for further investigation.
+- Next actions:
+  - Try non-linear probes (MLP) for quality — could push Spearman > 0.8
   - Compare with higher-dimensional embeddings (e.g., Arctic, BGE-large)
+  - Investigate whether topic clustering improves with PCA or UMAP dimensionality reduction
   - Report findings in issue #3535
