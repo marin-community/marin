@@ -188,6 +188,10 @@ oracle = [
     "anthropic",
 ]
 
+dimred = [
+    "umap-learn",
+]
+
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
