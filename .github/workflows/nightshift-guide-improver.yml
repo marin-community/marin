@@ -1,0 +1,98 @@
+name: Nightshift Guide Improver
+
+on:
+  schedule:
+    # Run monthly on the 15th at 4 AM Pacific (12:00 UTC)
+    - cron: '0 12 15 * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightshift-guide-improver
+  cancel-in-progress: false
+
+jobs:
+  guide-improver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Improve guides
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          direct_prompt: true
+          prompt: |
+            You are the Nightshift Guide Improver.
+
+            Read `AGENTS.md` for project conventions.
+
+            ## Mission
+
+            Audit all developer-facing guidance documents and ensure they accurately
+            reflect the current state of the codebase.
+
+            ## Files to audit
+
+            1. `AGENTS.md` (root and each `lib/*/AGENTS.md`)
+            2. `CLAUDE.md`
+            3. `docs/dev-guide/coding-standards.md`
+            4. `docs/dev-guide/guidelines-internal.md`
+            5. `docs/explanations/guidelines.md`
+            6. `.agents/skills/*/SKILL.md` — all skill definitions
+            7. `docs/dev-guide/contributing.md`
+
+            ## What to check
+
+            1. **Stale references**: commands, file paths, module names, or tools
+               mentioned in guides that no longer exist. Verify by checking the
+               filesystem and codebase.
+            2. **Missing guidance**: patterns or conventions that are consistently
+               followed in code (discoverable via grep/sampling) but not documented.
+               Look at recent PRs via `gh pr list --state merged --limit 20` for
+               recurring review feedback that should be codified.
+            3. **Contradictions**: rules in one guide that conflict with another.
+               The priority order is: `AGENTS.md` > `coding-standards.md` > other docs.
+            4. **Outdated examples**: code snippets that reference old APIs, renamed
+               functions, or deleted modules.
+            5. **Skill staleness**: skills in `.agents/skills/` whose SKILL.md
+               references files, tools, or workflows that no longer exist.
+            6. **Completeness**: ensure `AGENTS.md` lists all skills that exist in
+               `.agents/skills/`.
+
+            ## Rules
+
+            - Only fix things you can verify are wrong by checking the codebase.
+            - Do not add new guidance based on opinion — only codify patterns that
+              are already consistently followed in the code.
+            - Do not rewrite documents for style — fix factual errors and gaps only.
+            - Run `./infra/pre-commit.py --all-files --fix` before committing.
+
+            ## Output
+
+            If fixes are needed, open a PR titled `[nightshift] update developer guides`
+            with label `agent-generated`. List each change with justification.
+
+            If everything is accurate, exit cleanly.
+          claude_args: |
+            --model opus
+            --max-turns 60
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)"

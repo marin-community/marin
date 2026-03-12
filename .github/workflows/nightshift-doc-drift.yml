@@ -1,0 +1,84 @@
+name: Nightshift Doc Drift
+
+on:
+  schedule:
+    # Run weekly on Sunday at 3 AM Pacific (11:00 UTC)
+    - cron: '0 11 * * 0'
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightshift-doc-drift
+  cancel-in-progress: false
+
+jobs:
+  doc-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Detect documentation drift
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          direct_prompt: true
+          prompt: |
+            You are the Nightshift Doc Drift detector.
+
+            Read `AGENTS.md` for project conventions.
+
+            ## Mission
+
+            Scan `docs/` and compare it against the current codebase to find
+            documentation that has drifted out of sync with the code.
+
+            Check for:
+            1. **Stale references**: docs mentioning modules, functions, classes, or
+               CLI flags that have been renamed or deleted.
+            2. **Wrong examples**: code snippets in docs that no longer work
+               (wrong imports, changed APIs, renamed parameters).
+            3. **Missing docs**: public modules in `lib/*/src/` with no corresponding
+               documentation page.
+            4. **Broken links**: internal markdown links pointing to non-existent files.
+            5. **Config drift**: documented config options that don't match the actual
+               dataclass fields.
+
+            ## Process
+
+            1. List all `.md` files under `docs/`.
+            2. For each doc, extract code references (imports, function names, file paths).
+            3. Verify each reference exists in the current codebase.
+            4. Compile a report of all drift found.
+
+            ## Output
+
+            If drift is found:
+            - Fix straightforward issues (broken links, wrong imports in examples).
+            - For larger issues, file a GitHub issue with label `documentation` and
+              `agent-generated`.
+            - If you made fixes, open a PR titled `[nightshift] fix documentation drift`
+              with label `agent-generated`.
+
+            If nothing is found, exit cleanly.
+          claude_args: |
+            --model opus
+            --max-turns 60
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)"

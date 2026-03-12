@@ -1,0 +1,75 @@
+name: Nightshift Test Gaps
+
+on:
+  schedule:
+    # Run biweekly on the 1st and 15th at 4 AM Pacific (12:00 UTC)
+    - cron: '0 12 1,15 * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightshift-test-gaps
+  cancel-in-progress: false
+
+jobs:
+  test-gaps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Analyze test coverage gaps
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          direct_prompt: true
+          prompt: |
+            You are the Nightshift Test Gap analyzer.
+
+            Read `AGENTS.md` for project conventions.
+
+            ## Mission
+
+            Identify source modules that lack adequate test coverage.
+
+            ## Process
+
+            1. For each source file in `lib/*/src/`, check whether a corresponding
+               test file exists in `tests/`.
+            2. For files with tests, check whether the test file actually exercises
+               the public functions (not just imports them).
+            3. Identify the top 10 most critical coverage gaps, prioritizing:
+               - Core pipeline modules (`marin/run/`, `marin/processing/`)
+               - Modules changed frequently (use `git log --format='' --name-only` to rank)
+               - Modules with complex logic (high cyclomatic complexity)
+
+            ## Output
+
+            File a single GitHub issue titled `[nightshift] Test coverage gaps report`
+            with label `agent-generated` and `testing`. Include:
+            - A ranked table of modules missing tests
+            - For each, the public functions that lack coverage
+            - Suggested test strategies (unit vs integration, key edge cases)
+
+            Do NOT write tests yourself — this is an analysis-only workflow.
+            If an open issue with the same title already exists, update it instead
+            of creating a duplicate.
+          claude_args: |
+            --model opus
+            --max-turns 40
+            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(wc:*)"

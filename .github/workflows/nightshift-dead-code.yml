@@ -1,0 +1,85 @@
+name: Nightshift Dead Code
+
+on:
+  schedule:
+    # Run weekly on Wednesday at 2 AM Pacific (10:00 UTC)
+    - cron: '0 10 * * 3'
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightshift-dead-code
+  cancel-in-progress: false
+
+jobs:
+  dead-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Find dead code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          direct_prompt: true
+          prompt: |
+            You are the Nightshift Dead Code hunter.
+
+            Read `AGENTS.md` for project conventions.
+
+            ## Mission
+
+            Systematically find and remove dead code across the codebase.
+
+            ## What counts as dead code
+
+            1. **Unused imports**: imports not referenced anywhere in the file.
+               (Note: `__init__.py` re-exports are exempt per ruff config.)
+            2. **Unreferenced functions/classes**: defined but never called/instantiated
+               anywhere in the repo. Use `grep -r` to verify across the entire codebase.
+            3. **Commented-out code blocks**: more than 2 consecutive commented lines
+               that look like code (not documentation). This is in git history.
+            4. **Stale TODO/FIXME**: comments older than 90 days (check via `git blame`).
+               File an issue for each with context, then remove the comment.
+            5. **Unused function parameters**: parameters that are accepted but never
+               used in the function body. Be careful with interface implementations.
+            6. **Empty exception handlers**: `except: pass` or `except Exception: pass`.
+            7. **Unreachable code**: code after unconditional `return`, `raise`, `break`.
+
+            ## Safety rules
+
+            - Do NOT remove code that is referenced from experiment files, even if
+              those experiments are old.
+            - Do NOT remove anything in `__init__.py` that could be a public re-export.
+            - Verify each removal by searching the ENTIRE repo, not just the local file.
+            - Run tests after each batch of removals.
+            - When in doubt, file an issue instead of deleting.
+
+            ## Output
+
+            Open a PR titled `[nightshift] remove dead code` with label `agent-generated`.
+            List each removal with a one-line justification.
+
+            If nothing found, exit cleanly.
+          claude_args: |
+            --model opus
+            --max-turns 80
+            --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"

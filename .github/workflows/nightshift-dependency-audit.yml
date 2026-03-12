@@ -1,0 +1,68 @@
+name: Nightshift Dependency Audit
+
+on:
+  schedule:
+    # Run monthly on the 1st at 5 AM Pacific (13:00 UTC)
+    - cron: '0 13 1 * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightshift-dependency-audit
+  cancel-in-progress: false
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Audit dependencies
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          direct_prompt: true
+          prompt: |
+            You are the Nightshift Dependency Auditor.
+
+            ## Mission
+
+            Analyze `pyproject.toml` and the lock file for dependency health.
+
+            Check for:
+            1. **Unused dependencies**: packages listed in pyproject.toml but never
+               imported anywhere in `lib/` or `experiments/`.
+            2. **Pinning issues**: dependencies pinned to old versions when newer
+               versions are available (use `uv pip list --outdated` or similar).
+            3. **Duplicate functionality**: multiple packages providing the same
+               capability (e.g., two HTTP clients, two YAML parsers).
+            4. **Security advisories**: check if any dependencies have known
+               vulnerabilities (use `uv pip audit` if available, or web search).
+            5. **Heavy unused deps**: large packages (torch, tensorflow) that are
+               only used in a small corner of the codebase.
+
+            ## Output
+
+            File a GitHub issue titled `[nightshift] Dependency audit — $(date +%Y-%m)`
+            with labels `agent-generated` and `infrastructure`. Include findings
+            grouped by severity (action needed / worth investigating / informational).
+          claude_args: |
+            --model opus
+            --max-turns 30
+            --allowedTools "Bash(git:*),Bash(gh:*),Bash(uv:*),Bash(python:*),Bash(date:*)"

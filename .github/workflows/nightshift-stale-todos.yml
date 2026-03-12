@@ -1,0 +1,61 @@
+name: Nightshift Stale TODOs
+
+on:
+  schedule:
+    # Run weekly on Monday at 3 AM Pacific (11:00 UTC)
+    - cron: '0 11 * * 1'
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightshift-stale-todos
+  cancel-in-progress: false
+
+jobs:
+  stale-todos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Scan for stale TODOs
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          direct_prompt: true
+          prompt: |
+            You are the Nightshift TODO tracker.
+
+            ## Mission
+
+            Find all `TODO`, `FIXME`, `HACK`, and `XXX` comments in the codebase.
+            For each one, use `git blame` to determine when it was added.
+
+            ## Output
+
+            File a GitHub issue titled `[nightshift] Stale TODO report — $(date +%Y-%m-%d)`
+            with label `agent-generated`. Include:
+
+            - A table grouped by age bucket (>1 year, >6 months, >90 days, recent)
+            - Each entry: file:line, the comment text, author, date added
+            - For TODOs >90 days old, a brief assessment of whether the TODO is still
+              relevant based on the surrounding code
+
+            If an issue with title matching `[nightshift] Stale TODO report` was created
+            in the last 7 days, skip and exit cleanly.
+          claude_args: |
+            --model opus
+            --max-turns 30
+            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(date:*)"
