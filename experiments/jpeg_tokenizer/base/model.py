@@ -24,8 +24,20 @@ JPEG_TOKENIZER_V0_MODEL = JpegLmConfig(
     head_dim=None,
 )
 
+JPEG_TOKENIZER_V1_LARGE_MODEL = JpegLmConfig(
+    vocab_size=4096,
+    hidden_dim=768,
+    intermediate_dim=2688,
+    num_layers=8,
+    num_heads=12,
+    num_kv_heads=12,
+    max_seq_len=4096,
+    head_dim=None,
+)
+
 __all__ = [
     "JPEG_TOKENIZER_V0_MODEL",
+    "JPEG_TOKENIZER_V1_LARGE_MODEL",
     "JpegLmConfig",
     "JpegTransformer",
     "debug_mesh_and_token_pspec",
