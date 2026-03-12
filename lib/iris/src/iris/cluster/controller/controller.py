@@ -59,6 +59,7 @@ from iris.cluster.controller.scheduler import (
     SchedulingContext,
     WorkerSnapshot,
 )
+from iris.cluster.controller.auth_setup import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
@@ -693,6 +694,9 @@ class ControllerConfig:
     auth_provider: str | None = None
     """Name of the auth provider (e.g. "gcp", "static") for the dashboard UI."""
 
+    auth: ControllerAuth | None = None
+    """Full auth config passed to the service layer for login and API key management."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -773,6 +777,7 @@ class Controller:
             controller=self,
             bundle_store=self._bundle_store,
             log_store=self._log_store,
+            auth=config.auth,
         )
         self._dashboard = ControllerDashboard(
             self._service,

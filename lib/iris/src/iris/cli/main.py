@@ -10,6 +10,7 @@ import json
 import logging as _logging_module
 import os
 import sys
+from pathlib import Path
 
 import click
 
@@ -23,9 +24,15 @@ logger = _logging_module.getLogger(__name__)
 def create_client_token_provider(auth_config: config_pb2.AuthConfig) -> TokenProvider | None:
     """Create a TokenProvider from an AuthConfig proto for CLI usage.
 
-    Returns None when no provider is configured, so unauthenticated clusters
-    continue to work without any change in behavior.
+    Checks for a stored API key at ~/.iris/token first (from ``iris login``),
+    then falls back to config-based token providers.
     """
+    token_path = Path.home() / ".iris" / "token"
+    if token_path.exists():
+        stored = token_path.read_text().strip()
+        if stored:
+            return StaticTokenProvider(stored)
+
     provider = auth_config.WhichOneof("provider")
     if provider is None:
         return None
@@ -35,7 +42,6 @@ def create_client_token_provider(auth_config: config_pb2.AuthConfig) -> TokenPro
         tokens = dict(auth_config.static.tokens)
         if not tokens:
             raise ValueError("Static auth config requires at least one token")
-        # Use the first configured token for CLI auth
         first_token = next(iter(tokens))
         return StaticTokenProvider(first_token)
     raise ValueError(f"Unknown auth provider: {provider}")
@@ -165,6 +171,140 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
     # in require_controller_url() so commands like ``cluster start`` don't block.
     if controller_url:
         ctx.obj["controller_url"] = controller_url
+
+
+@iris.command()
+@click.pass_context
+def login(ctx):
+    """Authenticate with the cluster and store an API key locally."""
+    controller_url = require_controller_url(ctx)
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for login")
+
+    auth_config = config.auth
+    provider = auth_config.WhichOneof("provider")
+
+    if provider == "gcp":
+        gcp_provider = CliGcpTokenProvider(audience=auth_config.gcp.audience)
+        try:
+            identity_token = gcp_provider.get_token()
+        except Exception as e:
+            raise click.ClickException(f"Failed to get GCP identity token: {e}") from e
+
+        from iris.rpc import cluster_pb2
+        from iris.rpc.cluster_connect import ControllerServiceClientSync
+
+        client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
+        try:
+            response = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
+        except Exception as e:
+            raise click.ClickException(f"Login failed: {e}") from e
+        finally:
+            client.close()
+
+        raw_token = response.token
+        user_id = response.user_id
+    elif provider == "static":
+        tokens = dict(auth_config.static.tokens)
+        if not tokens:
+            raise click.ClickException("No static tokens configured")
+        raw_token = next(iter(tokens))
+        user_id = tokens[raw_token]
+    else:
+        raise click.ClickException(f"Unsupported auth provider for login: {provider}")
+
+    token_path = Path.home() / ".iris" / "token"
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(raw_token)
+    token_path.chmod(0o600)
+
+    click.echo(f"Authenticated as {user_id}")
+    click.echo(f"Token stored in {token_path}")
+
+
+def _make_authenticated_client(controller_url: str, token_provider: TokenProvider | None):
+    """Create a ControllerServiceClientSync with auth interceptor if available."""
+    from iris.rpc.auth import AuthTokenInjector
+    from iris.rpc.cluster_connect import ControllerServiceClientSync
+
+    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    return ControllerServiceClientSync(address=controller_url, timeout_ms=30000, interceptors=interceptors)
+
+
+@iris.group()
+@click.pass_context
+def key(ctx):
+    """Manage API keys."""
+    pass
+
+
+@key.command("create")
+@click.option("--name", required=True, help="Human-readable key name")
+@click.option("--user", "user_id", default="", help="Target user (admin only for other users)")
+@click.option("--ttl", "ttl_ms", default=0, type=int, help="Time-to-live in milliseconds (0 = no expiry)")
+@click.pass_context
+def key_create(ctx, name: str, user_id: str, ttl_ms: int):
+    """Create a new API key."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    from iris.rpc import cluster_pb2
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        response = client.create_api_key(cluster_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
+    finally:
+        client.close()
+
+    click.echo(f"Key ID:  {response.key_id}")
+    click.echo(f"Token:   {response.token}")
+    click.echo(f"Prefix:  {response.key_prefix}")
+    click.echo("Store this token securely — it cannot be retrieved again.")
+
+
+@key.command("list")
+@click.option("--user", "user_id", default="", help="Filter by user (admin only for other users)")
+@click.pass_context
+def key_list(ctx, user_id: str):
+    """List API keys."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    from iris.rpc import cluster_pb2
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        response = client.list_api_keys(cluster_pb2.ListApiKeysRequest(user_id=user_id))
+    finally:
+        client.close()
+
+    if not response.keys:
+        click.echo("No API keys found.")
+        return
+
+    for k in response.keys:
+        status = "REVOKED" if k.revoked else "active"
+        click.echo(f"  {k.key_id}  {k.key_prefix}...  {k.name:<20s}  {k.user_id:<20s}  {status}")
+
+
+@key.command("revoke")
+@click.argument("key_id")
+@click.pass_context
+def key_revoke(ctx, key_id: str):
+    """Revoke an API key."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    from iris.rpc import cluster_pb2
+
+    client = _make_authenticated_client(controller_url, token_provider)
+    try:
+        client.revoke_api_key(cluster_pb2.RevokeApiKeyRequest(key_id=key_id))
+    finally:
+        client.close()
+
+    click.echo(f"Revoked key: {key_id}")
 
 
 # Register subcommand groups — imported at module level to ensure they are

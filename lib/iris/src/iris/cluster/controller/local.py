@@ -206,6 +206,7 @@ class LocalController:
                 log_dir=Path(self._db_dir.name),
                 auth_verifier=auth.verifier,
                 auth_provider=auth.provider,
+                auth=auth,
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,

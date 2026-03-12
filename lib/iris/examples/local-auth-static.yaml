@@ -14,6 +14,8 @@ auth:
     tokens:
       dev-token-123: developer
       admin-token-456: admin
+  admin_users:
+    - admin
 
 scale_groups:
   cpu:

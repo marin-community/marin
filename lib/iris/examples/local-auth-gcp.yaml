@@ -13,6 +13,8 @@ controller:
 auth:
   gcp:
     audience: iris-controller  # Change to your actual audience
+  admin_users:
+    - your-email@example.com  # Replace with actual admin email
 
 scale_groups:
   cpu:

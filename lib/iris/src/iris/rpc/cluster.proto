@@ -26,6 +26,48 @@ import "logging.proto";
 
 message Empty {}
 
+// --- Authentication ---
+message LoginRequest {
+  string identity_token = 1;
+}
+message LoginResponse {
+  string token = 1;
+  string key_id = 2;
+  string user_id = 3;
+}
+
+message CreateApiKeyRequest {
+  string user_id = 1;
+  string name = 2;
+  int64 ttl_ms = 3;
+}
+message CreateApiKeyResponse {
+  string key_id = 1;
+  string token = 2;
+  string key_prefix = 3;
+}
+
+message RevokeApiKeyRequest {
+  string key_id = 1;
+}
+
+message ListApiKeysRequest {
+  string user_id = 1;
+}
+message ApiKeyInfo {
+  string key_id = 1;
+  string key_prefix = 2;
+  string user_id = 3;
+  string name = 4;
+  int64 created_at_ms = 5;
+  int64 last_used_at_ms = 6;
+  int64 expires_at_ms = 7;
+  bool revoked = 8;
+}
+message ListApiKeysResponse {
+  repeated ApiKeyInfo keys = 1;
+}
+
 // --- Profiling ---
 // Shared by both ControllerService and WorkerService (controller proxies to worker).
 
@@ -937,6 +979,12 @@ service ControllerService {
 
   // Process status (local process info + recent logs)
   rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
+
+  // Authentication & API key management
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
+  rpc RevokeApiKey(RevokeApiKeyRequest) returns (Empty);
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
 }
 
 service WorkerService {

@@ -170,6 +170,7 @@ def serve(
         log_dir=Path("/tmp/iris/controller-logs"),
         auth_verifier=auth.verifier,
         auth_provider=auth.provider,
+        auth=auth,
     )
 
     try:

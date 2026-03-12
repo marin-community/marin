@@ -440,12 +440,14 @@ class StaticAuthConfig(_message.Message):
     def __init__(self, tokens: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class AuthConfig(_message.Message):
-    __slots__ = ("gcp", "static")
+    __slots__ = ("gcp", "static", "admin_users")
     GCP_FIELD_NUMBER: _ClassVar[int]
     STATIC_FIELD_NUMBER: _ClassVar[int]
+    ADMIN_USERS_FIELD_NUMBER: _ClassVar[int]
     gcp: GcpAuthConfig
     static: StaticAuthConfig
-    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ...) -> None: ...
+    admin_users: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("platform", "defaults", "storage", "controller", "scale_groups", "auth")

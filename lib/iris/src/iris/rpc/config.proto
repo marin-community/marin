@@ -370,6 +370,7 @@ message AuthConfig {
     GcpAuthConfig gcp = 1;
     StaticAuthConfig static = 2;
   }
+  repeated string admin_users = 3;
 }
 
 // ============================================================================

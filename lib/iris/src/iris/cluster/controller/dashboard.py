@@ -32,6 +32,21 @@ from iris.rpc.interceptors import RequestTimingInterceptor
 logger = logging.getLogger(__name__)
 
 
+_UNAUTHENTICATED_RPCS = {"Login"}
+
+
+class _SelectiveAuthInterceptor:
+    """Auth interceptor that skips authentication for specific RPC methods."""
+
+    def __init__(self, verifier: TokenVerifier):
+        self._inner = AuthInterceptor(verifier)
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        if ctx.method().name in _UNAUTHENTICATED_RPCS:
+            return call_next(request, ctx)
+        return self._inner.intercept_unary_sync(call_next, request, ctx)
+
+
 class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
@@ -67,7 +82,7 @@ class ControllerDashboard:
     def _create_app(self) -> Starlette:
         interceptors = [RequestTimingInterceptor()]
         if self._auth_verifier is not None:
-            interceptors.insert(0, AuthInterceptor(self._auth_verifier))
+            interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 

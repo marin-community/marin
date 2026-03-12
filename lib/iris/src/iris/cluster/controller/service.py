@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import secrets
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -19,10 +20,12 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.rpc.auth import get_verified_user
+from iris.cluster.controller.auth_setup import ControllerAuth
+from iris.rpc.auth import get_verified_user, hash_token
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
+    API_KEYS,
     ATTEMPTS,
     ENDPOINTS,
     JOBS,
@@ -503,6 +506,7 @@ class ControllerServiceImpl:
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_store: LogStore,
+        auth: ControllerAuth | None = None,
     ):
         self._transitions = transitions
         self._db = db
@@ -510,6 +514,7 @@ class ControllerServiceImpl:
         self._bundle_store = bundle_store
         self._log_store = log_store
         self._timer = Timer()
+        self._auth = auth or ControllerAuth()
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1494,3 +1499,118 @@ class ControllerServiceImpl:
             target="/system/process",
         )
         return stub.get_process_status(forwarded, timeout_ms=10000)
+
+    # ── Auth RPCs ────────────────────────────────────────────────────────
+
+    def login(
+        self,
+        request: cluster_pb2.LoginRequest,
+        ctx: Any,
+    ) -> cluster_pb2.LoginResponse:
+        if not self._auth.login_verifier:
+            raise ConnectError(Code.UNIMPLEMENTED, "Login not available (no identity provider configured)")
+
+        try:
+            username = self._auth.login_verifier.verify(request.identity_token)
+        except ValueError as exc:
+            raise ConnectError(Code.UNAUTHENTICATED, f"Identity verification failed: {exc}") from exc
+
+        if username.startswith("system:"):
+            raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
+
+        now = Timestamp.now()
+        self._db.ensure_user(username, now)
+
+        raw_token = secrets.token_urlsafe(32)
+        key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        self._db.create_api_key(
+            key_id=key_id,
+            key_hash=hash_token(raw_token),
+            key_prefix=raw_token[:8],
+            user_id=username,
+            name=f"login-{now.epoch_ms()}",
+            now=now,
+        )
+        return cluster_pb2.LoginResponse(token=raw_token, key_id=key_id, user_id=username)
+
+    def create_api_key(
+        self,
+        request: cluster_pb2.CreateApiKeyRequest,
+        ctx: Any,
+    ) -> cluster_pb2.CreateApiKeyResponse:
+        caller = self._require_auth()
+        target_user = request.user_id or caller
+        if target_user != caller:
+            self._require_admin(caller)
+
+        now = Timestamp.now()
+        self._db.ensure_user(target_user, now)
+
+        raw_token = secrets.token_urlsafe(32)
+        key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        expires_at = Timestamp.from_ms(now.epoch_ms() + request.ttl_ms) if request.ttl_ms > 0 else None
+        self._db.create_api_key(
+            key_id=key_id,
+            key_hash=hash_token(raw_token),
+            key_prefix=raw_token[:8],
+            user_id=target_user,
+            name=request.name or f"key-{now.epoch_ms()}",
+            now=now,
+            expires_at=expires_at,
+        )
+        return cluster_pb2.CreateApiKeyResponse(key_id=key_id, token=raw_token, key_prefix=raw_token[:8])
+
+    def revoke_api_key(
+        self,
+        request: cluster_pb2.RevokeApiKeyRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Empty:
+        caller = self._require_auth()
+        with self._db.snapshot() as q:
+            key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
+        if key is None:
+            raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
+        if key.user_id != caller:
+            self._require_admin(caller)
+        self._db.revoke_api_key(request.key_id, Timestamp.now())
+        return cluster_pb2.Empty()
+
+    def list_api_keys(
+        self,
+        request: cluster_pb2.ListApiKeysRequest,
+        ctx: Any,
+    ) -> cluster_pb2.ListApiKeysResponse:
+        caller = self._require_auth()
+        target_user = request.user_id or caller
+        if target_user != caller:
+            self._require_admin(caller)
+
+        keys = self._db.list_api_keys(user_id=target_user if target_user else None)
+        key_infos = []
+        for k in keys:
+            key_infos.append(
+                cluster_pb2.ApiKeyInfo(
+                    key_id=k.key_id,
+                    key_prefix=k.key_prefix,
+                    user_id=k.user_id,
+                    name=k.name,
+                    created_at_ms=k.created_at.epoch_ms(),
+                    last_used_at_ms=k.last_used_at.epoch_ms() if k.last_used_at else 0,
+                    expires_at_ms=k.expires_at.epoch_ms() if k.expires_at else 0,
+                    revoked=k.revoked_at is not None,
+                )
+            )
+        return cluster_pb2.ListApiKeysResponse(keys=key_infos)
+
+    def _require_auth(self) -> str:
+        """Get the verified user or raise UNAUTHENTICATED."""
+        user = get_verified_user()
+        if user is None:
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
+        return user
+
+    def _require_admin(self, user_id: str) -> None:
+        """Raise PERMISSION_DENIED if user is not an admin."""
+        role = self._db.get_user_role(user_id)
+        if role != "admin":
+            raise ConnectError(Code.PERMISSION_DENIED, "Admin access required")

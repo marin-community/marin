@@ -279,3 +279,151 @@ def test_create_client_token_provider_none_when_no_provider():
 
     config = AuthConfig()
     assert create_client_token_provider(config) is None
+
+
+# ---------------------------------------------------------------------------
+# hash_token utility
+# ---------------------------------------------------------------------------
+
+
+def test_hash_token_deterministic():
+    from iris.rpc.auth import hash_token
+
+    assert hash_token("test-token") == hash_token("test-token")
+    assert hash_token("a") != hash_token("b")
+
+
+def test_hash_token_is_sha256_hex():
+    from iris.rpc.auth import hash_token
+
+    result = hash_token("test")
+    assert len(result) == 64  # SHA-256 hex digest
+    assert all(c in "0123456789abcdef" for c in result)
+
+
+# ---------------------------------------------------------------------------
+# DbTokenVerifier
+# ---------------------------------------------------------------------------
+
+
+def test_db_token_verifier_valid_key(tmp_path):
+    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.db import ControllerDB
+    from iris.rpc.auth import hash_token
+    from iris.time_utils import Timestamp
+
+    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
+    now = Timestamp.now()
+    db.ensure_user("alice", now)
+    raw_token = "my-secret-token"
+    db.create_api_key(
+        key_id="k1",
+        key_hash=hash_token(raw_token),
+        key_prefix=raw_token[:8],
+        user_id="alice",
+        name="test-key",
+        now=now,
+    )
+    verifier = DbTokenVerifier(db)
+    assert verifier.verify(raw_token) == "alice"
+    db.close()
+
+
+def test_db_token_verifier_invalid_key(tmp_path):
+    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.db import ControllerDB
+
+    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
+    verifier = DbTokenVerifier(db)
+    with pytest.raises(ValueError, match="Invalid API key"):
+        verifier.verify("nonexistent-token")
+    db.close()
+
+
+def test_db_token_verifier_revoked_key(tmp_path):
+    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.db import ControllerDB
+    from iris.rpc.auth import hash_token
+    from iris.time_utils import Timestamp
+
+    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
+    now = Timestamp.now()
+    db.ensure_user("alice", now)
+    raw_token = "revoked-token"
+    db.create_api_key(
+        key_id="k1",
+        key_hash=hash_token(raw_token),
+        key_prefix=raw_token[:8],
+        user_id="alice",
+        name="test-key",
+        now=now,
+    )
+    db.revoke_api_key("k1", now)
+
+    verifier = DbTokenVerifier(db)
+    with pytest.raises(ValueError, match="revoked"):
+        verifier.verify(raw_token)
+    db.close()
+
+
+def test_db_token_verifier_expired_key(tmp_path):
+    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.db import ControllerDB
+    from iris.rpc.auth import hash_token
+    from iris.time_utils import Timestamp
+
+    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
+    now = Timestamp.now()
+    db.ensure_user("alice", now)
+    raw_token = "expired-token"
+    past = Timestamp.from_ms(1000)
+    db.create_api_key(
+        key_id="k1",
+        key_hash=hash_token(raw_token),
+        key_prefix=raw_token[:8],
+        user_id="alice",
+        name="test-key",
+        now=past,
+        expires_at=past,
+    )
+
+    verifier = DbTokenVerifier(db)
+    with pytest.raises(ValueError, match="expired"):
+        verifier.verify(raw_token)
+    db.close()
+
+
+def test_db_token_verifier_last_used_throttle(tmp_path):
+    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.db import ControllerDB
+    from iris.rpc.auth import hash_token
+    from iris.time_utils import Timestamp
+
+    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
+    now = Timestamp.now()
+    db.ensure_user("alice", now)
+    raw_token = "throttle-test-token"
+    db.create_api_key(
+        key_id="k1",
+        key_hash=hash_token(raw_token),
+        key_prefix=raw_token[:8],
+        user_id="alice",
+        name="test-key",
+        now=now,
+    )
+
+    verifier = DbTokenVerifier(db)
+
+    # First call should set last_used_at
+    verifier.verify(raw_token)
+    key = db.lookup_api_key_by_hash(hash_token(raw_token))
+    assert key is not None
+    assert key.last_used_at is not None
+    first_used = key.last_used_at.epoch_ms()
+
+    # Immediate second call should NOT update (throttled)
+    verifier.verify(raw_token)
+    key2 = db.lookup_api_key_by_hash(hash_token(raw_token))
+    assert key2.last_used_at.epoch_ms() == first_used
+
+    db.close()

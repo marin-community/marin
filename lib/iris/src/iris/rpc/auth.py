@@ -8,6 +8,7 @@ on the client side. Authentication is optional: when no verifier is configured,
 all requests pass through without authentication.
 """
 
+import hashlib
 import logging
 from contextvars import ContextVar
 from typing import Protocol
@@ -16,6 +17,12 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 logger = logging.getLogger(__name__)
+
+
+def hash_token(raw_token: str) -> str:
+    """SHA-256 hex digest of a raw API key. Used for storage and lookup."""
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
 
 # Thread-local storage for the verified user identity within an RPC handler.
 # Set by AuthInterceptor before calling the handler, read by service code.
