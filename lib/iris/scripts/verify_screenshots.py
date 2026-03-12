@@ -9,24 +9,32 @@ import sys
 from pathlib import Path
 
 
-def verify_screenshot(image_path: Path, description: str) -> tuple[bool, str]:
+def verify_screenshots(pairs: list[tuple[Path, str]]) -> tuple[bool, str]:
+    """Pass all screenshot+description pairs to claude in one call."""
+    lines = []
+    for i, (png, desc) in enumerate(pairs, 1):
+        lines.append(f"{i}. Read the screenshot at {png} — expected: {desc}")
+
+    descriptions = "\n".join(lines)
     prompt = (
-        f"Read the screenshot at {image_path} and determine if it matches "
-        f"the following description.\n\n"
-        f"Description: {description}\n\n"
-        f"Reply with exactly OK if the screenshot matches, or NOT_OK followed by "
-        f"a brief explanation. Be lenient about exact text matches etc but verify structural "
-        f"elements (badges, tables, cards, charts) are present. We're trying to test for big failures"
-        f"not minor structural changes or individual log lines."
+        "You are verifying E2E test screenshots. For each numbered item below, "
+        "read the screenshot file and determine if it matches the expected description.\n\n"
+        f"{descriptions}\n\n"
+        "Reply with a single line: OK if ALL screenshots match their descriptions.\n"
+        "Otherwise reply NOT_OK followed by one line per failing screenshot in the format:\n"
+        "  - <filename>: <brief reason>\n\n"
+        "Be lenient about exact text but verify structural elements "
+        "(badges, tables, cards, charts) are present. We're testing for big failures, "
+        "not minor text differences."
     )
     result = subprocess.run(
-        ["claude", "--print", prompt],
+        ["claude", "--model=sonnet", "--print", "--dangerously-skip-permissions", "--tools=Read", "--", prompt],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=180,
     )
     if result.returncode != 0:
-        return False, f"claude CLI failed: {result.stderr.strip()}"
+        return False, f"claude CLI failed: {result.stderr.strip()} {result.stdout.strip()}"
     text = result.stdout.strip()
     return text.startswith("OK"), text
 
@@ -50,17 +58,11 @@ def main():
         print("No screenshot+description pairs found, skipping")
         sys.exit(0)
 
-    failures = []
-    for png_path, desc in pairs:
-        label = png_path.stem
-        print(f"Verifying {label}...")
-        passed, explanation = verify_screenshot(png_path, desc)
-        print(f"  {'OK' if passed else 'NOT_OK'}: {explanation}")
-        if not passed:
-            failures.append(label)
+    print(f"Verifying {len(pairs)} screenshots in one batch...")
+    passed, explanation = verify_screenshots(pairs)
+    print(explanation)
 
-    if failures:
-        print(f"\nFailed: {', '.join(failures)}")
+    if not passed:
         sys.exit(1)
     print(f"\nAll {len(pairs)} screenshots verified OK")
 

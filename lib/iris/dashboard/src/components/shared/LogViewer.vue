@@ -40,17 +40,17 @@ const useRpc = props.source === 'worker' ? useWorkerRpc : useControllerRpc
 const taskLogState = props.taskId
   ? useRpc<GetTaskLogsResponse>('GetTaskLogs', () => ({
       id: props.taskId,
-      maxTotalLines: tailLines.value,
+      maxTotalLines: tailLines.value || undefined,
       attemptId: selectedAttemptId.value >= 0 ? selectedAttemptId.value : -1,
     }))
   : null
 
 const processLogState = !props.taskId
-  ? useRpc<FetchLogsResponse>('FetchLogs', {
+  ? useRpc<FetchLogsResponse>('FetchLogs', () => ({
       source: props.workerId ? `/worker/${props.workerId}` : '/system/process',
-      maxLines: tailLines.value,
+      maxLines: tailLines.value || undefined,
       tail: true,
-    })
+    }))
   : null
 
 const rpcState = taskLogState ?? processLogState!
@@ -62,6 +62,7 @@ async function doRefresh() {
 const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(doRefresh, 30_000)
 
 watch(selectedAttemptId, () => doRefresh())
+watch(tailLines, () => doRefresh())
 
 onMounted(doRefresh)
 
@@ -109,6 +110,16 @@ const filteredLogs = computed(() => {
         <option value="info">Info</option>
         <option value="warning">Warning</option>
         <option value="error">Error</option>
+      </select>
+      <select
+        v-model.number="tailLines"
+        class="px-2 py-1.5 border border-surface-border rounded text-sm"
+      >
+        <option :value="500">500 lines</option>
+        <option :value="1000">1,000 lines</option>
+        <option :value="5000">5,000 lines</option>
+        <option :value="10000">10,000 lines</option>
+        <option :value="0">All</option>
       </select>
       <select
         v-if="attempts && attempts.length > 0"
