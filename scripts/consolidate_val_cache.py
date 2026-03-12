@@ -33,8 +33,9 @@ def main():
     shard_paths = [f"gs://{e}" for e in entries if fs.isdir(e)]
     logger.info("Found %d shard directories under %s", len(shard_paths), VALIDATION_PATH)
 
-    # Filter to shards with .success sentinel
-    existing = [p for p in shard_paths if fs.exists(f"{p.removeprefix('gs://')}/.success")]
+    # Batch-check .success sentinels via glob instead of per-path fs.exists
+    success_files = set(fs.glob(f"{VALIDATION_PATH.removeprefix('gs://')}/*/.success"))
+    existing = [p for p in shard_paths if f"{p.removeprefix('gs://')}/.success" in success_files]
     logger.info("Of those, %d have .success sentinel", len(existing))
 
     if not existing:
