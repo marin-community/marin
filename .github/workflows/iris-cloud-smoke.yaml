@@ -35,30 +35,20 @@ jobs:
       LABEL_PREFIX: smoke-ci
 
     steps:
-      - name: Resolve PR head ref
-        id: pr
-        if: github.event_name == 'issue_comment'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pr_json=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }})
-          echo "sha=$(echo "$pr_json" | jq -r .head.sha)" >> "$GITHUB_OUTPUT"
-          echo "ref=$(echo "$pr_json" | jq -r .head.ref)" >> "$GITHUB_OUTPUT"
-
       - name: Set commit status to pending
         if: github.event_name == 'issue_comment'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
+          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha || github.sha }} \
             -f state=pending \
             -f context="Iris Cloud Smoke Test" \
-            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
 
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.pr.outputs.ref || github.ref }}
+          ref: refs/pull/${{ github.event.issue.number }}/head
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -135,30 +125,20 @@ jobs:
           if-no-files-found: ignore
 
   # Separate job so cleanup runs even if the test job times out or is killed.
-  # always() ensures this runs on success, failure, AND cancellation.
+  # Skipped when cloud-smoke-test was skipped (e.g. non-matching comment).
   cleanup:
     needs: cloud-smoke-test
-    if: ${{ always() }}
+    if: ${{ always() && needs.cloud-smoke-test.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       LABEL_PREFIX: smoke-ci
 
     steps:
-      - name: Resolve PR head ref
-        id: pr
-        if: github.event_name == 'issue_comment'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pr_json=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }})
-          echo "ref=$(echo "$pr_json" | jq -r .head.ref)" >> "$GITHUB_OUTPUT"
-          echo "sha=$(echo "$pr_json" | jq -r .head.sha)" >> "$GITHUB_OUTPUT"
-
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.pr.outputs.ref || github.ref }}
+          ref: refs/pull/${{ github.event.issue.number }}/head
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -221,12 +201,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          sha=$(git rev-parse HEAD)
           if [ "${{ needs.cloud-smoke-test.result }}" = "success" ]; then
             state=success
           else
             state=failure
           fi
-          gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
+          gh api repos/${{ github.repository }}/statuses/"$sha" \
             -f state="$state" \
             -f context="Iris Cloud Smoke Test" \
             -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
