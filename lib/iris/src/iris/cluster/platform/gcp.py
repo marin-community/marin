@@ -394,8 +394,9 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             error = result.stderr.strip()
-            if "not found" not in error.lower():
-                logger.warning("Failed to delete GCE instance %s: %s", self._gce_vm_name, error)
+            if "not found" in error.lower():
+                raise RuntimeError(f"GCE instance {self._gce_vm_name} not found in zone {self._zone}: {error}")
+            raise RuntimeError(f"Failed to delete GCE instance {self._gce_vm_name}: {error}")
 
     def set_labels(self, labels: dict[str, str]) -> None:
         cmd = [
