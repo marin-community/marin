@@ -12,8 +12,9 @@ Every rule includes a rationale and a concrete bad/good example.
 
 ### 1.1 Imports
 
-All imports at the top of the file. No mid-function imports except to break
-genuine circular dependencies or guard optional third-party packages.
+All imports at the top of the file. No mid-function imports 
+except to guard optional third-party packages. Fix circular imports
+by refactoring to a common package instead of hacking around them.
 
 ```python
 # BAD
@@ -29,7 +30,7 @@ def train(config):
 ```
 
 No `TYPE_CHECKING` guards. Fix import cycles structurally — extract common
-code/interfaces into a separate module, or use `Protocol` at module boundaries.
+code/interfaces into a separate module, or use `Protocol` at module boundaries when appropriate.
 
 ### 1.2 Naming
 
@@ -42,14 +43,7 @@ code/interfaces into a separate module, or use `Protocol` at module boundaries.
 
 ### 1.3 License header
 
-Every `.py` file begins with:
-
-```python
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-```
-
-See `pyproject.toml` for the pre-commit configuration that checks this.
+License headers are managed by pre-commit.py. See below.
 
 ---
 
@@ -162,6 +156,7 @@ Pick one input type and normalize at the entry point.
 ### 3.5 Enum over compound booleans
 
 Replace `is_started and not is_done` with an explicit state enum.
+Use StrEnum and "auto" when appropriate for human readability.
 
 ---
 
@@ -298,15 +293,7 @@ These are the specific patterns that automated cleanup workflows should look for
 
 ## 9. Formatting and Lint Rules
 
-Enforced automatically by `./infra/pre-commit.py --all-files --fix`:
-
-- **Formatter**: `black` with `line-length = 121`, `target-version = ["py310"]`, preview mode.
-- **Linter**: `ruff` with rules: `A, B, E, F, I, NPY, RUF, UP, W` and
-  `ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]`.
-  See `pyproject.toml` for the full ruff configuration including ignored rules.
-- **Type checker**: `pyrefly` on `lib/*/src/` directories.
-- **File hygiene**: max 500 KB, valid AST, no merge conflict markers, trailing
-  whitespace, end-of-file newline.
+Enforced automatically by `./infra/pre-commit.py --all-files --fix`.
 
 ---
 
