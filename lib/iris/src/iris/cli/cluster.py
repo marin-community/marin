@@ -361,6 +361,27 @@ def cluster_dashboard(ctx):
     stop.wait()
 
 
+@cluster.command("dashboard-proxy")
+@click.option("--port", default=8080, type=int, help="Local port to serve the dashboard on")
+@click.pass_context
+def cluster_dashboard_proxy(ctx, port: int):
+    """Start a local dashboard that proxies RPC calls to the remote controller.
+
+    Serves the Vue dashboard UI locally and forwards all Connect RPC requests
+    to the upstream controller. Useful for viewing a remote controller without
+    SSH tunneling.
+    """
+    import uvicorn
+
+    from iris.cluster.controller.dashboard import ProxyControllerDashboard
+
+    controller_url = require_controller_url(ctx)
+    dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
+    click.echo(f"Proxying to controller at {controller_url}")
+    click.echo(f"Dashboard: http://localhost:{port}")
+    uvicorn.run(dashboard.app, host="127.0.0.1", port=port, log_level="info")
+
+
 # =============================================================================
 # VM subcommands (always via controller RPC)
 # =============================================================================
