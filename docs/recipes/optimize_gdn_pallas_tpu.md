@@ -185,6 +185,9 @@ Updated mainline target:
 
 - Stop using the broad `HackableDecoderLayer/*` sum as the actionable shell tax.
 - Define a namespace-invariant **hybrid-specific generic shell delta** from a matched hybrid vs attention-only attribution pair.
+- Prefer xprof-backed attribution for this comparison when a matched XPlane pair is available:
+  - `uv run python scripts/gdn/gdnctl.py xprof-compare-runs ...`
+  - `uv run python scripts/gdn/gdnctl.py summary-attribution --xprof-compare-json ...`
 - Canonical shell families:
   - `dispatch_shard_shell_delta_ms`
   - `ad_wrapper_shell_delta_ms`
@@ -192,6 +195,12 @@ Updated mainline target:
   - `residual_add_shell_delta_ms`
 - Mainline budget:
   - `hybrid_generic_shell_delta_budget_ms`
+- xprof-side attribution to record when available:
+  - `xprof_dispatch_shard_shell_delta_ms`
+  - `xprof_ad_wrapper_shell_delta_ms`
+  - `xprof_layout_shell_delta_ms`
+  - `xprof_residual_add_shell_delta_ms`
+  - `xprof_idle_attributed_ms`
 - Residual budget after train path + hybrid shell delta:
   - `interaction_remainder_ms`
 

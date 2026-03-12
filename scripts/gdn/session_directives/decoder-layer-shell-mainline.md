@@ -6,6 +6,8 @@ Goal:
 
 Mainline budget:
 - `hybrid_generic_shell_delta_budget_ms`
+- Prefer xprof-backed accounting for this budget whenever you have a matched hybrid vs attention-only XPlane pair.
+- Use `gdnctl xprof-compare-runs` or `gdnctl xprof-compare`, then feed the JSON into `gdnctl summary-attribution --xprof-compare-json ...`.
 
 Required shell sub-budgets:
 - `dispatch_shard_shell_delta_ms`
@@ -13,6 +15,12 @@ Required shell sub-budgets:
 - `layout_shell_delta_ms`
 - `residual_add_shell_delta_ms`
 - `interaction_remainder_ms`
+- xprof-specific counterparts when available:
+  - `xprof_dispatch_shard_shell_delta_ms`
+  - `xprof_ad_wrapper_shell_delta_ms`
+  - `xprof_layout_shell_delta_ms`
+  - `xprof_residual_add_shell_delta_ms`
+  - `xprof_idle_attributed_ms`
 
 Grouping rule:
 - compute the shell target from a matched hybrid vs attention-only pair,

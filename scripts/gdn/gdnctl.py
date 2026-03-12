@@ -782,18 +782,44 @@ def _normalize_iteration_metric_label(label: str) -> str | None:
         "dispatch shard shell delta budget"
     ):
         return "dispatch_shard_shell_delta_ms"
+    if normalized.startswith("xprof dispatch/shard shell delta budget") or normalized.startswith(
+        "xprof dispatch shard shell delta budget"
+    ):
+        return "xprof_dispatch_shard_shell_delta_ms"
     if normalized.startswith("ad/wrapper shell delta budget") or normalized.startswith("ad wrapper shell delta budget"):
         return "ad_wrapper_shell_delta_ms"
+    if normalized.startswith("xprof ad/wrapper shell delta budget") or normalized.startswith(
+        "xprof ad wrapper shell delta budget"
+    ):
+        return "xprof_ad_wrapper_shell_delta_ms"
     if normalized.startswith("ad shell budget"):
         return "ad_shell_budget_ms"
     if normalized.startswith("sharding shell budget"):
         return "sharding_shell_budget_ms"
     if normalized.startswith("layout shell budget"):
         return "layout_shell_budget_ms"
+    if normalized.startswith("xprof layout shell delta budget"):
+        return "xprof_layout_shell_delta_ms"
     if normalized.startswith("residual/add shell budget") or normalized.startswith("add shell budget"):
         return "residual_add_shell_budget_ms"
+    if normalized.startswith("xprof residual/add shell delta budget") or normalized.startswith(
+        "xprof residual add shell delta budget"
+    ):
+        return "xprof_residual_add_shell_delta_ms"
+    if normalized.startswith("xprof hybrid generic shell delta budget"):
+        return "xprof_hybrid_generic_shell_delta_budget_ms"
     if normalized.startswith("interaction remainder"):
         return "interaction_remainder_ms"
+    if normalized.startswith("xprof idle attributed remainder"):
+        return "xprof_idle_attributed_ms"
+    if normalized.startswith("xprof custom-call attributed remainder") or normalized.startswith(
+        "xprof custom call attributed remainder"
+    ):
+        return "xprof_custom_call_attributed_ms"
+    if normalized.startswith("xprof all-gather attributed remainder") or normalized.startswith(
+        "xprof all gather attributed remainder"
+    ):
+        return "xprof_all_gather_attributed_ms"
     if normalized.startswith("shard_map"):
         return "shard_map_ms"
     if normalized.startswith("all-gather"):
@@ -2140,6 +2166,18 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - `Hybrid generic shell delta budget: <before> ms -> <after> ms`\n"
         "  - `Dispatch/shard shell delta budget: <before> ms -> <after> ms`\n"
         "  - `AD/wrapper shell delta budget: <before> ms -> <after> ms`\n"
+        "  - `xprof hybrid generic shell delta budget: <before> ms -> <after> ms` "
+        "when a matched XPlane pair is available\n"
+        "  - `xprof dispatch/shard shell delta budget: <before> ms -> <after> ms` "
+        "when a matched XPlane pair is available\n"
+        "  - `xprof AD/wrapper shell delta budget: <before> ms -> <after> ms` "
+        "when a matched XPlane pair is available\n"
+        "  - `xprof layout shell delta budget: <before> ms -> <after> ms` "
+        "when a matched XPlane pair is available\n"
+        "  - `xprof residual/add shell delta budget: <before> ms -> <after> ms` "
+        "when a matched XPlane pair is available\n"
+        "  - `xprof IDLE attributed remainder: <before> ms -> <after> ms` "
+        "when a matched XPlane pair is available\n"
         "  - `AD shell budget: <before> ms -> <after> ms`\n"
         "  - `Sharding shell budget: <before> ms -> <after> ms`\n"
         "  - `Layout shell budget: <before> ms -> <after> ms`\n"
@@ -2994,6 +3032,243 @@ def _submit_ray_job(cmd: Sequence[str], *, cwd: Path | None = None) -> tuple[int
     return proc.returncode, combined, _extract_submission_id(combined)
 
 
+def _dev_tpu_host_alias(tpu_name: str) -> str:
+    return f"dev-tpu-{tpu_name}"
+
+
+def _ensure_dev_tpu_ssh_config(tpu_name: str) -> str:
+    host_alias = _dev_tpu_host_alias(tpu_name)
+    config_path = Path.home() / ".ssh" / "config"
+    if not config_path.exists() or f"Host {host_alias}" not in config_path.read_text(encoding="utf-8", errors="replace"):
+        raise SystemExit(
+            f"[gdnctl] SSH configuration for {host_alias} not found. "
+            f"Allocate the dev TPU first with scripts/ray/dev_tpu.py allocate."
+        )
+    return host_alias
+
+
+def _xprof_remote_stage_paths(remote_stage_dir: str) -> tuple[str, str]:
+    normalized = remote_stage_dir.strip().strip("/")
+    if not normalized:
+        raise SystemExit("[gdnctl] --remote-stage-dir must not be empty.")
+    remote_user = os.environ.get("USER") or os.environ.get("LOGNAME")
+    if not remote_user:
+        raise SystemExit("[gdnctl] Unable to determine remote username for dev TPU staging.")
+    remote_base = Path("/home") / remote_user / "marin" / normalized
+    return str(remote_base / "before.xplane.pb"), str(remote_base / "after.xplane.pb")
+
+
+def _find_xplane_pb(profile_dir: Path) -> Path:
+    matches = sorted(profile_dir.rglob("*.xplane.pb"))
+    if not matches:
+        raise FileNotFoundError(f"[gdnctl] no .xplane.pb file found under downloaded profile artifact: {profile_dir}")
+    return matches[0]
+
+
+def _build_remote_xprof_compare_command(
+    *,
+    before_remote_path: str,
+    after_remote_path: str,
+    output_remote_path: str,
+    top_k: int,
+    normalize_positive_deltas_ms: float | None,
+) -> str:
+    cmd: list[str] = [
+        "uv",
+        "run",
+        "--with",
+        "xprof",
+        "python",
+        "-m",
+        "marin.profiling.cli",
+        "xprof-compare",
+        "--before-xplane",
+        before_remote_path,
+        "--after-xplane",
+        after_remote_path,
+        "--top-k",
+        str(top_k),
+    ]
+    if normalize_positive_deltas_ms is not None:
+        cmd += ["--normalize-positive-deltas-ms", str(normalize_positive_deltas_ms)]
+    return (
+        'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" && '
+        "if ! command -v uv >/dev/null 2>&1; then "
+        "curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; "
+        'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; '
+        "fi && "
+        "cd /home/$USER/marin && "
+        f"{shlex.join([*cmd, '--output', output_remote_path])} >/dev/null && "
+        f"cat {shlex.quote(output_remote_path)}"
+    )
+
+
+def _run_xprof_compare_remote(
+    *,
+    cluster: str,
+    tpu_name: str,
+    before_xplane: Path,
+    after_xplane: Path,
+    top_k: int,
+    normalize_positive_deltas_ms: float | None,
+    remote_stage_dir: str,
+    sync_repo: bool,
+    keep_remote: bool,
+) -> dict[str, object]:
+    host_alias = _ensure_dev_tpu_ssh_config(tpu_name)
+
+    if sync_repo:
+        sync_cmd = [
+            *DEV_TPU,
+            "--cluster",
+            cluster,
+            "--tpu-name",
+            tpu_name,
+            "execute",
+            "--",
+            "true",
+        ]
+        sync_rc = _run(sync_cmd, check=False).returncode
+        if sync_rc != 0:
+            raise SystemExit(sync_rc)
+
+    remote_before_path, remote_after_path = _xprof_remote_stage_paths(remote_stage_dir)
+    remote_stage_parent = str(Path(remote_before_path).parent)
+    remote_output_path = f"{remote_stage_parent}/xprof_compare.json"
+    mkdir_cmd = ["ssh", host_alias, "mkdir", "-p", remote_stage_parent]
+    if _run(mkdir_cmd, check=False).returncode != 0:
+        raise SystemExit(1)
+
+    upload_before_cmd = ["scp", str(before_xplane), f"{host_alias}:{remote_before_path}"]
+    if _run(upload_before_cmd, check=False).returncode != 0:
+        raise SystemExit(1)
+    upload_after_cmd = ["scp", str(after_xplane), f"{host_alias}:{remote_after_path}"]
+    if _run(upload_after_cmd, check=False).returncode != 0:
+        raise SystemExit(1)
+
+    remote_cmd = _build_remote_xprof_compare_command(
+        before_remote_path=remote_before_path,
+        after_remote_path=remote_after_path,
+        output_remote_path=remote_output_path,
+        top_k=top_k,
+        normalize_positive_deltas_ms=normalize_positive_deltas_ms,
+    )
+    ssh_cmd = ["ssh", host_alias, "bash", "-lc", remote_cmd]
+
+    try:
+        proc = _run(ssh_cmd, capture_output=True, check=False)
+        if proc.stderr:
+            sys.stderr.write(proc.stderr)
+        stdout_text = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            if stdout_text:
+                sys.stdout.write(stdout_text + ("\n" if not stdout_text.endswith("\n") else ""))
+            raise SystemExit(proc.returncode)
+        return json.loads(stdout_text)
+    finally:
+        if not keep_remote:
+            _run(["ssh", host_alias, "rm", "-rf", remote_stage_parent], check=False)
+
+
+def _xprof_metric_map_from_rows(
+    rows: Sequence[object],
+    *,
+    key_field: str,
+    normalize_positive_deltas_ms: float | None,
+) -> dict[str, float]:
+    normalized: dict[str, float] = {}
+    positive_rows: list[tuple[str, float]] = []
+    positive_total = 0.0
+    for row_obj in rows:
+        if not isinstance(row_obj, dict):
+            continue
+        key = row_obj.get(key_field)
+        if not isinstance(key, str):
+            continue
+        normalized_ms = _coerce_float(row_obj.get("normalized_ms"))
+        if normalized_ms is not None:
+            normalized[key] = normalized_ms
+            continue
+        delta = _coerce_float(row_obj.get("delta"))
+        if delta is None or delta <= 0:
+            continue
+        positive_rows.append((key, delta))
+        positive_total += delta
+
+    if normalized or normalize_positive_deltas_ms is None or positive_total <= 0:
+        return normalized
+    return {key: (delta / positive_total) * normalize_positive_deltas_ms for key, delta in positive_rows}
+
+
+def _augment_compare_attribution_with_xprof(
+    compare_metrics: dict[str, object],
+    xprof_payload: dict[str, object],
+) -> dict[str, object]:
+    augmented = dict(compare_metrics)
+    interaction_remainder_ms = _coerce_float(augmented.get("interaction_remainder_ms"))
+    xprof_norm_budget = _coerce_float(xprof_payload.get("normalize_positive_deltas_ms"))
+    normalize_positive_deltas_ms = (
+        interaction_remainder_ms if interaction_remainder_ms is not None else xprof_norm_budget
+    )
+
+    derived_metrics_obj = xprof_payload.get("derived_metrics")
+    derived_metrics = derived_metrics_obj if isinstance(derived_metrics_obj, dict) else {}
+
+    framework_family_obj = derived_metrics.get("framework_family_normalized_ms")
+    framework_family = framework_family_obj if isinstance(framework_family_obj, dict) else {}
+    if not framework_family:
+        framework_compare_obj = xprof_payload.get("framework_op_stats")
+        framework_compare = framework_compare_obj if isinstance(framework_compare_obj, dict) else {}
+        framework_family = _xprof_metric_map_from_rows(
+            framework_compare.get("family_positive_deltas", []) if isinstance(framework_compare, dict) else [],
+            key_field="family",
+            normalize_positive_deltas_ms=normalize_positive_deltas_ms,
+        )
+
+    category_norm_obj = derived_metrics.get("op_profile_category_normalized_ms")
+    category_norm = category_norm_obj if isinstance(category_norm_obj, dict) else {}
+    if not category_norm:
+        category_compare_obj = xprof_payload.get("op_profile_category")
+        category_compare = category_compare_obj if isinstance(category_compare_obj, dict) else {}
+        category_norm = _xprof_metric_map_from_rows(
+            category_compare.get("positive_deltas", []) if isinstance(category_compare, dict) else [],
+            key_field="name",
+            normalize_positive_deltas_ms=normalize_positive_deltas_ms,
+        )
+
+    augmented["xprof_compare"] = xprof_payload
+    if framework_family:
+        augmented["xprof_framework_family_normalized_ms"] = framework_family
+        dispatch = _coerce_float(framework_family.get("dispatch_shard_shell")) or 0.0
+        ad_wrapper = _coerce_float(framework_family.get("ad_wrapper_shell")) or 0.0
+        layout = _coerce_float(framework_family.get("layout_shell")) or 0.0
+        residual = _coerce_float(framework_family.get("residual_add_shell")) or 0.0
+        augmented["xprof_dispatch_shard_shell_delta_ms"] = dispatch
+        augmented["xprof_ad_wrapper_shell_delta_ms"] = ad_wrapper
+        augmented["xprof_layout_shell_delta_ms"] = layout
+        augmented["xprof_residual_add_shell_delta_ms"] = residual
+        augmented["xprof_hybrid_generic_shell_delta_budget_ms"] = dispatch + ad_wrapper + layout + residual
+
+    if category_norm:
+        augmented["xprof_op_profile_category_normalized_ms"] = category_norm
+        idle = _coerce_float(category_norm.get("IDLE"))
+        if idle is not None:
+            augmented["xprof_idle_attributed_ms"] = idle
+        custom_call = _coerce_float(category_norm.get("custom-call"))
+        if custom_call is not None:
+            augmented["xprof_custom_call_attributed_ms"] = custom_call
+        all_gather = _coerce_float(category_norm.get("all-gather")) or _coerce_float(category_norm.get("all_gather"))
+        if all_gather is not None:
+            augmented["xprof_all_gather_attributed_ms"] = all_gather
+        custom_fusion = _coerce_float(category_norm.get("custom fusion"))
+        if custom_fusion is not None:
+            augmented["xprof_custom_fusion_attributed_ms"] = custom_fusion
+        data_formatting = _coerce_float(category_norm.get("data formatting"))
+        if data_formatting is not None:
+            augmented["xprof_data_formatting_attributed_ms"] = data_formatting
+    return augmented
+
+
 def _wait_for_ray_job(
     *,
     cluster: str,
@@ -3119,6 +3394,85 @@ def cmd_hf_download_trace(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_xprof_compare(args: argparse.Namespace) -> int:
+    before_xplane = args.before_xplane.resolve()
+    after_xplane = args.after_xplane.resolve()
+    if not before_xplane.exists():
+        raise SystemExit(f"[gdnctl] Missing --before-xplane file: {before_xplane}")
+    if not after_xplane.exists():
+        raise SystemExit(f"[gdnctl] Missing --after-xplane file: {after_xplane}")
+
+    payload = _run_xprof_compare_remote(
+        cluster=args.cluster,
+        tpu_name=args.tpu_name,
+        before_xplane=before_xplane,
+        after_xplane=after_xplane,
+        top_k=args.top_k,
+        normalize_positive_deltas_ms=args.normalize_positive_deltas_ms,
+        remote_stage_dir=args.remote_stage_dir,
+        sync_repo=args.sync_repo,
+        keep_remote=args.keep_remote,
+    )
+
+    output_json = json.dumps(payload, indent=2, sort_keys=True)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(output_json + "\n", encoding="utf-8")
+        print(str(args.output))
+    else:
+        print(output_json)
+    return 0
+
+
+def cmd_xprof_compare_runs(args: argparse.Namespace) -> int:
+    from marin.profiling import download_latest_profile_artifact_for_run
+
+    download_root = Path(args.download_root).resolve() if args.download_root is not None else None
+    before_download = download_latest_profile_artifact_for_run(
+        args.before_run_target,
+        entity=args.entity,
+        project=args.project,
+        alias=args.alias,
+        download_root=download_root,
+    )
+    after_download = download_latest_profile_artifact_for_run(
+        args.after_run_target,
+        entity=args.entity,
+        project=args.project,
+        alias=args.alias,
+        download_root=download_root,
+    )
+
+    before_xplane = _find_xplane_pb(before_download.artifact_dir)
+    after_xplane = _find_xplane_pb(after_download.artifact_dir)
+    payload = _run_xprof_compare_remote(
+        cluster=args.cluster,
+        tpu_name=args.tpu_name,
+        before_xplane=before_xplane,
+        after_xplane=after_xplane,
+        top_k=args.top_k,
+        normalize_positive_deltas_ms=args.normalize_positive_deltas_ms,
+        remote_stage_dir=args.remote_stage_dir,
+        sync_repo=args.sync_repo,
+        keep_remote=args.keep_remote,
+    )
+    payload["before_run_target"] = args.before_run_target
+    payload["after_run_target"] = args.after_run_target
+    payload["before_artifact_ref"] = before_download.artifact_ref
+    payload["after_artifact_ref"] = after_download.artifact_ref
+    payload["before_xplane_local"] = str(before_xplane)
+    payload["after_xplane_local"] = str(after_xplane)
+
+    output_json = json.dumps(payload, indent=2, sort_keys=True)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(output_json + "\n", encoding="utf-8")
+        print(str(args.output))
+    else:
+        print(output_json)
+    return 0
+
+
 def cmd_summary_attribution(args: argparse.Namespace) -> int:
     summary = json.loads(args.summary.read_text(encoding="utf-8"))
     result = _profile_summary_attribution(
@@ -3193,7 +3547,14 @@ def cmd_summary_attribution(args: argparse.Namespace) -> int:
                         compare_metrics["interaction_remainder_ms"] = (
                             upper_bound_gap_ms - train_path_budget_ms - hybrid_generic_shell_delta_budget_ms
                         )
+        xprof_compare_json = getattr(args, "xprof_compare_json", None)
+        if xprof_compare_json is not None:
+            xprof_payload = json.loads(xprof_compare_json.read_text(encoding="utf-8"))
+            payload["xprof_compare_json"] = str(xprof_compare_json)
+            compare_metrics = _augment_compare_attribution_with_xprof(compare_metrics, xprof_payload)
         payload["compare_attribution"] = compare_metrics
+    elif getattr(args, "xprof_compare_json", None) is not None:
+        raise SystemExit("[gdnctl] --xprof-compare-json requires --baseline-summary.")
 
     output_json = json.dumps(payload, indent=2, sort_keys=True)
     if args.output is not None:
@@ -4700,6 +5061,74 @@ def build_parser() -> argparse.ArgumentParser:
     hf_trace.add_argument("--token", default=None, help="HF token (optional)")
     hf_trace.set_defaults(func=cmd_hf_download_trace)
 
+    xprof_compare = subparsers.add_parser(
+        "xprof-compare",
+        help="Run marin.profiling xprof comparison on a held dev TPU/Linux host and save JSON locally.",
+    )
+    xprof_compare.add_argument("--cluster", default="us-east5-a")
+    xprof_compare.add_argument("--tpu-name", required=True)
+    xprof_compare.add_argument("--before-xplane", type=Path, required=True)
+    xprof_compare.add_argument("--after-xplane", type=Path, required=True)
+    xprof_compare.add_argument("--top-k", type=int, default=20)
+    xprof_compare.add_argument("--normalize-positive-deltas-ms", type=float, default=None)
+    xprof_compare.add_argument(
+        "--remote-stage-dir",
+        default=".agents/xprof_compare",
+        help="Remote subdirectory under ~/marin used to stage the two XPlane files.",
+    )
+    xprof_compare.add_argument(
+        "--sync-repo",
+        action="store_true",
+        help="Synchronize the repo to the held dev TPU before running xprof analysis.",
+    )
+    xprof_compare.add_argument(
+        "--keep-remote",
+        action="store_true",
+        help="Keep staged remote XPlane files instead of deleting them after analysis.",
+    )
+    xprof_compare.add_argument("--output", type=Path, default=None, help="Optional local JSON output path.")
+    xprof_compare.set_defaults(func=cmd_xprof_compare)
+
+    xprof_compare_runs = subparsers.add_parser(
+        "xprof-compare-runs",
+        help=(
+            "Download latest W&B profile artifacts for two runs, compare their XPlane files on a "
+            "held dev TPU/Linux host, and save JSON locally."
+        ),
+    )
+    xprof_compare_runs.add_argument("--cluster", default="us-east5-a")
+    xprof_compare_runs.add_argument("--tpu-name", required=True)
+    xprof_compare_runs.add_argument("--before-run-target", required=True)
+    xprof_compare_runs.add_argument("--after-run-target", required=True)
+    xprof_compare_runs.add_argument("--entity", default=None)
+    xprof_compare_runs.add_argument("--project", default=None)
+    xprof_compare_runs.add_argument("--alias", default="latest")
+    xprof_compare_runs.add_argument(
+        "--download-root",
+        type=Path,
+        default=REPO_ROOT / ".profiles/xprof_compare",
+        help="Local root for downloaded W&B profile artifacts.",
+    )
+    xprof_compare_runs.add_argument("--top-k", type=int, default=20)
+    xprof_compare_runs.add_argument("--normalize-positive-deltas-ms", type=float, default=None)
+    xprof_compare_runs.add_argument(
+        "--remote-stage-dir",
+        default=".agents/xprof_compare",
+        help="Remote subdirectory under ~/marin used to stage the two XPlane files.",
+    )
+    xprof_compare_runs.add_argument(
+        "--sync-repo",
+        action="store_true",
+        help="Synchronize the repo to the held dev TPU before running xprof analysis.",
+    )
+    xprof_compare_runs.add_argument(
+        "--keep-remote",
+        action="store_true",
+        help="Keep staged remote XPlane files instead of deleting them after analysis.",
+    )
+    xprof_compare_runs.add_argument("--output", type=Path, default=None, help="Optional local JSON output path.")
+    xprof_compare_runs.set_defaults(func=cmd_xprof_compare_runs)
+
     summary_attr = subparsers.add_parser(
         "summary-attribution",
         help="Compute train-path-aware attribution metrics from a normalized profile summary.",
@@ -4725,6 +5154,12 @@ def build_parser() -> argparse.ArgumentParser:
     summary_attr.add_argument("--baseline-gdn-layers-per-block", type=int, default=None)
     summary_attr.add_argument("--gdn-block-size", type=int, default=None)
     summary_attr.add_argument("--baseline-gdn-block-size", type=int, default=None)
+    summary_attr.add_argument(
+        "--xprof-compare-json",
+        type=Path,
+        default=None,
+        help="Optional xprof comparison JSON from gdnctl xprof-compare or xprof-compare-runs.",
+    )
     summary_attr.add_argument("--top-k", type=int, default=5)
     summary_attr.add_argument("--output", type=Path, default=None, help="Optional JSON output path.")
     summary_attr.set_defaults(func=cmd_summary_attribution)

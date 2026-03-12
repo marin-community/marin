@@ -10,13 +10,17 @@ Use this recipe to turn a `jax_profile` artifact into a deterministic, agent-con
 5. re-profile and compare.
 
 ## Scope
-MVP ingestion source of truth:
+Primary ingestion source of truth:
 - xprof-exported trace JSON inside Levanter `jax_profile` artifacts:
   - `plugins/profile/<timestamp>/perfetto_trace.json.gz` (preferred)
   - `plugins/profile/<timestamp>/*.trace.json.gz` (fallback)
 
-MVP non-goal:
-- direct `*.xplane.pb` parsing (kept as a follow-up increment)
+Supplementary analysis source:
+- direct `*.xplane.pb` parsing via xprof when you need program/op-family attribution that Perfetto summaries do not expose cleanly
+
+Important constraint:
+- xprof raw conversion is currently reliable only on a Linux host with xprof installed.
+- When using `xprof.convert.raw_to_tool_data`, force `use_saved_result=False`. Without that flag, matched before/after traces from the same TPU host can collapse to identical output and destroy the comparison.
 
 ## Capture Profiles
 Use Levanter profiler flags so profiles are uploaded consistently as `jax_profile` artifacts:
@@ -114,6 +118,76 @@ uv run python lib/marin/tools/profile_summary.py report \
 Trace quality checks are surfaced in `trace_overview`:
 - `suspected_truncation`: `true` when event counts match a known export cap pattern.
 - `quality_warnings`: warnings to treat hotspot/gap attribution with extra caution.
+
+## XPlane / xprof Comparison
+Use xprof when Perfetto leaves a large unattributed remainder and you need:
+- framework-op self-time deltas,
+- op-profile category deltas,
+- shell-family attribution (dispatch/sharding, AD/wrapper, layout, residual/add).
+
+The base comparison CLI lives in `marin.profiling`:
+
+```bash
+uv run --with xprof python -m marin.profiling.cli xprof-compare \
+  --before-xplane /path/to/before.xplane.pb \
+  --after-xplane /path/to/after.xplane.pb \
+  --normalize-positive-deltas-ms 47.972424 \
+  --output /tmp/xprof_compare.json
+```
+
+For local macOS workflows, use the `gdnctl` wrapper to stage the XPlane files to a held dev TPU and run the Linux-side analysis there:
+
+```bash
+uv run python scripts/gdn/gdnctl.py xprof-compare \
+  --cluster us-east5-a \
+  --tpu-name calvinxu-gdn \
+  --before-xplane scratch/xprof_iter92/attn/plugins/profile/2026_03_12_22_48_45/t1v-n-a0df86f9-w-0.xplane.pb \
+  --after-xplane scratch/xprof_iter92/hybrid/plugins/profile/2026_03_12_22_47_02/t1v-n-a0df86f9-w-0.xplane.pb \
+  --normalize-positive-deltas-ms 47.972424 \
+  --output scratch/xprof_iter92/iter92_xprof_compare.json
+```
+
+Use `--sync-repo` if the held dev TPU does not already have the current repo state.
+
+If you already know the matched W&B runs and want `gdnctl` to download the latest profile artifacts before comparing:
+
+```bash
+uv run python scripts/gdn/gdnctl.py xprof-compare-runs \
+  --cluster us-east5-a \
+  --tpu-name "$USER-gdn" \
+  --before-run-target <attn_run_url_or_id> \
+  --after-run-target <hybrid_run_url_or_id> \
+  --normalize-positive-deltas-ms 47.972424 \
+  --output scratch/xprof_iter92/iter92_xprof_compare.json
+```
+
+To merge xprof shell accounting into the same matched hybrid-vs-attention attribution JSON used by the hillclimb loop:
+
+```bash
+uv run python scripts/gdn/gdnctl.py summary-attribution \
+  --summary <hybrid_summary.json> \
+  --baseline-summary <attn_summary.json> \
+  --step-duration-ms <hybrid_step_ms> \
+  --baseline-step-duration-ms <attn_step_ms> \
+  --upper-bound-step-ms <attn_step_ms> \
+  --xprof-compare-json scratch/xprof_iter92/iter92_xprof_compare.json \
+  --output scratch/xprof_iter92/iter92_summary_attribution.json
+```
+
+The current comparison report includes:
+- `framework_op_stats.positive_deltas`
+- `framework_op_stats.family_positive_deltas`
+- `op_profile_category.positive_deltas`
+
+The shell-family classifier currently maps hybrid-only wrapper paths into:
+- `dispatch_shard_shell`
+- `ad_wrapper_shell`
+- `layout_shell`
+- `residual_add_shell`
+
+Treat xprof as a complement to Perfetto, not a replacement:
+- Perfetto remains the source of truth for promotion decisions and step-level budgets.
+- xprof is the right tool for decomposing `interaction_remainder_ms` into concrete op/program families before deciding what boundary to widen next.
 
 ## Agent Queries
 Top ops:

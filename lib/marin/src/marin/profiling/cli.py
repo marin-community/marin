@@ -28,6 +28,7 @@ from marin.profiling.tracking import (
     make_regression_record,
     summarize_regression_history,
 )
+from marin.profiling.xprof_analysis import build_xprof_comparison_report
 
 _BREAKDOWN_MODES = ("exclusive_per_track", "exclusive_global")
 
@@ -192,6 +193,21 @@ def parse_args() -> argparse.Namespace:
     bundle.add_argument("--output-dir", type=Path, required=True, help="Directory for bundle outputs.")
     bundle.add_argument("--output", type=Path, help="Optional bundle-manifest JSON path. Defaults to stdout.")
 
+    xprof_compare = subparsers.add_parser(
+        "xprof-compare", help="Compare two XPlane files using xprof framework_op_stats and op_profile."
+    )
+    xprof_compare.add_argument("--before-xplane", type=Path, required=True, help="Baseline XPlane protobuf path.")
+    xprof_compare.add_argument("--after-xplane", type=Path, required=True, help="Candidate XPlane protobuf path.")
+    xprof_compare.add_argument(
+        "--top-k", type=int, default=20, help="Maximum number of positive/negative deltas to report."
+    )
+    xprof_compare.add_argument(
+        "--normalize-positive-deltas-ms",
+        type=float,
+        help="Optional ms budget used to scale positive delta shares for attribution.",
+    )
+    xprof_compare.add_argument("--output", type=Path, help="Optional output JSON path. Defaults to stdout.")
+
     publish = subparsers.add_parser("publish", help="Publish summary/report as a W&B profile_summary artifact.")
     publish.add_argument("--summary", type=Path, required=True, help="Path to profile summary JSON.")
     publish.add_argument("--report", type=Path, help="Optional markdown report path to include.")
@@ -331,6 +347,22 @@ def main() -> None:
             history_path=args.history,
         )
         payload = result.to_dict()
+        output_json = json.dumps(payload, indent=2, sort_keys=True)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(output_json + "\n", encoding="utf-8")
+            print(str(args.output))
+        else:
+            print(output_json)
+        return
+
+    if args.command == "xprof-compare":
+        payload = build_xprof_comparison_report(
+            before_xplane=args.before_xplane,
+            after_xplane=args.after_xplane,
+            top_k=args.top_k,
+            normalize_positive_deltas_ms=args.normalize_positive_deltas_ms,
+        )
         output_json = json.dumps(payload, indent=2, sort_keys=True)
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

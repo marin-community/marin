@@ -17,6 +17,7 @@ from marin.profiling.publish import (
 )
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
+from marin.profiling.xprof_analysis import build_xprof_comparison_report
 from marin.profiling.schema import ProfileSummary, profile_summary_from_dict
 from marin.profiling.tracking import (
     RegressionThresholds,
@@ -32,6 +33,7 @@ __all__ = [
     "RegressionThresholds",
     "assess_profile_regression",
     "build_markdown_report",
+    "build_xprof_comparison_report",
     "compare_profile_summaries",
     "download_latest_profile_artifact_for_run",
     "download_wandb_profile_artifact",

@@ -89,6 +89,9 @@ Coverage slots:
   - benchmark family,
   - step window,
   - fixed `3/4` GDN hybrid config.
+- Prefer xprof-backed shell accounting for this slot:
+  - compare matched XPlane artifacts with `gdnctl xprof-compare-runs`
+  - feed that JSON into `gdnctl summary-attribution --xprof-compare-json ...`
 - Record:
   - `step_duration_ms`
   - `train_path_budget_ms`
@@ -106,6 +109,12 @@ Coverage slots:
   - `gap_explained_by_hybrid_generic_shell_delta`
   - `hybrid_generic_shell_delta_topk`
   - `remainder_topk`
+  - `xprof_hybrid_generic_shell_delta_budget_ms`
+  - `xprof_dispatch_shard_shell_delta_ms`
+  - `xprof_ad_wrapper_shell_delta_ms`
+  - `xprof_layout_shell_delta_ms`
+  - `xprof_residual_add_shell_delta_ms`
+  - `xprof_idle_attributed_ms`
 
 ### L3) Fixed-4-layer block design / skeleton
 - This is a design-and-scaffold iteration, not a promotion candidate unless it also improves step time.
@@ -165,6 +174,12 @@ Acceptance gate checklist (must appear in the iteration writeup):
   - `Sharding shell budget: ...`
   - `Layout shell budget: ...`
   - `Residual/add shell budget: ...`
+  - `xprof hybrid generic shell delta budget: ...` when a matched XPlane pair is available
+  - `xprof dispatch/shard shell delta budget: ...` when a matched XPlane pair is available
+  - `xprof AD/wrapper shell delta budget: ...` when a matched XPlane pair is available
+  - `xprof layout shell delta budget: ...` when a matched XPlane pair is available
+  - `xprof residual/add shell delta budget: ...` when a matched XPlane pair is available
+  - `xprof IDLE attributed remainder: ...` when a matched XPlane pair is available
   - `Step duration: ...`
   - `Remainder budget: ...`
   - `Interaction remainder: ...`
@@ -186,6 +201,7 @@ Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
 - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --no-sync`
 - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --no-sync`
+- `uv run python scripts/gdn/gdnctl.py xprof-compare-runs --cluster us-east5-a --tpu-name "$USER-gdn" --before-run-target <attn_run_url_or_id> --after-run-target <hybrid_run_url_or_id> --normalize-positive-deltas-ms <interaction_remainder_ms> --output <xprof_json>`
 - `uv run python scripts/gdn/gdnctl.py summary-attribution ...`
 - `uv run python scripts/gdn/gdnctl.py lint-log`
 

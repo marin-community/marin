@@ -241,3 +241,81 @@ def test_cmd_summary_attribution_emits_compare_attribution(tmp_path: Path) -> No
     assert math.isclose(compare["hybrid_generic_shell_delta_budget_ms"], 2.25)
     assert math.isclose(compare["gap_explained_by_hybrid_generic_shell_delta"], 2.25 / 50.0)
     assert math.isclose(compare["interaction_remainder_ms"], 50.0 - 2.25)
+
+
+def test_cmd_summary_attribution_merges_xprof_compare(tmp_path: Path) -> None:
+    candidate_summary = {
+        "hot_ops": [
+            {"count": 2, "total_duration": 4000.0, "tf_op_path": "HackableDecoderLayer/shard_map/pallas_call:"},
+        ],
+        "hierarchical_regions": [],
+    }
+    baseline_summary = {
+        "hot_ops": [
+            {"count": 2, "total_duration": 1000.0, "tf_op_path": "HackableDecoderLayer/shard_map/pallas_call:"},
+        ],
+        "hierarchical_regions": [],
+    }
+    xprof_compare = {
+        "normalize_positive_deltas_ms": 10.0,
+        "framework_op_stats": {
+            "family_positive_deltas": [
+                {"family": "dispatch_shard_shell", "delta": 9.0, "normalized_ms": 6.0},
+                {"family": "ad_wrapper_shell", "delta": 3.0, "normalized_ms": 2.0},
+                {"family": "layout_shell", "delta": 1.5, "normalized_ms": 1.0},
+                {"family": "residual_add_shell", "delta": 1.5, "normalized_ms": 1.0},
+            ],
+        },
+        "op_profile_category": {
+            "positive_deltas": [
+                {"name": "IDLE", "delta": 8.0, "normalized_ms": 7.5},
+                {"name": "custom-call", "delta": 2.0, "normalized_ms": 1.5},
+            ],
+        },
+        "derived_metrics": {
+            "framework_family_normalized_ms": {
+                "dispatch_shard_shell": 6.0,
+                "ad_wrapper_shell": 2.0,
+                "layout_shell": 1.0,
+                "residual_add_shell": 1.0,
+            },
+            "op_profile_category_normalized_ms": {"IDLE": 7.5, "custom-call": 1.5},
+        },
+    }
+    candidate_path = tmp_path / "candidate.json"
+    baseline_path = tmp_path / "baseline.json"
+    xprof_path = tmp_path / "xprof.json"
+    output_path = tmp_path / "output.json"
+    candidate_path.write_text(json.dumps(candidate_summary))
+    baseline_path.write_text(json.dumps(baseline_summary))
+    xprof_path.write_text(json.dumps(xprof_compare))
+
+    rc = gdnctl.cmd_summary_attribution(
+        argparse.Namespace(
+            summary=candidate_path,
+            baseline_summary=baseline_path,
+            step_duration_ms=100.0,
+            baseline_step_duration_ms=60.0,
+            upper_bound_step_ms=50.0,
+            gdn_layer_fraction=0.75,
+            baseline_gdn_layer_fraction=0.0,
+            gdn_layers_per_block=3,
+            baseline_gdn_layers_per_block=0,
+            gdn_block_size=4,
+            baseline_gdn_block_size=4,
+            xprof_compare_json=xprof_path,
+            top_k=4,
+            output=output_path,
+        )
+    )
+
+    assert rc == 0
+    payload = json.loads(output_path.read_text())
+    compare = payload["compare_attribution"]
+    assert math.isclose(compare["xprof_dispatch_shard_shell_delta_ms"], 6.0)
+    assert math.isclose(compare["xprof_ad_wrapper_shell_delta_ms"], 2.0)
+    assert math.isclose(compare["xprof_layout_shell_delta_ms"], 1.0)
+    assert math.isclose(compare["xprof_residual_add_shell_delta_ms"], 1.0)
+    assert math.isclose(compare["xprof_hybrid_generic_shell_delta_budget_ms"], 10.0)
+    assert math.isclose(compare["xprof_idle_attributed_ms"], 7.5)
+    assert math.isclose(compare["xprof_custom_call_attributed_ms"], 1.5)
