@@ -1,0 +1,7 @@
+{
+  "track": "ray",
+  "job_id": "ray-run-gq32-eqsw5-r2-20260310",
+  "cluster": "us-central1",
+  "experiment": "experiments/grug/moe/launch_qwen3_32b_a4b_v5p64_equal_shared.py",
+  "restart_count": 0
+}

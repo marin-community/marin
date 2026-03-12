@@ -299,12 +299,7 @@ def build_step(
     resolved_run_id = _resolve_run_id(run_stem)
 
     return ExecutorStep(
-        name=(
-            f"grug/gq32-v5p64-b{batch_size}-e{expert_axis_size}-c{cf_slug}"
-            f"{experts_slug}{topk_slug}{matched_slug}{intermediate_slug}{shared_slug}{hidden_slug}{layers_slug}{total_flops_slug}"
-            f"{remat_slug}{ce_slug}{overflow_slug}"
-            f"{ce_block_slug}{loader_slug}{shuffle_slug}{synthetic_slug}-p"
-        ),
+        name=f"grug/{run_stem}",
         fn=run_grug_moe_v5p_ep_profile,
         config=GrugMoeV5pEpProfileConfig(
             model=versioned(

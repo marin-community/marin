@@ -1196,3 +1196,43 @@ uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --cpu 4 --me
     - `bs320 / EP4 / cf1.1 / E64 / topk4 / shared2048 / match_activated_params / synthetic / offload_mlp`
     - `cross_entropy_implementation=pallas_tpu,xla`
     - no explicit CE `BlockSizes`
+
+### 2026-03-11 21:40 PT - GRUG-PERF-045 target-shape recommendation after corrected shared-width FLOPs accounting
+- Observation:
+  - Correcting `lm_flops_per_token(...)` to account for actual `shared_expert_intermediate_dim` materially changed the ranking of the geometry sweep.
+  - The earlier "no shared wins" conclusion was wrong under the buggy accounting.
+- Best corrected overall candidate:
+  - `es3r2`
+  - W&B: `gq32-v5p64-b320-e4-c1p25-e64-k4-ix1024-sx1024-h4096-l27-rom-cex-syn-p-es3r2`
+  - Meaning:
+    - `hidden_dim=4096`
+    - `num_layers=27`
+    - `EP=4`
+    - `num_experts=64`
+    - `topk=4`
+    - routed expert width `intermediate_dim=1024`
+    - shared expert width `shared_expert_intermediate_dim=1024`
+  - Result:
+    - max `throughput/tokens_per_second`: `139,044.68`
+    - corrected `flops/token`: `8.323e9`
+    - corrected model FLOPs/s: `1.157e15`
+    - final short-run loss: `13.9`
+- Best simpler companion candidate:
+  - `es2`
+  - W&B: `gq32-v5p64-b320-e4-c1p25-e64-k4-ix1536-sx1536-h3072-l32-rom-cex-syn-p-es2`
+  - Meaning:
+    - `hidden_dim=3072`
+    - `num_layers=32`
+    - `EP=4`
+    - `num_experts=64`
+    - `topk=4`
+    - routed expert width `intermediate_dim=1536`
+    - shared expert width `shared_expert_intermediate_dim=1536`
+  - Result:
+    - max `throughput/tokens_per_second`: `130,273.02`
+    - corrected `flops/token`: `8.360e9`
+    - corrected model FLOPs/s: `1.089e15`
+- Interpretation:
+  - `es3r2` is the current "best really-MoE-like" target: it keeps shared width modest and equal to routed width while beating the other equal-shared variants.
+  - `es2` is the cleaner, simpler fallback target in the same equal-shared-width design family.
+  - These are the two target shapes to carry into the longer real-data compare.
