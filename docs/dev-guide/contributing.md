@@ -13,13 +13,7 @@ cd marin
 uv venv --python 3.11
 source .venv/bin/activate
 uv sync --package marin --group dev
-cat <<'EOF' > .git/hooks/pre-commit
-#!/bin/sh
-set -e
-cd "$(git rev-parse --show-toplevel)"
-./infra/pre-commit.py --fix
-EOF
-chmod +x .git/hooks/pre-commit
+make setup_pre_commit
 ```
 
 Alternatively, you can install all the core dependencies and build `marin` as a Python
@@ -28,13 +22,29 @@ package with `make init`.
 ### Linting
 
 The Git hook configured above runs `./infra/pre-commit.py` before each commit so that the repo-standard lint/format checks pass.
-You can also run them manually with `./infra/pre-commit.py --all-files` or via `make lint`.
+You can also run them manually with `./infra/pre-commit.py --all-files --fix` or via `make lint`.
 
 ### Testing
 
-You can run the tests with `make test`.
+For most changes, start with targeted fast tests:
+
+```bash
+uv run pytest -m 'not slow' <relevant test paths>
+```
+
+Use `make test` when you need the full default test suite.
 
 *Note* that to run the unit tests, you must not have set `RAY_ADDRESS`. You can unset it with `unset RAY_ADDRESS` or `export RAY_ADDRESS=""`.
+
+### Opening a pull request
+
+Before opening a pull request:
+
+1. Run `./infra/pre-commit.py --all-files --fix`.
+2. Run `uv run pytest -m 'not slow'` for the files or packages you changed.
+3. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
+
+For the end-to-end branch and fork workflow, see [Submitting a pull request](../tutorials/submitting-pr.md).
 
 ## Guidelines
 

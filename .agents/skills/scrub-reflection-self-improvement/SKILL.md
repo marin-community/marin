@@ -21,13 +21,26 @@ Use this skill on scheduled scrub turns to identify and land high-leverage impro
 - Recurring failures or avoidable manual steps in experiments, scripts, and infra operations.
 - Capability gaps that reduce the value of agent-assisted contributions.
 
+## Triage Checklist
+
+Run a lightweight, repeatable scan before choosing work:
+
+1. Review recent open issues and open PRs for repeated friction clusters.
+2. Review the latest commits on `main` for changes that imply follow-on docs/workflow updates.
+3. Search `AGENTS.md`, `.agents/skills/`, and docs for stale workflow guidance related to those clusters.
+4. De-duplicate against existing issues/PRs before creating new artifacts.
+
+When possible, prefer improvements that remove recurring operator time (for example,
+turning ad-hoc scrub judgment into explicit repeatable guidance).
+
 ## Decision Heuristics
 
 - Pick the highest-leverage change with the lowest coordination overhead.
 - De-duplicate against existing issues/PRs before opening new work.
 - When an improvement changes recurring workflow guidance, codify it in durable repo instructions:
-  `AGENTS.md` for cross-cutting agent behavior, or `docs/recipes/*.md` for repeatable task workflows.
+  `AGENTS.md` for cross-cutting agent behavior, or `.agents/skills/` for repeatable task workflows.
 - If no justified improvement exists now, choose a no-op outcome.
+- Prefer direct implementation over opening new issues when the change is fully in-repo and low-risk.
 
 ## Output
 
@@ -37,3 +50,9 @@ Use this skill on scheduled scrub turns to identify and land high-leverage impro
 - If publish is blocked (auth, permissions, CI infra, etc.), report the blocker and set a future `needs_followup_at` instead of ending the run.
 - If you choose no-op, include explicit inspected signals and why no justified improvement exists now.
 - Always end with the required `HARNESS_SCRUB_LOOP` footer (provided by the base scrub contract).
+
+For no-op outcomes, include at minimum:
+
+- which issue/PR/commit windows were inspected,
+- why each candidate was not suitable for this run,
+- and why deferring to the next scheduled run is preferable to opening a low-signal artifact now.

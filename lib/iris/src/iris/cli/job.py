@@ -25,8 +25,8 @@ from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug
 from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
+from iris.cluster.constraints import Constraint, WellKnownAttribute, region_constraint, zone_constraint
 from iris.cluster.types import (
-    Constraint,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -35,8 +35,6 @@ from iris.cluster.types import (
     ResourceSpec,
     get_tpu_topology,
     gpu_device,
-    region_constraint,
-    zone_constraint,
     tpu_device,
 )
 from iris.rpc import cluster_pb2
@@ -231,6 +229,85 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
     )
 
 
+def _levenshtein(a: str, b: str) -> int:
+    if len(a) < len(b):
+        return _levenshtein(b, a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1] + [0] * len(b)
+        for j, cb in enumerate(b):
+            curr[j + 1] = min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (ca != cb))
+        prev = curr
+    return prev[-1]
+
+
+def _find_closest(value: str, known: set[str], max_distance: int = 5) -> str | None:
+    """Return the closest match from *known* by edit distance, or None."""
+    best, best_dist = None, max_distance + 1
+    for candidate in sorted(known):
+        dist = _levenshtein(value, candidate)
+        if dist < best_dist:
+            best, best_dist = candidate, dist
+    return best if best_dist <= max_distance else None
+
+
+def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
+    """Extract known regions and zones from an IrisClusterConfig proto.
+
+    Returns:
+        (regions, zones) sets derived from scale group worker attributes.
+    """
+    regions: set[str] = set()
+    zones: set[str] = set()
+    for sg in config.scale_groups.values():
+        attrs = sg.worker.attributes
+        if WellKnownAttribute.REGION in attrs:
+            regions.add(attrs[WellKnownAttribute.REGION])
+        if WellKnownAttribute.ZONE in attrs:
+            zones.add(attrs[WellKnownAttribute.ZONE])
+    return regions, zones
+
+
+def validate_region_zone(
+    regions: tuple[str, ...] | None,
+    zone: str | None,
+    config,
+) -> None:
+    """Validate --region/--zone CLI values against the cluster config.
+
+    Raises click.BadParameter if a value doesn't match any known region/zone.
+    Only validates when a config is available (i.e. --config was passed).
+    """
+    if config is None:
+        return
+
+    known_regions, known_zones = _known_regions_and_zones(config)
+
+    if not known_regions and not known_zones:
+        return
+
+    if regions:
+        for r in regions:
+            if r not in known_regions:
+                suggestion = _find_closest(r, known_regions)
+                hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+                raise click.BadParameter(
+                    f"'{r}' is not a known region in the cluster config.{hint}"
+                    f" Known regions: {', '.join(sorted(known_regions))}",
+                    param_hint="'--region'",
+                )
+
+    if zone:
+        if zone not in known_zones:
+            suggestion = _find_closest(zone, known_zones)
+            hint = f" Did you mean '{suggestion}'?" if suggestion else ""
+            raise click.BadParameter(
+                f"'{zone}' is not a known zone in the cluster config.{hint}"
+                f" Known zones: {', '.join(sorted(known_zones))}",
+                param_hint="'--zone'",
+            )
+
+
 def build_resources(
     tpu: str | None,
     gpu: str | None,
@@ -333,7 +410,7 @@ def resolve_multinode_tpu_defaults(
             f"Using explicit replicas={replicas} with coscheduling by tpu-name."
         )
 
-    coscheduling = CoschedulingConfig(group_by="tpu-name")
+    coscheduling = CoschedulingConfig(group_by=WellKnownAttribute.TPU_NAME)
     return replicas, coscheduling
 
 
@@ -591,6 +668,7 @@ def run(
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    validate_region_zone(region or None, zone, ctx.obj.get("config"))
 
     command = list(cmd)
     if not command:
@@ -748,6 +826,12 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
 )
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
 @click.option(
+    "--level",
+    type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
+    default=None,
+    help="Minimum log level to display (e.g., --level warning).",
+)
+@click.option(
     "--include-children/--no-include-children",
     default=False,
     help="Include logs from child jobs (nested submissions).",
@@ -759,6 +843,7 @@ def logs(
     since_ms: int | None,
     since_seconds: int | None,
     follow: bool,
+    level: str | None,
     include_children: bool,
 ) -> None:
     """Stream task logs for a job using batch log fetching."""
@@ -774,6 +859,8 @@ def logs(
     start_since_ms = since_ms or 0
     job_name = JobName.from_wire(job_id)
 
+    min_level = level.upper() if level else ""
+
     if follow:
         job = Job(client, job_name)
         job.wait(
@@ -781,6 +868,7 @@ def logs(
             include_children=include_children,
             timeout=float("inf"),
             raise_on_failure=False,
+            min_level=min_level,
         )
         return
 
@@ -788,6 +876,7 @@ def logs(
         job_name,
         include_children=include_children,
         start=Timestamp.from_ms(start_since_ms) if start_since_ms > 0 else None,
+        min_level=min_level,
     )
     for entry in entries:
         ts = entry.timestamp.as_short_time()

@@ -19,12 +19,11 @@ import logging
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
@@ -67,6 +66,7 @@ class ControllerDashboard:
             Route("/", self._dashboard),
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
+            Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
@@ -74,25 +74,22 @@ class ControllerDashboard:
         return Starlette(routes=routes)
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Controller", "/static/controller/app.js"))
+        return HTMLResponse(html_shell("Iris Controller", "controller"))
 
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Job Detail", "/static/controller/job-detail.js"))
+        return HTMLResponse(html_shell("Job Detail", "controller"))
 
     def _worker_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Worker Detail", "/static/controller/worker-detail.js"))
+        return HTMLResponse(html_shell("Worker Detail", "controller"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
-        workers_resp = self._service.list_workers(cluster_pb2.Controller.ListWorkersRequest(), None)
-        jobs_resp = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
-        worker_count = len(workers_resp.workers)
-        job_count = len(jobs_resp.jobs)
+        return JSONResponse({"status": "ok"})
 
-        response = {
-            "status": "ok",
-            "workers": worker_count,
-            "jobs": job_count,
-        }
-
-        return JSONResponse(response)
+    def _bundle_download(self, request: Request) -> Response:
+        bundle_id = request.path_params["bundle_id"]
+        try:
+            data = self._service.bundle_zip(bundle_id)
+        except FileNotFoundError:
+            return Response(f"Bundle not found: {bundle_id}", status_code=404)
+        return Response(data, media_type="application/zip")

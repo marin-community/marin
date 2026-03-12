@@ -19,12 +19,14 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.config import make_local_config
+from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
     ControllerConfig as _InnerControllerConfig,
     RpcWorkerStubFactory,
 )
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
@@ -44,6 +46,7 @@ def create_local_autoscaler(
     config: config_pb2.IrisClusterConfig,
     controller_address: str,
     threads: ThreadContainer | None = None,
+    db: ControllerDB | None = None,
 ) -> tuple[Autoscaler, tempfile.TemporaryDirectory]:
     """Create Autoscaler with LocalPlatform for all scale groups.
 
@@ -76,10 +79,16 @@ def create_local_autoscaler(
     worker_attributes_by_group: dict[str, dict[str, str | int | float]] = {}
     gpu_count_by_group: dict[str, int] = {}
     for name, sg_config in config.scale_groups.items():
+        attrs: dict[str, str | int | float] = {}
+        if sg_config.HasField("resources"):
+            attrs.update(worker_attributes_from_resources(sg_config.resources))
         if sg_config.HasField("worker") and sg_config.worker.attributes:
-            worker_attributes_by_group[name] = dict(sg_config.worker.attributes)
-        if sg_config.resources.gpu_count > 0:
-            gpu_count_by_group[name] = sg_config.resources.gpu_count
+            attrs.update(sg_config.worker.attributes)
+        worker_attributes_by_group[name] = attrs
+        if sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and sg_config.resources.device_count > 0:
+            gpu_count_by_group[name] = sg_config.resources.device_count
+
+    storage_prefix = config.storage.bundle_prefix or ""
 
     platform = LocalPlatform(
         label_prefix=label_prefix,
@@ -90,6 +99,7 @@ def create_local_autoscaler(
         port_allocator=port_allocator,
         worker_attributes_by_group=worker_attributes_by_group,
         gpu_count_by_group=gpu_count_by_group,
+        storage_prefix=storage_prefix,
     )
 
     scale_up_delay = Duration.from_proto(config.defaults.autoscaler.scale_up_delay)
@@ -103,6 +113,7 @@ def create_local_autoscaler(
             scale_up_cooldown=scale_up_delay,
             scale_up_rate_limit=sg_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=sg_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
+            db=db,
         )
 
     autoscaler = Autoscaler.from_config(
@@ -110,6 +121,7 @@ def create_local_autoscaler(
         config=config.defaults.autoscaler,
         platform=platform,
         threads=threads,
+        db=db,
     )
     return autoscaler, temp_dir
 
@@ -123,7 +135,7 @@ class _InProcessController(Protocol):
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
-    def restore_from_snapshot(self) -> bool: ...
+    def restore_from_checkpoint(self) -> bool: ...
 
     @property
     def url(self) -> str: ...
@@ -134,6 +146,10 @@ class LocalController:
 
     Runs Controller + Autoscaler(LocalPlatform) in the current process.
     Workers are threads, not VMs. No Docker, no GCS, no SSH.
+
+    A single instance can be stopped and restarted via restart(). The controller
+    DB lives in a persistent _db_dir created at construction time, so checkpoints
+    written before stop() are found and restored on the next start().
     """
 
     def __init__(
@@ -148,6 +164,8 @@ class LocalController:
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
         self._stopped = threading.Event()
+        # Persistent across stop()/start() so checkpoints survive restart().
+        self._db_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_db_")
 
     def start(self) -> str:
         self._stopped = threading.Event()
@@ -162,11 +180,14 @@ class LocalController:
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
+        db = ControllerDB(db_path=Path(self._db_dir.name) / "controller.sqlite3")
+
         # Autoscaler creates its own temp dirs for worker resources
         self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
             self._config,
             address,
             threads=autoscaler_threads,
+            db=db,
         )
 
         self._controller = _InnerController(
@@ -176,12 +197,14 @@ class LocalController:
                 bundle_prefix=self._config.storage.bundle_prefix or f"file://{bundle_dir}",
                 heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
+                log_dir=Path(self._db_dir.name),
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,
             threads=controller_threads,
+            db=db,
         )
-        self._controller.restore_from_snapshot()
+        self._controller.restore_from_checkpoint()
         self._controller.start()
         return self._controller.url
 
@@ -198,6 +221,11 @@ class LocalController:
         if self._temp_dir:
             self._temp_dir.cleanup()
             self._temp_dir = None
+
+    def close(self) -> None:
+        """Stop the controller and release all resources including the DB dir."""
+        self.stop()
+        self._db_dir.cleanup()
 
     def wait(self) -> None:
         """Block until stop() is called."""
@@ -236,14 +264,12 @@ def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
         name="local-cpu",
         min_slices=1,
         max_slices=max_workers,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(
             cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
-            gpu_count=0,
-            tpu_count=0,
+            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
         ),
     )
     base_config.scale_groups["local-cpu"].CopyFrom(sg)

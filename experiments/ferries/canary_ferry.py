@@ -6,9 +6,9 @@
 Trains to 1B tokens on v5p-8 with AdamH. Designed to run daily to catch infra
 and pretraining regressions early. See #2873 for the proposal.
 
-Each run embeds today's date in the step name so the executor sees a fresh
-output path and actually trains (instead of skipping on prior SUCCESS status).
-Override via CANARY_DATE env var for testing or reruns.
+Each run embeds RUN_ID in the step name so the executor sees a fresh output
+path and actually trains (instead of skipping on prior SUCCESS status).
+When RUN_ID is unset, a UTC timestamp suffix is used for local/manual runs.
 
 Optimal hyperparameters from mega-sweep-bs64-1b-hid512-v3 (trial 26, macro_loss=3.754):
   lr=0.00864, beta1=0.894, adam_lr=0.000502, beta2=0.999, eps=2.32e-07,
@@ -36,7 +36,7 @@ from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 
-CANARY_DATE = os.environ.get("CANARY_DATE", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"))
+RUN_ID = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 # --- Model: Qwen3 ~30M (hidden_dim=512) ---
 model = Qwen3Config(
@@ -92,7 +92,7 @@ def make_training_step(accelerator: str = "tpu"):
     )
 
     return default_train(
-        name=f"canary-ferry-{CANARY_DATE}",
+        name=f"canary-ferry-{RUN_ID}",
         tokenized=nemotron_mix,
         model_config=model,
         train_config=train_config,

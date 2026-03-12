@@ -1,4 +1,5 @@
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from google.protobuf import service as _service
@@ -97,6 +98,36 @@ class ListActorsResponse(_message.Message):
     ACTORS_FIELD_NUMBER: _ClassVar[int]
     actors: _containers.RepeatedCompositeFieldContainer[ActorInfo]
     def __init__(self, actors: _Optional[_Iterable[_Union[ActorInfo, _Mapping]]] = ...) -> None: ...
+
+class Operation(_message.Message):
+    __slots__ = ("operation_id", "state", "serialized_result", "error")
+    class State(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        PENDING: _ClassVar[Operation.State]
+        RUNNING: _ClassVar[Operation.State]
+        SUCCEEDED: _ClassVar[Operation.State]
+        FAILED: _ClassVar[Operation.State]
+        CANCELLED: _ClassVar[Operation.State]
+    PENDING: Operation.State
+    RUNNING: Operation.State
+    SUCCEEDED: Operation.State
+    FAILED: Operation.State
+    CANCELLED: Operation.State
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    SERIALIZED_RESULT_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    operation_id: str
+    state: Operation.State
+    serialized_result: bytes
+    error: ActorError
+    def __init__(self, operation_id: _Optional[str] = ..., state: _Optional[_Union[Operation.State, str]] = ..., serialized_result: _Optional[bytes] = ..., error: _Optional[_Union[ActorError, _Mapping]] = ...) -> None: ...
+
+class OperationId(_message.Message):
+    __slots__ = ("operation_id",)
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    operation_id: str
+    def __init__(self, operation_id: _Optional[str] = ...) -> None: ...
 
 class ActorService(_service.service): ...
 

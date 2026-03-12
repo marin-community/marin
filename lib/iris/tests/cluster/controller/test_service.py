@@ -13,12 +13,39 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.db import JOBS, TASKS, ATTEMPTS, ControllerDB, _tasks_with_attempts
+from iris.cluster.log_store import LogStore
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.state import ControllerState, ControllerTask
-from iris.cluster.types import JobName, WorkerId
-from iris.logging import BufferedLogRecord, LogRingBuffer
+from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.constraints import device_variant_constraint
+from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import cluster_pb2
+from iris.time_utils import Timestamp
+
+
+def _query_job(state: ControllerTransitions, job_id: JobName):
+    """Read a single job from state DB."""
+    with state._db.snapshot() as q:
+        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+
+
+def _query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName):
+    """Read tasks with attempts for a job."""
+    with state._db.snapshot() as q:
+        tasks = q.select(
+            TASKS,
+            where=TASKS.c.job_id == job_id.to_wire(),
+            order_by=(TASKS.c.task_index.asc(),),
+        )
+        if not tasks:
+            return []
+        attempts = q.select(
+            ATTEMPTS,
+            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
+            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        )
+    return _tasks_with_attempts(tasks, attempts)
 
 
 def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
@@ -29,37 +56,57 @@ def _make_test_entrypoint() -> cluster_pb2.RuntimeEntrypoint:
 
 
 # =============================================================================
-# Test Helpers - Wrap handle_event() for common test patterns
+# Test Helpers
 # =============================================================================
 
 
-def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: WorkerId) -> None:
-    """Dispatch a task to a worker: assign + mark running."""
-    state.handle_event(
-        TaskAssignedEvent(
-            task_id=task.task_id,
+def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
+    metadata = cluster_pb2.WorkerMetadata(
+        hostname=str(worker_id),
+        ip_address="127.0.0.1",
+        cpu_count=8,
+        memory_bytes=16 * 1024**3,
+        disk_bytes=100 * 1024**3,
+    )
+    state.register_or_refresh_worker(
+        worker_id=worker_id,
+        address=f"{worker_id}:8080",
+        metadata=metadata,
+        ts=Timestamp.now(),
+    )
+
+
+def _set_job_state(state: ControllerTransitions, job_id: JobName, state_value: int) -> None:
+    state._db.execute(
+        "UPDATE jobs SET state = ? WHERE job_id = ?",
+        (state_value, job_id.to_wire()),
+    )
+
+
+def _assign_and_transition(
+    state: ControllerTransitions,
+    task_id: JobName,
+    worker_id: WorkerId,
+    target_state: int,
+    *,
+    error: str | None = None,
+) -> None:
+    state.queue_assignments([Assignment(task_id=task_id, worker_id=worker_id)])
+    state.apply_task_updates(
+        HeartbeatApplyRequest(
             worker_id=worker_id,
+            worker_resource_snapshot=None,
+            updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=cluster_pb2.TASK_STATE_RUNNING)],
         )
     )
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=task.task_id,
-            new_state=cluster_pb2.TASK_STATE_RUNNING,
-            attempt_id=task.current_attempt_id,
+    if target_state != cluster_pb2.TASK_STATE_RUNNING:
+        state.apply_task_updates(
+            HeartbeatApplyRequest(
+                worker_id=worker_id,
+                worker_resource_snapshot=None,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
+            )
         )
-    )
-
-
-def transition_task(state: ControllerState, task: ControllerTask, new_state: int, *, error: str | None = None) -> None:
-    """Transition a task to a new state via handle_event."""
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=task.task_id,
-            new_state=new_state,
-            attempt_id=task.current_attempt_id,
-            error=error,
-        )
-    )
 
 
 @pytest.fixture
@@ -111,9 +158,15 @@ def worker_metadata():
 
 
 @pytest.fixture
-def state():
-    """Create a fresh ControllerState for each test."""
-    return ControllerState()
+def state(tmp_path):
+    """Create a fresh ControllerTransitions for each test."""
+    db_path = tmp_path / "controller.sqlite3"
+    db = ControllerDB(db_path=db_path)
+    log_store = LogStore(db_path=db_path)
+    s = ControllerTransitions(db=db, log_store=log_store)
+    yield s
+    log_store.close()
+    db.close()
 
 
 class MockSchedulerWake:
@@ -135,9 +188,17 @@ def mock_scheduler():
 
 
 @pytest.fixture
-def service(state, mock_scheduler):
+def service(state, mock_scheduler, tmp_path):
     """Create a ControllerServiceImpl for testing."""
-    return ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/iris-test-bundles")
+    from iris.cluster.bundle import BundleStore
+
+    return ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
+    )
 
 
 # =============================================================================
@@ -161,6 +222,17 @@ def test_launch_job_returns_job_id(service, job_request):
     assert status_response.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
+def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state, job_request):
+    request = job_request("bundle-job")
+    request.bundle_blob = b"bundle-bytes"
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "bundle-job"))
+    assert job is not None
+    assert job.request.bundle_blob == b""
+    assert len(job.request.bundle_id) == 64
+
+
 def test_launch_job_rejects_duplicate_name(service, job_request):
     """Verify launch_job rejects duplicate job names for running jobs."""
     request = job_request("duplicate-job")
@@ -178,61 +250,47 @@ def test_launch_job_rejects_duplicate_name(service, job_request):
 def test_launch_job_replaces_finished_job_by_default(service, state, job_request):
     """Verify launch_job replaces finished jobs by default."""
     request = job_request("replaceable-job")
+    job_id = JobName.root("test-user", "replaceable-job")
 
     # Submit initial job
     response = service.launch_job(request, None)
-    assert response.job_id == JobName.root("test-user", "replaceable-job").to_wire()
+    assert response.job_id == job_id.to_wire()
 
     # Mark the job as failed
-    job = state.get_job(JobName.root("test-user", "replaceable-job"))
+    job = _query_job(state, job_id)
     assert job is not None
-    tasks = state.get_job_tasks(job.job_id)
+    tasks = _query_tasks_with_attempts(state, job.job_id)
     assert len(tasks) == 1
-    task = tasks[0]
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=task.task_id,
-            new_state=cluster_pb2.TASK_STATE_FAILED,
-            attempt_id=-1,
-            error="Test failure",
-        )
-    )
+    _set_job_state(state, job.job_id, cluster_pb2.JOB_STATE_FAILED)
 
     # Verify job is now failed
-    job = state.get_job(JobName.root("test-user", "replaceable-job"))
+    job = _query_job(state, job_id)
     assert job.state == cluster_pb2.JOB_STATE_FAILED
 
     # Submit again - should succeed (replaces the finished job)
     response = service.launch_job(request, None)
-    assert response.job_id == JobName.root("test-user", "replaceable-job").to_wire()
+    assert response.job_id == job_id.to_wire()
 
     # Verify the new job is pending
-    job = state.get_job(JobName.root("test-user", "replaceable-job"))
+    job = _query_job(state, job_id)
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
 
 def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_request):
     """Verify fail_if_exists=true prevents replacing finished jobs."""
     request = job_request("no-replace-job")
+    job_id = JobName.root("test-user", "no-replace-job")
 
     # Submit initial job
     response = service.launch_job(request, None)
-    assert response.job_id == JobName.root("test-user", "no-replace-job").to_wire()
+    assert response.job_id == job_id.to_wire()
 
     # Mark the job as succeeded
-    job = state.get_job(JobName.root("test-user", "no-replace-job"))
-    tasks = state.get_job_tasks(job.job_id)
-    task = tasks[0]
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=task.task_id,
-            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
-            attempt_id=-1,
-        )
-    )
+    job = _query_job(state, job_id)
+    _set_job_state(state, job.job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
 
     # Verify job is now succeeded
-    job = state.get_job(JobName.root("test-user", "no-replace-job"))
+    job = _query_job(state, job_id)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # Submit again with fail_if_exists=true - should fail
@@ -388,21 +446,16 @@ def test_terminate_job_only_affects_descendants(service, job_request):
 
 def test_terminate_job_skips_already_finished_children(service, state, job_request):
     """Verify terminate_job skips children already in terminal state."""
-    from iris.cluster.controller.state import ControllerJob
-    from iris.time_utils import Timestamp
-
     # Launch parent via RPC
     service.launch_job(job_request("parent"), None)
 
-    # Create a child that's already succeeded (need to set up via state since
-    # we can't naturally get a job to SUCCEEDED without worker interaction)
-    child_succeeded = ControllerJob(
-        job_id=JobName.from_string("/test-user/parent/child-succeeded"),
-        request=job_request("/test-user/parent/child-succeeded"),
-        state=cluster_pb2.JOB_STATE_SUCCEEDED,
-        finished_at=Timestamp.from_ms(12345),
-    )
-    state.add_job(child_succeeded)
+    # Create child and transition it to SUCCEEDED.
+    service.launch_job(job_request("/test-user/parent/child-succeeded"), None)
+    child_succeeded_job = JobName.from_string("/test-user/parent/child-succeeded")
+    child_task = _query_tasks_with_attempts(state, child_succeeded_job)[0]
+    done_worker = WorkerId("w-child-succeeded")
+    _register_worker(state, done_worker)
+    _assign_and_transition(state, child_task.task_id, done_worker, cluster_pb2.TASK_STATE_SUCCEEDED)
 
     # Launch running child via RPC
     service.launch_job(job_request("/test-user/parent/child-running"), None)
@@ -443,17 +496,16 @@ def test_parent_job_failure_cascades_to_children(service, state, job_request):
     service.launch_job(job_request("/test-user/parent/child2"), None)
 
     # Get parent task and mark it as failed
-    parent_job = state.get_job(JobName.root("test-user", "parent"))
-    parent_tasks = state.get_job_tasks(parent_job.job_id)
-    parent_task = parent_tasks[0]
-
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=parent_task.task_id,
-            new_state=cluster_pb2.TASK_STATE_FAILED,
-            attempt_id=-1,
-            error="Parent task failed",
-        )
+    parent_job = _query_job(state, JobName.root("test-user", "parent"))
+    parent_task = _query_tasks_with_attempts(state, parent_job.job_id)[0]
+    worker_id = WorkerId("w-parent")
+    _register_worker(state, worker_id)
+    _assign_and_transition(
+        state,
+        parent_task.task_id,
+        worker_id,
+        cluster_pb2.TASK_STATE_FAILED,
+        error="Parent task failed",
     )
 
     # Verify all jobs are now in terminal states via get_job_status RPC
@@ -479,17 +531,16 @@ def test_launch_job_rejects_child_of_failed_parent(service, state, job_request):
     """Verify launch_job rejects submissions to a failed parent's namespace."""
     # Launch and fail parent
     service.launch_job(job_request("failed-parent"), None)
-    parent_job = state.get_job(JobName.root("test-user", "failed-parent"))
-    parent_tasks = state.get_job_tasks(parent_job.job_id)
-    parent_task = parent_tasks[0]
-
-    state.handle_event(
-        TaskStateChangedEvent(
-            task_id=parent_task.task_id,
-            new_state=cluster_pb2.TASK_STATE_FAILED,
-            attempt_id=-1,
-            error="Parent task failed",
-        )
+    parent_job = _query_job(state, JobName.root("test-user", "failed-parent"))
+    parent_task = _query_tasks_with_attempts(state, parent_job.job_id)[0]
+    worker_id = WorkerId("w-failed-parent")
+    _register_worker(state, worker_id)
+    _assign_and_transition(
+        state,
+        parent_task.task_id,
+        worker_id,
+        cluster_pb2.TASK_STATE_FAILED,
+        error="Parent task failed",
     )
 
     # Try to submit a child job - should fail
@@ -544,6 +595,7 @@ def test_list_workers_returns_all(service, worker_metadata):
         request = cluster_pb2.Controller.RegisterRequest(
             address=f"host{i}:8080",
             metadata=worker_metadata(),
+            worker_id=f"worker-{i}",
         )
         service.register(request, None)
 
@@ -557,76 +609,75 @@ def test_list_workers_returns_all(service, worker_metadata):
         assert w.healthy is True
 
 
-def test_get_process_logs():
-    """Test GetProcessLogs RPC retrieves logs from the buffer."""
-
-    state = ControllerState()
-    mock_scheduler = MockSchedulerWake()
-    log_buffer = LogRingBuffer(maxlen=100)
-
-    # Add some test log records
-    log_buffer.append(
-        BufferedLogRecord(seq=1, timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1")
-    )
-    log_buffer.append(
-        BufferedLogRecord(
-            seq=2, timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log"
-        )
-    )
-    log_buffer.append(
-        BufferedLogRecord(seq=3, timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2")
-    )
-
-    service = ControllerServiceImpl(
-        state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=log_buffer
-    )
-
-    # Test: Get all logs
-    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
-    assert len(response.records) == 3
-    assert response.records[0].message == "Test log 1"
-    assert response.records[1].logger_name == "iris.cluster.vm"
-    assert response.records[2].level == "ERROR"
-
-    # Test: Filter by prefix
-    response = service.get_process_logs(
-        cluster_pb2.Controller.GetProcessLogsRequest(prefix="iris.cluster.vm", limit=0), None
-    )
-    assert len(response.records) == 1
-    assert response.records[0].message == "Autoscaler log"
-
-    # Test: Limit results
-    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=2), None)
-    assert len(response.records) == 2
-    assert response.records[0].message == "Autoscaler log"
-    assert response.records[1].message == "Test log 2"
-
-
-def test_get_process_logs_no_buffer():
-    """Test GetProcessLogs returns empty when buffer is None."""
-    state = ControllerState()
-    mock_scheduler = MockSchedulerWake()
-    service = ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=None)
-
-    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
-    assert len(response.records) == 0
-
-
 # =============================================================================
-# GetTaskLogs Tests
+# Constraint Injection Tests
 # =============================================================================
 
 
-def test_get_task_logs_invalid_regex_returns_error(service, job_request):
-    """Invalid regex filter returns a structured error instead of raising."""
-    launch_resp = service.launch_job(job_request("regex-test"), None)
-
-    response = service.get_task_logs(
-        cluster_pb2.Controller.GetTaskLogsRequest(
-            id=launch_resp.job_id,
-            regex="(unclosed",
-        ),
-        None,
+def test_launch_job_injects_device_constraints_from_tpu_resource(service, state):
+    """Job with TPU resource spec gets auto-injected device-type and device-variant constraints."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "tpu-job").to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
-    assert len(response.task_logs) == 1
-    assert "Invalid regex filter" in response.task_logs[0].error
+    request.resources.device.CopyFrom(tpu_device("v5litepod-16"))
+
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "tpu-job"))
+    stored_constraints = list(job.request.constraints)
+    keys = {c.key for c in stored_constraints}
+    assert WellKnownAttribute.DEVICE_TYPE in keys
+    assert WellKnownAttribute.DEVICE_VARIANT in keys
+
+    dt = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE)
+    assert dt.value.string_value == "tpu"
+    dv = next(c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT)
+    assert dv.value.string_value == "v5litepod-16"
+
+
+def test_launch_job_user_constraints_override_auto(service, state):
+    """Explicit user constraints for canonical keys replace auto-generated ones."""
+    user_variant = device_variant_constraint(["v5litepod-16", "v6e-16"])
+
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "multi-variant-job").to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    request.resources.device.CopyFrom(tpu_device("v5litepod-16"))
+    request.constraints.append(user_variant.to_proto())
+
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "multi-variant-job"))
+    stored_constraints = list(job.request.constraints)
+
+    # device-variant should be the user's IN constraint, not the auto EQ
+    dv_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_VARIANT]
+    assert len(dv_constraints) == 1
+    assert dv_constraints[0].op == cluster_pb2.CONSTRAINT_OP_IN
+
+    # device-type should still be auto-injected
+    dt_constraints = [c for c in stored_constraints if c.key == WellKnownAttribute.DEVICE_TYPE]
+    assert len(dt_constraints) == 1
+    assert dt_constraints[0].value.string_value == "tpu"
+
+
+def test_launch_job_cpu_resource_no_constraints_injected(service, state):
+    """CPU-only jobs get no auto-injected device constraints."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "cpu-job").to_wire(),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
+    )
+    request.resources.device.CopyFrom(cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice()))
+
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "cpu-job"))
+    assert len(job.request.constraints) == 0
