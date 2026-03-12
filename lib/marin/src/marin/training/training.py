@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 import logging
 import os
 from copy import deepcopy
@@ -15,18 +16,30 @@ from fray.v2 import (
     Entrypoint,
     GpuConfig,
     JobRequest,
+    JobStatus,
     ResourceConfig,
     TpuConfig,
     create_environment,
     current_client,
+    get_tpu_topology,
+    wait_all,
 )
 from levanter.main import train_dpo
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
+from levanter.tracker.wandb import WandbConfig
 from mergedeep import mergedeep
 
-from iris.marin_fs import check_gcs_paths_same_region, marin_temp_bucket
+from iris.marin_fs import REGION_TO_TMP_BUCKET, check_gcs_paths_same_region, marin_temp_bucket
+from levanter.elastic import (
+    MARIN_ELASTIC_GROUP_ID_ENV,
+    MARIN_ELASTIC_WORKER_COUNT_ENV,
+    MARIN_ELASTIC_WORKER_ID_ENV,
+    read_completion,
+    resolve_elastic_paths,
+)
+from levanter.utils import fsspec_utils
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +99,9 @@ TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnP
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
+ELASTIC_DATA_SEED_STRIDE = 10_000
+MARIN_FAULT_INJECTION_BY_WORKER_ENV = "MARIN_FAULT_INJECTION_BY_WORKER"
+MARIN_FAULT_INJECTION_STEPS_ENV = "MARIN_FAULT_INJECTION_STEPS"
 
 
 def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
@@ -186,6 +202,155 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return replace(config, train_config=inner_config)
 
 
+def _requested_tpu_slice_count(resources: ResourceConfig) -> int:
+    if not isinstance(resources.device, TpuConfig):
+        return 1
+    topology = get_tpu_topology(resources.device.variant)
+    return max(1, resources.replicas // topology.vm_count)
+
+
+def _elastic_worker_count(config: TrainOnPodConfigT) -> int:
+    elastic = config.train_config.trainer.elastic
+    if not elastic.enabled or not isinstance(config.resources.device, TpuConfig):
+        return 1
+    if elastic.worker_count is not None:
+        return elastic.worker_count
+    return _requested_tpu_slice_count(config.resources)
+
+
+def _single_slice_resources(resources: ResourceConfig) -> ResourceConfig:
+    if not isinstance(resources.device, TpuConfig):
+        return resources
+    topology = get_tpu_topology(resources.device.variant)
+    return replace(resources, replicas=topology.vm_count)
+
+
+def _shared_elastic_state_path(config: TrainOnPodConfigT) -> str:
+    assert config.train_config.trainer.id is not None
+    return fsspec_utils.join_path(
+        config.train_config.trainer.checkpointer.base_path,
+        f"_elastic/{config.train_config.trainer.id}",
+    )
+
+
+def _with_elastic_worker_assignment(
+    config: TrainOnPodConfigT,
+    *,
+    worker_index: int,
+    worker_count: int,
+    fault_injection_by_worker: str | None = None,
+) -> tuple[TrainOnPodConfigT, dict[str, str]]:
+    logical_run_id = config.train_config.trainer.id
+    assert logical_run_id is not None
+
+    worker_id = f"w{worker_index:03d}"
+    worker_run_id = f"{logical_run_id}-{worker_id}"
+    elastic = replace(
+        config.train_config.trainer.elastic,
+        group_id=logical_run_id,
+        worker_id=worker_id,
+        worker_count=worker_count,
+        state_path=_shared_elastic_state_path(config),
+    )
+    trainer = replace(
+        config.train_config.trainer,
+        id=worker_run_id,
+        elastic=elastic,
+        tracker=_tracker_for_elastic_worker(config.train_config.trainer.tracker, logical_run_id, worker_id),
+    )
+
+    train_config = replace(config.train_config, trainer=trainer)
+    if hasattr(train_config, "data_seed"):
+        base_data_seed = config.train_config.data_seed
+        if base_data_seed is None:
+            base_data_seed = config.train_config.trainer.seed
+        train_config = replace(train_config, data_seed=base_data_seed + worker_index * ELASTIC_DATA_SEED_STRIDE)
+
+    worker_config = replace(
+        config,
+        train_config=train_config,
+        resources=_single_slice_resources(config.resources),
+    )
+    worker_env = {
+        MARIN_ELASTIC_GROUP_ID_ENV: logical_run_id,
+        MARIN_ELASTIC_WORKER_ID_ENV: worker_id,
+        MARIN_ELASTIC_WORKER_COUNT_ENV: str(worker_count),
+        "RUN_ID": worker_run_id,
+    }
+    worker_fault_steps = _fault_steps_for_worker(fault_injection_by_worker, worker_id)
+    if worker_fault_steps is not None:
+        worker_env[MARIN_FAULT_INJECTION_STEPS_ENV] = worker_fault_steps
+    return worker_config, worker_env
+
+
+def _tracker_for_elastic_worker(tracker, logical_run_id: str, worker_id: str):
+    def _rewrite_tracker_entry(entry):
+        if not isinstance(entry, WandbConfig):
+            return entry
+
+        base_name = entry.name or logical_run_id
+        return replace(
+            entry,
+            group=entry.group or logical_run_id,
+            name=f"{base_name}-{worker_id}",
+        )
+
+    if isinstance(tracker, tuple):
+        return tuple(_rewrite_tracker_entry(entry) for entry in tracker)
+    if isinstance(tracker, list):
+        return [_rewrite_tracker_entry(entry) for entry in tracker]
+    return _rewrite_tracker_entry(tracker)
+
+
+def _fault_steps_for_worker(fault_injection_by_worker: str | None, worker_id: str) -> str | None:
+    if fault_injection_by_worker is None:
+        return None
+
+    payload = json.loads(fault_injection_by_worker)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{MARIN_FAULT_INJECTION_BY_WORKER_ENV} must be a JSON object mapping worker ids to step lists")
+
+    worker_steps = payload.get(worker_id)
+    if worker_steps is None:
+        return None
+    if isinstance(worker_steps, int):
+        worker_steps = [worker_steps]
+    if not isinstance(worker_steps, list):
+        raise ValueError(
+            f"{MARIN_FAULT_INJECTION_BY_WORKER_ENV}[{worker_id!r}] must be an int or list of ints, "
+            f"got {type(worker_steps)}"
+        )
+
+    return json.dumps([int(step) for step in worker_steps])
+
+
+def _elastic_completion_path(config: TrainOnPodConfigT) -> str:
+    assert config.train_config.trainer.id is not None
+    paths = resolve_elastic_paths(
+        config.train_config.trainer.checkpointer.expanded_path(config.train_config.trainer.id),
+        replace(config.train_config.trainer.elastic, state_path=_shared_elastic_state_path(config)),
+        run_id=config.train_config.trainer.id,
+    )
+    return paths.completion_path
+
+
+def _wait_for_elastic_jobs(jobs, *, completion_path: str) -> None:
+    statuses = wait_all(jobs, raise_on_failure=False)
+    completion = read_completion(completion_path)
+    if completion is not None:
+        logger.info(
+            "Elastic training completed by worker %s at step %s",
+            completion.worker_id,
+            completion.completed_step,
+        )
+        return
+
+    if all(status == JobStatus.SUCCEEDED for status in statuses):
+        return
+
+    raise RuntimeError(f"Elastic training group did not report completion. Final statuses: {statuses}")
+
+
 def _normalize_jax_compilation_cache_dir(path: str) -> str:
     """Normalize cache dir to a form accepted by JAX's compilation cache.
 
@@ -216,6 +381,14 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
         return
     env["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
     logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
+
+
+def _compilation_cache_dir_for_resources(resources: ResourceConfig) -> str:
+    target_regions = sorted(set(resources.regions or []))
+    if len(target_regions) == 1:
+        if bucket := REGION_TO_TMP_BUCKET.get(target_regions[0]):
+            return f"gs://{bucket}/ttl=30d/compilation-cache"
+    return _normalize_jax_compilation_cache_dir(marin_temp_bucket(ttl_days=30, prefix="compilation-cache"))
 
 
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
@@ -252,9 +425,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
-            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
-        )
+        env["JAX_COMPILATION_CACHE_DIR"] = _compilation_cache_dir_for_resources(config.resources)
         logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
     _disable_xla_autotune_subcache(env)
 
@@ -283,6 +454,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
+    config = replace(config, train_config=train_config)
     client = current_client()
 
     extras = []
@@ -290,6 +462,29 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         extras.append("tpu")
     elif isinstance(config.resources.device, GpuConfig):
         extras.append("gpu")
+
+    worker_count = _elastic_worker_count(config)
+    fault_injection_by_worker = env.pop(MARIN_FAULT_INJECTION_BY_WORKER_ENV, None)
+    if worker_count > 1:
+        completion_path = _elastic_completion_path(config)
+        jobs = []
+        for worker_index in range(worker_count):
+            worker_config, worker_env = _with_elastic_worker_assignment(
+                config,
+                worker_index=worker_index,
+                worker_count=worker_count,
+                fault_injection_by_worker=fault_injection_by_worker,
+            )
+            job_request = JobRequest(
+                name=f"train_lm-{worker_env[MARIN_ELASTIC_WORKER_ID_ENV]}",
+                entrypoint=Entrypoint.from_callable(train_lm.main, args=[worker_config.train_config]),
+                resources=worker_config.resources,
+                environment=create_environment(env_vars={**env, **worker_env}, extras=extras),
+                max_retries_failure=10,
+            )
+            jobs.append(client.submit(job_request))
+        _wait_for_elastic_jobs(jobs, completion_path=completion_path)
+        return
 
     # Note: Using a constant job name allows restarts to adopt the existing job handle
     # instead of raising a duplicate name error (adopt_existing=True is the default).
@@ -327,9 +522,7 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     env = _add_run_env_variables(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
-        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
-            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
-        )
+        env["JAX_COMPILATION_CACHE_DIR"] = _compilation_cache_dir_for_resources(config.resources)
         logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
     _disable_xla_autotune_subcache(env)
 
@@ -347,6 +540,7 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     if not isinstance(config.resources.device, CpuConfig):
         _doublecheck_paths(config)
 
+    config = replace(config, train_config=train_config)
     client = current_client()
 
     extras = []
@@ -354,6 +548,29 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
         extras.append("tpu")
     elif isinstance(config.resources.device, GpuConfig):
         extras.append("gpu")
+
+    worker_count = _elastic_worker_count(config)
+    fault_injection_by_worker = env.pop(MARIN_FAULT_INJECTION_BY_WORKER_ENV, None)
+    if worker_count > 1:
+        completion_path = _elastic_completion_path(config)
+        jobs = []
+        for worker_index in range(worker_count):
+            worker_config, worker_env = _with_elastic_worker_assignment(
+                config,
+                worker_index=worker_index,
+                worker_count=worker_count,
+                fault_injection_by_worker=fault_injection_by_worker,
+            )
+            job_request = JobRequest(
+                name=f"train_dpo-{worker_env[MARIN_ELASTIC_WORKER_ID_ENV]}",
+                entrypoint=Entrypoint.from_callable(train_dpo.main, args=[worker_config.train_config]),
+                resources=worker_config.resources,
+                environment=create_environment(env_vars={**env, **worker_env}, extras=extras),
+                max_retries_failure=10,
+            )
+            jobs.append(client.submit(job_request))
+        _wait_for_elastic_jobs(jobs, completion_path=completion_path)
+        return
 
     job_request = JobRequest(
         name="train_dpo",
@@ -374,10 +591,20 @@ def _doublecheck_paths(config: TrainOnPodConfigT):
     This function recursively examines all strings/paths in the config to identify GCS paths and checks their regions.
     """
     local_ok = not isinstance(config.resources.device, TpuConfig)
+    target_regions = sorted(set(config.resources.regions or []))
+    target_region = None
+    if len(target_regions) == 1:
+        target_region = target_regions[0]
+    elif len(target_regions) > 1:
+        raise ValueError(
+            "Path region validation requires a single target region when launching TPU jobs remotely. "
+            f"Got regions={target_regions}."
+        )
 
     check_gcs_paths_same_region(
         config.train_config,
         local_ok=local_ok,
+        region=target_region,
     )
     return config
 

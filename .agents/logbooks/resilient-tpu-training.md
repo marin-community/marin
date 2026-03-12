@@ -1,0 +1,443 @@
+# Resilient TPU Training: Research Logbook
+
+## Scope
+- Goal: design and validate resilient Levanter/Marin training on preemptible TPU slices so capacity can shrink or grow without depending on a fixed allowlist of exact slice counts.
+- Primary metric(s): useful training time after preemptions, tokens/day under volatile slice supply, restart latency after slice loss, and ability to resume from the same run state on a different slice count.
+- Constraints: correctness must not depend on unstable transport APIs; most TPU capacity is preemptible; very large models may still impose a minimum viable slice count greater than 1; do not require cluster restarts or manual slice surgery during normal operation.
+
+## Links
+- GitHub experiment issue: `https://github.com/marin-community/marin/issues/3521`
+- Triggering issue: `marin-community/marin#470`
+- Project note: `.agents/projects/resilient-tpu-training.md`
+
+## Key References
+- JAX distributed initialization docs: `https://docs.jax.dev/en/latest/_autosummary/jax.distributed.initialize.html`
+- JAX fault-tolerance docs: `https://docs.jax.dev/en/latest/fault_tolerance.html`
+- DiLoCo paper: `https://arxiv.org/abs/2311.08105`
+- OpenDiLoCo paper: `https://arxiv.org/abs/2407.07852`
+- INTELLECT-1 technical report: `https://arxiv.org/abs/2412.01152`
+
+## Baseline
+- Date: 2026-03-10
+- Code refs:
+  - `lib/levanter/src/levanter/infra/ray_tpu.py`
+  - `lib/fray/src/fray/v1/cluster/ray/tpu/execution.py`
+  - `lib/levanter/src/levanter/trainer.py`
+  - `lib/levanter/src/levanter/checkpoint.py`
+  - `lib/levanter/src/levanter/utils/mesh.py`
+  - `lib/marin/src/marin/rl/weight_transfer/jax.py`
+  - `lib/iris/src/iris/cluster/controller/snapshot.py`
+- Baseline behavior:
+  - Current multislice execution is still gang semantics. If one slice fails, Fray cancels the remaining slices and retries the whole cohort.
+  - The existing workaround for preemptible supply is discrete sizing: `num_slices` may be a `Sequence[int]`, and the launcher snaps to one of those exact sizes instead of handling arbitrary slice counts.
+  - Levanter checkpoint restore already supports loading on a different host count, which is the key primitive needed for elastic restart.
+  - Mesh construction already derives DCN shape from the observed `num_slices`, so the hard blocker is not mesh math but runtime reconfiguration.
+  - Marin has a JAX TransferServer integration in RL code, but in this environment `jax.experimental.transfer` imports fail because `jaxlib` lacks `TransferConnection`. That makes it a poor correctness dependency today.
+  - Official JAX fault-tolerance support is still experimental and, per current docs, fully works only on GPUs; TPU users are pointed toward Pathways instead.
+  - Iris controller snapshots already reconcile live slices against checkpointed state, which is promising for a persistent elastic control plane.
+
+## Success Criteria
+- Replace exact-size multislice allowlists with an elastic policy over a slice range.
+- Keep training progress when slice supply changes by restarting onto the currently available slice count instead of failing the run.
+- Bound lost work to the last committed safe point.
+- Continue making progress at the minimum viable slice count for the model.
+- Show that the design works for both scale-down after preemption and scale-up when more slices become available.
+
+## Stop Criteria
+- Ship a design and prototype path that removes the fixed-size workaround from the critical path.
+- Demonstrate checkpoint/restore across multiple slice counts on the same run lineage.
+- Run a canary long enough to observe real slice churn and confirm bounded restart behavior.
+- Escalate if synchronous elastic restart costs too much throughput or if minimum viable slice count makes the "one slice keeps going" goal physically impossible for the target model class.
+
+## Initial Hypotheses
+- The right baseline is elastic restart, not in-place membership mutation. JAX distributed world size appears effectively static for a given process group, but Levanter checkpoints already make cross-host-count restart feasible.
+- Transport acceleration should be optional. TensorStore checkpointing should remain the source of truth, while Arrow Flight or JAX TransferServer can be evaluated as a warm-start fast path.
+- The right place for elasticity is a persistent controller above Fray's gang runner, not more complexity inside `run_on_pod`.
+- "One slice being enough to make progress" is only realistic for models that fit the minimum model-parallel footprint of one slice. Larger models still need a declared minimum slice count.
+- DiLoCo is credible enough to keep as a secondary research track: the literature has moved past toy replications, but it is still an algorithmic change rather than a direct fix for synchronous Levanter training.
+
+## Initial Experiment Matrix
+- `ERT-001`: Reproduce the current Fray failure mode with synthetic slice loss and record exact cancellation/retry semantics.
+- `ERT-002`: Measure Levanter checkpoint restore across `1`, `2`, `4`, and `8` slice counts for the same model state.
+- `ERT-003`: Prototype an elastic controller that restarts a fixed-mesh training cohort at checkpoint boundaries after slice loss or slice gain.
+- `ERT-004`: Benchmark state relay options for restart acceleration: TensorStore only, Arrow Flight, and JAX TransferServer if the runtime is actually available.
+- `ERT-005`: Run a canary on preemptible slices with opportunistic scale-up enabled and compare useful tokens/day against the current discrete-size workaround.
+
+## Proposed Direction
+- Introduce a persistent elastic training controller on non-preemptible CPU infrastructure.
+- Treat TPU workers as short-lived fixed-mesh cohorts rather than one immortal multislice job.
+- On membership change, stop at a safe point, commit state, relaunch with the currently available slice count, and continue from the same run lineage.
+- Keep a pluggable state relay abstraction so TransferServer-like mechanisms can accelerate resume without becoming the only durable path.
+
+## Experiment Log
+### 2026-03-10 22:00 - Kickoff and baseline inspection
+- Hypothesis: current multislice resiliency is still gang restart with a discrete slice-count workaround, and the existing checkpoint + controller infrastructure is enough to support a more generic elastic-restart design.
+- Command:
+  - `sed -n '1,220p' .agents/skills/agent-research/SKILL.md`
+  - `sed -n '1,260p' lib/levanter/src/levanter/infra/ray_tpu.py`
+  - `sed -n '500,620p' lib/fray/src/fray/v1/cluster/ray/tpu/execution.py`
+  - `sed -n '800,990p' lib/fray/src/fray/v1/cluster/ray/tpu/execution.py`
+  - `sed -n '880,1040p' lib/levanter/src/levanter/trainer.py`
+  - `sed -n '1,240p' lib/levanter/src/levanter/checkpoint.py`
+  - `sed -n '520,640p' lib/iris/src/iris/cluster/controller/snapshot.py`
+  - `gh issue view 470 --repo marin-community/marin --comments`
+  - `uv run python - <<'PY' ... import jax.experimental.transfer ... PY`
+- Config: code reading only; no runtime modifications.
+- Result:
+  - Confirmed that `#470` closed without a generic implementation.
+  - Confirmed Fray's current discrete `Sequence[int]` slice-count behavior and whole-cohort cancellation on any slice failure.
+  - Confirmed Levanter can restore checkpoints on a different host count.
+  - Confirmed local JAX TransferServer availability is not robust enough to trust as the only path.
+  - Created experiment issue `#3521` to track the thread publicly.
+- Interpretation: the shortest viable path is a controller-driven elastic-restart system built on existing checkpoint durability, with optional fast-state transport layered on top.
+- Next action: decide whether the first prototype should live in Levanter, Fray, or an Iris-backed controller wrapper, then start with checkpoint-restore validation across changing slice counts.
+
+### 2026-03-10 22:20 - External reference sweep
+- Hypothesis: official JAX docs will confirm that in-place fault-tolerant multi-controller execution is not production-ready for TPU, while DiLoCo references will show whether there is serious evidence for lower-communication alternatives.
+- Command:
+  - web search: `jax.distributed.initialize`, `Fault Tolerant Distributed JAX`, `DiLoCo`, `OpenDiLoCo`, `INTELLECT-1`
+- Config: literature review only.
+- Result:
+  - JAX docs confirm that standard multi-controller JAX is fate-sharing by default, and the fault-tolerance guide explicitly says the feature is still experimental and currently works fully only on GPUs.
+  - The DiLoCo paper claims robustness to workers becoming unavailable or newly available over time.
+  - OpenDiLoCo reports multi-continent training with `90-95%` utilization and billion-parameter scale.
+  - INTELLECT-1 reports a `10B` model trained on `1T` tokens with dynamic node churn, using a hybrid DiLoCo-based system.
+- Interpretation: for TPU, elastic restart remains the safest baseline. DiLoCo is now credible enough to keep as a follow-on research branch, especially for models that fit on one slice.
+- Next action: keep the synchronous elastic-restart prototype as the primary implementation path and treat DiLoCo-style work as a separate mode, not the first fix.
+
+### 2026-03-11 02:26 - 125M benchmark launch and W&B status
+- Hypothesis: the new elastic benchmark harness can launch a synchronous `v5p-16` baseline and a `2 x v5p-8` elastic run with deterministic fault injection, and W&B should expose both run lineages once TPU workers start.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --prefix /dlwh/resilient-125m-0311-baseline --json`
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --prefix /dlwh/resilient-125m-0311-elastic --json`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs /dlwh/resilient-125m-0311-baseline/train_lm --since-seconds 1800`
+  - `uv run iris --config lib/iris/examples/marin.yaml cluster status`
+  - `gsutil cat gs://marin-us-east5/scratch/dlwh/resilient-tpu-training/resilient-125m-0311-baseline/summary.json`
+  - `gsutil cat gs://marin-us-east5/scratch/dlwh/resilient-tpu-training/resilient-125m-0311-elastic/summary.json`
+  - `uv run python - <<'PY' ... wandb.Api().run(...) ... PY`
+- Config:
+  - Baseline parent: `/dlwh/resilient-125m-0311-baseline`
+  - Baseline child: `/dlwh/resilient-125m-0311-baseline/train_lm`
+  - Baseline W&B: `https://wandb.ai/marin-community/marin/runs/resilient-125m-0311-baseline-baseline`
+  - Elastic parent: `/dlwh/resilient-125m-0311-elastic`
+  - Elastic children:
+    - `/dlwh/resilient-125m-0311-elastic/train_lm-w000`
+    - `/dlwh/resilient-125m-0311-elastic/train_lm-w001`
+  - Elastic W&B targets:
+    - `https://wandb.ai/marin-community/marin/runs/resilient-125m-0311-elastic-elastic-w000`
+    - `https://wandb.ai/marin-community/marin/runs/resilient-125m-0311-elastic-elastic-w001`
+- Result:
+  - Baseline TPU job is running on `v5p-16`, but W&B still shows `history_rows=0` because the job is still building synthetic dataset caches and has not begun emitting training scalars.
+  - Baseline W&B summary is currently only hardware metadata: `backend=tpu`, `num_devices=8`, `num_hosts=2`.
+  - Elastic TPU workers are still `JOB_STATE_PENDING`, both waiting on `tpu_v5p_8-us-east5-a`.
+  - Elastic W&B runs do not exist yet in the API because neither worker has started.
+  - Cluster status shows `tpu_v5p_8-us-east5-a` at `ready=3, demand=3`, so the elastic side is queued on capacity rather than failing at launch.
+- Interpretation: the benchmark harness and W&B naming are correct, but the current snapshot is still pre-training: baseline is in cache build and elastic is capacity-blocked. There are canonical W&B URLs for all intended runs, but only the baseline run currently exists.
+- Next action: keep polling until the baseline starts logging scalars and the first elastic worker starts, then compare post-fault throughput and loss trajectories.
+
+### 2026-03-11 10:48 - Benchmark failure triage from W&B artifacts
+- Hypothesis: if the benchmark runs failed before logging training scalars, W&B run artifacts should still contain enough console output to identify the first real failure without relying on Iris control-plane access.
+- Command:
+  - `uv run python - <<'PY' ... wandb.Api().run(...).files() ... output.log ... PY`
+  - `gsutil ls -R gs://marin-us-east5/scratch/dlwh/resilient-tpu-training/resilient-125m-0311-baseline`
+  - `gsutil ls -R gs://marin-us-east5/scratch/dlwh/resilient-tpu-training/resilient-125m-0311-elastic`
+- Config:
+  - Baseline W&B: `resilient-125m-0311-baseline-baseline`
+  - Elastic W&B:
+    - `resilient-125m-0311-elastic-elastic-w000`
+    - `resilient-125m-0311-elastic-elastic-w001`
+- Result:
+  - All three W&B runs now exist and are marked `failed`.
+  - All three have `history_rows=0`, so none reached a logged training step.
+  - The shared failure is:
+    - `ValueError: AsyncDataset is finite but has length 0. DataLoader cannot be initialized on an empty finite dataset.`
+  - The exception is raised during evaluation setup in `levanter.eval.TaggedEvaluator`, before the main train loop emits scalars.
+  - Both benchmark roots have completed train/validation cache materialization in GCS, so the crash happens after cache build and before real training begins.
+  - There is also a recurring `draccus` config-logging error (`cannot create weak reference to 'str' object`), but it is not the terminating failure.
+- Interpretation: the current blocker for the 125M comparison is benchmark input configuration, not elastic transport or TPU failure recovery. The synthetic validation path resolves to an empty finite dataset from the evaluator's perspective, so every run dies at evaluation initialization before any fault-injection or steady-state training behavior can be observed.
+- Next action: fix the synthetic benchmark config so validation is either non-empty or disabled, relaunch the baseline and elastic runs, then resume the fault-injection comparison.
+
+### 2026-03-11 12:17 - Default validation reroute and relaunch
+- Hypothesis: replacing the ad hoc synthetic validation split with the benchmark's normal validation plumbing should get the runs past the empty-eval crash, provided validation caches are rebuilt region-locally instead of reusing the cross-region `gs://levanter-data` cache path.
+- Command:
+  - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py -q`
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/training/elastic_fault_benchmark.py tests/test_training.py`
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --no-wait --job-name resilient-125m-0311g-baseline --region us-east5 -e WANDB_API_KEY ... -- uv run python -m marin.training.elastic_fault_benchmark --mode baseline --benchmark-id resilient-125m-0311g-baseline --region us-east5 ...`
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --no-wait --job-name resilient-125m-0311g-elastic --region us-east5 -e WANDB_API_KEY ... -- uv run python -m marin.training.elastic_fault_benchmark --mode elastic --benchmark-id resilient-125m-0311g-elastic --region us-east5 ...`
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --prefix /dlwh/resilient-125m-0311g-baseline --json`
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --prefix /dlwh/resilient-125m-0311g-elastic --json`
+- Result:
+  - First relaunch attempt (`0311f`) failed immediately because the inherited `openwebtext` validation component kept `cache_dir=gs://levanter-data/tokenized/openwebtext/`, which Iris rejected as cross-region (`nam4` vs `us-east5`).
+  - Patched the benchmark to keep the base validation raw URLs but clear the component cache dir, so validation caches rebuild under the benchmark's region-local cache root.
+  - Targeted tests and lint passed after the patch.
+  - Fresh relaunches:
+    - Baseline parent: `/dlwh/resilient-125m-0311g-baseline`
+    - Elastic parent: `/dlwh/resilient-125m-0311g-elastic`
+  - Current live child jobs:
+    - Baseline: `/dlwh/resilient-125m-0311g-baseline/train_lm` pending on `tpu_v5p_16-us-east5-a`
+    - Elastic:
+      - `/dlwh/resilient-125m-0311g-elastic/train_lm-w000`
+      - `/dlwh/resilient-125m-0311g-elastic/train_lm-w001`
+      both pending on `tpu_v5p_8-us-east5-a`
+  - No new W&B runs exist yet for the `0311g` rerun, which is consistent with the TPU jobs still being queued rather than running.
+- Interpretation: the validation-config bugs now appear resolved at the parent-launch level. The current blocker has shifted back to TPU capacity, which is the state we wanted before observing real training/fault behavior.
+- Next action: wait for TPU admission, then verify that the new runs reach W&B and log at least one train step before evaluating fault recovery.
+
+### 2026-03-11 15:20 - Eval-budget bug identified and `0311h` relaunch queued
+- Hypothesis: the persistent `AsyncDataset ... length 0` failure in `0311g` is now self-inflicted by the benchmark's `max_eval_batches=0`, not by the validation dataset source.
+- Command:
+  - `sed -n '1,120p' lib/levanter/src/levanter/eval.py`
+  - `sed -n '200,430p' lib/levanter/src/levanter/eval.py`
+  - `sed -n '120,155p' lib/levanter/src/levanter/data/loader.py`
+  - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py -q`
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/training/elastic_fault_benchmark.py tests/test_training.py`
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --no-wait --job-name resilient-125m-0311h-baseline --region us-east5 -e WANDB_API_KEY ... -- uv run python -m marin.training.elastic_fault_benchmark --mode baseline --benchmark-id resilient-125m-0311h-baseline --region us-east5 ...`
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --no-wait --job-name resilient-125m-0311h-elastic --region us-east5 -e WANDB_API_KEY ... -- uv run python -m marin.training.elastic_fault_benchmark --mode elastic --benchmark-id resilient-125m-0311h-elastic --region us-east5 ...`
+- Result:
+  - `0311g` baseline and both elastic workers all reached W&B, then failed with `history_rows=0`.
+  - The actual bug is in benchmark config semantics:
+    - `train_lm.py` converts `max_eval_batches` into `max_eval_examples_per_ds`.
+    - `DomainTaggedDataset` treats `max_examples_per_dataset=0` as "do not slice" in one branch, but still clamps dataset lengths to `0` in `_get_offsets()`.
+    - That makes the evaluator's `DataLoader` see a finite dataset of length `0` and raise immediately.
+  - Patched benchmark defaults to use a real small eval budget instead:
+    - `steps_per_eval=500`
+    - `max_eval_batches=1`
+  - Added a regression test that the benchmark trainer config keeps a positive eval budget.
+  - Fresh reruns submitted:
+    - Baseline parent: `/dlwh/resilient-125m-0311h-baseline`
+    - Elastic parent: `/dlwh/resilient-125m-0311h-elastic`
+  - Current state:
+    - `/dlwh/resilient-125m-0311h-baseline/train_lm` is pending on `tpu_v5p_16-us-east5-a`
+    - `/dlwh/resilient-125m-0311h-elastic/train_lm-w000` and `...-w001` are pending on `tpu_v5p_8-us-east5-a`
+    - No `0311h` W&B runs exist yet, which matches the TPU children still being queued.
+- Interpretation: the last startup blocker was benchmark config, not validation source selection. The current `0311h` pair is the first relaunch that clears both the cross-region validation-cache issue and the zero-example eval bug.
+- Next action: wait for TPU admission on `0311h`, then confirm the runs produce non-empty W&B history before judging fault-recovery behavior.
+
+### 2026-03-11 16:43 - `0311h` completed on baseline and elastic
+- Hypothesis: with the eval-budget fix in place, the benchmark should finally reach steady-state training; the baseline should complete synchronously on `v5p-16`, and the elastic pair should complete independently even with retries/preemption on individual workers.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job list --prefix /dlwh/resilient-125m-0311h-elastic --json`
+  - `uv run python - <<'PY' ... wandb.Api().run('marin-community/marin/resilient-125m-0311h-baseline-baseline') ... PY`
+  - `uv run python - <<'PY' ... wandb.Api().run('marin-community/marin/resilient-125m-0311h-elastic-elastic-w000') ... PY`
+  - `uv run python - <<'PY' ... wandb.Api().run('marin-community/marin/resilient-125m-0311h-elastic-elastic-w001') ... PY`
+- Result:
+  - Baseline W&B run finished with full training history:
+    - `https://wandb.ai/marin-community/marin/runs/resilient-125m-0311h-baseline-baseline`
+    - `history_rows=2000`
+    - final `global_step=1999`
+    - final `train/loss=0.01162`
+    - final `eval/loss=20.16`
+    - final `throughput/tokens_per_second=942,869`
+  - Elastic completed successfully:
+    - parent `/dlwh/resilient-125m-0311h-elastic`: `JOB_STATE_SUCCEEDED`
+    - worker `w000`: `JOB_STATE_SUCCEEDED`, `preemption_count=1`
+    - worker `w001`: `JOB_STATE_SUCCEEDED`, `failure_count=3`
+  - Elastic W&B runs:
+    - `w000`: `https://wandb.ai/marin-community/marin/runs/resilient-125m-0311h-elastic-elastic-w000`
+      - `history_rows=1354`
+      - final `global_step=1999`
+      - final `train/loss=0.01287`
+      - final `eval/loss=24.18`
+      - final `throughput/tokens_per_second=536,155`
+    - `w001`: `https://wandb.ai/marin-community/marin/runs/resilient-125m-0311h-elastic-elastic-w001`
+      - `history_rows=1300`
+      - final `global_step=1999`
+      - final `train/loss=0.01340`
+      - final `eval/loss=23.92`
+      - final `throughput/tokens_per_second=207,384`
+  - The elastic worker histories are shorter than 2000 rows because retries/preemption do not produce a single uninterrupted W&B scalar stream, but both runs reached the target final step.
+- Interpretation: the resilience mechanism is now doing real work instead of dying in setup. The elastic pair completed despite worker disruption, which is the first end-to-end confirmation that this non-restart path can preserve progress through slice instability. The baseline remains materially faster in raw tokens/sec, but it does not tolerate the same failure mode.
+- Next action: extract a cleaner apples-to-apples comparison table from the three W&B runs and inspect the elastic logs for exactly which retries on `w001` came from injected faults versus external job restarts.
+
+### 2026-03-11 17:40 - Throughput diagnosis for `0311h`
+- Hypothesis: the alarming elastic throughput summaries are mixing together at least three different effects:
+  - per-step steady-state compute throughput,
+  - wall-clock loss from slice failure/retry gaps,
+  - failed peer-sync attempts that may mean the run is not actually paying a transport cost in steady state.
+- Command:
+  - `uv run python - <<'PY' ... wandb.Api().run(...).history(samples=2000, pandas=False) ... PY`
+  - `uv run iris --config lib/iris/examples/marin.yaml job bug-report /dlwh/resilient-125m-0311h-elastic/train_lm-w000`
+  - `uv run iris --config lib/iris/examples/marin.yaml job bug-report /dlwh/resilient-125m-0311h-elastic/train_lm-w001`
+  - `uv run iris --config lib/iris/examples/marin.yaml job bug-report /dlwh/resilient-125m-0311h-baseline/train_lm`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs /dlwh/resilient-125m-0311h-elastic/train_lm-w000 --include-children | ...`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs /dlwh/resilient-125m-0311h-elastic/train_lm-w001 --include-children | ...`
+- Result:
+  - Steady-state step throughput is not the problem:
+    - baseline median `throughput/duration=0.2776s`, median `throughput/tokens_per_second=944k`
+    - `w000` median `throughput/duration=0.2448s`, median `throughput/tokens_per_second=535.5k`
+    - `w001` median `throughput/duration=0.2445s`, median `throughput/tokens_per_second=536.1k`
+    - summed healthy elastic throughput is therefore about `1.07M tok/s`, which is actually above the `v5p-16` baseline's steady-state `944k tok/s`
+  - The ugly `w001` final summary (`207k tok/s`) is not representative steady-state behavior; its history median is still `~536k tok/s`, and the bad final point is dominated by end-of-run disruption.
+  - The wall-clock loss is coming from worker outages and retry gaps:
+    - baseline ran clean with no retries
+    - `w000` had `1` preemption and restarted once
+    - `w001` had `3` failures; the injected faults at steps `400` and `1200` are visible in logs, and the job spent long gaps waiting to come back
+    - `w001` recovered from the step-`400` failure to first post-restart batch in about `80s`
+    - `w001` recovered from the step-`1200` failure to first post-restart batch in about `6m43s`
+    - after restart, the first resumed step was only `~2.8-3.0s`, so XLA recompilation is not the dominant loss here; TPU replacement / Iris retry / checkpoint restore latency is
+  - The current live training benchmark is also not successfully using peer sync:
+    - every attempted sync in `w000`/`w001` logged `Elastic sync pull ... failed`
+    - one failure is `AttributeError: 'bool' object has no attribute 'dtype'` inside `jax.experimental.transfer`
+    - another is a request-file control-plane race on GCS (`FileNotFoundError` reading a request JSON)
+    - that means the benchmark is currently behaving more like independent one-slice trainers with restart-from-checkpoint than like successful peer-averaging with live JAX transfer
+- Interpretation:
+  - There is no large steady-state transport overhead in the healthy case.
+  - The real throughput hurdle is wall-clock efficiency under slice churn, and specifically the time to reacquire a TPU worker and resume an Iris task.
+  - Separately, the JAX TransferServer path still has correctness gaps on real training state because the shareable pytree includes leaves that `jax.experimental.transfer` cannot currently pull as-is.
+- Next action:
+  - fix the transfer pytree / request-path issues so live peer sync actually succeeds during training
+  - then rerun the benchmark and compare wall-clock completion time again, this time separating:
+    - healthy no-fault steady state
+    - fault downtime
+    - successful peer-sync overhead
+
+### 2026-03-11 18:10 - Arrays-only transfer fix and 1e19 launcher for `us-central1`
+- Hypothesis:
+  - the live `jax_transfer` path is failing because it is trying to move full trainer pytrees that still contain non-array leaves (`bool`, Python scalars, `None`) rather than an explicit arrays-only payload.
+  - for the real comparison run, the best region-local dataset is the existing `fineweb-edu-10B` cache in `us-central1`, and the cleanest baseline shape is the repo’s prior 300M Llama `v5p-32` speedrun setup.
+- Command:
+  - edited [elastic.py](../../lib/levanter/src/levanter/elastic.py) to flatten transfer payloads to named array leaves and restore them against the local exemplar tree
+  - added [elastic_budget_compare.py](../../lib/marin/src/marin/training/elastic_budget_compare.py)
+  - `uv run --with pytest python -m pytest --import-mode=importlib lib/levanter/tests/test_elastic.py -q`
+  - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py -q`
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/elastic.py lib/levanter/tests/test_elastic.py lib/marin/src/marin/training/elastic_budget_compare.py tests/test_training.py`
+- Result:
+  - `jax_transfer` now publishes a flat `dict[path -> array]` payload and reconstructs it on fetch, so TransferServer no longer sees the `bool` / scalar leaves that were breaking real training-state sync.
+  - GCS request/status JSON reads now tolerate `FileNotFoundError`, and request cleanup is idempotent instead of `exists()`-then-remove.
+  - New launcher defaults:
+    - dataset: `gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-6fbcbb`
+    - tokenizer: `meta-llama/Meta-Llama-3.1-8B`
+    - model: 300M-ish Llama (`hidden=768`, `mlp=2688`, `layers=12`, `seq_len=4096`)
+    - baseline: `v5p-32`, global batch `128`
+    - elastic: `4 x v5p-8`, local batch `32`, `jax_transfer`, params-only sync, `publish/sync every 200`, `mixing_rate=0.25`, `max_peers=3`
+    - target budget: `1e19` FLOPs, computed as `11,456` steps for both baseline and max-capacity elastic
+  - Verification:
+    - `lib/levanter/tests/test_elastic.py`: passed
+    - `tests/test_training.py`: passed
+    - targeted repo lint/type checks: passed
+- Interpretation:
+  - the transport path is now much closer to what we actually wanted from the start: GCS as a control plane only, and direct TransferServer movement for the payload itself.
+  - the upcoming elastic-vs-baseline comparison should now be measuring a real live-sync path instead of silently falling back to “independent slices plus restart restore.”
+- Next action:
+  - launch separate `us-central1` baseline and elastic parent runs from the new launcher
+  - capture the summary JSON and W&B links immediately after submission
+  - monitor TPU admission and the first few hundred steps for actual sync success in logs
+
+### 2026-03-11 18:08 - Submitted real `1e19` comparison in `us-central1`
+- Hypothesis:
+  - the new launcher should now create the intended real comparison:
+    - baseline on one `v5p-32`
+    - elastic on `4 x v5p-8`
+    - both using the same 300M Llama / FineWeb-EDU-10B / `11,456`-step budget.
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 2 --memory 16GB --disk 20GB --region us-central1 --extra tpu --job-name resilient-1e19-0311a-baseline-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare --mode baseline --benchmark-id resilient-1e19-0311a --region us-central1`
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 2 --memory 16GB --disk 20GB --region us-central1 --extra tpu --job-name resilient-1e19-0311a-elastic-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare --mode elastic --benchmark-id resilient-1e19-0311a --region us-central1`
+  - `uv run iris --config lib/iris/examples/marin.yaml job list | rg 'resilient-1e19-0311a'`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs /dlwh/resilient-1e19-0311a-baseline-parent --include-children`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs /dlwh/resilient-1e19-0311a-elastic-parent --include-children`
+- Result:
+  - Parent jobs:
+    - baseline: `/dlwh/resilient-1e19-0311a-baseline-parent`
+    - elastic: `/dlwh/resilient-1e19-0311a-elastic-parent`
+  - Parent logs confirm the real remote path:
+    - output root resolved to `gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-1e19-0311a`
+    - `current_client: using Iris backend (auto-detected)`
+  - Child jobs now exist and are pending on TPU scale-up:
+    - baseline: `/dlwh/resilient-1e19-0311a-baseline-parent/train_lm` on `v5p-32`
+    - elastic: `/dlwh/resilient-1e19-0311a-elastic-parent/train_lm-w000`
+    - elastic: `/dlwh/resilient-1e19-0311a-elastic-parent/train_lm-w001`
+    - elastic: `/dlwh/resilient-1e19-0311a-elastic-parent/train_lm-w002`
+    - elastic: `/dlwh/resilient-1e19-0311a-elastic-parent/train_lm-w003`
+  - Shared summary artifact:
+    - `gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-1e19-0311a/summary.json`
+  - W&B targets:
+    - baseline: `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311a-baseline`
+    - elastic:
+      - `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311a-elastic-w000`
+      - `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311a-elastic-w001`
+      - `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311a-elastic-w002`
+      - `https://wandb.ai/marin-community/marin/runs/resilient-1e19-0311a-elastic-w003`
+- Interpretation:
+  - the experiment is now launched correctly on the remote path that matters.
+  - the only current blocker is TPU admission; no training metrics exist yet because the children are still pending.
+- Next action:
+  - wait for TPU admission
+  - confirm first W&B history rows and first elastic sync attempts once workers start
+
+### 2026-03-11 20:34 - Monitoring caught first fast-fail; patched and resubmitted
+- Hypothesis:
+  - the comparison launcher still had the same class of eval-initialization bug as the earlier synthetic benchmark: Levanter was attempting to materialize validation caches even though the selected `fineweb-edu-10B` cache only has a `train/` split.
+- Command:
+  - monitored under the Iris track per [job-monitoring-loop.md](../../.agents/docs/job-monitoring-loop.md)
+  - `uv run iris --config lib/iris/examples/marin.yaml job bug-report /dlwh/resilient-1e19-0311a-baseline-parent/train_lm`
+  - `uv run iris --config lib/iris/examples/marin.yaml job bug-report /dlwh/resilient-1e19-0311a-elastic-parent/train_lm-w000`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs /dlwh/resilient-1e19-0311a-baseline-parent/train_lm | tail -n 220`
+  - `uv run iris --config lib/iris/examples/marin.yaml job logs /dlwh/resilient-1e19-0311a-elastic-parent/train_lm-w000 | tail -n 220`
+  - patched [elastic_budget_compare.py](../../lib/marin/src/marin/training/elastic_budget_compare.py) so the cache-only component has an explicit empty `UrlDatasetSourceConfig(train_urls=[], validation_urls=[])`
+  - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py -q`
+  - `./infra/pre-commit.py --fix lib/marin/src/marin/training/elastic_budget_compare.py tests/test_training.py`
+  - resubmitted both parent jobs with the same Iris commands / job names
+- Result:
+  - baseline and elastic both failed before step 1 with the same real error:
+    - `ValueError: No source and no cache found for component fineweb-edu-10b split validation`
+    - root cause was missing `gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-6fbcbb/validation/shard_ledger.json`
+  - this was a small launcher bug, not a TPU failure or an elastic transport failure.
+  - the fix passed the relevant training tests and lint/type checks.
+  - `monitoring_state.json` restart count is now `1`.
+  - both parent jobs were resubmitted on the same ids:
+    - `/dlwh/resilient-1e19-0311a-baseline-parent`
+    - `/dlwh/resilient-1e19-0311a-elastic-parent`
+- Interpretation:
+  - the run failed in setup because the experiment description still implied an eval split to Levanter.
+  - the recovery preserves the intended experiment: no validation set, no eval initialization, train-only cached corpus.
+- Next action:
+  - continue the monitor through the 120-second startup stabilization on the resubmission
+  - confirm that the children now stay pending/running instead of fast-failing in `tagged_eval_sets()`
+
+### 2026-03-11 22:02 - Real `1e19` run crashed after making progress; evidence points to TPU loss, not an app exception
+- Hypothesis:
+  - the second failure was not another launcher/setup bug. Both baseline and elastic were training normally, then lost TPU backing mid-run. The elastic side also shows a dead peer during transfer request handling, consistent with slice disappearance rather than a Python exception.
+- Command:
+  - inspected W&B summaries for the resumed real runs:
+    - `resilient-1e19-0311a-baseline`
+    - `resilient-1e19-0311a-elastic-w000`
+    - `resilient-1e19-0311a-elastic-w001`
+    - `resilient-1e19-0311a-elastic-w002`
+    - `resilient-1e19-0311a-elastic-w003`
+  - inspected persisted elastic controller state under:
+    - `gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-1e19-0311a/elastic/checkpoints/_elastic/resilient-1e19-0311a-elastic`
+  - queried Cloud Logging for TPU node lifecycle events in `us-central1-a` around `2026-03-12T04:05Z`
+- Result:
+  - W&B shows real training progress before termination:
+    - baseline: `1692 / 11456` steps, `throughput/tokens_per_second=993470`, `train/loss=3.59`
+    - elastic:
+      - `w000`: `658` steps
+      - `w001`: `653` steps
+      - `w002`: `689` steps
+      - `w003`: `1198` steps
+      - each worker was running near `307k tok/s`
+  - elastic control-plane state persisted the last live worker status:
+    - `w003` published `step=1199`, `updated_at=2026-03-12T04:05:55Z`
+    - a stale request remained at `workers/w001/requests/ef685a0b4d9c4b218192b10d2c9c4fec.json`
+    - that request was created by `w003` at `2026-03-12T04:05:55Z`, implying `w003` was still attempting peer sync after at least one other worker had effectively disappeared
+  - Cloud Logging shows the corresponding TPU nodes being deleted in `us-central1-a` near the crash window:
+    - baseline `v5p-32` node:
+      - `projects/hai-gcp-models/locations/us-central1-a/nodes/marin-tpu_v5p_32-us-central1-a-20260312-0350-e73c2568`
+      - `DeleteNode` at `2026-03-12T04:06:45Z`
+    - elastic `v5p-8` nodes:
+      - `...-0356-89402d1e` deleted at `2026-03-12T04:05:07Z`
+      - `...-0356-9b463f04` deleted at `2026-03-12T04:05:07Z`
+      - `...-0356-cc00be2d` deleted at `2026-03-12T04:05:07Z`
+      - `...-0357-3ed93ec3` deleted at `2026-03-12T04:08:31Z`
+      - older `...-0347-70d86faa` also deleted during cleanup
+  - Iris no longer retained the child job records by the time of inspection, so there is no surviving `bug-report` traceback for this second failure.
+- Interpretation:
+  - this looks like infrastructure loss/preemption of the TPU nodes, not a replay of the earlier validation bug.
+  - baseline died when its single `v5p-32` node went away.
+  - elastic partially demonstrated the intended behavior: one worker (`w003`) stayed alive and kept making progress after peers were gone, but the remaining TPU backing was still eventually deleted, so the run did not recover to a stable surviving cohort.
+  - there is no strong evidence here of a deterministic Python crash in the training code path.
+- Next action:
+  - if we rerun this comparison, treat it as an infra-preemption result and decide whether to:
+    - keep monitoring and simply relaunch
+    - add explicit worker-loss accounting/reporting to the benchmark
+    - or harden the elastic path further around peer disappearance during in-flight transfer
