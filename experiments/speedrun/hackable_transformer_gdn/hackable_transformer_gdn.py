@@ -131,6 +131,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
     gdn_segment_size: int = 16
+    gdn_use_decoder_layer_boundary_prototype: bool = False
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     initializer_range: float = 0.02
@@ -376,27 +377,11 @@ class HackableDecoderLayer(eqx.Module):
     def __call__(
         self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
     ):
-        k_attn, k_mlp = maybe_rng_split(key, 2)
-        # self attention and skip connection
-        residual = x
-        x = self.input_layernorm(x)
-        if self.use_gdn:
-            attn_output = self._apply_gdn(x, mask)
-        else:
-            assert self.self_attn is not None
-            attn_output = self.self_attn(x=x, mask=mask, key=k_attn, pos_ids=pos_ids)
-        if self.post_attn_layernorm is not None:
-            attn_output = self.post_attn_layernorm(attn_output)
-        x = residual + attn_output
+        if self.use_gdn and self.config.gdn_use_decoder_layer_boundary_prototype:
+            layer_params, layer_static = eqx.partition(self, eqx.is_inexact_array)
+            return _gdn_decoder_layer_boundary_prototype((layer_params, x), layer_static, mask, key=key, pos_ids=pos_ids)
 
-        # MLP and skip connection
-        residual = x
-        x = self.post_attention_layernorm(x)
-        mlp_output = self.mlp(x, key=k_mlp)
-        if self.post_mlp_layernorm is not None:
-            mlp_output = self.post_mlp_layernorm(mlp_output)
-        output = residual + mlp_output
-        return output
+        return _decoder_layer_forward_impl(self, x, mask, key=key, pos_ids=pos_ids)
 
     def _apply_gdn(self, x: NamedArray, mask: NamedArray | AttentionMask | None) -> NamedArray:
         assert self.gdn is not None
@@ -419,6 +404,102 @@ class HackableDecoderLayer(eqx.Module):
             except Exception:
                 pass
         return y
+
+
+def _decoder_layer_forward_impl(
+    layer: "HackableDecoderLayer",
+    x: NamedArray,
+    mask: NamedArray | AttentionMask | None,
+    *,
+    key=None,
+    pos_ids: NamedArray | None = None,
+) -> NamedArray:
+    k_attn, k_mlp = maybe_rng_split(key, 2)
+
+    residual = x
+    x = layer.input_layernorm(x)
+    if layer.use_gdn:
+        attn_output = layer._apply_gdn(x, mask)
+    else:
+        assert layer.self_attn is not None
+        attn_output = layer.self_attn(x=x, mask=mask, key=k_attn, pos_ids=pos_ids)
+    if layer.post_attn_layernorm is not None:
+        attn_output = layer.post_attn_layernorm(attn_output)
+    x = residual + attn_output
+
+    residual = x
+    x = layer.post_attention_layernorm(x)
+    mlp_output = layer.mlp(x, key=k_mlp)
+    if layer.post_mlp_layernorm is not None:
+        mlp_output = layer.post_mlp_layernorm(mlp_output)
+    return residual + mlp_output
+
+
+def _decoder_layer_forward_from_boundary(
+    layer_and_x: tuple["HackableDecoderLayer", NamedArray],
+    layer_static: "HackableDecoderLayer",
+    mask: NamedArray | AttentionMask | None,
+    *,
+    key=None,
+    pos_ids: NamedArray | None = None,
+) -> NamedArray:
+    layer_params, x = layer_and_x
+    layer = eqx.combine(layer_params, layer_static)
+    return _decoder_layer_forward_impl(layer, x, mask, key=key, pos_ids=pos_ids)
+
+
+# Keep the whole decoder-layer shell inside one autodiff boundary while avoiding
+# passing static layer structure through the differentiated input.
+@eqx.filter_custom_vjp
+def _gdn_decoder_layer_boundary_prototype(
+    layer_and_x: tuple["HackableDecoderLayer", NamedArray],
+    layer_static: "HackableDecoderLayer",
+    mask: NamedArray | AttentionMask | None,
+    *,
+    key=None,
+    pos_ids: NamedArray | None = None,
+) -> NamedArray:
+    return _decoder_layer_forward_from_boundary(layer_and_x, layer_static, mask, key=key, pos_ids=pos_ids)
+
+
+def _gdn_decoder_layer_boundary_prototype_fwd(
+    perturbed,
+    layer_and_x: tuple["HackableDecoderLayer", NamedArray],
+    layer_static: "HackableDecoderLayer",
+    mask: NamedArray | AttentionMask | None,
+    *,
+    key=None,
+    pos_ids: NamedArray | None = None,
+):
+    del perturbed
+    output = _decoder_layer_forward_from_boundary(layer_and_x, layer_static, mask, key=key, pos_ids=pos_ids)
+    return output, None
+
+
+def _gdn_decoder_layer_boundary_prototype_bwd(
+    residuals,
+    grad_output: NamedArray,
+    perturbed,
+    layer_and_x: tuple["HackableDecoderLayer", NamedArray],
+    layer_static: "HackableDecoderLayer",
+    mask: NamedArray | AttentionMask | None,
+    *,
+    key=None,
+    pos_ids: NamedArray | None = None,
+):
+    del residuals, perturbed
+
+    @eqx.filter_checkpoint
+    def _forward(boundary_inputs: tuple["HackableDecoderLayer", NamedArray]) -> NamedArray:
+        return _decoder_layer_forward_from_boundary(boundary_inputs, layer_static, mask, key=key, pos_ids=pos_ids)
+
+    _, pullback = eqx.filter_vjp(_forward, layer_and_x)
+    (boundary_grads,) = pullback(grad_output)
+    return boundary_grads
+
+
+_gdn_decoder_layer_boundary_prototype.def_fwd(_gdn_decoder_layer_boundary_prototype_fwd)
+_gdn_decoder_layer_boundary_prototype.def_bwd(_gdn_decoder_layer_boundary_prototype_bwd)
 
 
 class HackableTransformer(eqx.Module):
