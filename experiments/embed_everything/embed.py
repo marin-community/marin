@@ -17,7 +17,9 @@ from iris.marin_fs import open_url
 
 logger = logging.getLogger(__name__)
 
-LUXICAL_MODEL = "DatologyAI/luxical-one"
+LUXICAL_MODEL = "DatologyAI/luxical-one"  # 192-dim
+ARCTIC_MODEL = "Snowflake/snowflake-arctic-embed-l"  # 1024-dim
+BGE_LARGE_MODEL = "BAAI/bge-large-en-v1.5"  # 1024-dim
 DEFAULT_BATCH_SIZE = 64
 
 
