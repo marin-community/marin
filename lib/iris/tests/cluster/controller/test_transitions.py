@@ -560,6 +560,45 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
         assert _query_task(state, task.task_id).state == cluster_pb2.TASK_STATE_KILLED
 
 
+def test_cancel_job_releases_committed_worker_resources(job_request, worker_metadata):
+    """cancel_job must decommit resources on workers that had active tasks.
+
+    Regression: cancel_job marked tasks KILLED without calling _decommit_worker_resources.
+    apply_heartbeat then skipped the update (task already finished), so committed resources
+    were never released, permanently blocking scheduling on those workers.
+    """
+    state = _make_state()
+
+    w1 = register_worker(state, "w1", "host1:8080", worker_metadata())
+    w2 = register_worker(state, "w2", "host2:8080", worker_metadata())
+
+    req = job_request("test-job")
+    req.replicas = 3
+    tasks = submit_job(state, "j1", req)
+
+    # Dispatch 2 tasks to different workers, leave 1 pending
+    dispatch_task(state, tasks[0], w1)
+    dispatch_task(state, tasks[1], w2)
+
+    # Verify resources are committed
+    assert _query_worker(state, w1).committed_cpu_millicores == 1000
+    assert _query_worker(state, w1).committed_mem == 1024**3
+    assert _query_worker(state, w2).committed_cpu_millicores == 1000
+
+    # Cancel job
+    state.cancel_job(JobName.root("test-user", "j1"), reason="User cancelled")
+
+    # Resources must be fully released on both workers
+    assert _query_worker(state, w1).committed_cpu_millicores == 0, "w1 leaked committed_cpu_millicores"
+    assert _query_worker(state, w1).committed_mem == 0, "w1 leaked committed_mem"
+    assert _query_worker(state, w2).committed_cpu_millicores == 0, "w2 leaked committed_cpu_millicores"
+    assert _query_worker(state, w2).committed_mem == 0, "w2 leaked committed_mem"
+
+    # No active tasks on either worker
+    assert len(_worker_running_tasks(state, w1)) == 0
+    assert len(_worker_running_tasks(state, w2)) == 0
+
+
 def test_cancelled_job_tasks_excluded_from_demand(job_request, worker_metadata):
     """Regression test for issue #2777: Killed tasks with no attempts should not appear in demand entries."""
     state = _make_state()
