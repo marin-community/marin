@@ -11,17 +11,18 @@ from pathlib import Path
 
 def verify_screenshot(image_path: Path, description: str) -> tuple[bool, str]:
     prompt = (
-        f"Does this screenshot match the following description?\n\n"
+        f"Read the screenshot at {image_path} and determine if it matches "
+        f"the following description.\n\n"
         f"Description: {description}\n\n"
         f"Reply with exactly OK if the screenshot matches, or NOT_OK followed by "
         f"a brief explanation. Be lenient about exact text but verify structural "
         f"elements (badges, tables, cards, charts) are present."
     )
     result = subprocess.run(
-        ["claude", "--print", "--prompt", prompt, str(image_path)],
+        ["claude", "--print", prompt],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=120,
     )
     if result.returncode != 0:
         return False, f"claude CLI failed: {result.stderr.strip()}"
