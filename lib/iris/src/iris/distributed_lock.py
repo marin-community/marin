@@ -134,18 +134,16 @@ class DistributedLease(abc.ABC):
     def refresh(self) -> None:
         """Refresh a lease held by the current holder.
 
-        Raises ``LeaseLostError`` if the lock is held by a different worker.
-        If the lock disappeared (e.g. deleted by a concurrent release),
-        re-acquires it.
+        Raises ``LeaseLostError`` if the lock is held by a different worker
+        **or** if the lock file has disappeared.  A missing lock file means
+        another worker deleted it (e.g. took over a stale lease and released
+        it), so the current holder has irrecoverably lost ownership.
         """
         generation, lock_data = self._read_with_generation()
         if lock_data and lock_data.worker_id == self.worker_id:
             self._write(Lease(self.worker_id, time.time()), generation)
         elif lock_data is None:
-            # Lock disappeared (e.g. concurrent release/delete). Re-acquire
-            # by writing a fresh lease with generation=0 (create-if-absent).
-            logger.warning("[%s] Lock %s disappeared during refresh, re-acquiring", self.worker_id, self.lock_path)
-            self._write(Lease(self.worker_id, time.time()), generation)
+            raise LeaseLostError(f"Lease lost: lock file {self.lock_path} disappeared — another worker likely took over")
         else:
             raise LeaseLostError(
                 f"Lease lost: lock at {self.lock_path} held by {lock_data.worker_id}, expected {self.worker_id}"

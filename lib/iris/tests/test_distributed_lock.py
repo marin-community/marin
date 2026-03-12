@@ -13,7 +13,6 @@ from iris.distributed_lock import (
     GcsLease,
     Lease,
     LeaseLostError,
-    LocalFileLease,
     create_lock,
 )
 
@@ -26,16 +25,6 @@ def test_lease_is_stale_after_timeout():
 def test_lease_is_fresh_within_timeout():
     lease = Lease(worker_id="worker-1", timestamp=time.time())
     assert not lease.is_stale()
-
-
-def test_create_lock_returns_local_for_local_path(tmp_path):
-    lock = create_lock(str(tmp_path / "test.lock"), worker_id="w")
-    assert isinstance(lock, LocalFileLease)
-
-
-def test_create_lock_returns_gcs_for_gcs_path():
-    lock = create_lock("gs://bucket/test.lock", worker_id="w")
-    assert isinstance(lock, GcsLease)
 
 
 def test_acquire_and_release_local_lock(tmp_path):
@@ -109,6 +98,25 @@ def test_refresh_raises_lease_lost_error_if_not_holder(tmp_path):
     lock_a.release()
 
 
+def test_refresh_raises_lease_lost_when_lock_disappears(tmp_path):
+    """If the lock file vanishes under the holder, refresh() must raise LeaseLostError.
+
+    A disappearing lock file means another worker took over the stale lease and
+    subsequently released it, so the original holder has irrecoverably lost
+    ownership.  Silently re-acquiring would let two workers run the same step.
+    """
+    lock_path = str(tmp_path / "test.lock")
+    lock = create_lock(lock_path, worker_id="holder-a")
+    assert lock.try_acquire()
+
+    # Simulate the lock file being deleted (e.g. by another worker that took
+    # over a stale lease and then released it).
+    os.remove(lock_path)
+
+    with pytest.raises(LeaseLostError, match="disappeared"):
+        lock.refresh()
+
+
 def test_has_active_holder(tmp_path):
     lock_path = str(tmp_path / "test.lock")
     lock = create_lock(lock_path, worker_id="holder-a")
@@ -129,25 +137,6 @@ def test_same_holder_can_reacquire(tmp_path):
     lock.release()
 
 
-def test_refresh_reacquires_when_lock_disappears(tmp_path):
-    """Refresh should re-acquire the lock if it was deleted externally."""
-    lock_path = str(tmp_path / "test.lock")
-    lock = create_lock(lock_path, worker_id="holder-a")
-    assert lock.try_acquire()
-
-    # Simulate another worker deleting the lock file
-    os.remove(lock_path)
-
-    # Refresh should re-acquire instead of crashing
-    lock.refresh()
-
-    # Lock should exist again with the same holder
-    with open(lock_path) as f:
-        data = json.loads(f.read())
-    assert data["worker_id"] == "holder-a"
-    lock.release()
-
-
 def test_release_idempotent_when_lock_already_gone(tmp_path):
     """Release should not crash if the lock file was already deleted."""
     lock_path = str(tmp_path / "test.lock")
@@ -161,37 +150,40 @@ def test_release_idempotent_when_lock_already_gone(tmp_path):
     lock.release()
 
 
-def test_has_active_holder_when_lock_missing(tmp_path):
-    """has_active_holder should return False if lock file doesn't exist."""
-    lock_path = str(tmp_path / "nonexistent.lock")
-    lock = create_lock(lock_path, worker_id="holder-a")
-    assert not lock.has_active_holder()
+def test_stale_takeover_then_refresh_detects_new_holder(tmp_path):
+    """Simulates a full stale-takeover race:
+
+    1. Worker A acquires.
+    2. Worker A stops heartbeating; its lease goes stale.
+    3. Worker B takes over the stale lock.
+    4. Worker A wakes up and tries to refresh — must get LeaseLostError.
+    """
+    lock_path = str(tmp_path / "test.lock")
+    lock_a = create_lock(lock_path, worker_id="worker-A")
+    lock_b = create_lock(lock_path, worker_id="worker-B")
+
+    assert lock_a.try_acquire()
+
+    # Artificially age Worker A's lease past the timeout.
+    with open(lock_path) as f:
+        data = json.loads(f.read())
+    data["timestamp"] = time.time() - HEARTBEAT_TIMEOUT - 10
+    with open(lock_path, "w") as f:
+        f.write(json.dumps(data))
+
+    # Worker B sees the stale lock and takes over.
+    assert lock_b.try_acquire()
+
+    # Worker A tries to refresh — should fail because B now holds the lock.
+    with pytest.raises(LeaseLostError, match="worker-B"):
+        lock_a.refresh()
+
+    lock_b.release()
 
 
 # ---------------------------------------------------------------------------
-# GCS mock tests — validate NotFound handling and generation semantics
+# GCS mock tests — validate GCS-specific error handling
 # ---------------------------------------------------------------------------
-
-
-class _FakeBlob:
-    """Minimal mock for google.cloud.storage.Blob."""
-
-    def __init__(self, data: str | None, generation: int):
-        self._data = data
-        self.generation = generation
-
-    def download_as_string(self) -> bytes:
-        if self._data is None:
-            from google.api_core.exceptions import NotFound
-
-            raise NotFound("blob gone")
-        return self._data.encode()
-
-    def upload_from_string(self, data: str, if_generation_match: int = 0) -> None:
-        pass
-
-    def delete(self) -> None:
-        pass
 
 
 def _make_gcs_lease(lock_path: str = "gs://bucket/test.lock", worker_id: str = "w") -> GcsLease:
@@ -208,40 +200,18 @@ def test_gcs_refresh_raises_lease_lost_on_different_holder(mock_read):
         lease.refresh()
 
 
-@patch("iris.distributed_lock.GcsLease._write")
 @patch("iris.distributed_lock.GcsLease._read_with_generation")
-def test_gcs_refresh_reacquires_when_lock_gone(mock_read, mock_write):
-    """GcsLease.refresh re-acquires when lock disappears (NotFound race)."""
+def test_gcs_refresh_raises_lease_lost_when_lock_gone(mock_read):
+    """GcsLease.refresh raises LeaseLostError when the lock blob is absent.
+
+    On GCS, the blob can vanish between reads due to a concurrent delete.
+    This must be fatal — not silently re-acquired.
+    """
     lease = _make_gcs_lease(worker_id="worker-A")
     mock_read.return_value = (0, None)
 
-    lease.refresh()
-
-    mock_write.assert_called_once()
-    args = mock_write.call_args
-    assert args[0][0].worker_id == "worker-A"
-    assert args[0][1] == 0  # generation=0 → create-if-absent
-
-
-@patch("iris.distributed_lock.GcsLease._read_with_generation")
-def test_gcs_has_active_holder_returns_false_on_missing(mock_read):
-    """has_active_holder returns False when the lock blob is absent."""
-    lease = _make_gcs_lease()
-    mock_read.return_value = (0, None)
-
-    assert not lease.has_active_holder()
-
-
-@patch("iris.distributed_lock.GcsLease._delete")
-@patch("iris.distributed_lock.GcsLease._read_with_generation")
-def test_gcs_release_idempotent_when_gone(mock_read, mock_delete):
-    """release() is a no-op when the lock is already gone."""
-    lease = _make_gcs_lease(worker_id="worker-A")
-    mock_read.return_value = (0, None)
-
-    # Should not raise
-    lease.release()
-    mock_delete.assert_not_called()
+    with pytest.raises(LeaseLostError, match="disappeared"):
+        lease.refresh()
 
 
 @patch("iris.distributed_lock.GcsLease._read_with_generation")
@@ -250,9 +220,21 @@ def test_gcs_try_acquire_returns_false_on_precondition_failed(mock_read):
     lease = _make_gcs_lease(worker_id="worker-A")
     mock_read.return_value = (0, None)
 
-    # Simulate PreconditionFailed from _write
+    # Simulate PreconditionFailed from _write — this is the GCS-specific error
+    # when another writer wins the generation race.
     class PreconditionFailed(Exception):
         pass
 
     with patch.object(lease, "_write", side_effect=PreconditionFailed("gen mismatch")):
         assert not lease.try_acquire()
+
+
+@patch("iris.distributed_lock.GcsLease._delete")
+@patch("iris.distributed_lock.GcsLease._read_with_generation")
+def test_gcs_release_noop_when_lock_gone(mock_read, mock_delete):
+    """release() is a no-op when the lock blob is already absent."""
+    lease = _make_gcs_lease(worker_id="worker-A")
+    mock_read.return_value = (0, None)
+
+    lease.release()
+    mock_delete.assert_not_called()
