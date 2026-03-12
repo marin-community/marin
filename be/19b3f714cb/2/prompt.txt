@@ -1,0 +1,285 @@
+Implement the following plan:
+
+# Plan: Generalize exp2956 to support multiple student models
+
+## Context
+Currently `exp2956_sft_swe_smith_qwen3_8b.py` is hardcoded to fine-tune Qwen3-8B. We want to also support Qwen2.5-Coder-32B-Instruct as a student, selectable via `--student`. The file is also renamed to drop the model-specific suffix.
+
+## Changes
+
+### 1. Rename file
+`git mv experiments/exp2956_sft_swe_smith_qwen3_8b.py experiments/exp2956_sft_swe_smith.py`
+
+### 2. Add Qwen2.5-Coder-32B-Instruct config to `experiments/qwen3.py`
+Add after the existing `qwen2_5_32b_instruct` block (~line 273):
+```python
+qwen2_5_coder_32b_instruct_tokenizer = "Qwen/Qwen2.5-Coder-32B-Instruct"
+qwen2_5_coder_32b_instruct = dataclasses.replace(
+    qwen2_5_32b_instruct,
+    reference_checkpoint="Qwen/Qwen2.5-Coder-32B-Instruct",
+)
+```
+Same architecture as `qwen2_5_32b_instruct`, just different `reference_checkpoint`. Need to add `import dataclasses` at top of file.
+
+### 3. Rewrite `experiments/exp2956_sft_swe_smith.py`
+
+**Add `StudentConfig` dataclass** with fields: `model_config`, `tokenizer`, `model_name_or_path`, `chat_template`.
+
+**Add `STUDENT_CONFIGS` dict** with two entries:
+- `"qwen3-8b"` — uses existing `qwen3_8b` / `qwen3_8b_tokenizer` / `QWEN_3_CHAT_TEMPLATE`
+- `"qwen25-coder-32b-instruct"` — uses new `qwen2_5_coder_32b_instruct` / its tokenizer / `QWEN_2_5_INSTRUCT_CHAT_TEMPLATE`
+
+**Update `build_swe_smith_sft(teacher, student="qwen3-8b")`:**
+- Look up `StudentConfig` from `STUDENT_CONFIGS[student]`
+- Use student's tokenizer, model_config, chat_template, model_name_or_path
+- Create seq_len-overridden model config via `dataclasses.replace()` inside function
+- Include student slug in experiment name: `exp2956_sft_swe_smith_{teacher_slug}_{student_slug}_32768tokens_{RESOURCE_SUFFIX}`
+
+**Add imports:**
+- `from experiments.qwen3 import qwen2_5_coder_32b_instruct, qwen2_5_coder_32b_instruct_tokenizer`
+- `from experiments.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE`
+
+**Module-level exports:** Keep only qwen3-8b (default student) exports. Other combinations via CLI.
+
+**Add `--student` to argparse** with `choices=list(STUDENT_CONFIGS.keys())`, default `"qwen3-8b"`.
+
+**Update docstring** to reflect new `--student` flag.
+
+### 4. Resources
+Both students use `v5p-32`. Keep `RESOURCES` as a module constant.
+
+## Files modified
+- `experiments/qwen3.py` — add `qwen2_5_coder_32b_instruct` + tokenizer (2 lines)
+- `experiments/exp2956_sft_swe_smith_qwen3_8b.py` → `experiments/exp2956_sft_swe_smith.py` — rename + student parameterization
+
+## Verification
+- `python -c "from experiments.exp2956_sft_swe_smith import exp2956_sft_swe_smith_qwen3_8b"` — existing imports still work
+- `python -m experiments.exp2956_sft_swe_smith --teacher swebm-minimax-m2.5 --student qwen25-coder-32b-instruct --help`
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/kevin/.REDACTED.jsonl
+
+---
+
+Can you align the training hyperparameters in @experiments/exp2956_sft_swe_smith.py with:
+
+---
+
+[Request interrupted by user]
+
+---
+
+the following: # Config for multi-device full finetuning in full_finetune_distributed.py
+# using a Qwen2.5 7B model
+#
+# This config assumes that you've run the following command before launching
+# this run:
+#   tune download Qwen/Qwen2.5-7B-Instruct --output-dir /tmp/Qwen2_5-7B-Instruct
+#
+# To launch on 2 devices, run the following command from root:
+#   tune run --nnodes 1 --nproc_per_node 2 full_finetune_distributed --config qwen2_5/7B_full
+#
+# You can add specific overrides through the command line. For example
+# to override the checkpointer directory while launching training
+# you can run:
+#   tune run --nnodes 1 --nproc_per_node 2 full_finetune_distributed --config qwen2_5/7B_full checkpointer.checkpoint_dir=<YOUR_CHECKPOINT_DIR>
+#
+# This config works best when the model is being fine-tuned on 2+ GPUs.
+# Single device full finetuning requires more memory optimizations. It's
+# best to use 7B_full_single_device.yaml for those cases
+
+exp_name: qwen2p5-coder-32b-full-lr1e-4-warmup5___xml_all_250413
+output_dir: /weights/exps/${exp_name}
+# Model Arguments
+model:
+  _component_: torchtune.models.qwen2_5.qwen2_5_32b_instruct
+
+tokenizer:
+  _component_: torchtune.models.qwen2_5.qwen2_5_tokenizer
+  path: /weights/Qwen/Qwen2.5-Coder-32B-Instruct/vocab.json
+  merges_file: /weights/Qwen/Qwen2.5-Coder-32B-Instruct/merges.txt
+  max_seq_len: 32768
+
+checkpointer:
+  _component_: torchtune.training.FullModelHFCheckpointer
+  checkpoint_dir: /weights/Qwen/Qwen2.5-Coder-32B-Instruct
+  checkpoint_files: [
+    model-00001-of-00014.safetensors,
+    model-00002-of-00014.safetensors,
+    model-00003-of-00014.safetensors,
+    model-00004-of-00014.safetensors,
+    model-00005-of-00014.safetensors,
+    model-00006-of-00014.safetensors,
+    model-00007-of-00014.safetensors,
+    model-00008-of-00014.safetensors,
+    model-00009-of-00014.safetensors,
+    model-00010-of-00014.safetensors,
+    model-00011-of-00014.safetensors,
+    model-00012-of-00014.safetensors,
+    model-00013-of-00014.safetensors,
+    model-00014-of-00014.safetensors,
+  ]
+  recipe_checkpoint: null
+  output_dir: ${output_dir}
+  model_type: QWEN2
+  safe_serialization: True
+resume_from_checkpoint: False
+
+# Dataset and Sampler
+dataset:
+  _component_: torchtune.datasets.chat_dataset
+  source: json
+  data_files: /data/swe-smith-rs-glm-4.6.hermes.jsonl
+  split: train
+  conversation_column: messages
+  conversation_style: openai
+  train_on_input: False
+  new_system_prompt: null
+  packed: False  # True increases speed
+seed: 42
+shuffle: True
+batch_size: 1
+
+# Optimizer and Scheduler
+optimizer:
+  _component_: torch.optim.AdamW
+  fused: True
+  weight_decay: 0.01
+  lr: 1e-4
+lr_scheduler:
+  _component_: torchtune.training.lr_schedulers.get_cosine_schedule_with_warmup
+  num_warmup_steps: 5
+optimizer_in_bwd: True
+loss:
+  _component_: torchtune.modules.loss.CEWithChunkedOutputLoss
+
+# Training
+epochs: 3
+max_steps_per_epoch: null
+gradient_accumulation_steps: 1 # Use to increase virtual batch size
+compile: True  # pytorch compile, set to true for better perf/memory
+
+# Logging
+metric_logger:
+  _component_: torchtune.training.metric_logging.WandBLogger
+  project: swesmith
+  group: ${exp_name}
+  job_type: full_finetune_distributed
+log_every_n_steps: 1
+log_peak_memory_stats: True
+
+# Environment
+device: cuda
+dtype: bf16
+enable_activation_checkpointing: True  # True reduces memory
+enable_activation_offloading: False  # True reduces memory
+# custom_sharded_layers: ['tok_embeddings']  # Layers to shard separately (useful for large vocab size models). Lower Memory, but lower speed.
+
+# Show case the usage of pytorch profiler
+# Set enabled to False as it's only needed for debugging training
+profiler:
+  _component_: torchtune.training.setup_torch_profiler
+
+  enabled: False
+
+  #Output directory of trace artifacts
+  output_dir: ${output_dir}/profiling_outputs
+
+  #`torch.profiler.ProfilerActivity` types to trace
+  cpu: True
+  cuda: True
+
+  #trace options passed to `torch.profiler.profile`
+  profile_memory: False
+  with_stack: False
+  record_shapes: True
+  with_flops: False
+
+  # `torch.profiler.schedule` options:
+  # wait_steps -> wait, warmup_steps -> warmup, active_steps -> active, num_cycles -> repeat
+  wait_steps: 5
+  warmup_steps: 5
+  active_steps: 2
+  num_cycles: 1
+
+---
+
+does v5p-32 have enough memory to finetune qwen2.5-coder-instruct-32b with the current batch size settings ?
+
+---
+
+So I've trained qwen3-8b with the current setup and it fit in memory
+
+---
+
+Did you follow my new reference hyperparameter settings closely? I thought it has a batch_size of 1
+
+---
+
+I see, can you just try SFT qwen2.5-coder-32b-instruct with glm teacher using the current setup?
+
+---
+
+Yes, run and monitor for any errors
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Oh yeah, I know that there's a special patch for Qwen3 chat template to handle loss masks for SFT, do we need/have this for Qwen2.5-coder?
+
+---
+
+how's the sft going?
+
+---
+
+<task-notification>
+<task-id>bne12hudo</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1010/-home-kevin-marin-agentic-sft/tasks/bne12hudo.output</output-file>
+<status>completed</status>
+<summary>Background command "Run SFT for qwen2.5-coder-32b-instruct with glm-4.6 teacher on TPU v5p-32" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /tmp/claude-1010/-home-kevin-marin-agentic-sft/tasks/bne12hudo.output
+
+---
+
+how's the training going?
+
+---
+
+How to prevent OOM with 32b on v5p-32?
+
+---
+
+<task-notification>
+<task-id>b7undvdfm</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1010/-home-kevin-marin-agentic-sft/tasks/b7undvdfm.output</output-file>
+<status>completed</status>
+<summary>Background command "Relaunch SFT with decay fix" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /tmp/claude-1010/-home-kevin-marin-agentic-sft/tasks/b7undvdfm.output
+
+---
+
+how's the training progressing?
+
+---
+
+how come only 70 steps?
+
+---
+
+Got it, upload the final checkpoint to AlienKevin/swe-smith-rs-base-qwen2.5-coder-32b-instruct-teacher-glm-4.6-sft-marin
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Meanwhile, commit relevant changes

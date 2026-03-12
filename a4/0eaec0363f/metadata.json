@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "a40eaec0363f",
+  "strategy": "manual-commit",
+  "branch": "kevin/agentic-sft",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "experiments/exp2956_sft_swe_smith.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a4/0eaec0363f/0/metadata.json",
+      "transcript": "/a4/0eaec0363f/0/full.jsonl",
+      "context": "/a4/0eaec0363f/0/context.md",
+      "content_hash": "/a4/0eaec0363f/0/content_hash.txt",
+      "prompt": "/a4/0eaec0363f/0/prompt.txt"
+    },
+    {
+      "metadata": "/a4/0eaec0363f/1/metadata.json",
+      "transcript": "/a4/0eaec0363f/1/full.jsonl",
+      "context": "/a4/0eaec0363f/1/context.md",
+      "content_hash": "/a4/0eaec0363f/1/content_hash.txt",
+      "prompt": "/a4/0eaec0363f/1/prompt.txt"
+    },
+    {
+      "metadata": "/a4/0eaec0363f/2/metadata.json",
+      "transcript": "/a4/0eaec0363f/2/full.jsonl",
+      "context": "/a4/0eaec0363f/2/context.md",
+      "content_hash": "/a4/0eaec0363f/2/content_hash.txt",
+      "prompt": "/a4/0eaec0363f/2/prompt.txt"
+    },
+    {
+      "metadata": "/a4/0eaec0363f/3/metadata.json",
+      "transcript": "/a4/0eaec0363f/3/full.jsonl",
+      "context": "/a4/0eaec0363f/3/context.md",
+      "content_hash": "/a4/0eaec0363f/3/content_hash.txt",
+      "prompt": "/a4/0eaec0363f/3/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5038,
+    "cache_creation_tokens": 1643980,
+    "cache_read_tokens": 41842108,
+    "output_tokens": 192363,
+    "api_call_count": 477
+  }
+}

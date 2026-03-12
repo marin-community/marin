@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "ec2c94226ec2",
+  "strategy": "manual-commit",
+  "branch": "kevin/harbor",
+  "checkpoints_count": 13,
+  "files_touched": [
+    "experiments/exp3490_nemotron_terminal_8b_tb.py",
+    "lib/harbor/src/harbor/agents/oracle.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ec/2c94226ec2/0/metadata.json",
+      "transcript": "/ec/2c94226ec2/0/full.jsonl",
+      "context": "/ec/2c94226ec2/0/context.md",
+      "content_hash": "/ec/2c94226ec2/0/content_hash.txt",
+      "prompt": "/ec/2c94226ec2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 93787,
+    "cache_read_tokens": 3650136,
+    "output_tokens": 19128,
+    "api_call_count": 62
+  }
+}
