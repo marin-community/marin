@@ -10,7 +10,7 @@ from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
 from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
-from .tuned_block_sizes import infer_xla_b_block_size, infer_xla_v_block_size
+from .tuned_block_sizes import _largest_divisor_at_most, infer_xla_b_block_size, infer_xla_v_block_size
 
 _XLA_MAX_TILE_WORDS = 2**31 - 1
 
@@ -31,14 +31,19 @@ def _resolve_xla_batch_block_size(b_dim: int, v_block_size: int, block_sizes: Bl
     requested = block_sizes.b_block_size
     if requested <= 0:
         raise ValueError(f"XLA batch block size must be positive, got {requested}.")
-    if b_dim % requested != 0:
-        raise ValueError(f"XLA batch block size must divide B, got B={b_dim}, b_block_size={requested}.")
     if requested * v_block_size > _XLA_MAX_TILE_WORDS:
         raise ValueError(
             "XLA batch/vocab tile exceeds TPU/XLA int32 word-count limit: "
             f"b_block_size={requested}, v_block_size={v_block_size}."
         )
-    return requested
+
+    if requested <= b_dim and b_dim % requested == 0:
+        return requested
+
+    # Default/tuned block sizes often encode a preferred upper bound like 1024.
+    # Preserve that intent by shrinking to the largest valid divisor of B instead
+    # of rejecting smaller local batches outright.
+    return _largest_divisor_at_most(b_dim, min(requested, inferred))
 
 
 def _linear_softmax_cross_entropy_loss_streaming_fwd(
