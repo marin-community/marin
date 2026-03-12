@@ -648,13 +648,11 @@ class ControllerServiceImpl:
             # Get job-level diagnostics (expensive but only for detail view)
             pending_reason = self._controller.get_job_scheduling_diagnostics(job, sched_context)
             hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire())
-            # Only override scheduler diagnostics when autoscaler is actively
-            # requesting new capacity. Otherwise, scheduler root-cause details
-            # (e.g., constraint/resource mismatch) are more actionable.
-            if hint is not None and hint.is_scaling_up:
-                pending_reason = hint.message
-            elif hint is not None:
-                pending_reason = f"{pending_reason}\n\nAutoscaler: {hint.message}"
+            # Always show both scheduler and autoscaler diagnostics so users
+            # see the full picture (root-cause + scaling status).
+            if hint is not None:
+                scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
+                pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
@@ -769,7 +767,8 @@ class ControllerServiceImpl:
             if j.state == cluster_pb2.JOB_STATE_PENDING:
                 hint = autoscaler_pending_hints.get(j.job_id.to_wire())
                 if hint is not None:
-                    pending_reason = hint.message
+                    scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
+                    pending_reason = f"Autoscaler: {scaling_prefix}{hint.message}"
 
             proto_job = cluster_pb2.JobStatus(
                 job_id=j.job_id.to_wire(),
