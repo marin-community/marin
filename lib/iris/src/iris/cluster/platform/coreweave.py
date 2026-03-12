@@ -41,9 +41,8 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
-from typing import NamedTuple
 from urllib.parse import urlparse
 
 from google.protobuf.json_format import MessageToDict
@@ -347,7 +346,6 @@ class CoreweavePlatform:
         self._shutdown_event = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="coreweave")
         self._s3_enabled = bool(os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"))
-        self.tunnel_reconnect: Callable[[], None] | None = None  # see tunnel() below
         if self._s3_enabled:
             logger.info("S3 credentials detected in environment; enabling S3 env injection")
 
@@ -990,27 +988,21 @@ class CoreweavePlatform:
             )
         return workers
 
-    @contextmanager
     def tunnel(
         self,
         address: str,
         local_port: int | None = None,
-    ) -> Iterator[str]:
+    ) -> AbstractContextManager[str]:
         # address is like "iris-controller-svc.iris.svc.cluster.local:10000"
         host, port_str = address.rsplit(":", 1)
         service_name = host.split(".")[0]
         remote_port = int(port_str)
-        with _coreweave_tunnel(
+        return _coreweave_tunnel(
             kubectl=self._kubectl,
             service_name=service_name,
             remote_port=remote_port,
             local_port=local_port,
-        ) as (url, reconnect):
-            self.tunnel_reconnect = reconnect
-            try:
-                yield url
-            finally:
-                self.tunnel_reconnect = None
+        )
 
     def shutdown(self) -> None:
         self._shutdown_event.set()
@@ -1452,13 +1444,6 @@ def _build_controller_deployment(
 # ============================================================================
 
 
-class TunnelHandle(NamedTuple):
-    """Typed return from ``_coreweave_tunnel``."""
-
-    url: str
-    reconnect: Callable[[], None]
-
-
 @contextmanager
 def _coreweave_tunnel(
     kubectl: Kubectl,
@@ -1466,34 +1451,18 @@ def _coreweave_tunnel(
     remote_port: int,
     local_port: int | None = None,
     timeout: float = 90.0,
-) -> Iterator[TunnelHandle]:
-    """kubectl port-forward to a K8s Service, yielding ``(url, reconnect)``.
+) -> Iterator[str]:
+    """kubectl port-forward to a K8s Service, yielding the local URL.
 
     Uses a single deadline with exponential backoff to handle freshly
     provisioned nodes whose konnectivity agent may not be ready when
     the pod first passes its readiness probe.  If the kubectl process
     exits (e.g. konnectivity timeout), it is relaunched automatically.
-
-    The *reconnect* callback checks tunnel health and re-establishes the
-    port-forward if the subprocess has died.  Intended for use as an
-    ``on_retry`` hook so that RPC retries can recover from mid-session
-    tunnel death (see #3437).
     """
     if local_port is None:
         local_port = find_free_port()
 
-    # Shared across _launch/_stop/_connect/reconnect closures below.
     proc: subprocess.Popen | None = None
-
-    def _launch() -> subprocess.Popen:
-        return kubectl.popen(
-            ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
-            namespaced=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
 
     def _stop() -> None:
         nonlocal proc
@@ -1507,29 +1476,36 @@ def _coreweave_tunnel(
             proc.wait()
         proc = None
 
-    def _connect(connect_timeout: float) -> None:
-        """Establish port-forward with a fresh deadline + backoff."""
-        nonlocal proc
-        deadline = Deadline.from_seconds(connect_timeout)
-        backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+    deadline = Deadline.from_seconds(timeout)
+    backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
 
-        while not deadline.expired():
-            if proc is None:
-                proc = _launch()
+    while not deadline.expired():
+        # (Re-)launch kubectl port-forward when needed.
+        if proc is None:
+            proc = kubectl.popen(
+                ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
+                namespaced=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
 
-            if proc.poll() is not None:
-                stderr = proc.stderr.read() if proc.stderr else ""
-                logger.warning("Port-forward exited (retrying): %s", stderr.strip())
-                proc = None
-                time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
-                continue
+        # Process died — log, back off, and relaunch on next iteration.
+        if proc.poll() is not None:
+            stderr = proc.stderr.read() if proc.stderr else ""
+            logger.warning("Port-forward exited (retrying): %s", stderr.strip())
+            proc = None
+            time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
+            continue
 
-            try:
-                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
-                    return
-            except OSError:
-                time.sleep(0.5)
-
+        # Try to connect to the forwarded port.
+        try:
+            with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                break
+        except OSError:
+            time.sleep(0.5)
+    else:
         _stop()
         # Capture konnectivity-agent state — it lives in kube-system and is
         # invisible to normal pod-scoped queries. Without this, diagnosing
@@ -1540,34 +1516,10 @@ def _coreweave_tunnel(
                 logger.warning("kube-system pods at tunnel failure:\n%s", result.stdout.strip())
         except subprocess.TimeoutExpired:
             pass
-        raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {connect_timeout}s")
+        raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
-    def reconnect() -> None:
-        """Check tunnel health; re-establish if the port-forward has died.
-
-        Reuses the same *timeout* as initial establishment — konnectivity may
-        need the full budget if the upstream proxy is recovering.  Raises
-        RuntimeError if reconnection fails.
-        """
-        if proc is not None and proc.poll() is None:
-            try:
-                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
-                    return
-            except OSError:
-                logger.warning("Port-forward alive but port unreachable, restarting")
-
-        stderr = ""
-        if proc is not None and proc.poll() is not None:
-            stderr = proc.stderr.read() if proc.stderr else ""
-
-        _stop()
-        logger.warning("Port-forward died, reconnecting: %s", stderr.strip())
-        _connect(timeout)
-        logger.info("Tunnel re-established on port %d", local_port)
-
-    _connect(timeout)
     logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
     try:
-        yield TunnelHandle(url=f"http://127.0.0.1:{local_port}", reconnect=reconnect)
+        yield f"http://127.0.0.1:{local_port}"
     finally:
         _stop()

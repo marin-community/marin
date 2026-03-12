@@ -13,7 +13,6 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -23,7 +22,7 @@ from google.protobuf import json_format
 from tabulate import tabulate
 
 from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
-from iris.cli.main import require_client, require_controller_url
+from iris.cli.main import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import Constraint, WellKnownAttribute, region_constraint, zone_constraint
@@ -436,7 +435,6 @@ def run_iris_job(
     zone: str | None = None,
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
-    on_retry: Callable[[Exception], None] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -507,7 +505,6 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         reservation=reservation,
-        on_retry=on_retry,
     )
 
 
@@ -528,15 +525,13 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
-    on_retry: Callable[[Exception], None] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
-    When terminate_on_exit is True, the job (and its children) are killed on
-    any non-normal exit: KeyboardInterrupt, unexpected exceptions, etc.
-    Normal completion (success or JobFailedError) does not trigger termination.
+    Only KeyboardInterrupt terminates the remote job; connection failures
+    are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), on_retry=on_retry)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
@@ -554,12 +549,15 @@ def _submit_and_wait_job(
     )
 
     logger.info(f"Job submitted: {job.job_id}")
+    click.echo(str(job.job_id))
 
     if not wait:
-        logger.info("Job submitted (not waiting for completion)")
         return 0
 
-    logger.info("Streaming logs (Ctrl+C to kill)...")
+    logger.info(
+        "Streaming logs (Ctrl+C to stop). If disconnected, reconnect with: iris job logs -f %s",
+        job.job_id,
+    )
     try:
         try:
             status = job.wait(stream_logs=True, include_children=include_children_logs, timeout=float("inf"))
@@ -568,14 +566,19 @@ def _submit_and_wait_job(
         except JobFailedError as e:
             logger.error(f"Job failed: {e}")
             return 1
-    except BaseException:
+    except KeyboardInterrupt:
         if terminate_on_exit:
             logger.info(f"Terminating job {job.job_id}...")
             terminated = _terminate_jobs(client, (str(job.job_id),), include_children=True)
             for t in terminated:
                 logger.info(f"  Terminated: {t}")
-        if isinstance(sys.exc_info()[1], KeyboardInterrupt):
-            return 130
+        return 130
+    except Exception:
+        logger.warning(
+            "Connection lost; job %s is still running. Reconnect with: iris job logs -f %s",
+            job.job_id,
+            job.job_id,
+        )
         raise
 
 
@@ -644,7 +647,7 @@ Examples:
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
-    help="Terminate the job if an unexpected error occurs (default: terminate).",
+    help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
 )
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
@@ -690,7 +693,6 @@ def run(
         )
 
     env_vars_dict = load_env_vars(env_vars)
-    on_retry = ctx.obj.get("on_retry") if ctx.obj else None
 
     try:
         exit_code = run_iris_job(
@@ -714,7 +716,6 @@ def run(
             regions=region or None,
             zone=zone,
             reserve=reserve or None,
-            on_retry=on_retry,
         )
     except Exception:
         platform = ctx.obj.get("platform")
@@ -724,6 +725,7 @@ def run(
             except Exception:
                 logger.debug("Controller post-mortem failed", exc_info=True)
         raise
+
     sys.exit(exit_code)
 
 
@@ -737,7 +739,8 @@ def run(
 @click.pass_context
 def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs."""
-    client = require_client(ctx)
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -752,7 +755,8 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 @click.pass_context
 def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
-    client = require_client(ctx)
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -764,7 +768,8 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 @click.pass_context
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
     """List jobs with optional filtering."""
-    client = require_client(ctx)
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
 
     states: list[cluster_pb2.JobState] | None = None
     if state is not None:
@@ -853,7 +858,8 @@ def logs(
     if since_ms is not None and since_seconds is not None:
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
-    client = require_client(ctx)
+    controller_url = require_controller_url(ctx)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
 
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)

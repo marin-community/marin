@@ -6,7 +6,6 @@
 import logging
 import time
 import uuid
-from collections.abc import Callable
 
 from iris.cluster.client.protocol import TaskStateLogger
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
@@ -32,7 +31,6 @@ class RemoteClusterClient:
         bundle_id: str | None = None,
         bundle_blob: bytes | None = None,
         timeout_ms: int = 30000,
-        on_retry: Callable[[Exception], None] | None = None,
     ):
         """Initialize RPC cluster operations.
 
@@ -41,14 +39,11 @@ class RemoteClusterClient:
             bundle_id: Workspace bundle identifier for job inheritance
             bundle_blob: Workspace bundle as bytes (for initial job submission)
             timeout_ms: RPC timeout in milliseconds
-            on_retry: Optional callback invoked on retryable RPC failures before
-                each retry attempt (e.g. to re-establish a tunnel).
         """
         self._address = controller_address
         self._bundle_id = bundle_id
         self._bundle_blob = bundle_blob
         self._timeout_ms = timeout_ms
-        self._on_retry = on_retry
         self._client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=timeout_ms,
@@ -109,7 +104,7 @@ class RemoteClusterClient:
         def _call():
             self._client.launch_job(request)
 
-        call_with_retry(f"launch_job({job_id})", _call, on_retry=self._on_retry)
+        call_with_retry(f"launch_job({job_id})", _call)
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus:
         def _call():
@@ -117,7 +112,7 @@ class RemoteClusterClient:
             response = self._client.get_job_status(request)
             return response.job
 
-        return call_with_retry(f"get_job_status({job_id})", _call, on_retry=self._on_retry)
+        return call_with_retry(f"get_job_status({job_id})", _call)
 
     def wait_for_job(
         self,
@@ -273,7 +268,7 @@ class RemoteClusterClient:
         def _call():
             return self._client.register_endpoint(request)
 
-        response = call_with_retry("register_endpoint", _call, on_retry=self._on_retry)
+        response = call_with_retry("register_endpoint", _call)
         return response.endpoint_id
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
@@ -287,7 +282,7 @@ class RemoteClusterClient:
             response = self._client.list_endpoints(request, timeout_ms=10_000)
             return list(response.endpoints)
 
-        return call_with_retry("list_endpoints", _call, on_retry=self._on_retry)
+        return call_with_retry("list_endpoints", _call)
 
     def list_workers(self) -> list[cluster_pb2.Controller.WorkerHealthStatus]:
         """List all workers registered with the controller."""
@@ -297,7 +292,7 @@ class RemoteClusterClient:
             response = self._client.list_workers(request)
             return list(response.workers)
 
-        return call_with_retry("list_workers", _call, on_retry=self._on_retry)
+        return call_with_retry("list_workers", _call)
 
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         def _call():
@@ -305,7 +300,7 @@ class RemoteClusterClient:
             response = self._client.list_jobs(request)
             return list(response.jobs)
 
-        return call_with_retry("list_jobs", _call, on_retry=self._on_retry)
+        return call_with_retry("list_jobs", _call)
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
@@ -327,7 +322,7 @@ class RemoteClusterClient:
             response = self._client.get_task_status(request)
             return response.task
 
-        return call_with_retry(f"get_task_status({task_name})", _call, on_retry=self._on_retry)
+        return call_with_retry(f"get_task_status({task_name})", _call)
 
     def list_tasks(self, job_id: JobName) -> list[cluster_pb2.TaskStatus]:
         """List all tasks for a job.
@@ -344,7 +339,7 @@ class RemoteClusterClient:
             response = self._client.list_tasks(request)
             return list(response.tasks)
 
-        return call_with_retry(f"list_tasks({job_id})", _call, on_retry=self._on_retry)
+        return call_with_retry(f"list_tasks({job_id})", _call)
 
     def fetch_task_logs(
         self,
@@ -384,7 +379,7 @@ class RemoteClusterClient:
         def _call():
             return self._client.get_task_logs(request)
 
-        return call_with_retry(f"get_task_logs({target})", _call, on_retry=self._on_retry)
+        return call_with_retry(f"get_task_logs({target})", _call)
 
     def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.
@@ -397,4 +392,4 @@ class RemoteClusterClient:
             request = cluster_pb2.Controller.GetAutoscalerStatusRequest()
             return self._client.get_autoscaler_status(request)
 
-        return call_with_retry("get_autoscaler_status", _call, on_retry=self._on_retry)
+        return call_with_retry("get_autoscaler_status", _call)

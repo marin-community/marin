@@ -326,40 +326,27 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert zone_constraints[0].value == "us-central2-b"
 
 
-def test_require_client_wires_on_retry():
-    """require_client passes on_retry from ctx to the RPC client."""
-    import click
+def test_no_wait_prints_job_id(monkeypatch):
+    """--no-wait prints the job ID to stdout."""
+    from click.testing import CliRunner
+    from iris.cli.job import run as run_cmd
+    from iris.cluster.types import JobName
 
-    from iris.cli.main import require_client
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
 
-    callback_called = False
+    class FakeClient:
+        def submit(self, **kwargs):
+            return FakeJob()
 
-    def fake_on_retry(exc):
-        nonlocal callback_called
-        callback_called = True
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *a, **kw: FakeClient())
 
-    ctx = click.Context(click.Command("test"))
-    ctx.ensure_object(dict)
-    ctx.obj["controller_url"] = "http://localhost:9999"
-    ctx.obj["on_retry"] = fake_on_retry
-
-    client = require_client(ctx)
-    # The on_retry should be wired through to the underlying RemoteClusterClient
-    assert client._cluster_client._on_retry is not None
-    # Verify it's the same callback
-    client._cluster_client._on_retry(Exception("test"))
-    assert callback_called
-
-
-def test_require_client_works_without_on_retry():
-    """require_client works when no on_retry is set (non-CW platforms)."""
-    import click
-
-    from iris.cli.main import require_client
-
-    ctx = click.Context(click.Command("test"))
-    ctx.ensure_object(dict)
-    ctx.obj["controller_url"] = "http://localhost:9999"
-
-    client = require_client(ctx)
-    assert client._cluster_client._on_retry is None
+    runner = CliRunner()
+    result = runner.invoke(
+        run_cmd,
+        ["--no-wait", "--", "echo", "hi"],
+        catch_exceptions=False,
+        obj={"controller_url": "http://fake:10000"},
+    )
+    assert result.exit_code == 0
+    assert result.output.strip() == "/test-user/test-job"
