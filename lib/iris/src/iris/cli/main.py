@@ -15,7 +15,7 @@ import click
 
 from iris.logging import configure_logging
 from iris.rpc import config_pb2
-from iris.rpc.auth import CliGcpTokenProvider, TokenProvider
+from iris.rpc.auth import CliGcpTokenProvider, StaticTokenProvider, TokenProvider
 
 logger = _logging_module.getLogger(__name__)
 
@@ -31,6 +31,13 @@ def create_client_token_provider(auth_config: config_pb2.AuthConfig) -> TokenPro
         return None
     if provider == "gcp":
         return CliGcpTokenProvider(audience=auth_config.gcp.audience)
+    elif provider == "static":
+        tokens = dict(auth_config.static.tokens)
+        if not tokens:
+            raise ValueError("Static auth config requires at least one token")
+        # Use the first configured token for CLI auth
+        first_token = next(iter(tokens))
+        return StaticTokenProvider(first_token)
     raise ValueError(f"Unknown auth provider: {provider}")
 
 

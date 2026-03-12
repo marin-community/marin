@@ -426,11 +426,26 @@ class GcpAuthConfig(_message.Message):
     audience: str
     def __init__(self, audience: _Optional[str] = ...) -> None: ...
 
+class StaticAuthConfig(_message.Message):
+    __slots__ = ("tokens",)
+    class TokensEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    TOKENS_FIELD_NUMBER: _ClassVar[int]
+    tokens: _containers.ScalarMap[str, str]
+    def __init__(self, tokens: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
 class AuthConfig(_message.Message):
-    __slots__ = ("gcp",)
+    __slots__ = ("gcp", "static")
     GCP_FIELD_NUMBER: _ClassVar[int]
+    STATIC_FIELD_NUMBER: _ClassVar[int]
     gcp: GcpAuthConfig
-    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ...) -> None: ...
+    static: StaticAuthConfig
+    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("platform", "defaults", "storage", "controller", "scale_groups", "auth")

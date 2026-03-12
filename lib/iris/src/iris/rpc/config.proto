@@ -360,9 +360,15 @@ message GcpAuthConfig {
   string audience = 1;  // Expected audience for GCP ID token verification
 }
 
+message StaticAuthConfig {
+  // Map of token string → username. Useful for local dev and testing.
+  map<string, string> tokens = 1;
+}
+
 message AuthConfig {
   oneof provider {
     GcpAuthConfig gcp = 1;
+    StaticAuthConfig static = 2;
   }
 }
 

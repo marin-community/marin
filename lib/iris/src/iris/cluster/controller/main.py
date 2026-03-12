@@ -5,37 +5,22 @@
 
 import logging
 import os
-import secrets
 import signal
 import threading
 from pathlib import Path
 
 import click
 
+from iris.cluster.controller.auth_setup import ControllerAuth, create_controller_auth
 from iris.cluster.controller.checkpoint import is_remote_path
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
 from iris.rpc import config_pb2
-from iris.rpc.auth import CompositeTokenVerifier, GcpTokenVerifier, StaticTokenVerifier, TokenVerifier
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
-
-
-def create_auth_verifier(auth_config: config_pb2.AuthConfig) -> TokenVerifier | None:
-    """Create a TokenVerifier from the auth config proto, or None if auth is disabled."""
-    if not auth_config.HasField("provider"):
-        return None
-    provider = auth_config.WhichOneof("provider")
-    if provider == "gcp":
-        audience = auth_config.gcp.audience
-        if not audience:
-            raise ValueError("GCP auth config requires an audience")
-        logger.info("Auth enabled: GCP ID token verification (audience=%s)", audience)
-        return GcpTokenVerifier(audience=audience)
-    raise ValueError(f"Unknown auth provider: {provider}")
 
 
 def default_bundle_prefix() -> str:
@@ -92,7 +77,6 @@ def serve(
     from iris.cluster.controller.db import ControllerDB
     from iris.cluster.config import load_config, create_autoscaler
     from iris.cluster.platform.factory import create_platform
-    from iris.rpc import config_pb2
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -172,24 +156,9 @@ def serve(
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
-    # Create auth verifier from cluster config if present.
-    # When auth is enabled, generate a shared token for worker→controller RPCs
-    # and wrap both verifiers in a CompositeTokenVerifier so the controller
-    # accepts both GCP user tokens and the static worker token.
-    auth_verifier = None
-    auth_provider: str | None = None
-    if cluster_config and cluster_config.HasField("auth"):
-        gcp_verifier = create_auth_verifier(cluster_config.auth)
-        if gcp_verifier is not None:
-            worker_token = secrets.token_urlsafe(32)
-            worker_verifier = StaticTokenVerifier({worker_token: "iris-worker"})
-            auth_verifier = CompositeTokenVerifier([worker_verifier, gcp_verifier])
-            auth_provider = "gcp"
-            if base_worker_config is not None:
-                base_worker_config.auth_token = worker_token
-            logger.info("Auth enabled with worker token for worker→controller RPCs")
-    if auth_verifier is None:
-        logger.info("Authentication disabled (no auth config)")
+    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
+    if auth.worker_token and base_worker_config is not None:
+        base_worker_config.auth_token = auth.worker_token
 
     config = ControllerConfig(
         host=host,
@@ -199,8 +168,8 @@ def serve(
         heartbeat_failure_threshold=heartbeat_failure_threshold,
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
         log_dir=Path("/tmp/iris/controller-logs"),
-        auth_verifier=auth_verifier,
-        auth_provider=auth_provider,
+        auth_verifier=auth.verifier,
+        auth_provider=auth.provider,
     )
 
     try:

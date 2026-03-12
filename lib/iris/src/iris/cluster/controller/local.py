@@ -20,6 +20,7 @@ from typing import Protocol
 
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
+from iris.cluster.controller.auth_setup import create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
@@ -27,7 +28,6 @@ from iris.cluster.controller.controller import (
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.rpc.auth import TokenVerifier
 from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
@@ -157,13 +157,9 @@ class LocalController:
         self,
         config: config_pb2.IrisClusterConfig,
         threads: ThreadContainer | None = None,
-        auth_verifier: TokenVerifier | None = None,
-        auth_provider: str | None = None,
     ):
         self._config = config
         self._threads = threads
-        self._auth_verifier = auth_verifier
-        self._auth_provider = auth_provider
         self._controller: _InProcessController | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
@@ -182,10 +178,15 @@ class LocalController:
         port = self._config.controller.local.port or find_free_port()
         address = f"http://127.0.0.1:{port}"
 
+        db = ControllerDB(db_path=Path(self._db_dir.name) / "controller.sqlite3")
+
+        # Derive auth from config proto so callers never need to wire it manually.
+        auth = create_controller_auth(self._config.auth, db=db)
+        if auth.worker_token:
+            self._config.defaults.worker.auth_token = auth.worker_token
+
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
-
-        db = ControllerDB(db_path=Path(self._db_dir.name) / "controller.sqlite3")
 
         # Autoscaler creates its own temp dirs for worker resources
         self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
@@ -203,8 +204,8 @@ class LocalController:
                 heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
                 log_dir=Path(self._db_dir.name),
-                auth_verifier=self._auth_verifier,
-                auth_provider=self._auth_provider,
+                auth_verifier=auth.verifier,
+                auth_provider=auth.provider,
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,

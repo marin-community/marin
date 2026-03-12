@@ -1075,6 +1075,20 @@ class ControllerDB:
                     (path.name, Timestamp.now().epoch_ms()),
                 )
 
+    def get_kv(self, key: str) -> str | None:
+        """Read a value from the controller_kv store."""
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM controller_kv WHERE key = ?", (key,)).fetchone()
+            return row[0] if row else None
+
+    def set_kv(self, key: str, value: str) -> None:
+        """Write a value to the controller_kv store (insert or update)."""
+        with self.transaction() as cur:
+            cur.execute(
+                "INSERT INTO controller_kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+                (key, value, value),
+            )
+
     def next_sequence(self, key: str, *, cur: TransactionCursor) -> int:
         row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         if row is None:

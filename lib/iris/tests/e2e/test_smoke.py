@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from connectrpc.errors import ConnectError
 from iris.cli.cluster import _build_cluster_images, _pin_latest_images
 from iris.client.client import IrisClient
 from iris.cluster.config import IrisConfig, load_config, make_local_config
@@ -24,6 +25,7 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.manager import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
+    Entrypoint,
     ReservationEntry,
     ResourceSpec,
     gpu_device,
@@ -32,7 +34,6 @@ from iris.cluster.worker.env_probe import DefaultEnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2, logging_pb2
-from iris.rpc.auth import StaticTokenVerifier
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff
 
@@ -871,7 +872,7 @@ _AUTH_USER = "test-user"
 def test_dashboard_login_flow():
     """Dashboard shows login page when auth is enabled, allows token login, and supports logout.
 
-    Creates a standalone local cluster with StaticTokenVerifier. Exercises the
+    Creates a standalone local cluster with static auth via config. Exercises the
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
@@ -883,8 +884,8 @@ def test_dashboard_login_flow():
         pytest.skip("playwright not installed")
 
     config = _make_controller_only_config()
-    verifier = StaticTokenVerifier({_AUTH_TOKEN: _AUTH_USER})
-    controller = LocalController(config, auth_verifier=verifier, auth_provider="static")
+    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    controller = LocalController(config)
     url = controller.start()
 
     try:
@@ -935,5 +936,89 @@ def test_dashboard_login_flow():
 
             page.close()
             browser.close()
+    finally:
+        controller.close()
+
+
+def test_static_auth_rpc_access():
+    """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid token."""
+    from iris.cluster.controller.local import LocalController
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    controller = LocalController(config)
+    url = controller.start()
+
+    try:
+        list_req = cluster_pb2.Controller.ListWorkersRequest()
+
+        # Unauthenticated: should be rejected with 401
+        unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
+        with pytest.raises(ConnectError, match=r"(?i)authorization"):
+            unauth_client.list_workers(list_req)
+        unauth_client.close()
+
+        # Wrong token: should be rejected
+        wrong_injector = AuthTokenInjector(StaticTokenProvider("wrong-token"))
+        wrong_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[wrong_injector])
+        with pytest.raises(ConnectError, match=r"(?i)authenticat"):
+            wrong_client.list_workers(list_req)
+        wrong_client.close()
+
+        # Valid token: should succeed
+        valid_injector = AuthTokenInjector(StaticTokenProvider(_AUTH_TOKEN))
+        valid_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[valid_injector])
+        response = valid_client.list_workers(list_req)
+        assert response is not None
+        valid_client.close()
+    finally:
+        controller.close()
+
+
+def test_static_auth_job_ownership():
+    """Job ownership: user A cannot terminate user B's job.
+
+    Submits a job as user-a via the RPC layer (no workers needed; job stays
+    PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
+    it, while user-a can terminate their own job.
+    """
+    from iris.cluster.controller.local import LocalController
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+
+    _TOKEN_A = "token-user-a"
+    _TOKEN_B = "token-user-b"
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_TOKEN_A] = "user-a"
+    config.auth.static.tokens[_TOKEN_B] = "user-b"
+    controller = LocalController(config)
+    url = controller.start()
+
+    try:
+        # User A submits a job (stays PENDING since no workers)
+        injector_a = AuthTokenInjector(StaticTokenProvider(_TOKEN_A))
+        client_a = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_a])
+
+        entrypoint = Entrypoint.from_callable(TestJobs.quick)
+        launch_req = cluster_pb2.Controller.LaunchJobRequest(
+            name="/user-a/auth-owned-job",
+            entrypoint=entrypoint.to_proto(),
+            resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+        )
+        resp = client_a.launch_job(launch_req)
+        job_id = resp.job_id
+
+        # User B tries to terminate user A's job — should fail
+        injector_b = AuthTokenInjector(StaticTokenProvider(_TOKEN_B))
+        client_b = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_b])
+        with pytest.raises(ConnectError, match="cannot modify"):
+            client_b.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
+
+        # User A can terminate their own job
+        client_a.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
+
+        client_a.close()
+        client_b.close()
     finally:
         controller.close()
