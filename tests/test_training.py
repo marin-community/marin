@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from experiments.defaults import default_validation_sets
 from fray.v2 import JobStatus, ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
@@ -219,7 +220,7 @@ def test_compilation_cache_dir_uses_target_region_bucket():
     assert _compilation_cache_dir_for_resources(resources) == "gs://marin-tmp-us-east5/ttl=30d/compilation-cache"
 
 
-def test_elastic_fault_benchmark_uses_base_validation_components(tmp_path):
+def test_elastic_fault_benchmark_uses_default_validation_sets(tmp_path):
     base_data = LmDataConfig(
         tokenizer="gpt2",
         cache_dir="gs://levanter-data/tokenized",
@@ -237,21 +238,18 @@ def test_elastic_fault_benchmark_uses_base_validation_components(tmp_path):
     )
 
     data = _shared_data_config(base_data, str(tmp_path), train_docs=8, validation_docs=4)
+    expected_validation_names = set(default_validation_sets(tokenizer="gpt2"))
 
-    assert data.train_weights == {"synthetic": 1.0}
-    assert set(data.components) == {"synthetic", "openwebtext"}
+    assert data.train_weights == {"synthetic": 1.0, **{name: 0.0 for name in expected_validation_names}}
+    assert set(data.components) == {"synthetic", *expected_validation_names}
 
     synthetic = data.components["synthetic"]
     assert isinstance(synthetic, DatasetComponent)
     assert isinstance(synthetic.source, UrlDatasetSourceConfig)
     assert synthetic.source.train_urls == [f"{tmp_path}/synthetic-data/train.jsonl"]
     assert synthetic.source.validation_urls == []
-
-    openwebtext = data.components["openwebtext"]
-    assert isinstance(openwebtext, DatasetComponent)
-    assert openwebtext.cache_dir is None
-    assert isinstance(openwebtext.source, UrlDatasetSourceConfig)
-    assert openwebtext.source.validation_urls == ["gs://pubmed-mosaic/openwebtext-val.jsonl.gz"]
+    for name in expected_validation_names:
+        assert name in data.components
 
 
 def test_elastic_fault_benchmark_uses_positive_eval_budget(trainer_config):
@@ -295,12 +293,13 @@ def test_elastic_budget_compare_uses_cache_and_default_validation_data():
         dataset_cache_dir="gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-6fbcbb",
         tokenizer="meta-llama/Meta-Llama-3.1-8B",
     )
+    expected_validation_names = set(default_validation_sets(tokenizer="meta-llama/Meta-Llama-3.1-8B"))
 
     assert data.tokenizer == "meta-llama/Meta-Llama-3.1-8B"
-    assert data.cache_dir == "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-6fbcbb-eval-cache"
-    assert data.auto_build_caches is True
-    assert data.train_weights == {"fineweb-edu-10b": 1.0}
-    assert set(data.components) == {"fineweb-edu-10b", "old"}
+    assert data.cache_dir is None
+    assert data.auto_build_caches is False
+    assert data.train_weights == {"fineweb-edu-10b": 1.0, **{name: 0.0 for name in expected_validation_names}}
+    assert set(data.components) == {"fineweb-edu-10b", *expected_validation_names}
 
     component = data.components["fineweb-edu-10b"]
     assert isinstance(component, DatasetComponent)
@@ -309,11 +308,8 @@ def test_elastic_budget_compare_uses_cache_and_default_validation_data():
     assert component.source.validation_urls == []
     assert component.cache_dir == "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-6fbcbb"
 
-    validation_component = data.components["old"]
-    assert isinstance(validation_component, DatasetComponent)
-    assert validation_component.cache_dir is None
-    assert isinstance(validation_component.source, UrlDatasetSourceConfig)
-    assert validation_component.source.validation_urls == ["gs://pubmed-mosaic/val.jsonl.gz"]
+    for name in expected_validation_names:
+        assert name in data.components
 
 
 def test_elastic_budget_compare_uses_positive_eval_budget(trainer_config):

@@ -1,20 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import replace
+from experiments.defaults import default_validation_sets
+from levanter.data.text.datasets import LmDataConfig
 
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
+from marin.processing.tokenize import add_validation_sets_to_mixture
 
 
-def default_validation_components(base_data: LmDataConfig) -> dict[str, DatasetComponent]:
-    components: dict[str, DatasetComponent] = {}
-    for name, component in base_data.components.items():
-        if not isinstance(component, DatasetComponent):
-            continue
-        source = component.source
-        if source is None:
-            continue
-        if isinstance(source, UrlDatasetSourceConfig) and len(source.validation_urls) == 0:
-            continue
-        components[name] = replace(component, cache_dir=None)
-    return components
+def config_with_default_validation_sets(data_config: LmDataConfig) -> LmDataConfig:
+    """Add the standard default validation sets used by default_train."""
+    return add_validation_sets_to_mixture(
+        data_config,
+        default_validation_sets(tokenizer=data_config.tokenizer),
+    )

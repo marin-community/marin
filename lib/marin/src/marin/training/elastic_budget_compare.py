@@ -27,7 +27,7 @@ from levanter.tracker.wandb import WandbConfig
 
 from fray.v2 import ResourceConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.training.validation_sets import default_validation_components
+from marin.training.validation_sets import config_with_default_validation_sets
 
 logger = logging.getLogger(__name__)
 
@@ -110,23 +110,21 @@ def _experiment_optimizer_config() -> AdamConfig:
 
 
 def _cached_data_config(base_data: LmDataConfig, *, dataset_cache_dir: str, tokenizer: str) -> LmDataConfig:
-    validation_components = default_validation_components(base_data)
-    eval_cache_root = f"{dataset_cache_dir.rstrip('/')}-eval-cache"
-    return replace(
+    train_only_data = replace(
         base_data,
         tokenizer=tokenizer,
-        cache_dir=eval_cache_root,
-        auto_build_caches=True,
+        cache_dir=None,
+        auto_build_caches=False,
         components={
             "fineweb-edu-10b": DatasetComponent(
                 source=UrlDatasetSourceConfig(train_urls=[], validation_urls=[]),
                 cache_dir=dataset_cache_dir,
             ),
-            **validation_components,
         },
         train_weights={"fineweb-edu-10b": 1.0},
         max_train_batches=None,
     )
+    return config_with_default_validation_sets(train_only_data)
 
 
 def _num_train_steps_for_target_flops(

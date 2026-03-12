@@ -28,7 +28,7 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
-from marin.training.validation_sets import default_validation_components
+from marin.training.validation_sets import config_with_default_validation_sets
 
 logger = logging.getLogger(__name__)
 
@@ -157,22 +157,13 @@ def _base_train_config(path: str) -> TrainLmConfig:
 
 def _shared_data_config(base_data: LmDataConfig, root: str, *, train_docs: int, validation_docs: int) -> LmDataConfig:
     dataset_root = f"{root.rstrip('/')}/synthetic-data"
-    train_path, validation_path = _ensure_synthetic_dataset(
+    train_path, _ = _ensure_synthetic_dataset(
         dataset_root,
         train_docs=train_docs,
         validation_docs=validation_docs,
     )
 
-    validation_components = default_validation_components(base_data)
-    if not validation_components:
-        validation_components["synthetic-validation"] = DatasetComponent(
-            source=UrlDatasetSourceConfig(
-                train_urls=[],
-                validation_urls=[validation_path],
-            )
-        )
-
-    return replace(
+    train_only_data = replace(
         base_data,
         cache_dir=f"{dataset_root}/cache",
         auto_build_caches=True,
@@ -184,10 +175,10 @@ def _shared_data_config(base_data: LmDataConfig, root: str, *, train_docs: int, 
                     validation_urls=[],
                 )
             ),
-            **validation_components,
         },
         train_weights={"synthetic": 1.0},
     )
+    return config_with_default_validation_sets(train_only_data)
 
 
 def _trainer_config(
