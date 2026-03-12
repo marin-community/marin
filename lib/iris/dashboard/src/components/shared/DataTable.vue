@@ -100,7 +100,7 @@ function hasSlot(name: string): boolean {
               <span class="inline-flex items-center gap-1">
                 {{ col.label }}
                 <span v-if="col.sortable && sortKey === col.key" class="text-accent">
-                  {{ sortDir === 'asc' ? '\u2191' : '\u2193' }}
+                  {{ sortDir === 'asc' ? '↑' : '↓' }}
                 </span>
                 <span v-else-if="col.sortable" class="text-text-muted/40">
                   ↕
@@ -127,7 +127,7 @@ function hasSlot(name: string): boolean {
                 ]"
               >
                 <slot :name="`cell-${col.key}`" :value="cellValue(row, col.key)" :row="row">
-                  {{ cellValue(row, col.key) ?? '\u2014' }}
+                  {{ cellValue(row, col.key) ?? '—' }}
                 </slot>
               </td>
             </tr>

@@ -301,21 +301,21 @@ onMounted(async () => {
           :disabled="profiling"
           @click="handleProfile('cpu')"
         >
-          {{ profiling ? '\u23F3' : 'CPU Profile' }}
+          {{ profiling ? '⏳' : 'CPU Profile' }}
         </button>
         <button
           class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary disabled:opacity-50"
           :disabled="profiling"
           @click="handleProfile('memory')"
         >
-          {{ profiling ? '\u23F3' : 'Memory Profile' }}
+          {{ profiling ? '⏳' : 'Memory Profile' }}
         </button>
         <button
           class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary disabled:opacity-50"
           :disabled="profiling"
           @click="handleProfile('threads')"
         >
-          {{ profiling ? '\u23F3' : 'Thread Dump' }}
+          {{ profiling ? '⏳' : 'Thread Dump' }}
         </button>
       </div>
 
