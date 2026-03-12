@@ -1,6 +1,6 @@
-from . import time_pb2 as _time_pb2
-from . import vm_pb2 as _vm_pb2
-from . import logging_pb2 as _logging_pb2
+import time_pb2 as _time_pb2
+import vm_pb2 as _vm_pb2
+import logging_pb2 as _logging_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -152,6 +152,20 @@ class ListApiKeysResponse(_message.Message):
     KEYS_FIELD_NUMBER: _ClassVar[int]
     keys: _containers.RepeatedCompositeFieldContainer[ApiKeyInfo]
     def __init__(self, keys: _Optional[_Iterable[_Union[ApiKeyInfo, _Mapping]]] = ...) -> None: ...
+
+class GetCurrentUserRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class GetCurrentUserResponse(_message.Message):
+    __slots__ = ("user_id", "role", "display_name")
+    USER_ID_FIELD_NUMBER: _ClassVar[int]
+    ROLE_FIELD_NUMBER: _ClassVar[int]
+    DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
+    user_id: str
+    role: str
+    display_name: str
+    def __init__(self, user_id: _Optional[str] = ..., role: _Optional[str] = ..., display_name: _Optional[str] = ...) -> None: ...
 
 class CpuProfile(_message.Message):
     __slots__ = ("format", "rate_hz")

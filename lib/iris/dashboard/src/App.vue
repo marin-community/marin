@@ -18,6 +18,7 @@ const TABS: Tab[] = [
   { key: 'autoscaler', label: 'Autoscaler', to: '/autoscaler' },
   { key: 'status', label: 'Status', to: '/status' },
   { key: 'transactions', label: 'Transactions', to: '/transactions' },
+  { key: 'account', label: 'Account', to: '/account' },
 ]
 
 const PATH_TO_TAB: Record<string, string> = {
@@ -28,6 +29,7 @@ const PATH_TO_TAB: Record<string, string> = {
   '/autoscaler': 'autoscaler',
   '/status': 'status',
   '/transactions': 'transactions',
+  '/account': 'account',
 }
 
 const activeTab = computed(() => {

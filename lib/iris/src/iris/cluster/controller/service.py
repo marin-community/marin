@@ -1602,6 +1602,20 @@ class ControllerServiceImpl:
             )
         return cluster_pb2.ListApiKeysResponse(keys=key_infos)
 
+    def get_current_user(
+        self,
+        request: cluster_pb2.GetCurrentUserRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetCurrentUserResponse:
+        user_id = get_verified_user()
+        if user_id is None:
+            user_id = "anonymous"
+        role = self._db.get_user_role(user_id)
+        return cluster_pb2.GetCurrentUserResponse(
+            user_id=user_id,
+            role=role or "",
+        )
+
     def _require_auth(self) -> str:
         """Get the verified user or raise UNAUTHENTICATED."""
         user = get_verified_user()

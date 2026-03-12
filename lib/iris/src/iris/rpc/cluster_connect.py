@@ -12,7 +12,7 @@ from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
 from connectrpc.request import Headers, RequestContext
 from connectrpc.server import ConnectASGIApplication, ConnectWSGIApplication, Endpoint, EndpointSync
-from . import cluster_pb2 as cluster__pb2
+import cluster_pb2 as cluster__pb2
 
 
 class ControllerService(Protocol):
@@ -86,6 +86,9 @@ class ControllerService(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def list_api_keys(self, request: cluster__pb2.ListApiKeysRequest, ctx: RequestContext) -> cluster__pb2.ListApiKeysResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_current_user(self, request: cluster__pb2.GetCurrentUserRequest, ctx: RequestContext) -> cluster__pb2.GetCurrentUserResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -333,6 +336,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_api_keys,
+                ),
+                "/iris.cluster.ControllerService/GetCurrentUser": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetCurrentUser",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetCurrentUserRequest,
+                        output=cluster__pb2.GetCurrentUserResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_current_user,
                 ),
             },
             interceptors=interceptors,
@@ -826,6 +839,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_current_user(
+        self,
+        request: cluster__pb2.GetCurrentUserRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetCurrentUserResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetCurrentUser",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetCurrentUserRequest,
+                output=cluster__pb2.GetCurrentUserResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 
 class WorkerService(Protocol):
@@ -1128,6 +1161,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_api_keys(self, request: cluster__pb2.ListApiKeysRequest, ctx: RequestContext) -> cluster__pb2.ListApiKeysResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_current_user(self, request: cluster__pb2.GetCurrentUserRequest, ctx: RequestContext) -> cluster__pb2.GetCurrentUserResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
 class ControllerServiceWSGIApplication(ConnectWSGIApplication):
@@ -1373,6 +1408,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_api_keys,
+                ),
+                "/iris.cluster.ControllerService/GetCurrentUser": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetCurrentUser",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetCurrentUserRequest,
+                        output=cluster__pb2.GetCurrentUserResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_current_user,
                 ),
             },
             interceptors=interceptors,
@@ -1860,6 +1905,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.ListApiKeysRequest,
                 output=cluster__pb2.ListApiKeysResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_current_user(
+        self,
+        request: cluster__pb2.GetCurrentUserRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetCurrentUserResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetCurrentUser",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetCurrentUserRequest,
+                output=cluster__pb2.GetCurrentUserResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

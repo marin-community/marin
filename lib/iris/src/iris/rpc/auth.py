@@ -132,6 +132,20 @@ class AuthInterceptor:
             _verified_user.reset(reset_token)
 
 
+class NullAuthInterceptor:
+    """Interceptor for null-auth mode: all requests are treated as a synthetic admin user."""
+
+    def __init__(self, user: str = "anonymous"):
+        self._user = user
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        reset_token = _verified_user.set(self._user)
+        try:
+            return call_next(request, ctx)
+        finally:
+            _verified_user.reset(reset_token)
+
+
 class AuthTokenInjector:
     """Client-side Connect RPC interceptor that attaches a bearer token to requests."""
 

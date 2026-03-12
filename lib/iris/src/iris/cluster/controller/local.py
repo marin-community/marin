@@ -117,11 +117,19 @@ def create_local_autoscaler(
             db=db,
         )
 
+    # Build base_worker_config from defaults so auth_token (and other fields)
+    # flow through the autoscaler to locally-spawned workers.
+    base_worker_config: config_pb2.WorkerConfig | None = None
+    if config.defaults.worker.auth_token:
+        base_worker_config = config_pb2.WorkerConfig()
+        base_worker_config.CopyFrom(config.defaults.worker)
+
     autoscaler = Autoscaler.from_config(
         scale_groups=scale_groups,
         config=config.defaults.autoscaler,
         platform=platform,
         threads=threads,
+        base_worker_config=base_worker_config,
         db=db,
     )
     return autoscaler, temp_dir

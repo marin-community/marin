@@ -35,6 +35,10 @@ const routes = [
     component: () => import('./components/controller/UsersTab.vue'),
   },
   {
+    path: '/account',
+    component: () => import('./components/controller/AccountTab.vue'),
+  },
+  {
     path: '/job/:jobId(.+)/task/:taskId(.+)',
     component: () => import('./components/controller/TaskDetail.vue'),
     props: true,

@@ -67,7 +67,11 @@ def create_controller_auth(
     DbTokenVerifier handles all request verification.
     """
     if not auth_config.HasField("provider"):
-        logger.info("Authentication disabled (no auth config)")
+        if db:
+            now = Timestamp.now()
+            db.ensure_user("anonymous", now, role="admin")
+            db.set_user_role("anonymous", "admin")
+        logger.info("Authentication disabled — null-auth mode (all requests as anonymous admin)")
         return ControllerAuth()
 
     provider = auth_config.WhichOneof("provider")

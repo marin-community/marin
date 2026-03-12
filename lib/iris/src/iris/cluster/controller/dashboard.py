@@ -25,7 +25,7 @@ from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc.auth import AuthInterceptor, TokenVerifier
+from iris.rpc.auth import AuthInterceptor, NullAuthInterceptor, TokenVerifier
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
@@ -83,6 +83,8 @@ class ControllerDashboard:
         interceptors = [RequestTimingInterceptor()]
         if self._auth_verifier is not None:
             interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
+        else:
+            interceptors.insert(0, NullAuthInterceptor())
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
