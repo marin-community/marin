@@ -76,15 +76,22 @@ def _stable_doc_id(text: str, source: str) -> str:
     return hashlib.sha256(f"{source}:{text[:1000]}".encode()).hexdigest()[:16]
 
 
-def _read_gzipped_jsonl(gcs_path: str):
-    """Stream JSONL records from a .json.gz or .jsonl.gz file on GCS."""
+def _read_gzipped_jsonl(gcs_path: str, max_records: int = 0):
+    """Stream JSONL records from a .json.gz or .jsonl.gz file on GCS.
+
+    Streams decompression to avoid loading multi-GiB files into memory.
+    If max_records > 0, stops after yielding that many records.
+    """
+    count = 0
     with open_url(gcs_path, "rb") as raw:
-        content = raw.read()
-    lines = gzip.decompress(content).decode("utf-8").splitlines()
-    for line in lines:
-        line = line.strip()
-        if line:
-            yield json.loads(line)
+        with gzip.GzipFile(fileobj=raw) as gz:
+            for raw_line in gz:
+                line = raw_line.decode("utf-8").strip()
+                if line:
+                    yield json.loads(line)
+                    count += 1
+                    if max_records > 0 and count >= max_records:
+                        return
 
 
 def _sample_from_files(
@@ -118,8 +125,10 @@ def _sample_from_files(
 
         for filepath in matched:
             full_path = f"gs://{filepath}" if not filepath.startswith("gs://") else filepath
+            # Read at most 10x the target sample size per file to bound memory/time
+            max_per_file = n_per_stratum * 10
             try:
-                for doc in _read_gzipped_jsonl(full_path):
+                for doc in _read_gzipped_jsonl(full_path, max_records=max_per_file):
                     count += 1
                     text = doc.get("text", "")
                     if not text:
