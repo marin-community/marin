@@ -7452,3 +7452,177 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Move to `L2` and sketch a specialized whole-layer GDN-bearing decoder boundary with a custom VJP that directly attacks the `HackableDecoderLayer/*` shell family quantified above.
   - Keep CE fixed and use this `S2` shell split as the acceptance baseline for any `L2` or `P2` attempt.
+
+### Iteration 89 - Coverage Slot L2 / opt-in whole-layer decoder custom-VJP scaffold (validated, rejected, wrong-boundary progress)
+
+- Coverage slot: `L2`
+- Change class: `whole-layer boundary`
+- Why this is mainline-worthy now:
+  - `S2` is already validated on the current head and pinned the unresolved wall on decoder-layer shell buckets under `HackableDecoderLayer/*`.
+  - `L2` is the next required coverage slot before a larger `P2` whole-layer prototype, and it is the smallest concrete way to test whether a manual layer-boundary VJP can collapse the shell tax.
+  - `U` remains lower information because CE stayed fixed and bounded again: CE-attributed `while` only moved `8.861346 -> 8.816275 ms`, so CE is still not the main unresolved wall.
+
+- Codex loop iteration: `5 / 10`
+- Date: `2026-03-12T14:55:00Z`
+- Starting commit: `072f8300d23c6576b1c331a3b6a5c772f1fd6a32`
+- Commit under test: `072f8300d23c6576b1c331a3b6a5c772f1fd6a32` plus the opt-in decoder-layer custom-VJP scaffold kept default-off in the result commit
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion: `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Latest validated current-head `3/4` reproduction:
+    - `throughput/mfu=6.115848`
+    - `throughput/tokens_per_second=197846.526776`
+    - `throughput/duration=0.165623327 s`
+    - `step_duration=165.623327 ms`
+  - Fixed attention-only control carried in for upper-bound accounting:
+    - `throughput/mfu=20.952747`
+    - `throughput/tokens_per_second=562739.987315`
+    - `throughput/duration=0.058229379 s`
+    - `step_duration=58.229379 ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot L2 (selected):** revive a minimal whole-layer custom-VJP boundary around GDN-bearing decoder layers while leaving default behavior unchanged (`medium upside`, `low code scope`, `high risk of pure bucket relabeling instead of true shell removal`).
+  2. **Coverage slot P2:** a first serious whole-layer prototype that specializes projections, gating path, GDN, output projection, residual, and backward boundary together (`highest upside`, `highest correctness and implementation risk`).
+  3. **Coverage slot U:** bounded CE side-arm to re-check residual CE shell only if the whole-layer attempt re-exposed CE as ambiguous (`bounded upside`, `low information value while CE-attributed while remains flat`).
+
+- Selected slot rationale:
+  - `L2` is the next mainline coverage gap after `S2`.
+  - `P2` stays queued behind it because the minimal boundary needed to be made concrete first.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+
+- Expected effect on `step_duration_ms`:
+  - slight improvement or flat if the manual layer boundary really collapses AD shell; otherwise reject.
+- Expected effect on `upper_bound_gap_ms`:
+  - slight improvement or flat if the full step improves.
+- Expected effect on `decoder_layer_shell_budget_ms`:
+  - expected to drop modestly if the whole-layer boundary removes part of the shell tax.
+- Expected effect on `gap_explained_by_decoder_layer_shell`:
+  - expected to drop modestly if shell cost falls on the same control baseline.
+- Expected effect on `train_path_budget_ms`:
+  - could shift down or flatten if the custom VJP changes how the boundary is accounted.
+- Expected effect on `remainder_budget_ms`:
+  - expected to drop if the whole-layer boundary is a real full-step win rather than a relabel.
+- Reject if `step_duration_ms` does not improve? **Yes.**
+- Reject if `decoder_layer_shell_budget_ms` stays flat/up? **Yes.**
+- Reject if `remainder_budget_ms` grows? **Yes.**
+
+- Change summary:
+  - Restored `gdn_use_decoder_layer_custom_vjp` on `HackableTransformerConfig`.
+  - Split the decoder-layer math into `_decoder_layer_forward_impl(...)` and wrapped GDN-bearing layers in `_gdn_decoder_layer_custom_vjp(...)` when the opt-in flag is enabled.
+  - Added `GDN_PROFILE_GDN_DECODER_LAYER_CUSTOM_VJP=1` plumbing to `tiny_profile.py` and printed the resolved flag in the benchmark banner.
+  - Default execution remains unchanged; only the profiled candidate path enables the whole-layer boundary.
+
+- Correctness checks:
+  - Managed dev TPU attempt (failed, fell back as directed):
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: TPU busy during collection (`ABORTED: The TPU is already in use by another process ... /dev/vfio/0`)
+  - Required remote TPU wrapper parity slice via Ray fallback:
+    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both --no-wait`
+    - final result: `88 passed, 2 skipped in 240.11s (0:04:00)`
+
+- Profile run (CE fixed to `pallas_tpu` + `pallas`):
+  - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --profile-env GDN_PROFILE_GDN_DECODER_LAYER_CUSTOM_VJP=1 --profile-env WANDB_DISABLE_CODE=true --run-name-prefix gdn_l2_i05_wholelayer --no-wait`
+  - run: `https://wandb.ai/marin-community/marin/runs/gdn_l2_i05_wholelayer_gdn3of4_130m_ch128_seg16_20steps-03d443`
+  - profiler summary: `scratch/gdn_l2_i05_wholelayer_summary_200.json`
+  - baseline attribution artifact: `scratch/gdn_l2_i05_baseline_attribution.json`
+  - candidate attribution artifact: `scratch/gdn_l2_i05_wholelayer_attribution.json`
+  - candidate-vs-hybrid delta artifact: `scratch/gdn_l2_i05_vs_baseline_hybrid_attribution.json`
+
+- Perf (current-head validated baseline -> `L2` whole-layer scaffold candidate):
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - `gdn_layer_fraction: 0.833333`
+  - `Forward closed-call: 20.663807 ms -> 0.000000 ms`
+  - `Backward closed-call: 13.128370 ms -> 0.000000 ms`
+  - `while: 8.861346 ms -> 8.816275 ms`
+  - `conditional: 0.001367 ms -> 0.001128 ms`
+  - `CE-attributed while: 8.861346 ms -> 8.816275 ms`
+  - `Kernel budget: 33.792177 ms -> 0.000000 ms`
+  - `Control budget: 8.862712 ms -> 8.817403 ms`
+  - `Train-path budget: 42.654889 ms -> 8.817403 ms`
+  - `Decoder-layer shell budget: 20.390503 ms -> 20.738571 ms`
+  - `AD shell budget: 6.983898 ms -> 15.533661 ms`
+  - `Sharding shell budget: 13.244023 ms -> 20.738571 ms`
+  - `Layout shell budget: 2.178094 ms -> 0.000000 ms`
+  - `Step duration: 165.623327 ms -> 201.532639 ms`
+  - `Remainder budget: 122.968438 ms -> 192.715236 ms`
+  - `Upper-bound gap: 107.393948 ms -> 143.303260 ms`
+  - `Gap explained by train-path: 39.72% -> 6.15%`
+  - `Gap explained by decoder-layer shell: 18.99% -> 14.47%`
+  - `decoder_layer_shell_topk: transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/closed_call/shard_map/pallas_call 10.326762 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/shard_map/pallas_call 5.206899 ms; HackableDecoderLayer/shard_map/pallas_call 5.204910 ms`
+  - `remainder_topk: transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/closed_call/shard_map/pallas_call 10.326762 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/shard_map/pallas_call 5.206899 ms; HackableDecoderLayer/shard_map/pallas_call 5.204910 ms; CE forward pallas_call 2.703191 ms; transpose(jvp())/shard_map/psum 1.446308 ms`
+  - `throughput/mfu=5.026120`, `throughput/tokens_per_second=162594.010390`, `throughput/duration=0.201532639 s`
+
+- Candidate-vs-baseline shell migration evidence:
+  - `decoder_layer_shell_delta_topk: transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/closed_call/shard_map/pallas_call +10.326762 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/shard_map/pallas_call +5.206899 ms`
+  - `remainder_delta_topk: transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/closed_call/shard_map/pallas_call +10.326762 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/shard_map/pallas_call +5.206899 ms; transpose(jvp())/shard_map/psum +0.104061 ms`
+
+- Interpretation:
+  - Top-line result is a hard regression:
+    - `throughput/mfu` fell `6.115848 -> 5.026120` (`-17.82%` vs current-head baseline)
+    - `step_duration` rose `165.623327 -> 201.532639 ms` (`+35.909312 ms`)
+  - The apparent `kernel budget` / `train-path budget` collapse is not a real win. The old tracked closed-call buckets disappeared because the custom-VJP boundary introduced new nested `.../HackableDecoderLayer/jvp()/...` paths that the current train-path matcher does not classify as train-path buckets.
+  - The moved cost reappears directly inside the decoder shell:
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/closed_call/shard_map/pallas_call 10.326762 ms`
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/shard_map/pallas_call 5.206899 ms`
+  - Shell sub-budget dominance got worse, not better:
+    - sharding shell rose `13.244023 -> 20.738571 ms`
+    - AD shell rose `6.983898 -> 15.533661 ms`
+  - The whole decoder-layer shell still does not shrink:
+    - absolute shell budget grew `20.390503 -> 20.738571 ms`
+    - its percentage share of the upper-bound gap fell only because the total step got much worse, not because shell work was removed
+  - CE stayed bounded and unchanged enough to remain off-mainline:
+    - CE-attributed `while` only moved `8.861346 -> 8.816275 ms`
+
+- Required questions answered:
+  1. The whole decoder-layer shell explains `18.99%` of the carried-in gap on the current-head baseline and `14.47%` on the regressed `L2` candidate; the share falls only because the total gap widened.
+  2. The dominant shell sub-budgets are still sharding and AD, with the candidate making both materially worse.
+  3. This candidate does not shorten the full step; it lengthens the step and mostly moves previously tracked closed-call work into new whole-layer-shell buckets.
+  4. The outer boundary was supposed to beat the existing `HackableDecoderLayer/*` shell tax by collapsing autodiff shell at the layer boundary, but the measured result instead introduces nested `jvp()` shell paths and a larger AD/sharding tax.
+  5. This is not a same-boundary GDN move; it is a genuine whole-layer boundary attempt that nevertheless failed the end-to-end shell budget gates.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both --no-wait` -> `88 passed, 2 skipped in 240.11s (0:04:00)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `Forward closed-call: 20.663807 ms -> 0.000000 ms`
+    - `Backward closed-call: 13.128370 ms -> 0.000000 ms`
+    - `while: 8.861346 ms -> 8.816275 ms`
+    - `conditional: 0.001367 ms -> 0.001128 ms`
+    - `CE-attributed while: 8.861346 ms -> 8.816275 ms`
+    - `Kernel budget: 33.792177 ms -> 0.000000 ms`
+    - `Control budget: 8.862712 ms -> 8.817403 ms`
+    - `Train-path budget: 42.654889 ms -> 8.817403 ms`
+    - `Decoder-layer shell budget: 20.390503 ms -> 20.738571 ms`
+    - `AD shell budget: 6.983898 ms -> 15.533661 ms`
+    - `Sharding shell budget: 13.244023 ms -> 20.738571 ms`
+    - `Layout shell budget: 2.178094 ms -> 0.000000 ms`
+    - `Step duration: 165.623327 ms -> 201.532639 ms`
+    - `Remainder budget: 122.968438 ms -> 192.715236 ms`
+    - `Upper-bound gap: 107.393948 ms -> 143.303260 ms`
+    - `Gap explained by train-path: 39.72% -> 6.15%`
+    - `Gap explained by decoder-layer shell: 18.99% -> 14.47%`
+    - `decoder_layer_shell_topk: transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/closed_call/shard_map/pallas_call 10.326762 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/shard_map/pallas_call 5.206899 ms; HackableDecoderLayer/shard_map/pallas_call 5.204910 ms`
+    - `remainder_topk: transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/closed_call/shard_map/pallas_call 10.326762 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp()/shard_map/pallas_call 5.206899 ms; HackableDecoderLayer/shard_map/pallas_call 5.204910 ms; CE forward pallas_call 2.703191 ms; transpose(jvp())/shard_map/psum 1.446308 ms`
+    - `throughput/mfu=5.026120`, `throughput/tokens_per_second=162594.010390`, `throughput/duration=0.201532639 s`
+  - Governance:
+    - Reject: `step_duration_ms` regressed materially (`+35.909312 ms`).
+    - Reject: `decoder_layer_shell_budget_ms` stayed flat/up (`+0.348069 ms`), and the shell got worse in the dominant AD/sharding sub-budgets.
+    - Reject: `remainder_budget_ms` grew massively (`+69.746798 ms`).
+    - Classify as `wrong-boundary progress`: the tracked train path shrank only because the new boundary renamed/moved the same work into whole-layer shell buckets while the full step got slower.
+    - No champion promotion.
+
+- Assessment: **validated `L2` scaffold, rejected as a performance candidate**. The manual whole-layer custom-VJP boundary made the intended decoder-layer boundary concrete and safe to keep behind a default-off flag, but on TPU it regressed steady-state throughput by about `17.8%`, increased decoder-layer shell cost, and exploded remainder. The moved `.../HackableDecoderLayer/jvp()/...` buckets show that this scaffold mostly relabels the train path into shell rather than shrinking the full-step shell tax.
+- Next bold hypothesis:
+  - Do not promote this scaffold as-is.
+  - Use it only as a concrete `L2` starting point for `P2` work that must reduce actual sharding/AD shell, not just move tracked GDN closed-call buckets under a new whole-layer name.
