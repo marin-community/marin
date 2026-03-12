@@ -105,27 +105,11 @@ class ControllerDashboard:
         """Health check endpoint for controller availability."""
         return JSONResponse({"status": "ok"})
 
-    def _authenticate_request(self, request: Request) -> Response | None:
-        """Validate bearer token on non-RPC HTTP requests.
-
-        Returns None if auth passes (or is disabled), or a 401 Response on failure.
-        """
-        if self._auth_verifier is None:
-            return None
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse({"error": "Missing or malformed Authorization header"}, status_code=401)
-        token = auth_header[len("Bearer ") :]
-        try:
-            self._auth_verifier.verify(token)
-            return None
-        except ValueError as exc:
-            return JSONResponse({"error": f"Authentication failed: {exc}"}, status_code=401)
-
     def _bundle_download(self, request: Request) -> Response:
-        auth_error = self._authenticate_request(request)
-        if auth_error is not None:
-            return auth_error
+        # TODO(#3291): Add bearer token auth once Kubernetes init-containers
+        # support Authorization headers. Currently bundle IDs are SHA-256 hashes
+        # (256 bits of entropy) serving as capability URLs. Workers and K8s
+        # init-containers fetch via stdlib urlopen with no auth header support.
         bundle_id = request.path_params["bundle_id"]
         try:
             data = self._service.bundle_zip(bundle_id)
