@@ -27,6 +27,7 @@ from levanter.tracker.wandb import WandbConfig
 
 from fray.v2 import ResourceConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.validation_sets import default_validation_components
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ class ElasticBudgetCompareConfig:
     checkpoint_every: int = 500
     publish_every: int = 200
     sync_every: int = 200
+    steps_per_eval: int = 500
+    max_eval_batches: int = 1
     baseline_global_batch_size: int = 128
     elastic_local_batch_size: int = 32
     outer_learning_rate: float = 0.25
@@ -107,19 +110,21 @@ def _experiment_optimizer_config() -> AdamConfig:
 
 
 def _cached_data_config(base_data: LmDataConfig, *, dataset_cache_dir: str, tokenizer: str) -> LmDataConfig:
+    validation_components = default_validation_components(base_data)
+    eval_cache_root = f"{dataset_cache_dir.rstrip('/')}-eval-cache"
     return replace(
         base_data,
         tokenizer=tokenizer,
-        cache_dir=None,
-        auto_build_caches=False,
+        cache_dir=eval_cache_root,
+        auto_build_caches=True,
         components={
             "fineweb-edu-10b": DatasetComponent(
                 source=UrlDatasetSourceConfig(train_urls=[], validation_urls=[]),
                 cache_dir=dataset_cache_dir,
-            )
+            ),
+            **validation_components,
         },
         train_weights={"fineweb-edu-10b": 1.0},
-        num_validation_sequences=None,
         max_train_batches=None,
     )
 
@@ -148,6 +153,8 @@ def _trainer_config(
     num_steps: int,
     train_batch_size: int,
     checkpoint_every: int,
+    steps_per_eval: int,
+    max_eval_batches: int,
     elastic: ElasticTrainingConfig,
     tags: list[str],
 ) -> Any:
@@ -157,8 +164,8 @@ def _trainer_config(
         id=run_id,
         train_batch_size=train_batch_size,
         num_train_steps=num_steps,
-        steps_per_eval=num_steps + 1,
-        max_eval_batches=1,
+        steps_per_eval=min(num_steps, max(1, steps_per_eval)),
+        max_eval_batches=max_eval_batches,
         log_jaxprs=False,
         log_xla_hlo=False,
         tracker=WandbConfig(
@@ -190,6 +197,8 @@ def _pod_config(
     train_batch_size: int,
     num_steps: int,
     checkpoint_every: int,
+    steps_per_eval: int,
+    max_eval_batches: int,
     elastic: ElasticTrainingConfig,
     tags: list[str],
 ) -> TrainLmOnPodConfig:
@@ -205,6 +214,8 @@ def _pod_config(
             num_steps=num_steps,
             train_batch_size=train_batch_size,
             checkpoint_every=checkpoint_every,
+            steps_per_eval=steps_per_eval,
+            max_eval_batches=max_eval_batches,
             elastic=elastic,
             tags=tags,
         ),
@@ -302,6 +313,8 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
             },
             "sync_every": config.sync_every,
             "publish_every": config.publish_every,
+            "steps_per_eval": config.steps_per_eval,
+            "max_eval_batches": config.max_eval_batches,
             "outer_learning_rate": config.outer_learning_rate,
             "outer_optimizer": config.outer_optimizer,
             "max_peers": max_peers,
@@ -327,6 +340,8 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
                 train_batch_size=config.baseline_global_batch_size,
                 num_steps=baseline_steps,
                 checkpoint_every=config.checkpoint_every,
+                steps_per_eval=config.steps_per_eval,
+                max_eval_batches=config.max_eval_batches,
                 elastic=ElasticTrainingConfig(enabled=False),
                 tags=["resilient-tpu", "budget-1e19", "baseline", config.baseline_tpu_type, config.region],
             )
@@ -353,6 +368,8 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
                 train_batch_size=config.elastic_local_batch_size,
                 num_steps=elastic_steps,
                 checkpoint_every=config.checkpoint_every,
+                steps_per_eval=config.steps_per_eval,
+                max_eval_batches=config.max_eval_batches,
                 elastic=ElasticTrainingConfig(
                     enabled=True,
                     worker_count=config.elastic_slice_count,
@@ -395,6 +412,8 @@ def _parse_args() -> ElasticBudgetCompareConfig:
     parser.add_argument("--checkpoint-every", type=int, default=500)
     parser.add_argument("--publish-every", type=int, default=200)
     parser.add_argument("--sync-every", type=int, default=200)
+    parser.add_argument("--steps-per-eval", type=int, default=500)
+    parser.add_argument("--max-eval-batches", type=int, default=1)
     parser.add_argument("--baseline-global-batch-size", type=int, default=128)
     parser.add_argument("--elastic-local-batch-size", type=int, default=32)
     parser.add_argument("--outer-learning-rate", type=float, default=0.25)
@@ -417,6 +436,8 @@ def _parse_args() -> ElasticBudgetCompareConfig:
         checkpoint_every=args.checkpoint_every,
         publish_every=args.publish_every,
         sync_every=args.sync_every,
+        steps_per_eval=args.steps_per_eval,
+        max_eval_batches=args.max_eval_batches,
         baseline_global_batch_size=args.baseline_global_batch_size,
         elastic_local_batch_size=args.elastic_local_batch_size,
         outer_learning_rate=args.outer_learning_rate,

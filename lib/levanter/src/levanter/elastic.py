@@ -24,6 +24,7 @@ import numpy as np
 import optax
 import draccus
 import equinox as eqx
+import levanter.tracker
 from draccus import field
 from haliax.jax_utils import is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
@@ -31,6 +32,7 @@ from jax.sharding import Mesh
 
 import haliax as hax
 from levanter.checkpoint import load_checkpoint, save_checkpoint
+from levanter.schedule import BatchSchedule
 from levanter.trainer_state import init_optimizer_for_trainables, trainables_only
 from levanter.utils import fsspec_utils
 from levanter.utils.jax_utils import shape_dtype_struct_tree
@@ -78,6 +80,10 @@ def _remove_if_exists(path: str, *, recursive: bool = False) -> None:
         fsspec_utils.remove(path, recursive=recursive)
     except FileNotFoundError:
         return
+    except OSError as exc:
+        if "not exist" in str(exc).lower() or "notfound" in str(exc).lower():
+            return
+        raise
 
 
 class ElasticSyncConfig(draccus.ChoiceRegistry, abc.ABC):
@@ -168,6 +174,13 @@ class ElasticTrainingConfig:
 class _DiLoCoState:
     anchor_model: Any
     outer_opt_state: Any
+
+
+@dataclass(frozen=True)
+class _ElasticProgressConfig:
+    tokens_per_example: int
+    batch_schedule: BatchSchedule
+    prefix: str = "elastic"
 
 
 @dataclass(frozen=True)
@@ -489,16 +502,23 @@ class _JaxTransferRuntime:
             return self._payload
 
     def _materialize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if self._cpu_device is None:
-            return payload
+        def _copy_leaf(x):
+            if not is_jax_array_like(x):
+                return x
 
-        def _to_cpu(x):
-            if is_jax_array_like(x):
-                return jax.device_put(x, self._cpu_device)
-            return x
+            host_value = np.asarray(jax.device_get(x))
+            if self._cpu_device is not None:
+                return jax.device_put(host_value, self._cpu_device)
+            sharding = getattr(x, "sharding", None)
+            if sharding is not None:
+                return jax.device_put(host_value, sharding)
+            return jax.device_put(host_value)
+
+        if self._cpu_device is None:
+            return cast(dict[str, Any], jtu.tree_map(_copy_leaf, payload))
 
         with hax.set_mesh(Mesh(np.array([self._cpu_device]), axis_names=("cpu",))):
-            return cast(dict[str, Any], jtu.tree_map(_to_cpu, payload))
+            return cast(dict[str, Any], jtu.tree_map(_copy_leaf, payload))
 
 
 class FileBackedPeerSyncController:
@@ -531,11 +551,34 @@ class FileBackedPeerSyncController:
             else None
         )
         self._diloco_state: _DiLoCoState | None = None
+        self._progress_config: _ElasticProgressConfig | None = None
 
     def close(self) -> None:
         self._manager.wait_until_finished()
         if self._transfer_runtime is not None:
             self._transfer_runtime.close()
+
+    def configure_progress_reporting(
+        self,
+        *,
+        tokens_per_example: int,
+        batch_schedule: BatchSchedule,
+        prefix: str = "elastic",
+    ) -> None:
+        self._progress_config = _ElasticProgressConfig(
+            tokens_per_example=tokens_per_example,
+            batch_schedule=batch_schedule,
+            prefix=prefix,
+        )
+        if jax.process_index() == 0:
+            levanter.tracker.log_summary(
+                {
+                    f"{prefix}/configured_workers": self.config.worker_count or 1,
+                    f"{prefix}/sync_interval_steps": self.config.sync_interval_steps,
+                    f"{prefix}/publish_interval_steps": self.publish_interval_steps,
+                    f"{prefix}/tokens_per_example": tokens_per_example,
+                }
+            )
 
     def bootstrap_state(self, state: S) -> S:
         if isinstance(self.config.sync, DiLoCoSyncConfig):
@@ -570,10 +613,13 @@ class FileBackedPeerSyncController:
             self._publish_state(info.state, info.step)
 
         if info.next_step % self.config.sync_interval_steps != 0:
+            if info.next_step % self.control_interval_steps == 0:
+                self._log_aggregate_progress(current_step=info.step)
             return info
 
         peers = self._candidate_peer_statuses(current_step=info.step)
         if not peers:
+            self._log_aggregate_progress(current_step=info.step)
             return info
 
         shareable_states: list[dict[str, Any]] = []
@@ -595,6 +641,7 @@ class FileBackedPeerSyncController:
                 newest_peer = (peer.worker_id, source_step)
 
         if not shareable_states:
+            self._log_aggregate_progress(current_step=info.step)
             return info
 
         if isinstance(self.config.sync, DiLoCoSyncConfig):
@@ -614,6 +661,7 @@ class FileBackedPeerSyncController:
                 self.transport_kind,
             )
 
+        self._log_aggregate_progress(current_step=info.step)
         return dataclasses.replace(info, state=new_state)
 
     def mark_completed(self, info: "StepInfo[S]") -> None:
@@ -890,6 +938,27 @@ class FileBackedPeerSyncController:
         except Exception:
             return trainable_model
 
+    def _log_aggregate_progress(self, *, current_step: int) -> None:
+        if self._progress_config is None or jax.process_index() != 0:
+            return
+
+        statuses = {status.worker_id: status for status in list_worker_statuses(self.paths)}
+        statuses[self.worker_id] = ElasticWorkerStatus(
+            worker_id=self.worker_id,
+            run_id=self.run_id,
+            step=current_step,
+            checkpoint_path=None,
+            transport_kind=self.transport_kind,
+        )
+        metrics = _aggregate_progress_metrics(
+            list(statuses.values()),
+            configured_workers=self.config.worker_count or 1,
+            batch_schedule=self._progress_config.batch_schedule,
+            tokens_per_example=self._progress_config.tokens_per_example,
+            prefix=self._progress_config.prefix,
+        )
+        levanter.tracker.log(metrics, step=current_step)
+
 
 def _merge_tree(current: Any, incoming: Any, mixing_rate: float) -> Any:
     if mixing_rate == 1.0:
@@ -936,6 +1005,42 @@ def _merge_optional_tree(current: Any, incoming: Any, mixing_rate: float) -> Any
     if incoming is None:
         return current
     return _merge_tree(current, incoming, mixing_rate)
+
+
+def _aggregate_progress_metrics(
+    statuses: list[ElasticWorkerStatus],
+    *,
+    configured_workers: int,
+    batch_schedule: BatchSchedule,
+    tokens_per_example: int,
+    prefix: str,
+) -> dict[str, int | float]:
+    if not statuses:
+        return {
+            f"{prefix}/configured_workers": configured_workers,
+            f"{prefix}/reporting_workers": 0,
+            f"{prefix}/reporting_worker_fraction": 0.0,
+        }
+
+    completed_steps = [status.step + 1 for status in statuses]
+    total_examples = [batch_schedule.global_data_offset_by_step(step_count) for step_count in completed_steps]
+    logical_examples = max(total_examples)
+    delivered_examples = sum(total_examples)
+    max_step = max(status.step for status in statuses)
+    min_step = min(status.step for status in statuses)
+
+    return {
+        f"{prefix}/configured_workers": configured_workers,
+        f"{prefix}/reporting_workers": len(statuses),
+        f"{prefix}/reporting_worker_fraction": len(statuses) / configured_workers,
+        f"{prefix}/logical_step": max_step,
+        f"{prefix}/min_worker_step": min_step,
+        f"{prefix}/step_spread": max_step - min_step,
+        f"{prefix}/logical_total_examples": logical_examples,
+        f"{prefix}/delivered_total_examples": delivered_examples,
+        f"{prefix}/logical_total_tokens": logical_examples * tokens_per_example,
+        f"{prefix}/delivered_total_tokens": delivered_examples * tokens_per_example,
+    }
 
 
 def _flatten_transfer_payload(tree: Any) -> dict[str, Any]:

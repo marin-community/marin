@@ -19,6 +19,7 @@ from marin.training.elastic_budget_compare import (
     _cached_data_config,
     _experiment_model_config,
     _num_train_steps_for_target_flops,
+    _trainer_config as _budget_compare_trainer_config,
 )
 from marin.training.elastic_fault_benchmark import _shared_data_config, _trainer_config
 from marin.training.training import (
@@ -273,7 +274,7 @@ def test_elastic_fault_benchmark_uses_positive_eval_budget(trainer_config):
     assert benchmark_trainer.max_eval_batches == 1
 
 
-def test_elastic_budget_compare_uses_cache_only_train_data():
+def test_elastic_budget_compare_uses_cache_and_default_validation_data():
     base_data = LmDataConfig(
         tokenizer="gpt2",
         cache_dir="gs://old/cache",
@@ -296,10 +297,10 @@ def test_elastic_budget_compare_uses_cache_only_train_data():
     )
 
     assert data.tokenizer == "meta-llama/Meta-Llama-3.1-8B"
-    assert data.cache_dir is None
-    assert data.auto_build_caches is False
+    assert data.cache_dir == "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-6fbcbb-eval-cache"
+    assert data.auto_build_caches is True
     assert data.train_weights == {"fineweb-edu-10b": 1.0}
-    assert set(data.components) == {"fineweb-edu-10b"}
+    assert set(data.components) == {"fineweb-edu-10b", "old"}
 
     component = data.components["fineweb-edu-10b"]
     assert isinstance(component, DatasetComponent)
@@ -307,6 +308,32 @@ def test_elastic_budget_compare_uses_cache_only_train_data():
     assert component.source.train_urls == []
     assert component.source.validation_urls == []
     assert component.cache_dir == "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-6fbcbb"
+
+    validation_component = data.components["old"]
+    assert isinstance(validation_component, DatasetComponent)
+    assert validation_component.cache_dir is None
+    assert isinstance(validation_component.source, UrlDatasetSourceConfig)
+    assert validation_component.source.validation_urls == ["gs://pubmed-mosaic/val.jsonl.gz"]
+
+
+def test_elastic_budget_compare_uses_positive_eval_budget(trainer_config):
+    base = train_lm.TrainLmConfig(data=MockDataConfig(cache_dir="/tmp/data"), trainer=trainer_config)
+
+    benchmark_trainer = _budget_compare_trainer_config(
+        base,
+        run_id="run",
+        run_name="run",
+        num_steps=1000,
+        train_batch_size=128,
+        checkpoint_every=100,
+        steps_per_eval=500,
+        max_eval_batches=1,
+        elastic=ElasticTrainingConfig(enabled=False),
+        tags=[],
+    )
+
+    assert benchmark_trainer.steps_per_eval == 500
+    assert benchmark_trainer.max_eval_batches == 1
 
 
 def test_elastic_budget_compare_matches_known_1e19_300m_step_count():

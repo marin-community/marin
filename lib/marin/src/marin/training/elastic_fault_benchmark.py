@@ -28,6 +28,7 @@ from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
 )
+from marin.training.validation_sets import default_validation_components
 
 logger = logging.getLogger(__name__)
 
@@ -154,20 +155,6 @@ def _base_train_config(path: str) -> TrainLmConfig:
     return draccus.load(TrainLmConfig, path)
 
 
-def _base_validation_components(base_data: LmDataConfig) -> dict[str, DatasetComponent]:
-    components: dict[str, DatasetComponent] = {}
-    for name, component in base_data.components.items():
-        if not isinstance(component, DatasetComponent):
-            continue
-        source = component.source
-        if source is None:
-            continue
-        if isinstance(source, UrlDatasetSourceConfig) and len(source.validation_urls) == 0:
-            continue
-        components[name] = replace(component, cache_dir=None)
-    return components
-
-
 def _shared_data_config(base_data: LmDataConfig, root: str, *, train_docs: int, validation_docs: int) -> LmDataConfig:
     dataset_root = f"{root.rstrip('/')}/synthetic-data"
     train_path, validation_path = _ensure_synthetic_dataset(
@@ -176,7 +163,7 @@ def _shared_data_config(base_data: LmDataConfig, root: str, *, train_docs: int, 
         validation_docs=validation_docs,
     )
 
-    validation_components = _base_validation_components(base_data)
+    validation_components = default_validation_components(base_data)
     if not validation_components:
         validation_components["synthetic-validation"] = DatasetComponent(
             source=UrlDatasetSourceConfig(

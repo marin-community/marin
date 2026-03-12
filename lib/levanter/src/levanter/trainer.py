@@ -417,6 +417,15 @@ class Trainer:
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
 
+    def configure_elastic_progress_reporting(self, *, tokens_per_example: int, prefix: str = "elastic") -> None:
+        if self._elastic_controller is None:
+            return
+        self._elastic_controller.configure_progress_reporting(
+            tokens_per_example=tokens_per_example,
+            batch_schedule=self.config.batch_schedule,
+            prefix=prefix,
+        )
+
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
         return self.config.parameter_axis_mapping

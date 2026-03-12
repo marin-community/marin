@@ -231,6 +231,7 @@ def main(config: TrainLmConfig):
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
+        trainer.configure_elastic_progress_reporting(tokens_per_example=Pos.size)
 
         if isinstance(train_dataset, MixtureDataset):
             last_stage = -1

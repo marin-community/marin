@@ -534,3 +534,60 @@
 - Next action:
   - monitor the launched runs for first W&B history rows and successful elastic syncs
   - if sync failures reappear under real optimizer state, trace the transfer payload and sanitize any remaining non-array leaves
+
+### 2026-03-12 00:12 - Hardened sync path, added aggregate metrics, and launched retuned DiLoCo rerun
+- Hypothesis:
+  - the `0311c` DiLoCo run was not a fair tuning signal because most live syncs were failing; if the transfer payload is detached from donated buffers, request-file cleanup tolerates GCS races, and the outer loop is made less aggressive, the next run should provide a cleaner quality comparison with useful global progress metrics and eval loss.
+- Command:
+  - patched:
+    - `lib/levanter/src/levanter/elastic.py`
+    - `lib/levanter/src/levanter/trainer.py`
+    - `lib/levanter/src/levanter/main/train_lm.py`
+    - `lib/levanter/tests/test_elastic.py`
+    - `lib/marin/src/marin/training/validation_sets.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare.py`
+    - `lib/marin/src/marin/training/elastic_fault_benchmark.py`
+    - `tests/test_training.py`
+  - verification:
+    - `uv run --with pytest --with pytest-timeout python -m pytest lib/levanter/tests/test_elastic.py -q`
+    - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py -q`
+    - `./infra/pre-commit.py --fix lib/levanter/src/levanter/elastic.py lib/levanter/src/levanter/trainer.py lib/levanter/src/levanter/main/train_lm.py lib/levanter/tests/test_elastic.py lib/marin/src/marin/training/validation_sets.py lib/marin/src/marin/training/elastic_budget_compare.py lib/marin/src/marin/training/elastic_fault_benchmark.py tests/test_training.py`
+  - relaunched comparison in `us-central1`:
+    - baseline parent: `/dlwh/resilient-1e19-0312a-diloco-adam100-baseline-parent`
+    - elastic parent: `/dlwh/resilient-1e19-0312a-diloco-adam100-elastic-parent`
+  - launch config:
+    - `benchmark_id=resilient-1e19-0312a-diloco-adam100`
+    - `outer_optimizer=adam`
+    - `outer_learning_rate=0.05`
+    - `sync_every=100`
+    - `publish_every=100`
+    - `steps_per_eval=500`
+    - `max_eval_batches=1`
+- Result:
+  - root cause of the noisy `0311c` tuning signal:
+    - live worker logs showed repeated `Elastic sync pull ... failed`
+    - transfer failures included deleted/donated-buffer errors from JAX transfer
+    - request-file cleanup also raced on GCS with `OSError: The specified key does not exist`
+  - transport/controller hardening:
+    - the transfer runtime now materializes payload leaves onto fresh host-backed arrays before serving them, which should avoid exposing donated buffers to the transfer server
+    - request cleanup now treats GCS not-found races as benign
+  - observability improvements:
+    - elastic runs now log aggregate progress metrics including `elastic/logical_total_tokens`, `elastic/delivered_total_tokens`, worker counts, and step spread
+    - the budget-compare launcher now includes default validation components again and schedules eval normally, so the next runs should report eval loss as well as train loss
+  - current scheduler state right after relaunch:
+    - baseline child `/dlwh/resilient-1e19-0312a-diloco-adam100-baseline-parent/train_lm` is `pending` on `v5p-32`
+    - elastic workers `w000`, `w001`, and `w002` are already `running` on `v5p-8`
+    - elastic worker `w003` is still `pending`
+- Interpretation:
+  - `0312a` is the first DiLoCo rerun that combines:
+    - a hardened transfer path,
+    - aggregate cluster-progress metrics,
+    - and real validation loss.
+  - the parameter change is intentionally conservative: slower sync cadence than `0311c`, lower outer-step size, and Adam outer updates rather than aggressive SGD.
+  - if this still diverges materially from baseline after normalizing by delivered tokens or FLOPs, the remaining gap is more likely algorithmic than transport-related.
+- Next action:
+  - monitor `0312a` for:
+    - first successful eval points,
+    - aggregate elastic token metrics,
+    - and whether live sync failures recur under the hardened transport
+  - if syncs now work cleanly, compare baseline and elastic on loss versus delivered tokens rather than loss versus worker-local step

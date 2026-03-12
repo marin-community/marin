@@ -13,12 +13,16 @@ from levanter.callbacks import StepInfo
 from levanter.elastic import (
     DiLoCoSyncConfig,
     ElasticTrainingConfig,
+    ElasticWorkerStatus,
     FileBackedPeerSyncController,
     PeerAveragingSyncConfig,
+    _remove_if_exists,
+    _aggregate_progress_metrics,
     _flatten_transfer_payload,
     _restore_transfer_payload,
     read_completion,
 )
+from levanter.schedule import BatchSchedule
 from levanter.trainer import _InjectedFaults, MARIN_FAULT_INJECTION_STEPS_ENV
 
 
@@ -204,3 +208,36 @@ def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path):
     )
 
     assert float(synced_info.state.model["weight"][0]) == pytest.approx(0.5)
+
+
+def test_aggregate_progress_metrics_reports_logical_and_delivered_tokens():
+    metrics = _aggregate_progress_metrics(
+        [
+            ElasticWorkerStatus(worker_id="w000", run_id="run", step=9),
+            ElasticWorkerStatus(worker_id="w001", run_id="run", step=4),
+        ],
+        configured_workers=4,
+        batch_schedule=BatchSchedule(8),
+        tokens_per_example=16,
+        prefix="elastic",
+    )
+
+    assert metrics["elastic/configured_workers"] == 4
+    assert metrics["elastic/reporting_workers"] == 2
+    assert metrics["elastic/reporting_worker_fraction"] == 0.5
+    assert metrics["elastic/logical_step"] == 9
+    assert metrics["elastic/min_worker_step"] == 4
+    assert metrics["elastic/step_spread"] == 5
+    assert metrics["elastic/logical_total_examples"] == 80
+    assert metrics["elastic/delivered_total_examples"] == 120
+    assert metrics["elastic/logical_total_tokens"] == 1280
+    assert metrics["elastic/delivered_total_tokens"] == 1920
+
+
+def test_remove_if_exists_ignores_gcs_not_found_races(monkeypatch):
+    monkeypatch.setattr(
+        "levanter.elastic.fsspec_utils.remove",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("The specified key does not exist.")),
+    )
+
+    _remove_if_exists("gs://bucket/path")
