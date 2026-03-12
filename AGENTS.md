@@ -25,6 +25,7 @@ Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/ski
 - [add-pallas-kernel](.agents/skills/add-pallas-kernel/SKILL.md) — TPU Pallas kernel development
 - [archive-experiments](.agents/skills/archive-experiments/SKILL.md) — retiring legacy experiments
 - [architecture](.agents/skills/architecture/SKILL.md) — codebase architecture reference
+- [iris-controller-debug](.agents/skills/iris-controller-debug/SKILL.md) — debug Iris controller via live SQLite DB
 
 ## Development
 
