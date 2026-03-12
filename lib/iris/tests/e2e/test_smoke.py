@@ -254,7 +254,7 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     """Module-scoped screenshot capture for smoke dashboard tests."""
     if isinstance(smoke_page, _NoOpPage):
 
-        def noop_capture(label: str) -> Path:
+        def noop_capture(label: str, description: str = "") -> Path:
             return tmp_path_factory.mktemp("screenshots") / f"smoke-{label}.png"
 
         return noop_capture
@@ -267,9 +267,12 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    def capture(label: str) -> Path:
+    def capture(label: str, description: str = "") -> Path:
         path = output_dir / f"smoke-{label}.png"
         smoke_page.screenshot(path=str(path), full_page=True)
+        if description:
+            desc_path = output_dir / f"smoke-{label}.txt"
+            desc_path.write_text(description)
         return path
 
     return capture
@@ -307,7 +310,7 @@ def test_workers_ready(smoke_cluster, smoke_page, smoke_screenshot):
         "() => document.body.textContent.includes('Healthy')",
         timeout=10000,
     )
-    smoke_screenshot("workers-ready")
+    smoke_screenshot("workers-ready", "Fleet tab showing healthy workers with green Healthy badges")
 
 
 # ============================================================================
@@ -329,7 +332,9 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     wait_for_dashboard_ready(smoke_page)
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
-    smoke_screenshot("jobs-tab")
+    smoke_screenshot(
+        "jobs-tab", "Jobs tab listing smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)"
+    )
 
     smoke_cluster.kill(running)
 
@@ -345,7 +350,9 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
         "() => document.body.textContent.includes('Succeeded')",
         timeout=10000,
     )
-    smoke_screenshot("job-detail")
+    smoke_screenshot(
+        "job-detail", "Job detail page for succeeded job with state badge, task table, and job-level log viewer"
+    )
 
 
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
@@ -361,7 +368,11 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "() => document.body.textContent.includes('DONE: all lines emitted')",
         timeout=10000,
     )
-    smoke_screenshot("task-logs-default")
+    smoke_screenshot(
+        "task-logs-default",
+        "Task detail page with a log viewer panel displaying log output lines. "
+        "Should have structural elements like a status card and resource info.",
+    )
 
     # "validation failed" only appears in ERROR lines
     smoke_page.fill("input[placeholder='Filter logs...']", "validation failed")
@@ -370,7 +381,10 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "!document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )
-    smoke_screenshot("task-logs-filtered")
+    smoke_screenshot(
+        "task-logs-filtered",
+        "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
+    )
 
 
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
@@ -391,7 +405,9 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
             timeout=5000,
         )
         assert_visible(smoke_page, "text=region")
-        smoke_screenshot("constraints")
+        smoke_screenshot(
+            "constraints", "Job detail page showing constraint chips for region, env-tag, and device-variant"
+        )
 
 
 def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot):
@@ -405,7 +421,9 @@ def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screen
         dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
         wait_for_dashboard_ready(smoke_page)
         assert_visible(smoke_page, "text=Scheduling Diagnostic")
-        smoke_screenshot("scheduling-diagnostic")
+        smoke_screenshot(
+            "scheduling-diagnostic", "Job detail page with yellow scheduling diagnostic banner explaining CPU capacity"
+        )
 
 
 def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
@@ -416,7 +434,7 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot):
         "() => document.body.textContent.includes('Healthy')",
         timeout=10000,
     )
-    smoke_screenshot("workers-tab")
+    smoke_screenshot("workers-tab", "Fleet tab showing worker list with health status badges")
 
 
 def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
@@ -435,14 +453,16 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot):
         f"() => document.body.textContent.includes('{worker_id}') && " "document.body.textContent.includes('Healthy')",
         timeout=10000,
     )
-    smoke_screenshot("worker-detail")
+    smoke_screenshot(
+        "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
+    )
 
 
 def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    smoke_screenshot("autoscaler-tab")
+    smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
 
 
 def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
@@ -456,7 +476,45 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
         "document.body.textContent.includes('GetProcessStatus')",
         timeout=10000,
     )
-    smoke_screenshot("status-tab")
+    smoke_screenshot("status-tab", "Status tab showing controller process info or GetProcessStatus error")
+
+
+def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
+    """Job detail page shows combined log viewer for all tasks."""
+    job_id = verbose_job.job_id.to_wire()
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('Job Logs')",
+        timeout=10000,
+    )
+    smoke_screenshot(
+        "job-detail-logs",
+        "Job detail page showing task table and combined job-level log viewer with log lines",
+    )
+
+
+def test_dashboard_task_detail_sparklines(smoke_cluster, smoke_page, smoke_screenshot):
+    """Task detail page shows resource sparklines for a running task."""
+    job = smoke_cluster.submit(TestJobs.busy_loop, "smoke-sparkline", 15)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+    time.sleep(8)
+
+    task_status = smoke_cluster.task_status(job)
+    task_id = task_status.task_id
+    job_id = job.job_id.to_wire()
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.wait_for_function(
+        "() => document.querySelectorAll('.sparkline').length >= 2",
+        timeout=15000,
+    )
+    smoke_screenshot(
+        "task-detail-sparklines",
+        "Task detail page for a running task showing CPU and memory sparkline charts with resource history",
+    )
+    smoke_cluster.kill(job)
 
 
 # ============================================================================

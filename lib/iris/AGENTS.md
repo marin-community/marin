@@ -23,6 +23,22 @@ uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
 
 See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
 
+### Dashboard
+
+The Vue 3 dashboard lives in `dashboard/`. To type-check and build:
+
+```bash
+cd lib/iris/dashboard && npm run build:check   # vue-tsc + rsbuild
+```
+
+Or use the Iris CLI which handles `npm ci` automatically:
+
+```bash
+uv run iris build dashboard
+```
+
+Always run `build:check` after editing `.vue` or `.ts` files to catch type errors before committing.
+
 ## Code Conventions
 
 - Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
