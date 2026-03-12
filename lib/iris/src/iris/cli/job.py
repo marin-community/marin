@@ -910,7 +910,9 @@ def logs(
 def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, labels: str):
     """Generate a diagnostic bug report for a job."""
     controller_url = require_controller_url(ctx)
-    report = gather_bug_report(controller_url, JobName.from_wire(job_id), tail=tail)
+    report = gather_bug_report(
+        controller_url, JobName.from_wire(job_id), tail=tail, token_provider=ctx.obj.get("token_provider")
+    )
     markdown = format_bug_report(report)
 
     if file_issue:

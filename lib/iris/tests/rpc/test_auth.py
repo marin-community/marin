@@ -245,6 +245,11 @@ def test_composite_verifier_second_match():
     assert composite.verify("tok-b") == "bob"
 
 
+def test_composite_verifier_rejects_empty_list():
+    with pytest.raises(ValueError, match="requires at least one verifier"):
+        CompositeTokenVerifier([])
+
+
 def test_composite_verifier_all_fail():
     v1 = StaticTokenVerifier({"tok-a": "alice"})
     v2 = StaticTokenVerifier({"tok-b": "bob"})

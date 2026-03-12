@@ -80,6 +80,8 @@ class CompositeTokenVerifier:
     """Tries multiple verifiers in order, returning the first successful result."""
 
     def __init__(self, verifiers: list[TokenVerifier]):
+        if not verifiers:
+            raise ValueError("CompositeTokenVerifier requires at least one verifier")
         self._verifiers = verifiers
 
     def verify(self, token: str) -> str:
@@ -116,11 +118,11 @@ class AuthInterceptor:
         except ValueError as exc:
             raise ConnectError(Code.UNAUTHENTICATED, f"Authentication failed: {exc}") from exc
 
-        token = _verified_user.set(user)
+        reset_token = _verified_user.set(user)
         try:
             return call_next(request, ctx)
         finally:
-            _verified_user.reset(token)
+            _verified_user.reset(reset_token)
 
 
 class AuthTokenInjector:
@@ -194,7 +196,7 @@ class CliGcpTokenProvider:
         try:
             request = google_requests.Request()
             return id_token.fetch_id_token(request, self._audience)
-        except google_auth_exceptions.DefaultCredentialsError:
+        except (google_auth_exceptions.DefaultCredentialsError, google_auth_exceptions.GoogleAuthError):
             pass
 
         result = subprocess.run(

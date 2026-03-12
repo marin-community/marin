@@ -14,12 +14,13 @@ import sys
 import click
 
 from iris.logging import configure_logging
-from iris.rpc.auth import TokenProvider
+from iris.rpc import config_pb2
+from iris.rpc.auth import CliGcpTokenProvider, TokenProvider
 
 logger = _logging_module.getLogger(__name__)
 
 
-def create_client_token_provider(auth_config) -> TokenProvider | None:
+def create_client_token_provider(auth_config: config_pb2.AuthConfig) -> TokenProvider | None:
     """Create a TokenProvider from an AuthConfig proto for CLI usage.
 
     Returns None when no provider is configured, so unauthenticated clusters
@@ -29,8 +30,6 @@ def create_client_token_provider(auth_config) -> TokenProvider | None:
     if provider is None:
         return None
     if provider == "gcp":
-        from iris.rpc.auth import CliGcpTokenProvider
-
         return CliGcpTokenProvider(audience=auth_config.gcp.audience)
     raise ValueError(f"Unknown auth provider: {provider}")
 

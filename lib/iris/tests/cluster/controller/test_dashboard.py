@@ -1043,3 +1043,29 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     data = resp.json()
     assert data["auth_enabled"] is True
     assert data["provider"] == "gcp"
+
+
+def test_bundle_download_requires_auth_when_enabled(service):
+    """Bundle download returns 401 without token and 200 with valid token when auth is enabled."""
+    from iris.rpc.auth import StaticTokenVerifier
+
+    bundle_id = "a" * 64
+    bundle_bytes = b"zip-bytes"
+    service.bundle_zip = Mock(return_value=bundle_bytes)
+
+    verifier = StaticTokenVerifier({"valid-token": "test-user"})
+    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="gcp")
+    authed_client = TestClient(dashboard.app)
+
+    # No token -> 401
+    resp = authed_client.get(f"/bundles/{bundle_id}.zip")
+    assert resp.status_code == 401
+
+    # Wrong token -> 401
+    resp = authed_client.get(f"/bundles/{bundle_id}.zip", headers={"Authorization": "Bearer wrong"})
+    assert resp.status_code == 401
+
+    # Valid token -> 200
+    resp = authed_client.get(f"/bundles/{bundle_id}.zip", headers={"Authorization": "Bearer valid-token"})
+    assert resp.status_code == 200
+    assert resp.content == bundle_bytes

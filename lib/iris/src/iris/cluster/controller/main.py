@@ -17,13 +17,14 @@ from iris.cluster.controller.controller import Controller, ControllerConfig, Rpc
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
+from iris.rpc import config_pb2
 from iris.rpc.auth import CompositeTokenVerifier, GcpTokenVerifier, StaticTokenVerifier, TokenVerifier
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
 
-def create_auth_verifier(auth_config) -> TokenVerifier | None:
+def create_auth_verifier(auth_config: config_pb2.AuthConfig) -> TokenVerifier | None:
     """Create a TokenVerifier from the auth config proto, or None if auth is disabled."""
     if not auth_config.HasField("provider"):
         return None
