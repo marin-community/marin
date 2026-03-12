@@ -259,6 +259,68 @@ def test_composite_verifier_all_fail():
 
 
 # ---------------------------------------------------------------------------
+# NullAuthInterceptor
+# ---------------------------------------------------------------------------
+
+
+def test_null_auth_interceptor_sets_anonymous_user():
+    from iris.rpc.auth import NullAuthInterceptor
+
+    interceptor = NullAuthInterceptor()
+    captured_user = []
+
+    def handler(req, ctx):
+        captured_user.append(get_verified_user())
+        return "ok"
+
+    result = interceptor.intercept_unary_sync(handler, "request", _make_ctx())
+    assert result == "ok"
+    assert captured_user == ["anonymous"]
+
+
+def test_null_auth_interceptor_custom_user():
+    from iris.rpc.auth import NullAuthInterceptor
+
+    interceptor = NullAuthInterceptor(user="custom-user")
+    captured_user = []
+
+    def handler(req, ctx):
+        captured_user.append(get_verified_user())
+        return "ok"
+
+    interceptor.intercept_unary_sync(handler, "request", _make_ctx())
+    assert captured_user == ["custom-user"]
+
+
+def test_null_auth_interceptor_resets_context():
+    from iris.rpc.auth import NullAuthInterceptor
+
+    interceptor = NullAuthInterceptor()
+
+    def handler(req, ctx):
+        assert get_verified_user() == "anonymous"
+        return "ok"
+
+    interceptor.intercept_unary_sync(handler, "request", _make_ctx())
+    assert get_verified_user() is None
+
+
+def test_null_auth_interceptor_resets_context_on_error():
+    from iris.rpc.auth import NullAuthInterceptor
+
+    interceptor = NullAuthInterceptor()
+
+    def failing_handler(req, ctx):
+        assert get_verified_user() == "anonymous"
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        interceptor.intercept_unary_sync(failing_handler, "request", _make_ctx())
+
+    assert get_verified_user() is None
+
+
+# ---------------------------------------------------------------------------
 # CLI token provider factory
 # ---------------------------------------------------------------------------
 

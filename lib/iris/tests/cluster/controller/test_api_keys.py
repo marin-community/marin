@@ -274,3 +274,52 @@ def test_admin_can_revoke_any_key(db):
     # Alice's token should no longer work
     with pytest.raises(ValueError, match="revoked"):
         auth.verifier.verify("tok-a")
+
+
+# ---------------------------------------------------------------------------
+# Null-auth mode
+# ---------------------------------------------------------------------------
+
+
+def test_null_auth_creates_anonymous_admin(db):
+    """No auth config + DB bootstraps an anonymous admin user."""
+    config = config_pb2.AuthConfig()
+    create_controller_auth(config, db=db)
+    assert db.get_user_role("anonymous") == "admin"
+
+
+def test_null_auth_rpcs_work_without_tokens(db):
+    """Auth RPCs work in null-auth mode when NullAuthInterceptor is active."""
+    config = config_pb2.AuthConfig()
+    auth = create_controller_auth(config, db=db)
+    service = _make_service(db, auth=auth)
+
+    # Simulate NullAuthInterceptor setting the verified user
+    token = _verified_user.set("anonymous")
+    try:
+        keys_resp = service.list_api_keys(cluster_pb2.ListApiKeysRequest(), None)
+        assert keys_resp is not None
+
+        create_resp = service.create_api_key(
+            cluster_pb2.CreateApiKeyRequest(name="test-key"),
+            None,
+        )
+        assert create_resp.token
+        assert create_resp.key_id.startswith("iris_k_")
+    finally:
+        _verified_user.reset(token)
+
+
+def test_null_auth_get_current_user(db):
+    """GetCurrentUser returns anonymous/admin in null-auth mode."""
+    config = config_pb2.AuthConfig()
+    auth = create_controller_auth(config, db=db)
+    service = _make_service(db, auth=auth)
+
+    token = _verified_user.set("anonymous")
+    try:
+        resp = service.get_current_user(cluster_pb2.GetCurrentUserRequest(), None)
+        assert resp.user_id == "anonymous"
+        assert resp.role == "admin"
+    finally:
+        _verified_user.reset(token)
