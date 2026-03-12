@@ -324,3 +324,29 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     assert len(zone_constraints) == 1
     assert zone_constraints[0].op == ConstraintOp.EQ
     assert zone_constraints[0].value == "us-central2-b"
+
+
+def test_no_wait_prints_job_id(monkeypatch):
+    """--no-wait prints the job ID to stdout."""
+    from click.testing import CliRunner
+    from iris.cli.job import run as run_cmd
+    from iris.cluster.types import JobName
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            return FakeJob()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *a, **kw: FakeClient())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        run_cmd,
+        ["--no-wait", "--", "echo", "hi"],
+        catch_exceptions=False,
+        obj={"controller_url": "http://fake:10000"},
+    )
+    assert result.exit_code == 0
+    assert result.output.strip() == "/test-user/test-job"

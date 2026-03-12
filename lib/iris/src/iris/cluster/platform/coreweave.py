@@ -1462,9 +1462,22 @@ def _coreweave_tunnel(
     if local_port is None:
         local_port = find_free_port()
 
+    proc: subprocess.Popen | None = None
+
+    def _stop() -> None:
+        nonlocal proc
+        if proc is None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        proc = None
+
     deadline = Deadline.from_seconds(timeout)
     backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
-    proc: subprocess.Popen | None = None
 
     while not deadline.expired():
         # (Re-)launch kubectl port-forward when needed.
@@ -1493,9 +1506,7 @@ def _coreweave_tunnel(
         except OSError:
             time.sleep(0.5)
     else:
-        if proc is not None:
-            proc.terminate()
-            proc.wait()
+        _stop()
         # Capture konnectivity-agent state — it lives in kube-system and is
         # invisible to normal pod-scoped queries. Without this, diagnosing
         # the tunnel race requires manual kubectl before events TTL (~1h).
@@ -1507,13 +1518,8 @@ def _coreweave_tunnel(
             pass
         raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
+    logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
     try:
-        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
         yield f"http://127.0.0.1:{local_port}"
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        _stop()
