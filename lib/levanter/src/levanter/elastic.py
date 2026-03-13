@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 S = TypeVar("S", bound="TrainerState")
 ElasticTransportMode = Literal["auto", "checkpoint", "jax_transfer"]
-DiLoCoOuterOptimizer = Literal["adam", "sgd"]
+DiLoCoOuterOptimizer = Literal["adam", "sgd", "nesterov_sgd"]
 
 MARIN_ELASTIC_GROUP_ID_ENV = "MARIN_ELASTIC_GROUP_ID"
 MARIN_ELASTIC_WORKER_ID_ENV = "MARIN_ELASTIC_WORKER_ID"
@@ -109,6 +109,7 @@ class PeerAveragingSyncConfig(ElasticSyncConfig):
 class DiLoCoSyncConfig(ElasticSyncConfig):
     outer_learning_rate: float = 1.0
     outer_optimizer: DiLoCoOuterOptimizer = "adam"
+    outer_momentum: float = 0.9
     outer_beta1: float = 0.9
     outer_beta2: float = 0.95
     outer_epsilon: float = 1e-8
@@ -119,6 +120,8 @@ class DiLoCoSyncConfig(ElasticSyncConfig):
     def __post_init__(self):
         if self.outer_learning_rate <= 0:
             raise ValueError(f"outer_learning_rate must be positive, got {self.outer_learning_rate}")
+        if not 0.0 <= self.outer_momentum < 1.0:
+            raise ValueError(f"outer_momentum must be in [0, 1), got {self.outer_momentum}")
         if self.outer_epsilon <= 0:
             raise ValueError(f"outer_epsilon must be positive, got {self.outer_epsilon}")
         if not 0.0 <= self.outer_beta1 < 1.0:
@@ -906,9 +909,7 @@ class FileBackedPeerSyncController:
     @property
     def _diloco_outer_optimizer(self) -> optax.GradientTransformation:
         sync_config = cast(DiLoCoSyncConfig, self.config.sync)
-        if sync_config.outer_optimizer == "sgd":
-            components: list[optax.GradientTransformation] = []
-        else:
+        if sync_config.outer_optimizer == "adam":
             components = [
                 optax.scale_by_adam(
                     sync_config.outer_beta1,
@@ -916,10 +917,25 @@ class FileBackedPeerSyncController:
                     sync_config.outer_epsilon,
                 )
             ]
+            if sync_config.outer_weight_decay > 0:
+                components.append(optax.add_decayed_weights(sync_config.outer_weight_decay))
+            components.append(optax.scale(-sync_config.outer_learning_rate))
+            return optax.chain(*components)
+
+        if sync_config.outer_optimizer == "sgd":
+            outer_optimizer = optax.sgd(sync_config.outer_learning_rate, momentum=None, nesterov=False)
+        elif sync_config.outer_optimizer == "nesterov_sgd":
+            outer_optimizer = optax.sgd(
+                sync_config.outer_learning_rate,
+                momentum=sync_config.outer_momentum,
+                nesterov=True,
+            )
+        else:
+            raise ValueError(f"Unsupported DiLoCo outer optimizer: {sync_config.outer_optimizer}")
+
         if sync_config.outer_weight_decay > 0:
-            components.append(optax.add_decayed_weights(sync_config.outer_weight_decay))
-        components.append(optax.scale(-sync_config.outer_learning_rate))
-        return optax.chain(*components)
+            return optax.chain(optax.add_decayed_weights(sync_config.outer_weight_decay), outer_optimizer)
+        return outer_optimizer
 
     def _apply_diloco_sync(self, state: S, peer_shareable_states: list[dict[str, Any]]) -> S:
         sync_config = cast(DiLoCoSyncConfig, self.config.sync)

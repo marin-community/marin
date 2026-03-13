@@ -43,7 +43,8 @@ class ElasticBudgetCompareExecutorConfig:
     baseline_global_batch_size: int = 128
     elastic_local_batch_size: int = 32
     outer_learning_rate: float = 0.25
-    outer_optimizer: Literal["adam", "sgd"] = "sgd"
+    outer_optimizer: Literal["adam", "sgd", "nesterov_sgd"] = "sgd"
+    outer_momentum: float = 0.9
     max_peers: int | None = None
     max_peer_staleness_steps: int | None = None
     outer_max_update_norm: float | None = None
@@ -85,6 +86,7 @@ def _budget_compare_step(
             elastic_local_batch_size=config.elastic_local_batch_size,
             outer_learning_rate=config.outer_learning_rate,
             outer_optimizer=config.outer_optimizer,
+            outer_momentum=config.outer_momentum,
             max_peers=config.max_peers,
             max_peer_staleness_steps=config.max_peer_staleness_steps,
             outer_max_update_norm=config.outer_max_update_norm,
@@ -189,8 +191,11 @@ if __name__ == "__main__":
         "--outer-learning-rate", type=float, default=ElasticBudgetCompareExecutorConfig.outer_learning_rate
     )
     parser.add_argument(
-        "--outer-optimizer", choices=("adam", "sgd"), default=ElasticBudgetCompareExecutorConfig.outer_optimizer
+        "--outer-optimizer",
+        choices=("adam", "sgd", "nesterov_sgd"),
+        default=ElasticBudgetCompareExecutorConfig.outer_optimizer,
     )
+    parser.add_argument("--outer-momentum", type=float, default=ElasticBudgetCompareExecutorConfig.outer_momentum)
     parser.add_argument("--max-peers", type=int, default=None)
     parser.add_argument("--max-peer-staleness-steps", type=int, default=None)
     parser.add_argument("--outer-max-update-norm", type=float, default=None)
@@ -217,6 +222,7 @@ if __name__ == "__main__":
             elastic_local_batch_size=args.elastic_local_batch_size,
             outer_learning_rate=args.outer_learning_rate,
             outer_optimizer=args.outer_optimizer,
+            outer_momentum=args.outer_momentum,
             max_peers=args.max_peers,
             max_peer_staleness_steps=args.max_peer_staleness_steps,
             outer_max_update_norm=args.outer_max_update_norm,

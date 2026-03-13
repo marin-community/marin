@@ -56,7 +56,8 @@ class ElasticFaultBenchmarkConfig:
     steps_per_eval: int = 500
     max_eval_batches: int = 1
     outer_learning_rate: float = 0.25
-    outer_optimizer: Literal["adam", "sgd"] = "sgd"
+    outer_optimizer: Literal["adam", "sgd", "nesterov_sgd"] = "sgd"
+    outer_momentum: float = 0.9
     fault_steps_w001: tuple[int, ...] = (400, 1200)
 
 
@@ -349,6 +350,7 @@ def run_elastic_fault_benchmark(config: ElasticFaultBenchmarkConfig) -> dict[str
                     sync=DiLoCoSyncConfig(
                         outer_learning_rate=config.outer_learning_rate,
                         outer_optimizer=config.outer_optimizer,
+                        outer_momentum=config.outer_momentum,
                     ),
                     transfer_timeout=timedelta(minutes=5),
                     request_poll_interval_seconds=0.1,
@@ -387,7 +389,8 @@ def _parse_args() -> ElasticFaultBenchmarkConfig:
     parser.add_argument("--steps-per-eval", type=int, default=500)
     parser.add_argument("--max-eval-batches", type=int, default=1)
     parser.add_argument("--outer-learning-rate", type=float, default=0.25)
-    parser.add_argument("--outer-optimizer", choices=("adam", "sgd"), default="sgd")
+    parser.add_argument("--outer-optimizer", choices=("adam", "sgd", "nesterov_sgd"), default="sgd")
+    parser.add_argument("--outer-momentum", type=float, default=0.9)
     parser.add_argument("--fault-steps-w001", default="400,1200")
     args = parser.parse_args()
 
@@ -412,6 +415,7 @@ def _parse_args() -> ElasticFaultBenchmarkConfig:
         max_eval_batches=args.max_eval_batches,
         outer_learning_rate=args.outer_learning_rate,
         outer_optimizer=args.outer_optimizer,
+        outer_momentum=args.outer_momentum,
         fault_steps_w001=tuple(int(step.strip()) for step in args.fault_steps_w001.split(",") if step.strip()),
     )
 

@@ -824,3 +824,35 @@
 - Next action:
   - monitor `0312j` until elastic workers are running and first sync intervals pass
   - compare `train/loss` and validation loss against `0312i` with the new sync-norm metrics visible in W&B
+
+### 2026-03-12 21:46 - Ported MaxText-style Nesterov DiLoCo outer mode and launched `0312k`
+- Hypothesis:
+  - matching MaxText's outer loop more closely (Nesterov momentum SGD instead of Adam outer) should reduce sync-boundary oscillations under asynchronous peer availability.
+- Command:
+  - research reference:
+    - `https://github.com/AI-Hypercomputer/maxtext/blob/00ef5ded08ed979bc66307557db7ea9e8fc94dd3/src/maxtext/trainers/diloco/diloco.py`
+  - patched:
+    - `lib/levanter/src/levanter/elastic.py`
+    - `lib/levanter/tests/test_elastic.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare_executor.py`
+    - `lib/marin/src/marin/training/elastic_fault_benchmark.py`
+  - verification:
+    - `uv run --with pytest --with pytest-timeout python -m pytest lib/levanter/tests/test_elastic.py -q`
+    - `./infra/pre-commit.py --fix lib/levanter/src/levanter/elastic.py lib/levanter/tests/test_elastic.py lib/marin/src/marin/training/elastic_budget_compare.py lib/marin/src/marin/training/elastic_budget_compare_executor.py lib/marin/src/marin/training/elastic_fault_benchmark.py`
+  - launched:
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --region us-central1 --job-name resilient-1e19-0312k-diloco-nesterov90-maxpeers1-stale200-clip10-executor-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare_executor --benchmark-id resilient-1e19-0312k-diloco-nesterov90-maxpeers1-stale200-clip10 --output-root gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-1e19-0312k-diloco-nesterov90-maxpeers1-stale200-clip10 --region us-central1 --sync-every 100 --publish-every 100 --steps-per-eval 500 --max-eval-batches 1 --outer-optimizer nesterov_sgd --outer-momentum 0.9 --outer-learning-rate 0.02 --max-peers 1 --max-peer-staleness-steps 200 --outer-max-update-norm 10`
+- Result:
+  - DiLoCo now supports a new outer mode: `nesterov_sgd` with explicit `outer_momentum`.
+  - benchmark/fault CLI surfaces `--outer-momentum` and accepts `--outer-optimizer nesterov_sgd`.
+  - tests now cover nesterov path behavior in the controller sync update test matrix.
+  - new run root:
+    - `/dlwh/resilient-1e19-0312k-diloco-nesterov90-maxpeers1-stale200-clip10-executor-parent`
+  - current snapshot:
+    - `0312k` executor parent is `running` (launchers not yet materialized)
+    - `0312j` remains active with elastic `w000/w001` running; baseline and `w002/w003` pending capacity.
+- Interpretation:
+  - this isolates optimizer-family effects while retaining staleness and update clipping controls added in `0312j`.
+- Next action:
+  - monitor `0312k` startup and capture W&B run ids once children start
+  - compare `0312k` vs `0312j` using `train/loss` around sync boundaries plus `elastic/diloco_update_norm` and validation loss

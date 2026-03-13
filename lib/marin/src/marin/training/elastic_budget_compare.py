@@ -55,7 +55,8 @@ class ElasticBudgetCompareConfig:
     baseline_global_batch_size: int = 128
     elastic_local_batch_size: int = 32
     outer_learning_rate: float = 0.25
-    outer_optimizer: Literal["adam", "sgd"] = "sgd"
+    outer_optimizer: Literal["adam", "sgd", "nesterov_sgd"] = "sgd"
+    outer_momentum: float = 0.9
     max_peers: int | None = None
     max_peer_staleness_steps: int | None = None
     outer_max_update_norm: float | None = None
@@ -322,6 +323,7 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
             "max_eval_batches": config.max_eval_batches,
             "outer_learning_rate": config.outer_learning_rate,
             "outer_optimizer": config.outer_optimizer,
+            "outer_momentum": config.outer_momentum,
             "max_peers": max_peers,
             "max_peer_staleness_steps": config.max_peer_staleness_steps,
             "outer_max_update_norm": config.outer_max_update_norm,
@@ -386,6 +388,7 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
                     sync=DiLoCoSyncConfig(
                         outer_learning_rate=config.outer_learning_rate,
                         outer_optimizer=config.outer_optimizer,
+                        outer_momentum=config.outer_momentum,
                         outer_max_update_norm=config.outer_max_update_norm,
                     ),
                     max_peers=max_peers,
@@ -426,7 +429,8 @@ def _parse_args() -> ElasticBudgetCompareConfig:
     parser.add_argument("--baseline-global-batch-size", type=int, default=128)
     parser.add_argument("--elastic-local-batch-size", type=int, default=32)
     parser.add_argument("--outer-learning-rate", type=float, default=0.25)
-    parser.add_argument("--outer-optimizer", choices=("adam", "sgd"), default="sgd")
+    parser.add_argument("--outer-optimizer", choices=("adam", "sgd", "nesterov_sgd"), default="sgd")
+    parser.add_argument("--outer-momentum", type=float, default=0.9)
     parser.add_argument("--max-peers", type=int, default=None)
     parser.add_argument("--max-peer-staleness-steps", type=int, default=None)
     parser.add_argument("--outer-max-update-norm", type=float, default=None)
@@ -453,6 +457,7 @@ def _parse_args() -> ElasticBudgetCompareConfig:
         elastic_local_batch_size=args.elastic_local_batch_size,
         outer_learning_rate=args.outer_learning_rate,
         outer_optimizer=args.outer_optimizer,
+        outer_momentum=args.outer_momentum,
         max_peers=args.max_peers,
         max_peer_staleness_steps=args.max_peer_staleness_steps,
         outer_max_update_norm=args.outer_max_update_norm,

@@ -157,7 +157,14 @@ def test_transfer_payload_filters_non_arrays_and_restores_template():
     assert restored["opt_state"]["should_skip"] is True
 
 
-def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path):
+@pytest.mark.parametrize(
+    ("outer_optimizer", "expected_weight"),
+    [
+        ("sgd", 0.5),
+        ("nesterov_sgd", 0.95),
+    ],
+)
+def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path, outer_optimizer, expected_weight):
     elastic_root = str(tmp_path / "elastic")
     mesh = _single_device_mesh()
 
@@ -169,7 +176,7 @@ def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path):
             state_path=elastic_root,
             sync_interval_steps=1,
             publish_interval_steps=1,
-            sync=DiLoCoSyncConfig(outer_optimizer="sgd", outer_learning_rate=0.25),
+            sync=DiLoCoSyncConfig(outer_optimizer=outer_optimizer, outer_learning_rate=0.25, outer_momentum=0.9),
         ),
         checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w001"),
         run_id="run-w001",
@@ -184,7 +191,7 @@ def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path):
             state_path=elastic_root,
             sync_interval_steps=1,
             publish_interval_steps=1,
-            sync=DiLoCoSyncConfig(outer_optimizer="sgd", outer_learning_rate=0.25),
+            sync=DiLoCoSyncConfig(outer_optimizer=outer_optimizer, outer_learning_rate=0.25, outer_momentum=0.9),
         ),
         checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w000"),
         run_id="run-w000",
@@ -212,7 +219,7 @@ def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path):
         )
     )
 
-    assert float(synced_info.state.model["weight"][0]) == pytest.approx(0.5)
+    assert float(synced_info.state.model["weight"][0]) == pytest.approx(expected_weight)
     assert local_controller._diloco_state is not None  # noqa: SLF001
     assert (
         local_controller._diloco_state.anchor_model["weight"] is not synced_info.state.model["weight"]
@@ -250,6 +257,11 @@ def test_remove_if_exists_ignores_gcs_not_found_races(monkeypatch):
     )
 
     _remove_if_exists("gs://bucket/path")
+
+
+def test_diloco_sync_config_rejects_invalid_outer_momentum():
+    with pytest.raises(ValueError, match="outer_momentum"):
+        DiLoCoSyncConfig(outer_optimizer="nesterov_sgd", outer_momentum=1.0)
 
 
 def test_jax_transfer_publish_uses_staged_payload(tmp_path, monkeypatch):
