@@ -751,3 +751,42 @@
 - Next action:
   - continue monitoring `0312g` until at least one elastic worker starts
   - as soon as workers run, verify that the previous `Skipping elastic transfer publish` loop does not recur
+
+### 2026-03-12 17:47 - Fixed DiLoCo anchor donation aliasing and relaunched as `0312h`
+- Hypothesis:
+  - the remaining `Array has been deleted` failures in `0312g` came from DiLoCo anchor state aliasing with donated `state.model` buffers; if anchor snapshots are detached from training-state buffers, publish staging should stop crashing on first/early sync intervals.
+- Command:
+  - diagnosis from live traceback:
+    - failure path was `Trainer.train_step -> stage_publish_state -> _sync_state_payload -> diloco_state.anchor_model -> _materialize_payload -> jax.device_get`
+    - representative error: `RuntimeError: Array has been deleted with shape=float32[128256,768]`
+  - patched:
+    - `lib/levanter/src/levanter/elastic.py`
+    - `lib/levanter/tests/test_elastic.py`
+  - verification:
+    - `uv run --with pytest --with pytest-timeout python -m pytest lib/levanter/tests/test_elastic.py -q`
+    - `./infra/pre-commit.py --fix lib/levanter/src/levanter/elastic.py lib/levanter/tests/test_elastic.py`
+  - commit:
+    - `7f644cd37` `Decouple DiLoCo anchor from donated model buffers`
+  - rolled run:
+    - stopped `/dlwh/resilient-1e19-0312g-diloco-adam100-executor-parent`
+    - launched `/dlwh/resilient-1e19-0312h-diloco-adam100-executor-parent`
+    - same launch params: `sync_every=100`, `publish_every=100`, `outer_optimizer=adam`, `outer_learning_rate=0.05`, same FLOP target
+- Result:
+  - DiLoCo controller now deep-copies JAX-array leaves for long-lived anchor state at:
+    - initial anchor creation,
+    - sync-state import from peers,
+    - post-sync anchor update,
+    - and any fallback path that materializes model from anchor.
+  - this prevents anchor pointers from aliasing donated training buffers.
+  - current `0312h` status:
+    - baseline `train_lm` running on `v5p-32`
+    - elastic `w000/w001/w002` running on `v5p-8`
+    - elastic `w003` still pending on capacity
+    - `failure_count=0` for all running `0312h` workers
+  - known non-fatal draccus config-artifact tracebacks still appear, as expected.
+- Interpretation:
+  - this directly addresses the real crash traceback the user flagged (not a W&B false positive).
+  - the run is now in a cleaner state to validate publish/sync behavior under sustained training.
+- Next action:
+  - continue monitoring `0312h` through additional publish/sync intervals
+  - alert immediately if any `Array has been deleted` or `Skipping elastic transfer publish` line reappears
