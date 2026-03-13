@@ -247,8 +247,10 @@ def cluster_start(ctx, local: bool):
     try:
         if is_local:
             from iris.cluster.local_cluster import LocalCluster
+            from iris.managed_thread import ThreadContainer
 
-            cluster = LocalCluster(config)
+            threads = ThreadContainer("local-cluster")
+            cluster = LocalCluster(config, threads=threads)
             address = cluster.start()
             click.echo(f"Controller started at {address}")
             token = cluster.auto_login_token

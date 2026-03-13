@@ -115,8 +115,10 @@ def require_controller_url(ctx: click.Context) -> str:
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
             from iris.cluster.local_cluster import LocalCluster
+            from iris.managed_thread import ThreadContainer
 
-            cluster = LocalCluster(iris_config.proto)
+            threads = ThreadContainer("local-cluster")
+            cluster = LocalCluster(iris_config.proto, threads=threads)
             controller_address = cluster.start()
             ctx.call_on_close(cluster.close)
         else:
