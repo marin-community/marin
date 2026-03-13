@@ -37,23 +37,22 @@ Current mainline target order:
   - diagnostic-only from now on unless attribution tooling changes
 - `A3`: attempted and rejected
   - outward layer-level manual-backward boundary increased shell tax and slowed the full step
-- `P3`: next required mainline prototype
+- outward `P3` block-boundary family: attempted and rejected
+  - outward block custom-VJP / scan-switch / shard-map / custom-partitioning / no-checkpoint variants all failed
+- `G1`: next required mainline prototype
 
-## P3 Definition
+## G1 Definition
 
-Use a fixed `3 GDN + 1 attention` block as the optimization unit.
+Use the hybrid-specific GDN branch inside a GDN-bearing decoder layer as the optimization unit.
 
 Required properties:
 
-- bespoke backward/custom VJP at the block boundary
+- bespoke backward/custom VJP at the branch boundary
 - explicit sharding contract
 - explicit layout contract
-- reuse current leaf kernels initially
-- rejected variants already include Python-level block custom-VJP, array-VJP,
-  leaf-VJP, block-local `while/cond` scan/switch shells, and the compile-stable
-  no-checkpoint/remat-owned outward block custom-VJP retry
-- the next viable `P3` attempt likely needs one stronger primitive/sharding
-  boundary below generic block/module shell, not another outward wrapper
+- reuse current GDN leaf kernels initially
+- the branch starts at normalized hidden state plus mask and ends at the branch contribution before the generic decoder shell resumes
+- do not own the generic MLP / residual shell in the first prototype
 
 ## Anti-Goals
 
@@ -61,9 +60,8 @@ Do not spend mainline budget on:
 
 - another `S3` refresh without tooling changes
 - another near-identical `A3` retry
+- another outward `P3` block wrapper on the same generic block/module shell
 - same-boundary GDN solver/tape/kernel tweaks
-- another outward fixed-block custom-VJP wrapper on the same `HackableDecoderBlock`
-  boundary
 - CE side-arms unless attribution points back to CE again
 
 ## Source Of Truth

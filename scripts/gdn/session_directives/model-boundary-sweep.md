@@ -14,4 +14,6 @@ How to use this evidence now:
 
 Main interpretation:
 - each added GDN-bearing layer brings a large decoder-layer shell/scaffolding tax beyond the tracked kernel budget,
-- therefore the next mainline boundary is the whole GDN-bearing decoder layer, not the existing chunk-kernel train path.
+- therefore the old chunk-kernel train path is the wrong boundary,
+- but the obvious whole decoder-layer / block boundary is also too high,
+- so the next mainline cut should move inward to the hybrid-specific GDN branch.

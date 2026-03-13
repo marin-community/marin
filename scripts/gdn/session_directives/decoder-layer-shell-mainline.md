@@ -14,3 +14,7 @@ Grouping rule:
 - keep only positive hybrid-only deltas
 
 Use coarse `decoder_layer_shell_budget_ms` only as an upper bound, not as the main promotion target.
+
+Immediate implication:
+- do not optimize the broad `HackableDecoderLayer/*` or `HackableDecoderBlock/*` shell directly,
+- optimize the hybrid-specific GDN branch boundary that generates the positive shell deltas.

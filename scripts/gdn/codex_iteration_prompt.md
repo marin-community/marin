@@ -15,12 +15,14 @@ Primary objective:
 
 Current regime:
 - same-boundary GDN kernel hillclimbing is demoted
+- the obvious outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries are also demoted
 - `dispatch_shard_shell_delta_ms` is the mainline budget
 - `ad_wrapper_shell_delta_ms` is the second budget
 - `interaction_remainder_ms` and `xprof_idle_attributed_ms` are safety checks
 - `S3` is complete
 - `A3` is complete and rejected
-- the next required optimization slot is `P3`
+- outward `P3` block-boundary variants are complete and rejected
+- the next required optimization slot is `G1`
 
 Repo context:
 - GDN implementation: `lib/levanter/src/levanter/layers/gated_deltanet.py`
@@ -33,13 +35,14 @@ Required behavior:
 1. Read the current summary and latest log entries.
 2. Generate a shortlist of 2-3 candidates with upside and risk.
 3. Pick exactly one slot:
-   - `P3` fixed `3 GDN + 1 attention` block with bespoke backward + explicit sharding/layout contract
-   - `A3-diagnostic` only if you can explain why a materially different AD boundary is now higher information than `P3`
-   - `S3-diagnostic` only if you changed attribution/xprof plumbing in this iteration
+   - `G1` single-GDN-branch primitive with bespoke backward + explicit sharding/layout contract
+   - `G2` lower primitive / `custom_partitioning` branch attempt only if the chosen `G1` cut is const-clean enough
+   - `D1` dispatch-shell diagnostic only if you can isolate sharding/collective ownership without changing the forward math
+   - `A1` AD-boundary diagnostic only if you can move the manual backward inward to the hybrid-specific branch
    - `U` bounded CE side-arm only if fresh attribution re-implicates CE
 4. Classify the change as exactly one of:
-   - `whole-layer boundary`
-   - `diagnostic side-arm`
+   - `hybrid branch boundary`
+   - `branch diagnostic`
    - `CE backend`
 5. Keep CE fixed unless this is an explicit CE side-arm:
    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`
@@ -59,29 +62,37 @@ Required behavior:
 
 Slots:
 
-### P3) Mainline prototype
-- Optimize the fixed `3 GDN + 1 attention` block as one unit.
-- The block must own:
+### G1) Mainline prototype
+- Optimize only the hybrid-specific GDN branch inside a GDN-bearing decoder layer.
+- The branch starts from normalized hidden state plus mask and ends at the branch contribution before the generic decoder shell resumes.
+- The branch must own:
   - forward boundary
   - backward/custom VJP contract
   - sharding contract
   - layout contract
-- Reuse current leaf kernels first.
-- Do not let generic JAX AD or generic sharding rebuild the same shell outside the new boundary.
+- Reuse current GDN leaf kernels first.
+- Do not wrap the whole `HackableDecoderLayer` or `HackableDecoderBlock` again.
 - Reject the prototype if:
   - `dispatch_shard_shell_delta_ms` stays flat/up,
   - or `ad_wrapper_shell_delta_ms` grows,
   - or `interaction_remainder_ms` grows,
   - or `xprof_idle_attributed_ms` stays flat/up when available,
-  - even if old train-path buckets disappear.
+  - even if old bucket names disappear.
 
-### A3-diagnostic
-- Only if the backward/sharding contract is materially different from the rejected A3 attempt.
-- If it is just another outward layer-level manual-VJP boundary, do not do it.
+### G2) Lower primitive / custom-partitioned branch
+- Only after `G1` exists in a clean array-only / const-clean form.
+- Use this slot to test whether the branch, unlike the mixed block, can lower as one primitive.
+- If the chosen cut still carries closed-over const arrays, do not spend the iteration here.
 
-### S3-diagnostic
-- Only if the iteration changes xprof extraction, matched-pair attribution, or shell grouping logic.
-- Do not spend another mainline iteration here just to reconfirm the shell ranking.
+### D1) Dispatch-shell diagnostic
+- Keep the branch forward math fixed.
+- Change only sharding / collective ownership.
+- The purpose is to move `dispatch_shard_shell_delta_ms`, not to change AD.
+
+### A1) AD-boundary diagnostic
+- Keep the branch forward structure fixed.
+- Move the manual backward boundary inward to the hybrid-specific branch.
+- Do not propose another outward layer-level or block-level manual-VJP wrapper.
 
 ### U) CE side-arm
 - Only if fresh evidence points back to CE.
@@ -130,8 +141,8 @@ Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py lint-log`
 
 Definition of done:
-- one validated `P3` result, or
-- one explicitly diagnostic run that changes the shell attribution/tooling enough to justify itself,
+- one validated `G1` result, or
+- one explicitly diagnostic `G2` / `D1` / `A1` run that is justified by the current shell evidence,
 - plus TPU correctness when code changed,
 - plus profiling,
 - plus a log entry with canonical shell-delta metrics.

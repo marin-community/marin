@@ -647,7 +647,7 @@ def test_perf_policy_reverts_wrong_boundary_progress_candidate(tmp_path: Path) -
     last = state["history"][-1]
     reasons = last["control_gate_reasons"]
     assert isinstance(reasons, list)
-    assert any("wrong-boundary progress" in reason for reason in reasons)
+    assert any("off-critical-path or overlap-loss" in reason for reason in reasons)
 
 
 def test_perf_policy_reverts_namespace_only_progress_candidate(tmp_path: Path) -> None:

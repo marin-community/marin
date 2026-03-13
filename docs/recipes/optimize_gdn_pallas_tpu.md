@@ -40,7 +40,9 @@ Therefore:
 
 - same-boundary GDN Pallas kernel hillclimbing stays demoted
 - broad `HackableDecoderLayer/*` accounting is too coarse to be the main optimization target
-- the next serious systems prototype is a fixed `3 GDN + 1 attention` block that owns:
+- the obvious outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries are also demoted after the `A3/P3` failures
+- the next serious systems prototype is the hybrid-specific GDN branch inside a GDN-bearing decoder layer
+- that boundary must own:
   - forward boundary
   - backward/custom-VJP contract
   - sharding/layout contract
@@ -107,24 +109,27 @@ Current coverage status:
   - use only when attribution tooling itself changes
 - `A3`: complete and rejected
   - outward layer-level manual-backward boundary increased shell tax badly
-  - do not repeat unless the backward/sharding contract is materially different
+- outward `P3` block-boundary family: complete and rejected
+  - outward block custom-VJP / scan-switch / shard-map / custom-partitioning / no-checkpoint variants all failed
 
 Next required optimization slot:
 
-- `P3`
+- `G1`
 
-`P3` definition:
+`G1` definition:
 
-- fixed `3 GDN + 1 attention` block
-- bespoke backward/custom VJP at the block boundary
+- single hybrid-specific GDN branch inside a GDN-bearing decoder layer
+- bespoke backward/custom VJP at the branch boundary
 - explicit sharding contract
 - explicit layout contract
-- reuse current leaf kernels first
+- reuse current GDN leaf kernels first
+- do not own the generic MLP / residual shell in the first prototype
 
 Do not spend mainline budget on:
 
 - another `S3` refresh just to reconfirm the same ranking
 - another `A3` retry with only minor boundary edits
+- another outward `P3` block wrapper on the same generic block/module shell
 - same-boundary GDN tape/kernel tweaks
 - CE micro-tuning unless fresh attribution points back to CE
 
@@ -198,7 +203,7 @@ uv run python scripts/gdn/gdnctl.py xprof-compare-runs \
 
 A good iteration is one of:
 
-- a `P3` prototype that improves the full step and shell-delta budgets
+- a `G1` prototype that improves the full step and shell-delta budgets
 - a materially different boundary experiment that improves the full step and shell-delta budgets
 - a tooling-attribution change that materially improves understanding and is explicitly marked diagnostic
 

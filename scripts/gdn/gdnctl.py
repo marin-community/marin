@@ -1060,8 +1060,6 @@ def _evaluate_control_flow_gate(
     baseline_step = _coerce_float(baseline_hotspots.get("step_duration_ms"))
     candidate_train = _coerce_float(candidate_hotspots.get("train_path_budget_ms"))
     baseline_train = _coerce_float(baseline_hotspots.get("train_path_budget_ms"))
-    candidate_decoder_shell = _coerce_float(candidate_hotspots.get("decoder_layer_shell_budget_ms"))
-    baseline_decoder_shell = _coerce_float(baseline_hotspots.get("decoder_layer_shell_budget_ms"))
     candidate_generic_shell = _coerce_float(candidate_hotspots.get("hybrid_generic_shell_delta_budget_ms"))
     baseline_generic_shell = _coerce_float(baseline_hotspots.get("hybrid_generic_shell_delta_budget_ms"))
     candidate_dispatch_shell = _coerce_float(candidate_hotspots.get("dispatch_shard_shell_delta_ms"))
@@ -1155,28 +1153,6 @@ def _evaluate_control_flow_gate(
                 reasons.append(
                     f"`interaction_remainder_ms` increased by {interaction_increase:.3f} ms "
                     f"({baseline_interaction_remainder:.3f} -> {candidate_interaction_remainder:.3f})"
-                )
-
-    if candidate_decoder_shell is not None and baseline_decoder_shell is not None:
-        decoder_shell_increase = candidate_decoder_shell - baseline_decoder_shell
-        if decoder_shell_increase > args.perf_max_decoder_layer_shell_budget_increase_ms:
-            reasons.append(
-                f"`decoder_layer_shell_budget_ms` increased by {decoder_shell_increase:.3f} ms "
-                f"({baseline_decoder_shell:.3f} -> {candidate_decoder_shell:.3f})"
-            )
-
-        if candidate_step is not None and baseline_step is not None:
-            step_drop = baseline_step - candidate_step
-            decoder_shell_drop = baseline_decoder_shell - candidate_decoder_shell
-            if (
-                step_drop < args.perf_step_duration_improvement_margin_ms
-                and decoder_shell_drop < args.perf_min_decoder_layer_shell_drop_ms
-            ):
-                reasons.append(
-                    f"`decoder_layer_shell_budget_ms` did not improve materially "
-                    f"({baseline_decoder_shell:.3f} -> {candidate_decoder_shell:.3f}) while "
-                    f"`step_duration_ms` did not improve materially ({baseline_step:.3f} -> {candidate_step:.3f}); "
-                    "classify as wrong-boundary progress"
                 )
 
     if candidate_generic_shell is not None and baseline_generic_shell is not None:
@@ -2251,16 +2227,14 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - `decoder_layer_shell_topk: ...`\n"
         "  - `remainder_topk: ...`\n"
         "- Classification is mandatory in the iteration writeup:\n"
-        "  - `Change class: decoder shell attribution | whole-layer boundary | CE backend |\n"
-        "    diagnostic side-arm | inner kernel math`\n"
+        "  - `Change class: decoder shell attribution | hybrid branch boundary | CE backend |\n"
+        "    branch diagnostic | diagnostic side-arm | inner kernel math`\n"
         "  - `Expected effect on step_duration_ms: ...`\n"
         "  - `Reject if hybrid_generic_shell_delta_budget_ms stays flat/up? yes/no + why`\n"
         "- Hard control-flow gate: reject candidates when `while_ms` grows by > "
         f"{args.perf_max_while_increase_ms:.3f} ms or `train_path_budget_ms` grows by > "
         f"{args.perf_max_train_path_budget_increase_ms:.3f} ms unless "
         f"`{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
-        "- Reject candidates when `decoder_layer_shell_budget_ms` grows by > "
-        f"{args.perf_max_decoder_layer_shell_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
         "- Reject candidates when `hybrid_generic_shell_delta_budget_ms` grows by > "
         f"{args.perf_max_decoder_layer_shell_budget_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
         "- Reject candidates when `dispatch_shard_shell_delta_ms` grows by > "
@@ -2274,11 +2248,12 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "- Reject candidates as off-critical-path / overlap-loss when `train_path_budget_ms` drops by >= "
         f"{args.perf_min_train_path_drop_ms:.3f} ms but `step_duration_ms` does not improve by at least "
         f"{args.perf_step_duration_improvement_margin_ms:.3f} ms.\n"
-        "- Reject candidates as wrong-boundary progress when `decoder_layer_shell_budget_ms` fails to drop by at least "
-        f"{args.perf_min_decoder_layer_shell_drop_ms:.3f} ms and `step_duration_ms` does not improve materially.\n"
-        "- Reject candidates as namespace-only / renamed-bucket progress when `train_path_budget_ms` improves "
+        "- Reject candidates as wrong-boundary progress when `train_path_budget_ms` improves "
         "but `hybrid_generic_shell_delta_budget_ms` does not improve materially and `step_duration_ms` does not "
         "improve materially.\n"
+        "- Reject candidates as namespace-only / renamed-bucket progress when old train-path buckets disappear "
+        "but canonical shell deltas (`dispatch_shard_shell_delta_ms`, `ad_wrapper_shell_delta_ms`, "
+        "`hybrid_generic_shell_delta_budget_ms`) stay flat/up.\n"
         "- Reject candidates as waiting/serialization still dominant when `dispatch_shard_shell_delta_ms` "
         f"fails to drop by at least {args.perf_min_dispatch_shard_shell_drop_ms:.3f} ms and `step_duration_ms` "
         "does not improve materially.\n"
