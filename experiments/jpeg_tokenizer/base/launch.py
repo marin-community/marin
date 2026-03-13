@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from argparse import Namespace
 import dataclasses
 import os
 from dataclasses import dataclass, field
@@ -19,9 +20,11 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
+from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.jpeg_tokenizer.base.data import build_passthrough_lm_data_config_from_store
 from experiments.jpeg_tokenizer.base.model import JPEG_TOKENIZER_V0_MODEL, JPEG_TOKENIZER_V1_LARGE_MODEL, JpegLmConfig
 from experiments.jpeg_tokenizer.base.train import JpegEvalConfig, JpegRunConfig, JpegTrainerConfig, run_jpeg_tokenizer
+from scripts.jpeg_tokenizer.evaluate_representation_head2head import main as evaluate_representation_head2head_main
 
 DEFAULT_COEFF_K4_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k4_v0"
 DEFAULT_COEFF_K8_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_v0"
@@ -66,6 +69,21 @@ class JpegTokenizerLaunchConfig:
     checkpoint_keep_every_steps: int = 1_000
     jpeg_trainer: JpegTrainerConfig = field(default_factory=JpegTrainerConfig)
     eval: JpegEvalConfig | None = field(default_factory=JpegEvalConfig)
+
+
+@dataclass(frozen=True)
+class JpegRepresentationEvalLaunchConfig:
+    """Launch config for whole-image representation evaluation jobs."""
+
+    run_id: str
+    resources: ResourceConfig
+    output_dir: str
+    run_specs: tuple[str, ...]
+    split: str = "validation"
+    batch_size: int = 8
+    max_examples: int | None = None
+    pixels_per_image: int = 256 * 256
+    log_every: int = 10
 
 
 def _resolve_run_id(default_run_id: str) -> str:
@@ -133,6 +151,29 @@ def run_jpeg_tokenizer_trial(config: JpegTokenizerLaunchConfig) -> None:
     run_jpeg_tokenizer(run_config)
 
 
+def _run_representation_eval_local(config: JpegRepresentationEvalLaunchConfig) -> None:
+    args = Namespace(
+        run_spec=list(config.run_specs),
+        split=config.split,
+        batch_size=config.batch_size,
+        max_examples=config.max_examples,
+        pixels_per_image=config.pixels_per_image,
+        output_dir=config.output_dir,
+        log_every=config.log_every,
+    )
+    evaluate_representation_head2head_main(args)
+
+
+def run_jpeg_representation_eval(config: JpegRepresentationEvalLaunchConfig) -> None:
+    dispatch_grug_training_run(
+        run_id=config.run_id,
+        config=config,
+        local_entrypoint=_run_representation_eval_local,
+        resources=config.resources,
+        max_retries_failure=1,
+    )
+
+
 DEFAULT_JPEG_TOKENIZER_SMOKE_TRACKER = _build_wandb_tracker(
     group="tokexplore-jpeg-tokenizer-k4-smoke",
     tags=["jpeg-tokenizer", "coeff-k4", "smoke"],
@@ -188,6 +229,8 @@ RESOLVED_SYMBOLS_WHOLE_LIBJPEG_LARGE_SWA4096_SMOKE_RUN_ID = _resolve_run_id(
 RESOLVED_SYMBOLS_WHOLE_LIBJPEG_LARGE_SWA4096_RUN_ID = _resolve_run_id(
     "jpeg-tokenizer-symbols-whole-libjpeg-large-swa4096-trial"
 )
+RESOLVED_REPRESENTATION_EVAL_LONG_R3_RUN_ID = _resolve_run_id("jpeg-tokenizer-representation-eval-long-r3")
+RESOLVED_REPRESENTATION_EVAL_LARGE_R3_RUN_ID = _resolve_run_id("jpeg-tokenizer-representation-eval-large-r3")
 
 coeff_k4_smoke = ExecutorStep(
     name="tokexplore/jpeg-tokenizer-k4-smoke",
@@ -1963,6 +2006,38 @@ symbols_whole_libjpeg_large_swa4096_trial = ExecutorStep(
     ),
 )
 
+representation_eval_long_r3 = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-representation-eval-long-r3",
+    fn=run_jpeg_representation_eval,
+    config=JpegRepresentationEvalLaunchConfig(
+        run_id=RESOLVED_REPRESENTATION_EVAL_LONG_R3_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        output_dir="gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-long-r3",
+        run_specs=(
+            "name=coeff_k64_long,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-long-5272ec/checkpoints/step-8000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0,sliding_window=4096,unit_name=block,unit_count=1024",
+            "name=symbols_long,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-long-b4aa28/checkpoints/step-8000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0,sliding_window=4096",
+            "name=bytes_long,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-swa4096-long-64db87/checkpoints/step-8000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_whole_v0,sliding_window=4096",
+        ),
+        batch_size=8,
+    ),
+)
+
+representation_eval_large_r3 = ExecutorStep(
+    name="tokexplore/jpeg-tokenizer-representation-eval-large-r3",
+    fn=run_jpeg_representation_eval,
+    config=JpegRepresentationEvalLaunchConfig(
+        run_id=RESOLVED_REPRESENTATION_EVAL_LARGE_R3_RUN_ID,
+        resources=versioned(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE)),
+        output_dir="gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-large-r3",
+        run_specs=(
+            "name=coeff_k64_large,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-large-swa4096-trial-de16b2/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0,sliding_window=4096,unit_name=block,unit_count=1024",
+            "name=symbols_large,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-large-swa4096-trial-4b09ce/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0,sliding_window=4096",
+            "name=bytes_large,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-large-swa4096-trial-f64948/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_whole_v0,sliding_window=4096",
+        ),
+        batch_size=8,
+    ),
+)
+
 
 if __name__ == "__main__":
     executor_main(
@@ -2001,10 +2076,12 @@ if __name__ == "__main__":
             symbols_whole_libjpeg_swa4096_long,
             symbols_whole_libjpeg_large_swa4096_smoke,
             symbols_whole_libjpeg_large_swa4096_trial,
+            representation_eval_long_r3,
+            representation_eval_large_r3,
         ],
         description=(
             "JPEG tokenizer coefficient, libjpeg-coefficient, byte-window, "
             "whole-image byte, middle-ground JPEG, and whole-image symbol SWA runs on Imagenette token stores, "
-            "including SWA head-to-head, longer-run, and larger-model comparisons."
+            "including SWA head-to-head, longer-run, larger-model comparisons, and sequence-level representation evals."
         ),
     )
