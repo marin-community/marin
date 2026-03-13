@@ -10563,3 +10563,242 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Keep the next mainline slot in `P3`, but only if the real sharded train-step path first surfaces the remaining `custom_partitioning` const source directly instead of relying on simplified local block helpers.
   - Another nominal `custom_partitioning` retry on the same mixed block is likely to hit the same `assert not len(consts)` failure until the actual trainer-path const source is externalized or the boundary is pushed below it.
   - Keep CE fixed at `pallas_tpu` + `pallas`; this iteration again did not re-implicate CE.
+
+### Iteration 104 - Coverage Slot P3 / fixed-`3/4` decoder-block no-checkpoint custom-VJP retry (validated, rejected, reverted)
+
+- Why this iteration existed:
+  - `P3` remained the required next mainline slot after `S3` completed and `A3` was validated and rejected.
+  - The dead `custom_partitioning` line had already demonstrated that lower-level sharding ownership was attractive, but it was still compile-blocked and could not produce candidate shell budgets.
+  - This retry instead took the smallest compile-stable outward `P3` variant that materially changed block ownership: disable outer block checkpointing, pin one carry layout through the fixed `3 GDN + 1 attention` block, and give the block one explicit custom-VJP boundary.
+
+- Codex loop iteration: `10 / 10`
+- Date: `2026-03-13T18:24:19Z`
+- Starting commit: `83d9fb2e2cae88fa46a4486072b43ee1e7f962fe`
+- Commit: `final validated result commit descended from 83d9fb2e2cae88fa46a4486072b43ee1e7f962fe`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion from `.agents/logs/gdn_codex_loop/perf_state.json`:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Latest validated current-head `S3`/xprof baseline from Iteration 93:
+    - hybrid `throughput/mfu=6.036753`
+    - hybrid `throughput/tokens_per_second=195287.805612`
+    - hybrid `throughput/duration=0.167793375 s`
+    - hybrid `step_duration=167.793375 ms`
+    - control `throughput/duration=0.057256827 s`
+    - `train_path_budget_ms=42.682894`
+    - `decoder_layer_shell_budget_ms=20.388593`
+    - `hybrid_generic_shell_delta_budget_ms=20.103367`
+    - `dispatch_shard_shell_delta_ms=9.771419`
+    - `ad_wrapper_shell_delta_ms=6.178290`
+    - `interaction_remainder_ms=47.750288`
+    - `xprof_dispatch_shard_shell_delta_ms=31.572807`
+    - `xprof_ad_wrapper_shell_delta_ms=11.057602`
+    - `xprof_layout_shell_delta_ms=2.583071`
+    - `xprof_residual_add_shell_delta_ms=2.536807`
+    - `xprof_idle_attributed_ms=38.362912`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot P3 (selected):** keep the fixed `3 GDN + 1 attention` block as the unit, but make the block own remat/layout more aggressively by disabling outer block checkpointing and pinning one carry layout across the block while using one block-level custom VJP (`highest compile-stable information against the current dispatch/shard failure mode`, `high risk of amplifying outward shell if the block boundary is still too high`).
+  2. **Coverage slot P3 (lower cut):** go back to a lower `custom_partitioning` cut after flattening more block operands to arrays (`highest theoretical upside on dispatch/shard`, `still high compile risk and unlikely to finish unattended after the repeated const assertion`).
+  3. **Coverage slot P3 (explicit sharding retry):** revive the block `shard_map` shell only after moving more rotary/setup work above the boundary (`possible upside if setup leakage was the main blocker`, `lower information than the selected candidate because the explicit outward shell family has already failed before step 1`).
+
+- Selected slot rationale:
+  - `P3` was still mandatory next coverage.
+  - This candidate was materially different from the earlier outward block custom-VJP attempt because it changed remat ownership and layout pinning at the whole fixed block, while remaining compile-stable enough to produce a complete matched TPU profile.
+  - It was higher information than another compile-risk `custom_partitioning` retry because the loop needed one executable `P3` result with real shell deltas before the iteration budget ended.
+
+- Change class: `whole-layer boundary`
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - Why CE stayed fixed:
+    - This was not a CE side-arm.
+    - Fresh attribution still kept CE-attributed `while` in the single-digit-ms range and did not re-implicate CE as the mainline explanation for the hybrid-vs-attention gap.
+
+- Expected effect on `step_duration_ms`:
+  - decrease if the block now owned one real forward/backward/layout/sharding contract instead of letting generic outer wrappers rebuild shell.
+- Expected effect on `dispatch_shard_shell_delta_ms`:
+  - material decrease; this remained the immediate shell budget.
+- Expected effect on `ad_wrapper_shell_delta_ms`:
+  - decrease if the block custom VJP plus disabled outer remat prevented generic wrapper rebuild outside the block.
+- Expected effect on `hybrid_generic_shell_delta_budget_ms`:
+  - decrease if the fixed `3/4` region lowered as one block-level shell instead of re-emitting shell above it.
+- Expected effect on `interaction_remainder_ms`:
+  - decrease if the shorter shell path reduced waiting/serialization on the real step.
+- Expected effect on `xprof_idle_attributed_ms`:
+  - decrease if the same waiting/serialization loss fell with the shell.
+- Reject if `step_duration_ms` does not improve? **Yes.**
+  - This remained a mainline `P3` prototype, not a diagnostic-only run.
+- Reject if `dispatch_shard_shell_delta_ms` stays flat / grows? **Yes.**
+  - `dispatch/shard` remained the primary canonical shell budget.
+- Reject if `ad_wrapper_shell_delta_ms` grows? **Yes.**
+  - A bespoke block boundary only matters if it does not recreate more wrapper shell elsewhere.
+- Reject if `interaction_remainder_ms` grows? **Yes.**
+  - The optimization target remained the full-step critical path, not vanished old bucket names.
+- Reject if `xprof_idle_attributed_ms` stays flat / grows when an XPlane pair is available? **Yes.**
+  - More `IDLE` would still mean shell tax was surfacing as waiting/serialization.
+- Reject if `hybrid_generic_shell_delta_budget_ms` stays flat/up? **Yes.**
+  - This `P3` retry only earns promotion if the canonical hybrid-only shell delta falls with the step.
+
+- Change summary:
+  - Temporary candidate implementation in `experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py`:
+    - added an opt-in fixed `3/4` `HackableDecoderBlock` custom-VJP boundary,
+    - pinned carry layout back to the block input sharding after each inner layer,
+    - disabled outer block checkpointing when the prototype flag was enabled so the block owned one explicit remat contract.
+  - Temporary supporting plumbing in `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`:
+    - added `GDN_PROFILE_DECODER_BLOCK_CUSTOM_VJP_PROTOTYPE=1` so the candidate could be profiled without changing the default benchmark path.
+  - Retained tree after validation:
+    - no source changes were kept,
+    - the temporary `P3` prototype and benchmark flag were fully reverted after validation because the candidate materially regressed the full step and the canonical shell budgets.
+
+- Correctness checks:
+  - Local syntax/import smoke on the temporary candidate:
+    - `uv run python -m py_compile experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
+    - result: passed
+  - Local model-init smoke on the temporary candidate:
+    - `uv run python - <<'PY' ... HackableTransformer.init(dataclasses.replace(_size_presets()['130m'], gdn_use_decoder_block_custom_vjp_prototype=True), key=jr.PRNGKey(0)) ... PY`
+    - result: passed; the fixed `layer_block(2)` structure materialized and the first full-size block enabled the custom-VJP flag.
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - first two runs showed intermittent near-threshold drift in `tests/test_gdn_layer.py::test_gdn_layer_backward_matches_hf[True]` (`1/1536` then `18/1536` mismatched elements, max abs diff `1.18128955e-05` then `5.0991774e-05`)
+    - final accepted result on rerun: `88 passed, 2 skipped in 235.10s (0:03:55)`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - `P3` hybrid candidate:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_p3_i10_blockcvjp_nockpt --profile-env GDN_PROFILE_DECODER_BLOCK_CUSTOM_VJP_PROTOTYPE=true --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_p3_i10_blockcvjp_nockpt_gdn3of4_130m_ch128_seg16_20-6b09a8`
+    - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_p3_i10_blockcvjp_nockpt_gdn3of4_130m_ch128_seg16_20-6b09a8`
+    - normalized summary: `scratch/gdn_p3_i10/hybrid_summary_200.json`
+  - Fresh attention-only control:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_p3_i10_attnctrl --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_p3_i10_attnctrl_attnonly_130m_ch128_seg16_20steps-4ad930`
+    - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_p3_i10_attnctrl_attnonly_130m_ch128_seg16_20steps-4ad930`
+    - normalized summary: `scratch/gdn_p3_i10/attn_summary_200.json`
+  - Summary-based attribution:
+    - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_p3_i10/hybrid_summary_200.json --baseline-summary scratch/gdn_p3_i10/attn_summary_200.json --step-duration-ms 189.0235080063576 --baseline-step-duration-ms 57.15478899946902 --upper-bound-step-ms 57.860499 --gdn-layer-fraction 0.833333 --baseline-gdn-layer-fraction 0.0 --gdn-layers-per-block 3 --baseline-gdn-layers-per-block 0 --gdn-block-size 4 --baseline-gdn-block-size 4 --output scratch/gdn_p3_i10/attribution_no_xprof.json`
+    - artifact: `scratch/gdn_p3_i10/attribution_no_xprof.json`
+  - Matched XPlane comparison:
+    - `uv run python scripts/gdn/gdnctl.py xprof-compare-runs --cluster us-east5-a --tpu-name calvinxu-gdn --before-run-target https://wandb.ai/marin-community/marin/runs/gdn_p3_i10_attnctrl_attnonly_130m_ch128_seg16_20steps-4ad930 --after-run-target https://wandb.ai/marin-community/marin/runs/gdn_p3_i10_blockcvjp_nockpt_gdn3of4_130m_ch128_seg16_20-6b09a8 --normalize-positive-deltas-ms 54.23455898835759 --download-root scratch/gdn_p3_i10/xprof_downloads --remote-stage-dir .agents/xprof_compare/gdn_p3_i10 --output scratch/gdn_p3_i10/xprof_compare.json`
+    - artifact: `scratch/gdn_p3_i10/xprof_compare.json`
+  - Combined attribution artifact:
+    - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_p3_i10/hybrid_summary_200.json --baseline-summary scratch/gdn_p3_i10/attn_summary_200.json --step-duration-ms 189.0235080063576 --baseline-step-duration-ms 57.15478899946902 --upper-bound-step-ms 57.860499 --gdn-layer-fraction 0.833333 --baseline-gdn-layer-fraction 0.0 --gdn-layers-per-block 3 --baseline-gdn-layers-per-block 0 --gdn-block-size 4 --baseline-gdn-block-size 4 --xprof-compare-json scratch/gdn_p3_i10/xprof_compare.json --output scratch/gdn_p3_i10/attribution.json`
+    - artifact: `scratch/gdn_p3_i10/attribution.json`
+  - Throughput metrics use the required history-window median over steps `10-18` (`9` points).
+
+- Fresh attention-only control metrics (same-source control run):
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - `step_duration_ms: 57.154789`
+  - `forward_closed_call_ms: 0.000000`
+  - `backward_closed_call_ms: 0.000000`
+  - `train_path_budget_ms: 8.559126`
+  - `decoder_layer_shell_budget_ms: 20.177908`
+  - `while: 8.557974`
+  - `conditional: 0.001152`
+  - `CE-attributed while: 8.557974`
+  - `throughput/mfu: 21.346688`
+  - `throughput/tokens_per_second: 573320.286430`
+  - `throughput/duration: 0.057154789 s`
+  - `upper_bound_gap_ms: -0.705710`
+  - `remainder_topk: splash attention fwd residuals pallas_call 5.372411 ms; splash attention dkv pallas_call 3.618007 ms; CE forward pallas_call 2.703024 ms; splash attention dq pallas_call 2.656321 ms; vmap()/dot_general 2.624261 ms`
+
+- Measured metrics (Iteration 93 carried current-head `S3` baseline -> `P3` candidate):
+  - `CE backend selected: pallas_tpu -> pallas_tpu`
+  - `CE bwd mode: pallas -> pallas`
+  - `gdn_layer_fraction: 0.833333 -> 0.833333`
+  - `Forward closed-call: 20.663477 ms -> 0.000000 ms`
+  - `Backward closed-call: 13.128558 ms -> 0.000000 ms`
+  - `while: 8.889455 ms -> 8.833703 ms`
+  - `conditional: 0.001404 ms -> 0.001410 ms`
+  - `CE-attributed while: 8.889455 ms -> 8.833703 ms`
+  - `Kernel budget: 33.792035 ms -> 0.000000 ms`
+  - `Control budget: 8.890858 ms -> 8.835113 ms`
+  - `Train-path budget: 42.682894 ms -> 8.835113 ms`
+  - `Decoder-layer shell budget: 20.388593 ms -> 67.940503 ms`
+  - `Hybrid generic shell delta budget: 20.103367 ms -> 68.093337 ms`
+  - `Dispatch/shard shell delta budget: 9.771419 ms -> 55.699994 ms`
+  - `AD/wrapper shell delta budget: 6.178290 ms -> 8.555054 ms`
+  - `Layout shell delta budget: 2.177870 ms -> 1.579977 ms`
+  - `Residual/add shell delta budget: 2.322353 ms -> 2.258313 ms`
+  - `xprof hybrid generic shell delta budget: 47.750288 ms -> 54.234559 ms`
+  - `xprof dispatch/shard shell delta budget: 31.572807 ms -> 36.286112 ms`
+  - `xprof AD/wrapper shell delta budget: 11.057602 ms -> 13.051213 ms`
+  - `xprof layout shell delta budget: 2.583071 ms -> 2.735178 ms`
+  - `xprof residual/add shell delta budget: 2.536807 ms -> 2.162055 ms`
+  - `xprof IDLE attributed remainder: 38.362912 ms -> 35.541376 ms`
+  - `AD shell budget: 6.978173 ms -> 67.940503 ms`
+  - `Sharding shell budget: 13.241332 ms -> 59.696547 ms`
+  - `Layout shell budget: 2.177870 ms -> 14.276328 ms`
+  - `Residual/add shell budget: 2.322353 ms -> 2.258313 ms`
+  - `Step duration: 167.793375 ms -> 189.023508 ms`
+  - `Remainder budget: 125.110481 ms -> 180.188395 ms`
+  - `Interaction remainder: 47.750288 ms -> 54.234559 ms`
+  - `Upper-bound gap: 109.932876 ms -> 131.163009 ms`
+  - `Gap explained by train-path: 38.83% -> 6.74%`
+  - `Gap explained by decoder-layer shell: 18.55% -> 51.80%`
+  - `Gap explained by hybrid generic shell delta: 18.29% -> 51.92%`
+  - `hybrid_generic_shell_delta_topk: jvp(HackableTransformer)/HackableDecoderBlock/closed_call/shard_map/pallas_call: +20.291243 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/jvp()/closed_call/shard_map/pallas_call: +12.387434 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/transpose(transpose(jvp(HackableTransformer)))/HackableDecoderBlock/jvp()/closed_call/shard_map/pallas_call: +7.875052 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/closed_call/shard_map/pallas_call: +5.256553 ms; jvp(HackableTransformer)/HackableDecoderBlock/shard_map/pallas_call: +5.197911 ms`
+  - `decoder_layer_shell_topk: jvp(HackableTransformer)/HackableDecoderBlock/closed_call/shard_map/pallas_call: 20.291243 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/jvp()/closed_call/shard_map/pallas_call: 12.387434 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/transpose(transpose(jvp(HackableTransformer)))/HackableDecoderBlock/jvp()/closed_call/shard_map/pallas_call: 7.875052 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/closed_call/shard_map/pallas_call: 5.256553 ms; jvp(HackableTransformer)/HackableDecoderBlock/shard_map/pallas_call: 5.197911 ms`
+  - `remainder_topk: jvp(HackableTransformer)/HackableDecoderBlock/closed_call/shard_map/pallas_call: 20.291243 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/jvp()/closed_call/shard_map/pallas_call: 12.387434 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/transpose(transpose(jvp(HackableTransformer)))/HackableDecoderBlock/jvp()/closed_call/shard_map/pallas_call: 7.875052 ms; transpose(jvp(HackableTransformer))/HackableDecoderBlock/closed_call/shard_map/pallas_call: 5.256553 ms; jvp(HackableTransformer)/HackableDecoderBlock/shard_map/pallas_call: 5.197911 ms`
+  - `throughput/mfu: 6.036753 -> 5.358736`
+  - `throughput/tokens_per_second: 195287.805612 -> 173354.099422`
+  - `throughput/duration: 0.167793375 s -> 0.189023508 s`
+
+- Interpretation:
+  - This `P3` attempt did **not** shorten the full step:
+    - `step_duration_ms` regressed by `+21.230133 ms`
+    - `throughput/mfu` regressed by `-11.23%` versus the carried current-head `S3` baseline
+    - `throughput/mfu` regressed by `-12.02%` versus the active champion in `.agents/logs/gdn_codex_loop/perf_state.json`
+  - The no-checkpoint outward block boundary materially worsened the mainline shell budgets:
+    - `dispatch_shard_shell_delta_ms: 9.771419 -> 55.699994 ms`
+    - `ad_wrapper_shell_delta_ms: 6.178290 -> 8.555054 ms`
+    - `hybrid_generic_shell_delta_budget_ms: 20.103367 -> 68.093337 ms`
+    - `decoder_layer_shell_budget_ms: 20.388593 -> 67.940503 ms`
+    - `interaction_remainder_ms: 47.750288 -> 54.234559 ms`
+  - Removing outer checkpointing did not make the block own the shell:
+    - the dominant hybrid-only buckets stayed block-scoped under `HackableDecoderBlock/*/shard_map/pallas_call`,
+    - the new top shell paths are all outward `jvp()/transpose()/closed_call/shard_map/pallas_call` families on the block boundary.
+  - The apparent train-path shrink is wrong-boundary progress, not critical-path progress:
+    - `train_path_budget_ms: 42.682894 -> 8.835113 ms`
+    - `step_duration_ms` still regressed and `interaction_remainder_ms` still grew,
+    - the shell tax simply moved above the new boundary and manifested as larger block-scoped wrapper/sharding shell.
+  - xprof does not rescue the candidate:
+    - `xprof_idle_attributed_ms` improved slightly (`38.362912 -> 35.541376 ms`),
+    - but `xprof_dispatch_shard_shell_delta_ms`, `xprof_ad_wrapper_shell_delta_ms`, and `xprof_layout_shell_delta_ms` all grew,
+    - the full step still slowed materially, so the slight `IDLE` drop is not promotable progress.
+  - CE stayed bounded:
+    - `CE-attributed while: 8.889455 -> 8.833703 ms`
+    - nothing in this iteration re-implicated CE as the mainline explanation for the hybrid-vs-attention gap.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + final accepted result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `88 passed, 2 skipped in 235.10s (0:03:55)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `step_duration_ms: 189.023508`
+    - `dispatch_shard_shell_delta_ms: 55.699994`
+    - `ad_wrapper_shell_delta_ms: 8.555054`
+    - `hybrid_generic_shell_delta_budget_ms: 68.093337`
+    - `interaction_remainder_ms: 54.234559`
+    - `xprof_idle_attributed_ms: 35.541376`
+  - Governance:
+    - CE stayed fixed at `pallas_tpu` + `pallas`.
+    - Rejected as a speedup candidate because `step_duration_ms` regressed by `+21.230133 ms`.
+    - Rejected as a speedup candidate because `dispatch_shard_shell_delta_ms` grew by `+45.928575 ms`.
+    - Rejected as a speedup candidate because `ad_wrapper_shell_delta_ms` grew by `+2.376764 ms`.
+    - Rejected as a speedup candidate because `hybrid_generic_shell_delta_budget_ms` grew by `+47.989970 ms`.
+    - Rejected as a speedup candidate because `interaction_remainder_ms` grew by `+6.484271 ms`.
+    - Rejected as wrong-boundary / overlap-loss progress because the visible train path shrank while the canonical shell budgets and full step got worse.
+    - This is **not** CE progress and **not** attribution-only bookkeeping; it is a mainline `P3` boundary prototype that materially worsened the real shell budgets and the step.
+
+- Assessment: **validated, rejected, and reverted**. This tenth `P3` block-level prototype is also not deployable on the fixed `3/4` TPU benchmark. Disabling outer checkpointing and pinning one carry layout made the exact outward block custom-VJP boundary compile and run end-to-end, but it amplified the block-scoped `dispatch/shard` and `AD/wrapper` shell families instead of owning them, widened the canonical hybrid-only shell delta, and made the full step materially slower. The final tree therefore stays on the pre-existing executable baseline, and this iteration is recorded as a log-only validated result with TPU correctness plus one completed matched hybrid/control profile pair.
+- Next bold hypothesis:
+  - Keep CE fixed at `pallas_tpu` + `pallas`; this iteration again did not re-implicate CE.
+  - Do not spend another mainline turn on an outward `HackableDecoderBlock` custom-VJP wrapper. The compile-stable no-checkpoint/remat-owned variant is now also rejected.
+  - The next viable `P3` attempt, if any, still needs a lower primitive/sharding contract below generic block/module shell rather than another outward block boundary on the same structure.

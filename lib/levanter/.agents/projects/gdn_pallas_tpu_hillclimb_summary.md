@@ -50,9 +50,10 @@ Required properties:
 - explicit layout contract
 - reuse current leaf kernels initially
 - rejected variants already include Python-level block custom-VJP, array-VJP,
-  leaf-VJP, and block-local `while/cond` scan/switch shells
+  leaf-VJP, block-local `while/cond` scan/switch shells, and the compile-stable
+  no-checkpoint/remat-owned outward block custom-VJP retry
 - the next viable `P3` attempt likely needs one stronger primitive/sharding
-  boundary below block-local control flow, not another outward wrapper
+  boundary below generic block/module shell, not another outward wrapper
 
 ## Anti-Goals
 
@@ -61,6 +62,8 @@ Do not spend mainline budget on:
 - another `S3` refresh without tooling changes
 - another near-identical `A3` retry
 - same-boundary GDN solver/tape/kernel tweaks
+- another outward fixed-block custom-VJP wrapper on the same `HackableDecoderBlock`
+  boundary
 - CE side-arms unless attribution points back to CE again
 
 ## Source Of Truth
