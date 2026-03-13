@@ -3164,7 +3164,18 @@ def _run_xprof_compare_remote(
             if stdout_text:
                 sys.stdout.write(stdout_text + ("\n" if not stdout_text.endswith("\n") else ""))
             raise SystemExit(proc.returncode)
-        return json.loads(stdout_text)
+        if stdout_text:
+            try:
+                return json.loads(stdout_text)
+            except json.JSONDecodeError:
+                pass
+
+        with tempfile.TemporaryDirectory(prefix="gdnctl-xprof-") as temp_dir:
+            local_output_path = Path(temp_dir) / "xprof_compare.json"
+            download_output_cmd = ["scp", f"{host_alias}:{remote_output_path}", str(local_output_path)]
+            if _run(download_output_cmd, check=False).returncode != 0:
+                raise SystemExit(1)
+            return json.loads(local_output_path.read_text(encoding="utf-8"))
     finally:
         if not keep_remote:
             _run(["ssh", host_alias, "rm", "-rf", remote_stage_parent], check=False)
@@ -3428,19 +3439,27 @@ def cmd_xprof_compare_runs(args: argparse.Namespace) -> int:
     from marin.profiling import download_latest_profile_artifact_for_run
 
     download_root = Path(args.download_root).resolve() if args.download_root is not None else None
+    before_download_root = download_root / "before" if download_root is not None else None
+    after_download_root = download_root / "after" if download_root is not None else None
+    if before_download_root is not None:
+        shutil.rmtree(before_download_root, ignore_errors=True)
+        before_download_root.mkdir(parents=True, exist_ok=True)
+    if after_download_root is not None:
+        shutil.rmtree(after_download_root, ignore_errors=True)
+        after_download_root.mkdir(parents=True, exist_ok=True)
     before_download = download_latest_profile_artifact_for_run(
         args.before_run_target,
         entity=args.entity,
         project=args.project,
         alias=args.alias,
-        download_root=download_root,
+        download_root=before_download_root,
     )
     after_download = download_latest_profile_artifact_for_run(
         args.after_run_target,
         entity=args.entity,
         project=args.project,
         alias=args.alias,
-        download_root=download_root,
+        download_root=after_download_root,
     )
 
     before_xplane = _find_xplane_pb(before_download.artifact_dir)

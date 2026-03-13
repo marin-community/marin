@@ -8214,3 +8214,231 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
     - the backward/custom-VJP contract,
     - and the sharding/layout contract.
   - Reject more same-boundary GDN-local work unless it materially cuts `hybrid_generic_shell_delta_budget_ms` or `interaction_remainder_ms`.
+
+### Iteration 93 - Coverage Slot S3 / xprof-backed hybrid-specific shell delta refresh on the current head (validated, attribution-only)
+
+- Coverage slot: `S3`
+- Change class: `decoder shell attribution`
+- Why this is mainline-worthy now:
+  - The latest validated log entry (Iteration 92) already established the summary-based `S3` shell delta, but the current head `67002a1f0dc30111c63a04f3cbc09ea8a54238f4` added unvalidated xprof-backed shell attribution that had not been exercised end-to-end.
+  - Running `S3` again on this head is higher information than `L3` or `P3` because it sharpens the mainline budget first and avoids steering a fixed-4-layer prototype against stale or summary-only shell accounting.
+  - The smallest necessary executable change was a harness fix: `gdnctl xprof-compare-runs` needed isolated before/after artifact staging and a robust remote JSON retrieval fallback before it could produce a real matched XPlane comparison.
+
+- Codex loop iteration: `1 / 10`
+- Date: `2026-03-13T00:19:12Z`
+- Starting commit: `67002a1f0dc30111c63a04f3cbc09ea8a54238f4`
+- Commit: `final validated result commit descended from 67002a1f0dc30111c63a04f3cbc09ea8a54238f4`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Latest validated current-head `S3` baseline from the log:
+    - `417ceefc3f70c7d69c0cab5ce0efaf41c64e9612`
+    - hybrid `throughput/mfu=6.038512`
+    - hybrid `throughput/tokens_per_second=195344.720926`
+    - hybrid `throughput/duration=0.167744487 s`
+    - hybrid `step_duration=167.744487 ms`
+    - control `throughput/duration=0.056965500 s`
+    - `train_path_budget_ms=42.671751`
+    - `hybrid_generic_shell_delta_budget_ms=20.134812`
+    - `interaction_remainder_ms=47.972424`
+  - The current head still lacked a validated xprof-backed matched pair for:
+    - `xprof_hybrid_generic_shell_delta_budget_ms`
+    - `xprof_dispatch_shard_shell_delta_ms`
+    - `xprof_ad_wrapper_shell_delta_ms`
+    - `xprof_layout_shell_delta_ms`
+    - `xprof_residual_add_shell_delta_ms`
+    - `xprof_idle_attributed_ms`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot S3 (selected):** validate the new xprof-backed matched hybrid-vs-attention shell accounting on the current head (`highest information`, `low implementation risk`, `directly unlocks L3/P3 targeting`).
+  2. **Coverage slot L3:** build the fixed `3 GDN + 1 attention` block skeleton with manual/custom VJP and explicit sharding (`medium upside`, `high correctness risk`, `lower information before xprof is validated`).
+  3. **Coverage slot P3:** attempt the first fixed-4-layer prototype with bespoke backward and explicit sharding (`highest upside`, `highest regression risk`, `too easy to steer against incomplete shell accounting`).
+
+- Selected slot rationale:
+  - `S3` remains the best mainline use of this iteration because the current head already contains the xprof attribution code, and validating that path produces new actionable budgets without another wrong-boundary model change.
+  - `L3` and `P3` stay next in line, but they should target the now-validated `dispatch/shard` and `AD/wrapper` shell families rather than the coarse decoder prefix family.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - Why CE stayed fixed:
+    - This is not a CE side-arm, and the fresh matched pair again kept CE bounded rather than re-implicating CE as the main unresolved wall.
+
+- Expected effect on `step_duration_ms`:
+  - approximately flat near the current `~167.7-167.9 ms` hybrid regime because this is an attribution iteration, not a performance candidate.
+- Expected effect on `upper_bound_gap_ms`:
+  - approximately flat near `~110-111 ms` on a fresh matched pair.
+- Expected effect on `hybrid_generic_shell_delta_budget_ms`:
+  - approximately flat around `~20 ms`, but now with validated xprof-backed family splits on top.
+- Expected effect on `gap_explained_by_hybrid_generic_shell_delta`:
+  - approximately high-teens share of the matched hybrid-vs-attention gap in the summary-based view.
+- Expected effect on `train_path_budget_ms`:
+  - approximately flat near `~42.7 ms`.
+- Expected effect on `interaction_remainder_ms`:
+  - approximately flat in the high-`47 ms` range.
+- Expected effect on `remainder_budget_ms`:
+  - approximately flat near `~125 ms`.
+- Reject if `step_duration_ms` does not improve? **No for iteration validity; yes for promotion.**
+  - This is an attribution-only `S3` slot whose value is improved shell accounting, not a speed claim.
+- Reject if `hybrid_generic_shell_delta_budget_ms` stays flat / grows? **No for iteration validity; yes for promotion.**
+  - The point here is to measure the current-head shell delta cleanly and add xprof-backed splits.
+- Reject if `interaction_remainder_ms` grows? **No for iteration validity; yes for promotion.**
+  - A larger remainder would block promotion, but it would not invalidate a higher-information attribution result.
+
+- Change summary:
+  - Fixed `scripts/gdn/gdnctl.py` so `xprof-compare-runs` stages before/after W&B artifacts into isolated download roots instead of letting both runs share one `.xplane.pb` discovery tree.
+  - Added a fallback in remote xprof compare execution that SCPs the generated JSON result back to the local host when SSH stdout is empty or noisy.
+  - Added a regression test covering the distinct download roots and the remote-JSON fallback path.
+  - No model, kernel, or benchmark math changed.
+
+- Correctness checks:
+  - Local xprof sanity:
+    - `uv run --with pytest-timeout pytest scripts/gdn/tests/test_gdnctl_xprof.py scripts/gdn/tests/test_gdnctl_summary_attribution.py tests/profiling/test_xprof_analysis.py`
+    - result: `15 passed in 0.59s`
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: `88 passed, 2 skipped in 228.01s (0:03:48)`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - Fresh hybrid rerun:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_s3_i93_hybrid_xprof --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s3_i93_hybrid_xprof_gdn3of4_130m_ch128_seg16_20step-a7ae2f`
+    - profiler summary: `scratch/gdn_s3_i93_hybrid_xprof_summary_200.json`
+  - Fresh attention-only control:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_s3_i93_attn_xprof --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s3_i93_attn_xprof_attnonly_130m_ch128_seg16_20steps-6c4c59`
+    - profiler summary: `scratch/gdn_s3_i93_attn_xprof_summary_200.json`
+  - Matched XPlane comparison:
+    - `uv run python scripts/gdn/gdnctl.py xprof-compare-runs --cluster us-east5-a --tpu-name calvinxu-gdn --before-run-target https://wandb.ai/marin-community/marin/runs/gdn_s3_i93_attn_xprof_attnonly_130m_ch128_seg16_20steps-6c4c59 --after-run-target https://wandb.ai/marin-community/marin/runs/gdn_s3_i93_hybrid_xprof_gdn3of4_130m_ch128_seg16_20step-a7ae2f --remote-stage-dir .agents/xprof_compare/gdn_s3_i93 --output scratch/gdn_s3_i93_xprof_compare.json`
+    - artifact: `scratch/gdn_s3_i93_xprof_compare.json`
+  - Combined attribution artifact:
+    - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_s3_i93_hybrid_xprof_summary_200.json --baseline-summary scratch/gdn_s3_i93_attn_xprof_summary_200.json --step-duration-ms 167.79337499974645 --baseline-step-duration-ms 57.2568269999465 --upper-bound-step-ms 57.2568269999465 --gdn-layer-fraction 0.833333 --baseline-gdn-layer-fraction 0.0 --gdn-layers-per-block 3 --baseline-gdn-layers-per-block 0 --gdn-block-size 4 --baseline-gdn-block-size 4 --xprof-compare-json scratch/gdn_s3_i93_xprof_compare.json --output scratch/gdn_s3_i93_attribution.json`
+    - artifact: `scratch/gdn_s3_i93_attribution.json`
+  - Throughput metrics use the required history-window median over steps `10-18` (`9` points).
+
+- Refreshed `S3` attribution metrics (fresh attention-only control -> fresh hybrid rerun):
+  - `CE backend selected: pallas_tpu -> pallas_tpu`
+  - `CE bwd mode: pallas -> pallas`
+  - `gdn_layer_fraction: 0.000000 -> 0.833333`
+  - `Forward closed-call: 0.000000 ms -> 20.663477 ms`
+  - `Backward closed-call: 0.000000 ms -> 13.128558 ms`
+  - `while: 8.561949 ms -> 8.889455 ms`
+  - `conditional: 0.001177 ms -> 0.001404 ms`
+  - `CE-attributed while: 8.561949 ms -> 8.889455 ms`
+  - `Kernel budget: 0.000000 ms -> 33.792035 ms`
+  - `Control budget: 8.563126 ms -> 8.890858 ms`
+  - `Train-path budget: 8.563126 ms -> 42.682894 ms`
+  - `Decoder-layer shell budget: 20.161768 ms -> 20.388593 ms`
+  - `Hybrid generic shell delta budget: 0.000000 ms -> 20.103367 ms`
+  - `Dispatch/shard shell delta budget: 0.000000 ms -> 9.771419 ms`
+  - `AD/wrapper shell delta budget: 0.000000 ms -> 6.178290 ms`
+  - `AD shell budget: 0.000000 ms -> 6.978173 ms`
+  - `Sharding shell budget: 11.796024 ms -> 13.241332 ms`
+  - `Layout shell budget: 0.868022 ms -> 2.177870 ms`
+  - `Residual/add shell budget: 0.325079 ms -> 2.322353 ms`
+  - `xprof hybrid generic shell delta budget: 0.000000 ms -> 47.750288 ms`
+  - `xprof dispatch/shard shell delta budget: 0.000000 ms -> 31.572807 ms`
+  - `xprof AD/wrapper shell delta budget: 0.000000 ms -> 11.057602 ms`
+  - `xprof layout shell delta budget: 0.000000 ms -> 2.583071 ms`
+  - `xprof residual/add shell delta budget: 0.000000 ms -> 2.536807 ms`
+  - `xprof IDLE attributed remainder: 0.000000 ms -> 38.362912 ms`
+  - `Step duration: 57.256827 ms -> 167.793375 ms`
+  - `Remainder budget: 48.693701 ms -> 125.110481 ms`
+  - `Interaction remainder: 0.000000 ms -> 47.750288 ms`
+  - `Upper-bound gap: 0.000000 ms -> 110.536548 ms`
+  - `Gap explained by train-path: 0.00% -> 38.61%`
+  - `Gap explained by decoder-layer shell: 0.00% -> 18.45%`
+  - `Gap explained by hybrid generic shell delta: 0.00% -> 18.19%`
+  - `hybrid_generic_shell_delta_topk: dispatch_shard_shell HackableDecoderLayer/shard_map/pallas_call: +5.216361 ms; dispatch_shard_shell HackableDecoderLayer/closed_call/shard_map: +4.524626 ms; ad_wrapper_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: +1.997294 ms; layout_shell HackableDecoderLayer/reshape: +1.831305 ms; residual_add_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: +1.789590 ms`
+  - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call: 5.216361 ms; HackableDecoderLayer/closed_call/shard_map: 4.524626 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: 1.997294 ms; HackableDecoderLayer/reshape: 1.831305 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: 1.789590 ms`
+  - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call: 5.216361 ms; HackableDecoderLayer/closed_call/shard_map: 4.524626 ms; CE forward pallas_call 2.703008 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: 1.997294 ms; HackableDecoderLayer/reshape: 1.831305 ms`
+  - Hybrid `throughput/mfu=6.036753`, `throughput/tokens_per_second=195287.805612`, `throughput/duration=0.167793375 s`
+  - Control `throughput/mfu=21.308646`, `throughput/tokens_per_second=572298.566248`, `throughput/duration=0.057256827 s`
+
+- Interpretation:
+  - The fresh current-head matched pair is effectively stable versus Iteration 92 in the summary-based view:
+    - `step_duration_ms: 167.744487 -> 167.793375` (`+0.048888 ms`)
+    - `train_path_budget_ms: 42.671751 -> 42.682894` (`+0.011143 ms`)
+    - `hybrid_generic_shell_delta_budget_ms: 20.134812 -> 20.103367` (`-0.031445 ms`)
+    - `interaction_remainder_ms: 47.972424 -> 47.750288` (`-0.222136 ms`)
+    - this is a baseline-refresh attribution result, not a speedup.
+  - The validated current-head `S3` shell picture stays consistent:
+    - `dispatch/shard` remains the largest hybrid shell family,
+    - `AD/wrapper` remains second,
+    - `layout` and `residual/add` are visible but secondary.
+  - The new xprof-backed view strengthens the same ranking, with an important caveat:
+    - the xprof framework-family normalization distributes the measured `interaction_remainder_ms` across classified positive framework deltas only,
+    - on this pair that assigns the normalized remainder primarily to `dispatch/shard` (`31.572807 ms`) and `AD/wrapper` (`11.057602 ms`),
+    - while the independent op-profile category normalization still attributes `38.362912 ms` of the normalized remainder to `IDLE`, `5.116714 ms` to `custom-call`, and `1.620816 ms` to `all-gather`.
+    - This is evidence that the interaction remainder is still a shell/overlap problem, not a CE rebound.
+  - CE stayed bounded:
+    - `CE-attributed while` moved only `8.561949 -> 8.889455 ms`
+    - `CE forward pallas_call` stayed flat near `2.703 ms`
+  - Fresh vs governance-fixed upper bound:
+    - the fresh attention-only control landed at `57.256827 ms`, still faster than the fixed governance ceiling `57.860499 ms`,
+    - so the fresh matched-pair gap is `110.536548 ms`, while the gap against the fixed governance ceiling is `109.932876 ms`.
+  - Required shell questions answered:
+    - the current head now has a validated xprof-backed matched shell delta, not just a summary-based proxy,
+    - the largest actionable families remain `dispatch/shard` and `AD/wrapper`,
+    - the remainder still contains substantial idle/overlap behavior,
+    - another same-boundary GDN-local iteration would still be steering against the wrong budget.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `88 passed, 2 skipped in 228.01s (0:03:48)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `Forward closed-call: 0.000000 ms -> 20.663477 ms`
+    - `Backward closed-call: 0.000000 ms -> 13.128558 ms`
+    - `while: 8.561949 ms -> 8.889455 ms`
+    - `conditional: 0.001177 ms -> 0.001404 ms`
+    - `CE-attributed while: 8.561949 ms -> 8.889455 ms`
+    - `Kernel budget: 0.000000 ms -> 33.792035 ms`
+    - `Control budget: 8.563126 ms -> 8.890858 ms`
+    - `Train-path budget: 8.563126 ms -> 42.682894 ms`
+    - `Decoder-layer shell budget: 20.161768 ms -> 20.388593 ms`
+    - `Hybrid generic shell delta budget: 0.000000 ms -> 20.103367 ms`
+    - `Dispatch/shard shell delta budget: 0.000000 ms -> 9.771419 ms`
+    - `AD/wrapper shell delta budget: 0.000000 ms -> 6.178290 ms`
+    - `xprof hybrid generic shell delta budget: 0.000000 ms -> 47.750288 ms`
+    - `xprof dispatch/shard shell delta budget: 0.000000 ms -> 31.572807 ms`
+    - `xprof AD/wrapper shell delta budget: 0.000000 ms -> 11.057602 ms`
+    - `xprof layout shell delta budget: 0.000000 ms -> 2.583071 ms`
+    - `xprof residual/add shell delta budget: 0.000000 ms -> 2.536807 ms`
+    - `xprof IDLE attributed remainder: 0.000000 ms -> 38.362912 ms`
+    - `AD shell budget: 0.000000 ms -> 6.978173 ms`
+    - `Sharding shell budget: 11.796024 ms -> 13.241332 ms`
+    - `Layout shell budget: 0.868022 ms -> 2.177870 ms`
+    - `Residual/add shell budget: 0.325079 ms -> 2.322353 ms`
+    - `Step duration: 57.256827 ms -> 167.793375 ms`
+    - `Remainder budget: 48.693701 ms -> 125.110481 ms`
+    - `Interaction remainder: 0.000000 ms -> 47.750288 ms`
+    - `Upper-bound gap: 0.000000 ms -> 110.536548 ms`
+    - `Gap explained by train-path: 0.00% -> 38.61%`
+    - `Gap explained by decoder-layer shell: 0.00% -> 18.45%`
+    - `Gap explained by hybrid generic shell delta: 0.00% -> 18.19%`
+    - `hybrid_generic_shell_delta_topk: dispatch_shard_shell HackableDecoderLayer/shard_map/pallas_call: +5.216361 ms; dispatch_shard_shell HackableDecoderLayer/closed_call/shard_map: +4.524626 ms; ad_wrapper_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: +1.997294 ms; layout_shell HackableDecoderLayer/reshape: +1.831305 ms; residual_add_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: +1.789590 ms`
+    - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call: 5.216361 ms; HackableDecoderLayer/closed_call/shard_map: 4.524626 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: 1.997294 ms; HackableDecoderLayer/reshape: 1.831305 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: 1.789590 ms`
+    - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call: 5.216361 ms; HackableDecoderLayer/closed_call/shard_map: 4.524626 ms; CE forward pallas_call 2.703008 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: 1.997294 ms; HackableDecoderLayer/reshape: 1.831305 ms`
+    - `throughput/mfu=6.036753`, `throughput/tokens_per_second=195287.805612`, `throughput/duration=0.167793375 s`
+  - Governance:
+    - This is a validated `S3` attribution slot, so it is informative rather than promotable.
+    - CE stayed fixed at `pallas_tpu` + `pallas`.
+    - Rejected as a speedup candidate because `step_duration_ms` did not improve relative to the carried current-head baseline.
+    - Rejected as a speedup candidate because this iteration did not change the executable train path; it fixed attribution harnessing and refreshed the matched budgets.
+    - This is **not** `namespace-only / renamed-bucket progress`; the main value is the validated xprof-backed shell split and the harness fix that makes it reproducible.
+
+- Assessment: **validated, attribution-only, and high-information**. The current head now has a reproducible xprof-backed `S3` measurement on top of the summary-based shell delta: `42.682894 ms` tracked train path, `20.103367 ms` summary-based hybrid shell delta, and `47.750288 ms` interaction remainder, with xprof confirming that `dispatch/shard` and `AD/wrapper` dominate the classified remainder view. That keeps the next serious systems bet on `L3` or `P3` with manual backward and explicit sharding, aimed first at those two shell families.
+- Next bold hypothesis:
+  - Spend the next mainline iteration on `L3` or `P3`, with the fixed `3 GDN + 1 attention` block owning:
+    - the forward boundary,
+    - the backward/custom-VJP contract,
+    - and the sharding/layout contract.
+  - Make the first fixed-4-layer design/prototype explicitly beat `dispatch_shard_shell_delta_ms`, `ad_wrapper_shell_delta_ms`, and the remaining interaction remainder rather than chasing smaller same-boundary bucket names.
