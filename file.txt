@@ -1,712 +1,562 @@
-2026-03-13 00:20:08,379 INFO [stage0-Map] 2301/9105 complete, 128 in-flight, 6676 queued, 128 workers
-2026-03-13 00:20:13,380 INFO [stage0-Map] 2301/9105 complete, 128 in-flight, 6676 queued, 128 workers
-2026-03-13 00:20:18,381 INFO [stage0-Map] 2301/9105 complete, 128 in-flight, 6676 queued, 128 workers
-2026-03-13 00:20:23,382 INFO [stage0-Map] 2301/9105 complete, 128 in-flight, 6676 queued, 128 workers
-2026-03-13 00:20:28,383 INFO [stage0-Map] 2301/9105 complete, 128 in-flight, 6676 queued, 128 workers
-2026-03-13 00:20:33,384 INFO [stage0-Map] 2301/9105 complete, 128 in-flight, 6676 queued, 128 workers
-2026-03-13 00:20:37,891 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00050-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:20:37,892 INFO [shard 2370] Complete: 1 chunks produced
-2026-03-13 00:20:37,892 INFO [zephyr-levanter-cache-copy-5597e04e-workers-75] Task complete, reporting result for shard 2370
-2026-03-13 00:20:37,892 INFO [zephyr-levanter-cache-copy-5597e04e-workers-75] Executing task for shard 2429 (attempt 0)
-2026-03-13 00:20:37,892 INFO [shard 2429/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:20:37,893 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00025-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:20:37,997 INFO [stage0-Map] 2302/9105 tasks completed
-2026-03-13 00:20:38,385 INFO [stage0-Map] 2302/9105 complete, 128 in-flight, 6675 queued, 128 workers
-2026-03-13 00:20:43,386 INFO [stage0-Map] 2302/9105 complete, 128 in-flight, 6675 queued, 128 workers
-2026-03-13 00:20:47,788 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00015-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:20:47,790 INFO [shard 2335] Complete: 1 chunks produced
-2026-03-13 00:20:47,790 INFO [zephyr-levanter-cache-copy-5597e04e-workers-97] Task complete, reporting result for shard 2335
-2026-03-13 00:20:47,790 INFO [zephyr-levanter-cache-copy-5597e04e-workers-97] Executing task for shard 2430 (attempt 0)
-2026-03-13 00:20:47,790 INFO [shard 2430/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:20:47,791 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00026-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:20:48,387 INFO [stage0-Map] 2303/9105 complete, 128 in-flight, 6674 queued, 128 workers
-2026-03-13 00:20:48,546 INFO [stage0-Map] 2303/9105 tasks completed
-2026-03-13 00:20:53,389 INFO [stage0-Map] 2303/9105 complete, 128 in-flight, 6674 queued, 128 workers
-2026-03-13 00:20:58,390 INFO [stage0-Map] 2303/9105 complete, 128 in-flight, 6674 queued, 128 workers
-2026-03-13 00:21:03,391 INFO [stage0-Map] 2303/9105 complete, 128 in-flight, 6674 queued, 128 workers
-2026-03-13 00:21:08,392 INFO [stage0-Map] 2303/9105 complete, 128 in-flight, 6674 queued, 128 workers
-2026-03-13 00:21:13,393 INFO [stage0-Map] 2303/9105 complete, 128 in-flight, 6674 queued, 128 workers
-2026-03-13 00:21:17,613 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part02_02_train-00078-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:21:17,614 INFO [shard 2230] Complete: 1 chunks produced
-2026-03-13 00:21:17,614 INFO [zephyr-levanter-cache-copy-5597e04e-workers-96] Task complete, reporting result for shard 2230
-2026-03-13 00:21:17,615 INFO [zephyr-levanter-cache-copy-5597e04e-workers-96] Executing task for shard 2431 (attempt 0)
-2026-03-13 00:21:17,615 INFO [shard 2431/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:21:17,615 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00027-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:21:18,183 INFO [stage0-Map] 2304/9105 tasks completed
-2026-03-13 00:21:18,394 INFO [stage0-Map] 2304/9105 complete, 128 in-flight, 6673 queued, 128 workers
-2026-03-13 00:21:23,395 INFO [stage0-Map] 2304/9105 complete, 128 in-flight, 6673 queued, 128 workers
-2026-03-13 00:21:27,010 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00054-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:21:27,012 INFO [shard 2374] Complete: 1 chunks produced
-2026-03-13 00:21:27,012 INFO [zephyr-levanter-cache-copy-5597e04e-workers-37] Task complete, reporting result for shard 2374
-2026-03-13 00:21:27,012 INFO [zephyr-levanter-cache-copy-5597e04e-workers-37] Executing task for shard 2432 (attempt 0)
-2026-03-13 00:21:27,012 INFO [shard 2432/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:21:27,012 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00028-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:21:27,492 INFO [stage0-Map] 2305/9105 tasks completed
-2026-03-13 00:21:28,396 INFO [stage0-Map] 2305/9105 complete, 128 in-flight, 6672 queued, 128 workers
-2026-03-13 00:21:33,397 INFO [stage0-Map] 2305/9105 complete, 128 in-flight, 6672 queued, 128 workers
-2026-03-13 00:21:38,398 INFO [stage0-Map] 2305/9105 complete, 128 in-flight, 6672 queued, 128 workers
-2026-03-13 00:21:43,399 INFO [stage0-Map] 2305/9105 complete, 128 in-flight, 6672 queued, 128 workers
-2026-03-13 00:21:48,400 INFO [stage0-Map] 2305/9105 complete, 128 in-flight, 6672 queued, 128 workers
-2026-03-13 00:21:53,401 INFO [stage0-Map] 2305/9105 complete, 128 in-flight, 6672 queued, 128 workers
-2026-03-13 00:21:56,487 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_02_train-00057-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:21:56,488 INFO [shard 2293] Complete: 1 chunks produced
-2026-03-13 00:21:56,488 INFO [zephyr-levanter-cache-copy-5597e04e-workers-50] Task complete, reporting result for shard 2293
-2026-03-13 00:21:56,489 INFO [zephyr-levanter-cache-copy-5597e04e-workers-50] Executing task for shard 2433 (attempt 0)
-2026-03-13 00:21:56,489 INFO [shard 2433/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:21:56,489 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00029-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:21:56,759 INFO [stage0-Map] 2306/9105 tasks completed
-2026-03-13 00:21:58,403 INFO [stage0-Map] 2306/9105 complete, 128 in-flight, 6671 queued, 128 workers
-2026-03-13 00:22:03,404 INFO [stage0-Map] 2306/9105 complete, 128 in-flight, 6671 queued, 128 workers
-2026-03-13 00:22:08,405 INFO [stage0-Map] 2306/9105 complete, 128 in-flight, 6671 queued, 128 workers
-2026-03-13 00:22:13,406 INFO [stage0-Map] 2306/9105 complete, 128 in-flight, 6671 queued, 128 workers
-2026-03-13 00:22:18,407 INFO [stage0-Map] 2306/9105 complete, 128 in-flight, 6671 queued, 128 workers
-2026-03-13 00:22:23,408 INFO [stage0-Map] 2306/9105 complete, 128 in-flight, 6671 queued, 128 workers
-2026-03-13 00:22:27,175 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00027-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:22:27,177 INFO [shard 2347] Complete: 1 chunks produced
-2026-03-13 00:22:27,177 INFO [zephyr-levanter-cache-copy-5597e04e-workers-24] Task complete, reporting result for shard 2347
-2026-03-13 00:22:27,177 INFO [zephyr-levanter-cache-copy-5597e04e-workers-24] Executing task for shard 2434 (attempt 0)
-2026-03-13 00:22:27,177 INFO [shard 2434/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:22:27,177 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00030-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:22:27,341 INFO [stage0-Map] 2307/9105 tasks completed
-2026-03-13 00:22:28,409 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:22:33,411 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:22:38,412 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:22:43,413 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:22:48,414 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:22:53,415 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:22:58,416 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:23:03,418 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:23:08,419 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:23:13,420 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:23:18,421 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:23:23,422 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:23:28,423 INFO [stage0-Map] 2307/9105 complete, 128 in-flight, 6670 queued, 128 workers
-2026-03-13 00:23:30,098 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00013-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:23:30,099 INFO [shard 2333] Complete: 1 chunks produced
-2026-03-13 00:23:30,099 INFO [zephyr-levanter-cache-copy-5597e04e-workers-111] Task complete, reporting result for shard 2333
-2026-03-13 00:23:30,100 INFO [zephyr-levanter-cache-copy-5597e04e-workers-111] Executing task for shard 2435 (attempt 0)
-2026-03-13 00:23:30,100 INFO [shard 2435/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:23:30,100 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00031-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:23:30,747 INFO [stage0-Map] 2308/9105 tasks completed
-2026-03-13 00:23:33,424 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:23:38,425 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:23:43,426 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:23:48,427 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:23:53,428 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:23:58,429 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:24:03,430 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:24:08,431 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:24:13,432 INFO [stage0-Map] 2308/9105 complete, 128 in-flight, 6669 queued, 128 workers
-2026-03-13 00:24:18,114 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00053-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:24:18,115 INFO [shard 2373] Complete: 1 chunks produced
-2026-03-13 00:24:18,115 INFO [zephyr-levanter-cache-copy-5597e04e-workers-46] Task complete, reporting result for shard 2373
-2026-03-13 00:24:18,116 INFO [zephyr-levanter-cache-copy-5597e04e-workers-46] Executing task for shard 2436 (attempt 0)
-2026-03-13 00:24:18,116 INFO [shard 2436/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:24:18,116 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00032-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:24:18,434 INFO [stage0-Map] 2309/9105 complete, 128 in-flight, 6668 queued, 128 workers
-2026-03-13 00:24:18,780 INFO [stage0-Map] 2309/9105 tasks completed
-2026-03-13 00:24:23,435 INFO [stage0-Map] 2309/9105 complete, 128 in-flight, 6668 queued, 128 workers
-2026-03-13 00:24:28,436 INFO [stage0-Map] 2309/9105 complete, 128 in-flight, 6668 queued, 128 workers
-2026-03-13 00:24:33,437 INFO [stage0-Map] 2309/9105 complete, 128 in-flight, 6668 queued, 128 workers
-2026-03-13 00:24:38,438 INFO [stage0-Map] 2309/9105 complete, 128 in-flight, 6668 queued, 128 workers
-2026-03-13 00:24:43,439 INFO [stage0-Map] 2309/9105 complete, 128 in-flight, 6668 queued, 128 workers
-2026-03-13 00:24:46,646 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00079-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:24:46,647 INFO [shard 2399] Complete: 1 chunks produced
-2026-03-13 00:24:46,647 INFO [zephyr-levanter-cache-copy-5597e04e-workers-107] Task complete, reporting result for shard 2399
-2026-03-13 00:24:46,648 INFO [zephyr-levanter-cache-copy-5597e04e-workers-107] Executing task for shard 2437 (attempt 0)
-2026-03-13 00:24:46,648 INFO [shard 2437/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:24:46,648 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00033-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:24:47,490 INFO [stage0-Map] 2310/9105 tasks completed
-2026-03-13 00:24:48,440 INFO [stage0-Map] 2310/9105 complete, 128 in-flight, 6667 queued, 128 workers
-2026-03-13 00:24:53,441 INFO [stage0-Map] 2310/9105 complete, 128 in-flight, 6667 queued, 128 workers
-2026-03-13 00:24:58,442 INFO [stage0-Map] 2310/9105 complete, 128 in-flight, 6667 queued, 128 workers
-2026-03-13 00:25:03,443 INFO [stage0-Map] 2310/9105 complete, 128 in-flight, 6667 queued, 128 workers
-2026-03-13 00:25:06,960 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00018-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:25:06,961 INFO [shard 2338] Complete: 1 chunks produced
-2026-03-13 00:25:06,961 INFO [zephyr-levanter-cache-copy-5597e04e-workers-33] Task complete, reporting result for shard 2338
-2026-03-13 00:25:06,962 INFO [zephyr-levanter-cache-copy-5597e04e-workers-33] Executing task for shard 2438 (attempt 0)
-2026-03-13 00:25:06,962 INFO [shard 2438/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:25:06,962 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00034-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:25:06,983 INFO [stage0-Map] 2311/9105 tasks completed
-2026-03-13 00:25:07,497 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00048-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:25:07,498 INFO [shard 2368] Complete: 1 chunks produced
-2026-03-13 00:25:07,498 INFO [zephyr-levanter-cache-copy-5597e04e-workers-91] Task complete, reporting result for shard 2368
-2026-03-13 00:25:07,499 INFO [zephyr-levanter-cache-copy-5597e04e-workers-91] Executing task for shard 2439 (attempt 0)
-2026-03-13 00:25:07,499 INFO [shard 2439/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:25:07,499 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00035-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:25:07,605 INFO [stage0-Map] 2312/9105 tasks completed
-2026-03-13 00:25:08,444 INFO [stage0-Map] 2312/9105 complete, 128 in-flight, 6665 queued, 128 workers
-2026-03-13 00:25:13,445 INFO [stage0-Map] 2312/9105 complete, 128 in-flight, 6665 queued, 128 workers
-2026-03-13 00:25:18,447 INFO [stage0-Map] 2312/9105 complete, 128 in-flight, 6665 queued, 128 workers
-2026-03-13 00:25:23,448 INFO [stage0-Map] 2312/9105 complete, 128 in-flight, 6665 queued, 128 workers
-2026-03-13 00:25:28,449 INFO [stage0-Map] 2312/9105 complete, 128 in-flight, 6665 queued, 128 workers
-2026-03-13 00:25:33,450 INFO [stage0-Map] 2312/9105 complete, 128 in-flight, 6665 queued, 128 workers
-2026-03-13 00:25:36,774 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00072-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:25:36,775 INFO [shard 2392] Complete: 1 chunks produced
-2026-03-13 00:25:36,775 INFO [zephyr-levanter-cache-copy-5597e04e-workers-19] Task complete, reporting result for shard 2392
-2026-03-13 00:25:36,775 INFO [zephyr-levanter-cache-copy-5597e04e-workers-19] Executing task for shard 2440 (attempt 0)
-2026-03-13 00:25:36,775 INFO [shard 2440/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:25:36,775 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00036-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:25:36,902 INFO [stage0-Map] 2313/9105 tasks completed
-2026-03-13 00:25:38,451 INFO [stage0-Map] 2313/9105 complete, 128 in-flight, 6664 queued, 128 workers
-2026-03-13 00:25:43,452 INFO [stage0-Map] 2313/9105 complete, 128 in-flight, 6664 queued, 128 workers
-2026-03-13 00:25:48,453 INFO [stage0-Map] 2313/9105 complete, 128 in-flight, 6664 queued, 128 workers
-2026-03-13 00:25:53,455 INFO [stage0-Map] 2313/9105 complete, 128 in-flight, 6664 queued, 128 workers
-2026-03-13 00:25:56,953 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_01_train-00039-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:25:56,956 INFO [shard 2275] Complete: 1 chunks produced
-2026-03-13 00:25:56,956 INFO [zephyr-levanter-cache-copy-5597e04e-workers-42] Task complete, reporting result for shard 2275
-2026-03-13 00:25:56,956 INFO [zephyr-levanter-cache-copy-5597e04e-workers-42] Executing task for shard 2441 (attempt 0)
-2026-03-13 00:25:56,956 INFO [shard 2441/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:25:56,956 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00037-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:25:57,493 INFO [stage0-Map] 2314/9105 tasks completed
-2026-03-13 00:25:58,456 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:03,457 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:08,458 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:13,459 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:18,460 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:23,461 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:28,462 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:33,464 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:38,465 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:43,466 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:48,467 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:53,468 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:26:58,469 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:27:03,470 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:27:08,472 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:27:13,473 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:27:18,474 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:27:23,475 INFO [stage0-Map] 2314/9105 complete, 128 in-flight, 6663 queued, 128 workers
-2026-03-13 00:27:27,502 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00044-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:27:27,503 INFO [shard 2364] Complete: 1 chunks produced
-2026-03-13 00:27:27,503 INFO [zephyr-levanter-cache-copy-5597e04e-workers-29] Task complete, reporting result for shard 2364
-2026-03-13 00:27:27,503 INFO [zephyr-levanter-cache-copy-5597e04e-workers-29] Executing task for shard 2442 (attempt 0)
-2026-03-13 00:27:27,503 INFO [shard 2442/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:27:27,504 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00038-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:27:28,206 INFO [stage0-Map] 2315/9105 tasks completed
-2026-03-13 00:27:28,476 INFO [stage0-Map] 2315/9105 complete, 128 in-flight, 6662 queued, 128 workers
-2026-03-13 00:27:33,477 INFO [stage0-Map] 2315/9105 complete, 128 in-flight, 6662 queued, 128 workers
-2026-03-13 00:27:36,568 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00004-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:27:36,569 INFO [shard 2408] Complete: 1 chunks produced
-2026-03-13 00:27:36,569 INFO [zephyr-levanter-cache-copy-5597e04e-workers-35] Task complete, reporting result for shard 2408
-2026-03-13 00:27:36,569 INFO [zephyr-levanter-cache-copy-5597e04e-workers-35] Executing task for shard 2443 (attempt 0)
-2026-03-13 00:27:36,570 INFO [shard 2443/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:27:36,570 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00039-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:27:37,520 INFO [stage0-Map] 2316/9105 tasks completed
-2026-03-13 00:27:38,479 INFO [stage0-Map] 2316/9105 complete, 128 in-flight, 6661 queued, 128 workers
-2026-03-13 00:27:43,480 INFO [stage0-Map] 2316/9105 complete, 128 in-flight, 6661 queued, 128 workers
-2026-03-13 00:27:48,481 INFO [stage0-Map] 2316/9105 complete, 128 in-flight, 6661 queued, 128 workers
-2026-03-13 00:27:53,482 INFO [stage0-Map] 2316/9105 complete, 128 in-flight, 6661 queued, 128 workers
-2026-03-13 00:27:57,585 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part01_02_train-00049-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:27:57,586 INFO [shard 2117] Complete: 1 chunks produced
-2026-03-13 00:27:57,586 INFO [zephyr-levanter-cache-copy-5597e04e-workers-2] Task complete, reporting result for shard 2117
-2026-03-13 00:27:57,587 INFO [zephyr-levanter-cache-copy-5597e04e-workers-2] Executing task for shard 2444 (attempt 0)
-2026-03-13 00:27:57,587 INFO [shard 2444/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:27:57,587 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00040-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:27:57,593 INFO [stage0-Map] 2317/9105 tasks completed
-2026-03-13 00:27:58,483 INFO [stage0-Map] 2317/9105 complete, 128 in-flight, 6660 queued, 128 workers
-2026-03-13 00:28:03,484 INFO [stage0-Map] 2317/9105 complete, 128 in-flight, 6660 queued, 128 workers
-2026-03-13 00:28:08,485 INFO [stage0-Map] 2317/9105 complete, 128 in-flight, 6660 queued, 128 workers
-2026-03-13 00:28:13,486 INFO [stage0-Map] 2317/9105 complete, 128 in-flight, 6660 queued, 128 workers
-2026-03-13 00:28:17,119 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part02_02_train-00050-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:28:17,120 INFO [shard 2202] Complete: 1 chunks produced
-2026-03-13 00:28:17,120 INFO [zephyr-levanter-cache-copy-5597e04e-workers-117] Task complete, reporting result for shard 2202
-2026-03-13 00:28:17,121 INFO [zephyr-levanter-cache-copy-5597e04e-workers-117] Executing task for shard 2445 (attempt 0)
-2026-03-13 00:28:17,121 INFO [shard 2445/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:28:17,121 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00041-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:28:17,836 INFO [stage0-Map] 2318/9105 tasks completed
-2026-03-13 00:28:18,488 INFO [stage0-Map] 2318/9105 complete, 128 in-flight, 6659 queued, 128 workers
-2026-03-13 00:28:23,489 INFO [stage0-Map] 2318/9105 complete, 128 in-flight, 6659 queued, 128 workers
-2026-03-13 00:28:26,473 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00003-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:28:26,475 INFO [shard 2407] Complete: 1 chunks produced
-2026-03-13 00:28:26,475 INFO [zephyr-levanter-cache-copy-5597e04e-workers-57] Task complete, reporting result for shard 2407
-2026-03-13 00:28:26,475 INFO [zephyr-levanter-cache-copy-5597e04e-workers-57] Executing task for shard 2446 (attempt 0)
-2026-03-13 00:28:26,475 INFO [shard 2446/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:28:26,475 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00042-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:28:26,490 INFO [stage0-Map] 2319/9105 tasks completed
-2026-03-13 00:28:28,490 INFO [stage0-Map] 2319/9105 complete, 128 in-flight, 6658 queued, 128 workers
-2026-03-13 00:28:33,491 INFO [stage0-Map] 2319/9105 complete, 128 in-flight, 6658 queued, 128 workers
-2026-03-13 00:28:38,492 INFO [stage0-Map] 2319/9105 complete, 128 in-flight, 6658 queued, 128 workers
-2026-03-13 00:28:43,493 INFO [stage0-Map] 2319/9105 complete, 128 in-flight, 6658 queued, 128 workers
-2026-03-13 00:28:46,468 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00017-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:28:46,469 INFO [shard 2421] Complete: 1 chunks produced
-2026-03-13 00:28:46,469 INFO [zephyr-levanter-cache-copy-5597e04e-workers-84] Task complete, reporting result for shard 2421
-2026-03-13 00:28:46,470 INFO [zephyr-levanter-cache-copy-5597e04e-workers-84] Executing task for shard 2447 (attempt 0)
-2026-03-13 00:28:46,470 INFO [shard 2447/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:28:46,470 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00043-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:28:46,836 INFO [stage0-Map] 2320/9105 tasks completed
-2026-03-13 00:28:48,494 INFO [stage0-Map] 2320/9105 complete, 128 in-flight, 6657 queued, 128 workers
-2026-03-13 00:28:53,496 INFO [stage0-Map] 2320/9105 complete, 128 in-flight, 6657 queued, 128 workers
-2026-03-13 00:28:58,497 INFO [stage0-Map] 2320/9105 complete, 128 in-flight, 6657 queued, 128 workers
-2026-03-13 00:29:03,498 INFO [stage0-Map] 2320/9105 complete, 128 in-flight, 6657 queued, 128 workers
-2026-03-13 00:29:07,096 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part02_01_train-00031-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:29:07,097 INFO [shard 2183] Complete: 1 chunks produced
-2026-03-13 00:29:07,097 INFO [zephyr-levanter-cache-copy-5597e04e-workers-99] Task complete, reporting result for shard 2183
-2026-03-13 00:29:07,097 INFO [zephyr-levanter-cache-copy-5597e04e-workers-99] Executing task for shard 2448 (attempt 0)
-2026-03-13 00:29:07,098 INFO [shard 2448/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:29:07,098 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00044-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:29:07,731 INFO [stage0-Map] 2321/9105 tasks completed
-2026-03-13 00:29:08,499 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:13,500 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:18,501 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:23,502 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:28,504 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:33,505 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:38,506 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:43,507 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:48,508 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:53,509 INFO [stage0-Map] 2321/9105 complete, 128 in-flight, 6656 queued, 128 workers
-2026-03-13 00:29:56,718 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00041-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:29:56,719 INFO [shard 2361] Complete: 1 chunks produced
-2026-03-13 00:29:56,719 INFO [zephyr-levanter-cache-copy-5597e04e-workers-123] Task complete, reporting result for shard 2361
-2026-03-13 00:29:56,720 INFO [zephyr-levanter-cache-copy-5597e04e-workers-123] Executing task for shard 2449 (attempt 0)
-2026-03-13 00:29:56,720 INFO [shard 2449/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:29:56,720 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00045-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:29:56,732 INFO [stage0-Map] 2322/9105 tasks completed
-2026-03-13 00:29:57,136 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00016-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:29:57,137 INFO [shard 2336] Complete: 1 chunks produced
-2026-03-13 00:29:57,137 INFO [zephyr-levanter-cache-copy-5597e04e-workers-86] Task complete, reporting result for shard 2336
-2026-03-13 00:29:57,137 INFO [zephyr-levanter-cache-copy-5597e04e-workers-86] Executing task for shard 2450 (attempt 0)
-2026-03-13 00:29:57,137 INFO [shard 2450/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:29:57,137 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00046-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:29:57,149 INFO [stage0-Map] 2323/9105 tasks completed
-2026-03-13 00:29:58,511 INFO [stage0-Map] 2323/9105 complete, 128 in-flight, 6654 queued, 128 workers
-2026-03-13 00:30:03,512 INFO [stage0-Map] 2323/9105 complete, 128 in-flight, 6654 queued, 128 workers
-2026-03-13 00:30:08,513 INFO [stage0-Map] 2323/9105 complete, 128 in-flight, 6654 queued, 128 workers
-2026-03-13 00:30:13,514 INFO [stage0-Map] 2323/9105 complete, 128 in-flight, 6654 queued, 128 workers
-2026-03-13 00:30:18,515 INFO [stage0-Map] 2323/9105 complete, 128 in-flight, 6654 queued, 128 workers
-2026-03-13 00:30:23,517 INFO [stage0-Map] 2323/9105 complete, 128 in-flight, 6654 queued, 128 workers
-2026-03-13 00:30:28,518 INFO [stage0-Map] 2323/9105 complete, 128 in-flight, 6654 queued, 128 workers
-2026-03-13 00:30:33,519 INFO [stage0-Map] 2323/9105 complete, 128 in-flight, 6654 queued, 128 workers
-2026-03-13 00:30:38,391 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part01_02_train-00052-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:30:38,393 INFO [shard 2120] Complete: 1 chunks produced
-2026-03-13 00:30:38,393 INFO [zephyr-levanter-cache-copy-5597e04e-workers-58] Task complete, reporting result for shard 2120
-2026-03-13 00:30:38,393 INFO [zephyr-levanter-cache-copy-5597e04e-workers-58] Executing task for shard 2451 (attempt 0)
-2026-03-13 00:30:38,393 INFO [shard 2451/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:30:38,393 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00047-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:30:38,520 INFO [stage0-Map] 2324/9105 complete, 128 in-flight, 6653 queued, 128 workers
-2026-03-13 00:30:38,611 INFO [stage0-Map] 2324/9105 tasks completed
-2026-03-13 00:30:43,521 INFO [stage0-Map] 2324/9105 complete, 128 in-flight, 6653 queued, 128 workers
-2026-03-13 00:30:48,522 INFO [stage0-Map] 2324/9105 complete, 128 in-flight, 6653 queued, 128 workers
-2026-03-13 00:30:53,524 INFO [stage0-Map] 2324/9105 complete, 128 in-flight, 6653 queued, 128 workers
-2026-03-13 00:30:56,757 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00019-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:30:56,758 INFO [shard 2423] Complete: 1 chunks produced
-2026-03-13 00:30:56,758 INFO [zephyr-levanter-cache-copy-5597e04e-workers-119] Task complete, reporting result for shard 2423
-2026-03-13 00:30:56,758 INFO [zephyr-levanter-cache-copy-5597e04e-workers-119] Executing task for shard 2452 (attempt 0)
-2026-03-13 00:30:56,758 INFO [shard 2452/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:30:56,758 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00048-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:30:57,579 INFO [stage0-Map] 2325/9105 tasks completed
-2026-03-13 00:30:58,525 INFO [stage0-Map] 2325/9105 complete, 128 in-flight, 6652 queued, 128 workers
-2026-03-13 00:31:03,526 INFO [stage0-Map] 2325/9105 complete, 128 in-flight, 6652 queued, 128 workers
-2026-03-13 00:31:08,527 INFO [stage0-Map] 2325/9105 complete, 128 in-flight, 6652 queued, 128 workers
-2026-03-13 00:31:13,528 INFO [stage0-Map] 2325/9105 complete, 128 in-flight, 6652 queued, 128 workers
-2026-03-13 00:31:18,529 INFO [stage0-Map] 2325/9105 complete, 128 in-flight, 6652 queued, 128 workers
-2026-03-13 00:31:23,530 INFO [stage0-Map] 2325/9105 complete, 128 in-flight, 6652 queued, 128 workers
-2026-03-13 00:31:26,361 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00076-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:31:26,362 INFO [shard 2396] Complete: 1 chunks produced
-2026-03-13 00:31:26,362 INFO [zephyr-levanter-cache-copy-5597e04e-workers-12] Task complete, reporting result for shard 2396
-2026-03-13 00:31:26,363 INFO [zephyr-levanter-cache-copy-5597e04e-workers-12] Executing task for shard 2453 (attempt 0)
-2026-03-13 00:31:26,363 INFO [shard 2453/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:31:26,363 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00049-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:31:27,355 INFO [stage0-Map] 2326/9105 tasks completed
-2026-03-13 00:31:28,531 INFO [stage0-Map] 2326/9105 complete, 128 in-flight, 6651 queued, 128 workers
-2026-03-13 00:31:33,533 INFO [stage0-Map] 2326/9105 complete, 128 in-flight, 6651 queued, 128 workers
-2026-03-13 00:31:38,534 INFO [stage0-Map] 2326/9105 complete, 128 in-flight, 6651 queued, 128 workers
-2026-03-13 00:31:43,535 INFO [stage0-Map] 2326/9105 complete, 128 in-flight, 6651 queued, 128 workers
-2026-03-13 00:31:46,928 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_01_train-00028-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:31:46,929 INFO [shard 2264] Complete: 1 chunks produced
-2026-03-13 00:31:46,929 INFO [zephyr-levanter-cache-copy-5597e04e-workers-88] Task complete, reporting result for shard 2264
-2026-03-13 00:31:46,929 INFO [zephyr-levanter-cache-copy-5597e04e-workers-88] Executing task for shard 2454 (attempt 0)
-2026-03-13 00:31:46,929 INFO [shard 2454/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:31:46,929 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00050-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:31:47,335 INFO [stage0-Map] 2327/9105 tasks completed
-2026-03-13 00:31:48,536 INFO [stage0-Map] 2327/9105 complete, 128 in-flight, 6650 queued, 128 workers
-2026-03-13 00:31:53,537 INFO [stage0-Map] 2327/9105 complete, 128 in-flight, 6650 queued, 128 workers
-2026-03-13 00:31:58,538 INFO [stage0-Map] 2327/9105 complete, 128 in-flight, 6650 queued, 128 workers
-2026-03-13 00:32:03,539 INFO [stage0-Map] 2327/9105 complete, 128 in-flight, 6650 queued, 128 workers
-2026-03-13 00:32:08,540 INFO [stage0-Map] 2327/9105 complete, 128 in-flight, 6650 queued, 128 workers
-2026-03-13 00:32:13,542 INFO [stage0-Map] 2327/9105 complete, 128 in-flight, 6650 queued, 128 workers
-2026-03-13 00:32:18,543 INFO [stage0-Map] 2327/9105 complete, 128 in-flight, 6650 queued, 128 workers
-2026-03-13 00:32:23,544 INFO [stage0-Map] 2327/9105 complete, 128 in-flight, 6650 queued, 128 workers
-2026-03-13 00:32:27,625 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00027-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:32:27,626 INFO [shard 2431] Complete: 1 chunks produced
-2026-03-13 00:32:27,626 INFO [zephyr-levanter-cache-copy-5597e04e-workers-96] Task complete, reporting result for shard 2431
-2026-03-13 00:32:27,627 INFO [zephyr-levanter-cache-copy-5597e04e-workers-96] Executing task for shard 2455 (attempt 0)
-2026-03-13 00:32:27,627 INFO [shard 2455/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:32:27,627 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00051-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:32:27,659 INFO [stage0-Map] 2328/9105 tasks completed
-2026-03-13 00:32:28,545 INFO [stage0-Map] 2328/9105 complete, 128 in-flight, 6649 queued, 128 workers
-2026-03-13 00:32:33,546 INFO [stage0-Map] 2328/9105 complete, 128 in-flight, 6649 queued, 128 workers
-2026-03-13 00:32:38,547 INFO [stage0-Map] 2328/9105 complete, 128 in-flight, 6649 queued, 128 workers
-2026-03-13 00:32:43,548 INFO [stage0-Map] 2328/9105 complete, 128 in-flight, 6649 queued, 128 workers
-2026-03-13 00:32:48,550 INFO [stage0-Map] 2328/9105 complete, 128 in-flight, 6649 queued, 128 workers
-2026-03-13 00:32:53,551 INFO [stage0-Map] 2328/9105 complete, 128 in-flight, 6649 queued, 128 workers
-2026-03-13 00:32:56,629 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00002-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:32:56,630 INFO [shard 2406] Complete: 1 chunks produced
-2026-03-13 00:32:56,630 INFO [zephyr-levanter-cache-copy-5597e04e-workers-68] Task complete, reporting result for shard 2406
-2026-03-13 00:32:56,631 INFO [zephyr-levanter-cache-copy-5597e04e-workers-68] Executing task for shard 2456 (attempt 0)
-2026-03-13 00:32:56,631 INFO [shard 2456/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:32:56,631 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00052-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:32:57,171 INFO [stage0-Map] 2329/9105 tasks completed
-2026-03-13 00:32:58,553 INFO [stage0-Map] 2329/9105 complete, 128 in-flight, 6648 queued, 128 workers
-2026-03-13 00:33:03,554 INFO [stage0-Map] 2329/9105 complete, 128 in-flight, 6648 queued, 128 workers
-2026-03-13 00:33:08,555 INFO [stage0-Map] 2329/9105 complete, 128 in-flight, 6648 queued, 128 workers
-2026-03-13 00:33:13,556 INFO [stage0-Map] 2329/9105 complete, 128 in-flight, 6648 queued, 128 workers
-2026-03-13 00:33:14,389 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_01_train-00004-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:33:14,390 INFO [shard 2240] Complete: 1 chunks produced
-2026-03-13 00:33:14,390 INFO [zephyr-levanter-cache-copy-5597e04e-workers-72] Task complete, reporting result for shard 2240
-2026-03-13 00:33:14,390 INFO [zephyr-levanter-cache-copy-5597e04e-workers-72] Executing task for shard 2457 (attempt 0)
-2026-03-13 00:33:14,391 INFO [shard 2457/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:33:14,391 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00053-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:33:15,178 INFO [stage0-Map] 2330/9105 tasks completed
-2026-03-13 00:33:18,557 INFO [stage0-Map] 2330/9105 complete, 128 in-flight, 6647 queued, 128 workers
-2026-03-13 00:33:19,072 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00010-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:33:19,073 INFO [shard 2330] Complete: 1 chunks produced
-2026-03-13 00:33:19,073 INFO [zephyr-levanter-cache-copy-5597e04e-workers-66] Task complete, reporting result for shard 2330
-2026-03-13 00:33:19,074 INFO [zephyr-levanter-cache-copy-5597e04e-workers-66] Executing task for shard 2458 (attempt 0)
-2026-03-13 00:33:19,074 INFO [shard 2458/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:33:19,074 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00054-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:33:19,747 INFO [stage0-Map] 2331/9105 tasks completed
-2026-03-13 00:33:23,558 INFO [stage0-Map] 2331/9105 complete, 128 in-flight, 6646 queued, 128 workers
-2026-03-13 00:33:28,559 INFO [stage0-Map] 2331/9105 complete, 128 in-flight, 6646 queued, 128 workers
-2026-03-13 00:33:33,560 INFO [stage0-Map] 2331/9105 complete, 128 in-flight, 6646 queued, 128 workers
-2026-03-13 00:33:37,782 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00024-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:33:37,784 INFO [shard 2428] Complete: 1 chunks produced
-2026-03-13 00:33:37,784 INFO [zephyr-levanter-cache-copy-5597e04e-workers-21] Task complete, reporting result for shard 2428
-2026-03-13 00:33:37,784 INFO [zephyr-levanter-cache-copy-5597e04e-workers-21] Executing task for shard 2459 (attempt 0)
-2026-03-13 00:33:37,784 INFO [shard 2459/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:33:37,784 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00055-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:33:38,064 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part02_02_train-00080-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:33:38,066 INFO [shard 2232] Complete: 1 chunks produced
-2026-03-13 00:33:38,066 INFO [zephyr-levanter-cache-copy-5597e04e-workers-10] Task complete, reporting result for shard 2232
-2026-03-13 00:33:38,066 INFO [zephyr-levanter-cache-copy-5597e04e-workers-10] Executing task for shard 2460 (attempt 0)
-2026-03-13 00:33:38,066 INFO [shard 2460/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:33:38,066 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00056-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:33:38,254 INFO [stage0-Map] 2333/9105 tasks completed
-2026-03-13 00:33:38,561 INFO [stage0-Map] 2333/9105 complete, 128 in-flight, 6644 queued, 128 workers
-2026-03-13 00:33:43,563 INFO [stage0-Map] 2333/9105 complete, 128 in-flight, 6644 queued, 128 workers
-2026-03-13 00:33:48,564 INFO [stage0-Map] 2333/9105 complete, 128 in-flight, 6644 queued, 128 workers
-2026-03-13 00:33:53,565 INFO [stage0-Map] 2333/9105 complete, 128 in-flight, 6644 queued, 128 workers
-2026-03-13 00:33:58,566 INFO [stage0-Map] 2333/9105 complete, 128 in-flight, 6644 queued, 128 workers
-2026-03-13 00:34:03,567 INFO [stage0-Map] 2333/9105 complete, 128 in-flight, 6644 queued, 128 workers
-2026-03-13 00:34:06,600 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_01_train-00019-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:34:06,601 INFO [shard 2255] Complete: 1 chunks produced
-2026-03-13 00:34:06,601 INFO [zephyr-levanter-cache-copy-5597e04e-workers-115] Task complete, reporting result for shard 2255
-2026-03-13 00:34:06,601 INFO [zephyr-levanter-cache-copy-5597e04e-workers-115] Executing task for shard 2461 (attempt 0)
-2026-03-13 00:34:06,601 INFO [shard 2461/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:34:06,602 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00057-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:34:06,746 INFO [stage0-Map] 2334/9105 tasks completed
-2026-03-13 00:34:06,956 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00035-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:34:06,957 INFO [shard 2355] Complete: 1 chunks produced
-2026-03-13 00:34:06,958 INFO [zephyr-levanter-cache-copy-5597e04e-workers-34] Task complete, reporting result for shard 2355
-2026-03-13 00:34:06,958 INFO [zephyr-levanter-cache-copy-5597e04e-workers-34] Executing task for shard 2462 (attempt 0)
-2026-03-13 00:34:06,958 INFO [shard 2462/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:34:06,958 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00058-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:34:06,969 INFO [stage0-Map] 2335/9105 tasks completed
-2026-03-13 00:34:08,568 INFO [stage0-Map] 2335/9105 complete, 128 in-flight, 6642 queued, 128 workers
-2026-03-13 00:34:13,569 INFO [stage0-Map] 2335/9105 complete, 128 in-flight, 6642 queued, 128 workers
-2026-03-13 00:34:18,571 INFO [stage0-Map] 2335/9105 complete, 128 in-flight, 6642 queued, 128 workers
-2026-03-13 00:34:23,572 INFO [stage0-Map] 2335/9105 complete, 128 in-flight, 6642 queued, 128 workers
-2026-03-13 00:34:26,603 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_01_train-00017-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:34:26,605 INFO [shard 2253] Complete: 1 chunks produced
-2026-03-13 00:34:26,605 INFO [zephyr-levanter-cache-copy-5597e04e-workers-4] Task complete, reporting result for shard 2253
-2026-03-13 00:34:26,605 INFO [zephyr-levanter-cache-copy-5597e04e-workers-4] Executing task for shard 2463 (attempt 0)
-2026-03-13 00:34:26,605 INFO [shard 2463/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:34:26,605 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00059-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:34:27,305 INFO [stage0-Map] 2336/9105 tasks completed
-2026-03-13 00:34:28,573 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:34:33,574 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:34:38,575 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:34:43,576 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:34:48,577 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:34:53,578 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:34:58,579 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:35:03,581 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:35:08,582 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:35:13,583 INFO [stage0-Map] 2336/9105 complete, 128 in-flight, 6641 queued, 128 workers
-2026-03-13 00:35:16,598 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00025-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:35:16,600 INFO [shard 2345] Complete: 1 chunks produced
-2026-03-13 00:35:16,600 INFO [zephyr-levanter-cache-copy-5597e04e-workers-13] Task complete, reporting result for shard 2345
-2026-03-13 00:35:16,600 INFO [zephyr-levanter-cache-copy-5597e04e-workers-13] Executing task for shard 2464 (attempt 0)
-2026-03-13 00:35:16,600 INFO [shard 2464/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:35:16,600 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00060-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:35:17,107 INFO [stage0-Map] 2337/9105 tasks completed
-2026-03-13 00:35:18,584 INFO [stage0-Map] 2337/9105 complete, 128 in-flight, 6640 queued, 128 workers
-2026-03-13 00:35:23,585 INFO [stage0-Map] 2337/9105 complete, 128 in-flight, 6640 queued, 128 workers
-2026-03-13 00:35:28,586 INFO [stage0-Map] 2337/9105 complete, 128 in-flight, 6640 queued, 128 workers
-2026-03-13 00:35:33,587 INFO [stage0-Map] 2337/9105 complete, 128 in-flight, 6640 queued, 128 workers
-2026-03-13 00:35:38,588 INFO [stage0-Map] 2337/9105 complete, 128 in-flight, 6640 queued, 128 workers
-2026-03-13 00:35:43,590 INFO [stage0-Map] 2337/9105 complete, 128 in-flight, 6640 queued, 128 workers
-2026-03-13 00:35:46,845 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00020-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:35:46,846 INFO [shard 2340] Complete: 1 chunks produced
-2026-03-13 00:35:46,846 INFO [zephyr-levanter-cache-copy-5597e04e-workers-18] Task complete, reporting result for shard 2340
-2026-03-13 00:35:46,847 INFO [zephyr-levanter-cache-copy-5597e04e-workers-18] Executing task for shard 2465 (attempt 0)
-2026-03-13 00:35:46,847 INFO [shard 2465/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:35:46,847 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00061-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:35:47,421 INFO [stage0-Map] 2338/9105 tasks completed
-2026-03-13 00:35:48,591 INFO [stage0-Map] 2338/9105 complete, 128 in-flight, 6639 queued, 128 workers
-2026-03-13 00:35:53,592 INFO [stage0-Map] 2338/9105 complete, 128 in-flight, 6639 queued, 128 workers
-2026-03-13 00:35:58,593 INFO [stage0-Map] 2338/9105 complete, 128 in-flight, 6639 queued, 128 workers
-2026-03-13 00:36:03,594 INFO [stage0-Map] 2338/9105 complete, 128 in-flight, 6639 queued, 128 workers
-2026-03-13 00:36:08,595 INFO [stage0-Map] 2338/9105 complete, 128 in-flight, 6639 queued, 128 workers
-2026-03-13 00:36:13,596 INFO [stage0-Map] 2338/9105 complete, 128 in-flight, 6639 queued, 128 workers
-2026-03-13 00:36:18,597 INFO [stage0-Map] 2338/9105 complete, 128 in-flight, 6639 queued, 128 workers
-2026-03-13 00:36:23,598 INFO [stage0-Map] 2338/9105 complete, 128 in-flight, 6639 queued, 128 workers
-2026-03-13 00:36:26,793 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_02_train-00049-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:36:26,794 INFO [shard 2285] Complete: 1 chunks produced
-2026-03-13 00:36:26,794 INFO [zephyr-levanter-cache-copy-5597e04e-workers-55] Task complete, reporting result for shard 2285
-2026-03-13 00:36:26,795 INFO [zephyr-levanter-cache-copy-5597e04e-workers-55] Executing task for shard 2466 (attempt 0)
-2026-03-13 00:36:26,795 INFO [shard 2466/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:36:26,795 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00062-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:36:27,004 INFO [stage0-Map] 2339/9105 tasks completed
-2026-03-13 00:36:28,599 INFO [stage0-Map] 2339/9105 complete, 128 in-flight, 6638 queued, 128 workers
-2026-03-13 00:36:33,601 INFO [stage0-Map] 2339/9105 complete, 128 in-flight, 6638 queued, 128 workers
-2026-03-13 00:36:37,218 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00029-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:36:37,220 INFO [shard 2349] Complete: 1 chunks produced
-2026-03-13 00:36:37,220 INFO [zephyr-levanter-cache-copy-5597e04e-workers-103] Task complete, reporting result for shard 2349
-2026-03-13 00:36:37,220 INFO [zephyr-levanter-cache-copy-5597e04e-workers-103] Executing task for shard 2467 (attempt 0)
-2026-03-13 00:36:37,220 INFO [shard 2467/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:36:37,220 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00063-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:36:37,718 INFO [stage0-Map] 2340/9105 tasks completed
-2026-03-13 00:36:38,602 INFO [stage0-Map] 2340/9105 complete, 128 in-flight, 6637 queued, 128 workers
-2026-03-13 00:36:43,603 INFO [stage0-Map] 2340/9105 complete, 128 in-flight, 6637 queued, 128 workers
-2026-03-13 00:36:48,604 INFO [stage0-Map] 2340/9105 complete, 128 in-flight, 6637 queued, 128 workers
-2026-03-13 00:36:53,605 INFO [stage0-Map] 2340/9105 complete, 128 in-flight, 6637 queued, 128 workers
-2026-03-13 00:36:58,607 INFO [stage0-Map] 2340/9105 complete, 128 in-flight, 6637 queued, 128 workers
-2026-03-13 00:37:03,608 INFO [stage0-Map] 2340/9105 complete, 128 in-flight, 6637 queued, 128 workers
-2026-03-13 00:37:08,609 INFO [stage0-Map] 2340/9105 complete, 128 in-flight, 6637 queued, 128 workers
-2026-03-13 00:37:13,610 INFO [stage0-Map] 2340/9105 complete, 128 in-flight, 6637 queued, 128 workers
-2026-03-13 00:37:16,851 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00083-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:37:16,852 INFO [shard 2403] Complete: 1 chunks produced
-2026-03-13 00:37:16,853 INFO [zephyr-levanter-cache-copy-5597e04e-workers-70] Task complete, reporting result for shard 2403
-2026-03-13 00:37:16,853 INFO [zephyr-levanter-cache-copy-5597e04e-workers-70] Executing task for shard 2468 (attempt 0)
-2026-03-13 00:37:16,853 INFO [shard 2468/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:37:16,853 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00064-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:37:17,129 INFO [stage0-Map] 2341/9105 tasks completed
-2026-03-13 00:37:18,611 INFO [stage0-Map] 2341/9105 complete, 128 in-flight, 6636 queued, 128 workers
-2026-03-13 00:37:23,613 INFO [stage0-Map] 2341/9105 complete, 128 in-flight, 6636 queued, 128 workers
-2026-03-13 00:37:28,614 INFO [stage0-Map] 2341/9105 complete, 128 in-flight, 6636 queued, 128 workers
-2026-03-13 00:37:33,615 INFO [stage0-Map] 2341/9105 complete, 128 in-flight, 6636 queued, 128 workers
-2026-03-13 00:37:38,616 INFO [stage0-Map] 2341/9105 complete, 128 in-flight, 6636 queued, 128 workers
-2026-03-13 00:37:43,617 INFO [stage0-Map] 2341/9105 complete, 128 in-flight, 6636 queued, 128 workers
-2026-03-13 00:37:46,688 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00073-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:37:46,689 INFO [shard 2393] Complete: 1 chunks produced
-2026-03-13 00:37:46,689 INFO [zephyr-levanter-cache-copy-5597e04e-workers-95] Task complete, reporting result for shard 2393
-2026-03-13 00:37:46,690 INFO [zephyr-levanter-cache-copy-5597e04e-workers-95] Executing task for shard 2469 (attempt 0)
-2026-03-13 00:37:46,690 INFO [shard 2469/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:37:46,690 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00065-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:37:46,923 INFO [stage0-Map] 2342/9105 tasks completed
-2026-03-13 00:37:48,618 INFO [stage0-Map] 2342/9105 complete, 128 in-flight, 6635 queued, 128 workers
-2026-03-13 00:37:53,619 INFO [stage0-Map] 2342/9105 complete, 128 in-flight, 6635 queued, 128 workers
-2026-03-13 00:37:58,621 INFO [stage0-Map] 2342/9105 complete, 128 in-flight, 6635 queued, 128 workers
-2026-03-13 00:38:03,622 INFO [stage0-Map] 2342/9105 complete, 128 in-flight, 6635 queued, 128 workers
-2026-03-13 00:38:08,146 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_02_train-00075-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:08,147 INFO [shard 2311] Complete: 1 chunks produced
-2026-03-13 00:38:08,147 INFO [zephyr-levanter-cache-copy-5597e04e-workers-74] Task complete, reporting result for shard 2311
-2026-03-13 00:38:08,148 INFO [zephyr-levanter-cache-copy-5597e04e-workers-74] Executing task for shard 2470 (attempt 0)
-2026-03-13 00:38:08,148 INFO [shard 2470/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:38:08,148 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00066-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:08,285 INFO [stage0-Map] 2343/9105 tasks completed
-2026-03-13 00:38:08,623 INFO [stage0-Map] 2343/9105 complete, 128 in-flight, 6634 queued, 128 workers
-2026-03-13 00:38:13,624 INFO [stage0-Map] 2343/9105 complete, 128 in-flight, 6634 queued, 128 workers
-2026-03-13 00:38:17,065 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part01_02_train-00081-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:17,066 INFO [shard 2149] Complete: 1 chunks produced
-2026-03-13 00:38:17,066 INFO [zephyr-levanter-cache-copy-5597e04e-workers-98] Task complete, reporting result for shard 2149
-2026-03-13 00:38:17,067 INFO [zephyr-levanter-cache-copy-5597e04e-workers-98] Executing task for shard 2471 (attempt 0)
-2026-03-13 00:38:17,067 INFO [shard 2471/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:38:17,067 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00067-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:17,816 INFO [stage0-Map] 2344/9105 tasks completed
-2026-03-13 00:38:18,625 INFO [stage0-Map] 2344/9105 complete, 128 in-flight, 6633 queued, 128 workers
-2026-03-13 00:38:23,626 INFO [stage0-Map] 2344/9105 complete, 128 in-flight, 6633 queued, 128 workers
-2026-03-13 00:38:28,332 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00063-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:28,333 INFO [shard 2383] Complete: 1 chunks produced
-2026-03-13 00:38:28,333 INFO [zephyr-levanter-cache-copy-5597e04e-workers-81] Task complete, reporting result for shard 2383
-2026-03-13 00:38:28,334 INFO [zephyr-levanter-cache-copy-5597e04e-workers-81] Executing task for shard 2472 (attempt 0)
-2026-03-13 00:38:28,334 INFO [shard 2472/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:38:28,334 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00068-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:28,396 INFO [stage0-Map] 2345/9105 tasks completed
-2026-03-13 00:38:28,541 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00071-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:28,542 INFO [shard 2391] Complete: 1 chunks produced
-2026-03-13 00:38:28,542 INFO [zephyr-levanter-cache-copy-5597e04e-workers-85] Task complete, reporting result for shard 2391
-2026-03-13 00:38:28,543 INFO [zephyr-levanter-cache-copy-5597e04e-workers-85] Executing task for shard 2473 (attempt 0)
-2026-03-13 00:38:28,543 INFO [shard 2473/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:38:28,543 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00069-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:28,627 INFO [stage0-Map] 2346/9105 complete, 128 in-flight, 6631 queued, 128 workers
-2026-03-13 00:38:28,632 INFO [stage0-Map] 2346/9105 tasks completed
-2026-03-13 00:38:33,628 INFO [stage0-Map] 2346/9105 complete, 128 in-flight, 6631 queued, 128 workers
-2026-03-13 00:38:38,629 INFO [stage0-Map] 2346/9105 complete, 128 in-flight, 6631 queued, 128 workers
-2026-03-13 00:38:43,630 INFO [stage0-Map] 2346/9105 complete, 128 in-flight, 6631 queued, 128 workers
-2026-03-13 00:38:48,631 INFO [stage0-Map] 2346/9105 complete, 128 in-flight, 6631 queued, 128 workers
-2026-03-13 00:38:53,632 INFO [stage0-Map] 2346/9105 complete, 128 in-flight, 6631 queued, 128 workers
-2026-03-13 00:38:57,395 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part02_01_train-00033-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:57,396 INFO [shard 2185] Complete: 1 chunks produced
-2026-03-13 00:38:57,396 INFO [zephyr-levanter-cache-copy-5597e04e-workers-49] Task complete, reporting result for shard 2185
-2026-03-13 00:38:57,397 INFO [zephyr-levanter-cache-copy-5597e04e-workers-49] Executing task for shard 2474 (attempt 0)
-2026-03-13 00:38:57,397 INFO [shard 2474/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:38:57,397 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00070-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:38:57,984 INFO [stage0-Map] 2347/9105 tasks completed
-2026-03-13 00:38:58,633 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:03,635 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:08,636 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:13,637 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:18,638 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:23,639 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:28,640 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:33,641 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:38,642 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:43,644 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:48,645 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:53,646 INFO [stage0-Map] 2347/9105 complete, 128 in-flight, 6630 queued, 128 workers
-2026-03-13 00:39:57,959 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00001-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:39:57,961 INFO [shard 2405] Complete: 1 chunks produced
-2026-03-13 00:39:57,961 INFO [zephyr-levanter-cache-copy-5597e04e-workers-47] Task complete, reporting result for shard 2405
-2026-03-13 00:39:57,961 INFO [zephyr-levanter-cache-copy-5597e04e-workers-47] Executing task for shard 2475 (attempt 0)
-2026-03-13 00:39:57,961 INFO [shard 2475/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:39:57,961 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00071-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:39:58,647 INFO [stage0-Map] 2348/9105 complete, 128 in-flight, 6629 queued, 128 workers
-2026-03-13 00:39:58,866 INFO [stage0-Map] 2348/9105 tasks completed
-2026-03-13 00:40:03,648 INFO [stage0-Map] 2348/9105 complete, 128 in-flight, 6629 queued, 128 workers
-2026-03-13 00:40:08,649 INFO [stage0-Map] 2348/9105 complete, 128 in-flight, 6629 queued, 128 workers
-2026-03-13 00:40:13,650 INFO [stage0-Map] 2348/9105 complete, 128 in-flight, 6629 queued, 128 workers
-2026-03-13 00:40:18,651 INFO [stage0-Map] 2348/9105 complete, 128 in-flight, 6629 queued, 128 workers
-2026-03-13 00:40:23,652 INFO [stage0-Map] 2348/9105 complete, 128 in-flight, 6629 queued, 128 workers
-2026-03-13 00:40:28,653 INFO [stage0-Map] 2348/9105 complete, 128 in-flight, 6629 queued, 128 workers
-2026-03-13 00:40:33,654 INFO [stage0-Map] 2348/9105 complete, 128 in-flight, 6629 queued, 128 workers
-2026-03-13 00:40:36,385 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_02_train-00060-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:40:36,386 INFO [shard 2296] Complete: 1 chunks produced
-2026-03-13 00:40:36,386 INFO [zephyr-levanter-cache-copy-5597e04e-workers-93] Task complete, reporting result for shard 2296
-2026-03-13 00:40:36,386 INFO [zephyr-levanter-cache-copy-5597e04e-workers-93] Executing task for shard 2476 (attempt 0)
-2026-03-13 00:40:36,386 INFO [shard 2476/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:40:36,387 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00072-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:40:36,978 INFO [stage0-Map] 2349/9105 tasks completed
-2026-03-13 00:40:38,655 INFO [stage0-Map] 2349/9105 complete, 128 in-flight, 6628 queued, 128 workers
-2026-03-13 00:40:43,656 INFO [stage0-Map] 2349/9105 complete, 128 in-flight, 6628 queued, 128 workers
-2026-03-13 00:40:47,453 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00046-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:40:47,454 INFO [shard 2366] Complete: 1 chunks produced
-2026-03-13 00:40:47,454 INFO [zephyr-levanter-cache-copy-5597e04e-workers-113] Task complete, reporting result for shard 2366
-2026-03-13 00:40:47,454 INFO [zephyr-levanter-cache-copy-5597e04e-workers-113] Executing task for shard 2477 (attempt 0)
-2026-03-13 00:40:47,454 INFO [shard 2477/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:40:47,455 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00073-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:40:48,322 INFO [stage0-Map] 2350/9105 tasks completed
-2026-03-13 00:40:48,658 INFO [stage0-Map] 2350/9105 complete, 128 in-flight, 6627 queued, 128 workers
-2026-03-13 00:40:49,567 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00016-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:40:49,568 INFO [shard 2420] Complete: 1 chunks produced
-2026-03-13 00:40:49,568 INFO [zephyr-levanter-cache-copy-5597e04e-workers-36] Task complete, reporting result for shard 2420
-2026-03-13 00:40:49,569 INFO [zephyr-levanter-cache-copy-5597e04e-workers-36] Executing task for shard 2478 (attempt 0)
-2026-03-13 00:40:49,569 INFO [shard 2478/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:40:49,569 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00074-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:40:49,895 INFO [stage0-Map] 2351/9105 tasks completed
-2026-03-13 00:40:53,659 INFO [stage0-Map] 2351/9105 complete, 128 in-flight, 6626 queued, 128 workers
-2026-03-13 00:40:58,660 INFO [stage0-Map] 2351/9105 complete, 128 in-flight, 6626 queued, 128 workers
-2026-03-13 00:41:03,661 INFO [stage0-Map] 2351/9105 complete, 128 in-flight, 6626 queued, 128 workers
-2026-03-13 00:41:08,662 INFO [stage0-Map] 2351/9105 complete, 128 in-flight, 6626 queued, 128 workers
-2026-03-13 00:41:13,663 INFO [stage0-Map] 2351/9105 complete, 128 in-flight, 6626 queued, 128 workers
-2026-03-13 00:41:18,320 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00049-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:41:18,321 INFO [shard 2453] Complete: 1 chunks produced
-2026-03-13 00:41:18,321 INFO [zephyr-levanter-cache-copy-5597e04e-workers-12] Task complete, reporting result for shard 2453
-2026-03-13 00:41:18,321 INFO [zephyr-levanter-cache-copy-5597e04e-workers-12] Executing task for shard 2479 (attempt 0)
-2026-03-13 00:41:18,321 INFO [shard 2479/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:41:18,322 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00075-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:41:18,502 INFO [stage0-Map] 2352/9105 tasks completed
-2026-03-13 00:41:18,589 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00078-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:41:18,590 INFO [shard 2398] Complete: 1 chunks produced
-2026-03-13 00:41:18,590 INFO [zephyr-levanter-cache-copy-5597e04e-workers-5] Task complete, reporting result for shard 2398
-2026-03-13 00:41:18,590 INFO [zephyr-levanter-cache-copy-5597e04e-workers-5] Executing task for shard 2480 (attempt 0)
-2026-03-13 00:41:18,591 INFO [shard 2480/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:41:18,591 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00076-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:41:18,620 INFO [stage0-Map] 2353/9105 tasks completed
-2026-03-13 00:41:18,664 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:41:23,665 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:41:28,667 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:41:33,668 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:41:38,669 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:41:43,670 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:41:48,671 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:41:53,672 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:41:58,673 INFO [stage0-Map] 2353/9105 complete, 128 in-flight, 6624 queued, 128 workers
-2026-03-13 00:42:00,245 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00009-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:42:00,246 INFO [shard 2413] Complete: 1 chunks produced
-2026-03-13 00:42:00,246 INFO [zephyr-levanter-cache-copy-5597e04e-workers-76] Task complete, reporting result for shard 2413
-2026-03-13 00:42:00,246 INFO [zephyr-levanter-cache-copy-5597e04e-workers-76] Executing task for shard 2481 (attempt 0)
-2026-03-13 00:42:00,246 INFO [shard 2481/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:42:00,247 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00077-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:42:00,811 INFO [stage0-Map] 2354/9105 tasks completed
-2026-03-13 00:42:03,675 INFO [stage0-Map] 2354/9105 complete, 128 in-flight, 6623 queued, 128 workers
-2026-03-13 00:42:08,676 INFO [stage0-Map] 2354/9105 complete, 128 in-flight, 6623 queued, 128 workers
-2026-03-13 00:42:13,677 INFO [stage0-Map] 2354/9105 complete, 128 in-flight, 6623 queued, 128 workers
-2026-03-13 00:42:18,678 INFO [stage0-Map] 2354/9105 complete, 128 in-flight, 6623 queued, 128 workers
-2026-03-13 00:42:23,679 INFO [stage0-Map] 2354/9105 complete, 128 in-flight, 6623 queued, 128 workers
-2026-03-13 00:42:28,681 INFO [stage0-Map] 2354/9105 complete, 128 in-flight, 6623 queued, 128 workers
-2026-03-13 00:42:33,682 INFO [stage0-Map] 2354/9105 complete, 128 in-flight, 6623 queued, 128 workers
-2026-03-13 00:42:36,330 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00014-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:42:36,331 INFO [shard 2418] Complete: 1 chunks produced
-2026-03-13 00:42:36,331 INFO [zephyr-levanter-cache-copy-5597e04e-workers-120] Task complete, reporting result for shard 2418
-2026-03-13 00:42:36,332 INFO [zephyr-levanter-cache-copy-5597e04e-workers-120] Executing task for shard 2482 (attempt 0)
-2026-03-13 00:42:36,332 INFO [shard 2482/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:42:36,332 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00078-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:42:36,441 INFO [stage0-Map] 2355/9105 tasks completed
-2026-03-13 00:42:38,683 INFO [stage0-Map] 2355/9105 complete, 128 in-flight, 6622 queued, 128 workers
-2026-03-13 00:42:43,684 INFO [stage0-Map] 2355/9105 complete, 128 in-flight, 6622 queued, 128 workers
-2026-03-13 00:42:48,686 INFO [stage0-Map] 2355/9105 complete, 128 in-flight, 6622 queued, 128 workers
-2026-03-13 00:42:50,900 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_02_train-00045-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:42:50,901 INFO [shard 2281] Complete: 1 chunks produced
-2026-03-13 00:42:50,901 INFO [zephyr-levanter-cache-copy-5597e04e-workers-25] Task complete, reporting result for shard 2281
-2026-03-13 00:42:50,902 INFO [zephyr-levanter-cache-copy-5597e04e-workers-25] Executing task for shard 2483 (attempt 0)
-2026-03-13 00:42:50,902 INFO [shard 2483/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:42:50,902 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00079-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:42:51,847 INFO [stage0-Map] 2356/9105 tasks completed
-2026-03-13 00:42:53,687 INFO [stage0-Map] 2356/9105 complete, 128 in-flight, 6621 queued, 128 workers
-2026-03-13 00:42:58,688 INFO [stage0-Map] 2356/9105 complete, 128 in-flight, 6621 queued, 128 workers
-2026-03-13 00:43:03,689 INFO [stage0-Map] 2356/9105 complete, 128 in-flight, 6621 queued, 128 workers
-2026-03-13 00:43:08,690 INFO [stage0-Map] 2356/9105 complete, 128 in-flight, 6621 queued, 128 workers
-2026-03-13 00:43:13,691 INFO [stage0-Map] 2356/9105 complete, 128 in-flight, 6621 queued, 128 workers
-2026-03-13 00:43:18,693 INFO [stage0-Map] 2356/9105 complete, 128 in-flight, 6621 queued, 128 workers
-2026-03-13 00:43:23,694 INFO [stage0-Map] 2356/9105 complete, 128 in-flight, 6621 queued, 128 workers
-2026-03-13 00:43:26,488 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_02_train-00080-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:43:26,490 INFO [shard 2400] Complete: 1 chunks produced
-2026-03-13 00:43:26,490 INFO [zephyr-levanter-cache-copy-5597e04e-workers-121] Task complete, reporting result for shard 2400
-2026-03-13 00:43:26,490 INFO [zephyr-levanter-cache-copy-5597e04e-workers-121] Executing task for shard 2484 (attempt 0)
-2026-03-13 00:43:26,490 INFO [shard 2484/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:43:26,491 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00080-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:43:27,160 INFO [stage0-Map] 2357/9105 tasks completed
-2026-03-13 00:43:28,695 INFO [stage0-Map] 2357/9105 complete, 128 in-flight, 6620 queued, 128 workers
-2026-03-13 00:43:33,696 INFO [stage0-Map] 2357/9105 complete, 128 in-flight, 6620 queued, 128 workers
-2026-03-13 00:43:37,580 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00043-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:43:37,581 INFO [shard 2363] Complete: 1 chunks produced
-2026-03-13 00:43:37,581 INFO [zephyr-levanter-cache-copy-5597e04e-workers-16] Task complete, reporting result for shard 2363
-2026-03-13 00:43:37,582 INFO [zephyr-levanter-cache-copy-5597e04e-workers-16] Executing task for shard 2485 (attempt 0)
-2026-03-13 00:43:37,582 INFO [shard 2485/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:43:37,582 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00081-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:43:37,815 INFO [stage0-Map] 2358/9105 tasks completed
-2026-03-13 00:43:38,698 INFO [stage0-Map] 2358/9105 complete, 128 in-flight, 6619 queued, 128 workers
-2026-03-13 00:43:43,699 INFO [stage0-Map] 2358/9105 complete, 128 in-flight, 6619 queued, 128 workers
-2026-03-13 00:43:48,700 INFO [stage0-Map] 2358/9105 complete, 128 in-flight, 6619 queued, 128 workers
-2026-03-13 00:43:53,701 INFO [stage0-Map] 2358/9105 complete, 128 in-flight, 6619 queued, 128 workers
-2026-03-13 00:43:58,702 INFO [stage0-Map] 2358/9105 complete, 128 in-flight, 6619 queued, 128 workers
-2026-03-13 00:44:03,704 INFO [stage0-Map] 2358/9105 complete, 128 in-flight, 6619 queued, 128 workers
-2026-03-13 00:44:07,287 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part03_01_train-00027-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:44:07,288 INFO [shard 2263] Complete: 1 chunks produced
-2026-03-13 00:44:07,288 INFO [zephyr-levanter-cache-copy-5597e04e-workers-43] Task complete, reporting result for shard 2263
-2026-03-13 00:44:07,289 INFO [zephyr-levanter-cache-copy-5597e04e-workers-43] Executing task for shard 2486 (attempt 0)
-2026-03-13 00:44:07,289 INFO [shard 2486/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:44:07,289 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00082-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:44:07,861 INFO [stage0-Map] 2359/9105 tasks completed
-2026-03-13 00:44:08,705 INFO [stage0-Map] 2359/9105 complete, 128 in-flight, 6618 queued, 128 workers
-2026-03-13 00:44:13,706 INFO [stage0-Map] 2359/9105 complete, 128 in-flight, 6618 queued, 128 workers
-2026-03-13 00:44:16,901 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_01_train-00010-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:44:16,903 INFO [shard 2414] Complete: 1 chunks produced
-2026-03-13 00:44:16,903 INFO [zephyr-levanter-cache-copy-5597e04e-workers-104] Task complete, reporting result for shard 2414
-2026-03-13 00:44:16,903 INFO [zephyr-levanter-cache-copy-5597e04e-workers-104] Executing task for shard 2487 (attempt 0)
-2026-03-13 00:44:16,903 INFO [shard 2487/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:44:16,903 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part05_02_train-00083-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:44:17,258 INFO [stage0-Map] 2360/9105 tasks completed
-2026-03-13 00:44:17,783 INFO Finished copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part04_01_train-00005-of-00084_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:44:17,784 INFO [shard 2325] Complete: 1 chunks produced
-2026-03-13 00:44:17,784 INFO [zephyr-levanter-cache-copy-5597e04e-workers-63] Task complete, reporting result for shard 2325
-2026-03-13 00:44:17,784 INFO [zephyr-levanter-cache-copy-5597e04e-workers-63] Executing task for shard 2488 (attempt 0)
-2026-03-13 00:44:17,784 INFO [shard 2488/9105] Starting stage=stage0-Map, 1 input chunks, 1 ops
-2026-03-13 00:44:17,785 INFO Copying data from gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation/part-mint_EN_part06_train-00000-of-00049_val to gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only/validation.
-2026-03-13 00:44:17,946 INFO [stage0-Map] 2361/9105 tasks completed
-2026-03-13 00:44:18,707 INFO [stage0-Map] 2361/9105 complete, 128 in-flight, 6616 queued, 128 workers
-2026-03-13 00:44:23,708 INFO [stage0-Map] 2361/9105 complete, 128 in-flight, 6616 queued, 128 workers
-2026-03-13 00:44:28,709 INFO [stage0-Map] 2361/9105 complete, 128 in-flight, 6616 queued, 128 workers
+ncheatable_eval/wikipedia_english.cache_dir": "DEP[53]", "train_config.data.components.uncheatable_eval/github_python.source.cache_dir": "DEP[54]", "train_config.data.components.uncheatable_eval/github_python.source.validation_urls.[0]": "DEP[55]/github_python_*.jsonl.gz", "train_config.data.components.uncheatable_eval/github_python.cache_dir": "DEP[56]", "train_config.data.components.uncheatable_eval/github_cpp.source.cache_dir": "DEP[57]", "train_config.data.components.uncheatable_eval/github_cpp.source.validation_urls.[0]": "DEP[58]/github_cpp_*.jsonl.gz", "train_config.data.components.uncheatable_eval/github_cpp.cache_dir": "DEP[59]", "train_config.data.components.uncheatable_eval/bbc_news.source.cache_dir": "DEP[60]", "train_config.data.components.uncheatable_eval/bbc_news.source.validation_urls.[0]": "DEP[61]/bbc_news_*.jsonl.gz", "train_config.data.components.uncheatable_eval/bbc_news.cache_dir": "DEP[62]", "train_config.data.components.uncheatable_eval/arxiv_physics.source.cache_dir": "DEP[63]", "train_config.data.components.uncheatable_eval/arxiv_physics.source.validation_urls.[0]": "DEP[64]/arxiv_physics_*.jsonl.gz", "train_config.data.components.uncheatable_eval/arxiv_physics.cache_dir": "DEP[65]", "train_config.data.components.uncheatable_eval/arxiv_computer_science.source.cache_dir": "DEP[66]", "train_config.data.components.uncheatable_eval/arxiv_computer_science.source.validation_urls.[0]": "DEP[67]/arxiv_computer_science_*.jsonl.gz", "train_config.data.components.uncheatable_eval/arxiv_computer_science.cache_dir": "DEP[68]", "train_config.data.components.uncheatable_eval/ao3_english.source.cache_dir": "DEP[69]", "train_config.data.components.uncheatable_eval/ao3_english.source.validation_urls.[0]": "DEP[70]/ao3_english_*.jsonl.gz", "train_config.data.components.uncheatable_eval/ao3_english.cache_dir": "DEP[71]"}
+2026-03-12 17:52:06,893 INFO executor.py:839 --   DEP[0] = gs://marin-eu-west4/tokenized/nemotron_cc/hq_actual-5af4cc
+2026-03-12 17:52:06,893 INFO executor.py:839 --   DEP[1] = gs://marin-eu-west4/raw/nemotro-cc-eeb783
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[2] = gs://marin-eu-west4/tokenized/nemotron_cc/hq_actual-5af4cc
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[3] = gs://marin-eu-west4/tokenized/paloma/4chan-496ad5
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[4] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[5] = gs://marin-eu-west4/tokenized/paloma/4chan-496ad5
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[6] = gs://marin-eu-west4/tokenized/paloma/c4_100_domains-2b6db7
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[7] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[8] = gs://marin-eu-west4/tokenized/paloma/c4_100_domains-2b6db7
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[9] = gs://marin-eu-west4/tokenized/paloma/c4_en-cf1f79
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[10] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[11] = gs://marin-eu-west4/tokenized/paloma/c4_en-cf1f79
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[12] = gs://marin-eu-west4/tokenized/paloma/dolma-v1_5-d3bed7
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[13] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[14] = gs://marin-eu-west4/tokenized/paloma/dolma-v1_5-d3bed7
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[15] = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[16] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[17] = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[18] = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[19] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[20] = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[21] = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[22] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[23] = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[24] = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[25] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[26] = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[27] = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[28] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[29] = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[30] = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[31] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[32] = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[33] = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[34] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[35] = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[36] = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[37] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[38] = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[39] = gs://marin-eu-west4/tokenized/paloma/ptb-628036
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[40] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[41] = gs://marin-eu-west4/tokenized/paloma/ptb-628036
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[42] = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[43] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[44] = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[45] = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[46] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[47] = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[48] = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[49] = gs://marin-eu-west4/raw/paloma-fc6827
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[50] = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[51] = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[52] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[53] = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[54] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[55] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[56] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[57] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[58] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[59] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[60] = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[61] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[62] = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[63] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[64] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[65] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[66] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[67] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[68] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[69] = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[70] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
+2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[71] = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
+2026-03-12 17:52:06,938 INFO executor.py:1173 -- [ray-marin-eu-west4-head-5259ea37-compute-128704565245760] Status checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0: <function run_levanter_train_lm at 0x750dcbd82980>: None
+2026-03-12 17:52:06,938 INFO executor.py:1194 -- [ray-marin-eu-west4-head-5259ea37-compute-128704565245760] Attempting to acquire lock for checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0: <function run_levanter_train_lm at 0x750dcbd82980>
+2026-03-12 17:52:07,209 INFO executor.py:1197 -- [ray-marin-eu-west4-head-5259ea37-compute-128704565245760] Acquired lock for checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0: <function run_levanter_train_lm at 0x750dcbd82980>
+2026-03-12 17:52:07,399 - INFO - Submitting job: run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0
+2026-03-12 17:52:07,399 - INFO - Building environment with [], extras [] for job: run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0
+2026-03-12 17:52:07,400 INFO worker.py:1680 -- Using address 10.164.0.2:6379 set in the environment variable RAY_ADDRESS
+2026-03-12 17:52:07,405 INFO worker.py:1821 -- Connecting to existing Ray cluster at address: 10.164.0.2:6379...
+2026-03-12 17:52:07,416 INFO worker.py:1998 -- Connected to Ray cluster. View the dashboard at http://10.164.0.2:8265 
+(autoscaler +26s) Tip: use `ray status` to view detailed cluster status. To disable these messages, set RAY_SCHEDULER_EVENTS=0.
+(autoscaler +26s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +26s) Resized to 15960 CPUs, 544 TPUs.
+(autoscaler +26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +46s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +46s) Removing 9 nodes of type tpu_slice_v5e_64 (idle).
+(autoscaler +46s) Removing 48 nodes of type tpu_slice_v5e_256 (idle).
+(autoscaler +46s) Resized to 9120 CPUs, 316 TPUs.
+(autoscaler +46s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1m18s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1m18s) Resized to 9120 CPUs, 316 TPUs.
+(autoscaler +1m18s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(run_levanter_train_lm pid=7821, ip=10.164.0.103) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(run_levanter_train_lm pid=7821, ip=10.164.0.103) Resolved 535 packages in 5ms
+(autoscaler +1m32s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1m32s) Resized to 9120 CPUs, 316 TPUs.
+(autoscaler +1m32s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +2m7s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +2m7s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +2m7s) Resized to 9480 CPUs, 328 TPUs.
+(autoscaler +2m7s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +2m22s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +2m22s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +2m22s) Resized to 9600 CPUs, 332 TPUs.
+(autoscaler +2m22s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +2m47s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +2m47s) Resized to 9600 CPUs, 332 TPUs.
+(autoscaler +2m47s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +3m2s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +3m2s) Resized to 9600 CPUs, 332 TPUs.
+(autoscaler +3m2s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +3m43s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +3m43s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +3m43s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +3m43s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +4m9s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +4m9s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +4m9s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +4m23s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +4m23s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +4m23s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +5m41s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +5m41s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +5m41s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +6m16s) Adding 5 node(s) of type tpu_slice_v5e_64.
+(autoscaler +6m16s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +6m16s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +6m16s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +7m53s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +7m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +7m53s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +7m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +8m37s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +8m37s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +8m37s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +8m37s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +8m37s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +9m43s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +9m43s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +9m43s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +9m43s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +10m29s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +10m29s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +10m29s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +10m29s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +11m11s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +11m11s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +11m11s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +11m11s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12m14s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +12m14s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +12m14s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +12m44s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +12m44s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +12m44s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +13m15s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +13m15s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +13m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +13m51s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +13m51s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +13m51s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +14m26s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +14m26s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +14m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +15m29s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +15m29s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +15m29s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +16m0s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +16m0s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +16m0s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +16m0s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +16m29s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +16m29s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +16m29s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +18m3s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +18m3s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +18m3s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +18m3s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +18m3s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +18m47s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +18m47s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +18m47s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +18m47s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +19m49s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +19m49s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +19m49s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +19m49s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +20m23s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +20m23s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +20m23s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +20m23s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +21m8s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +21m8s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +21m8s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +21m44s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +21m44s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +21m44s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +22m22s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +22m22s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +22m22s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +22m22s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +23m16s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +23m16s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +23m16s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +23m46s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +23m46s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +23m46s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +24m16s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +24m16s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +24m16s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +24m43s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +24m43s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +24m43s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +25m17s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +25m17s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +25m17s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +25m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +26m11s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +26m11s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +26m11s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +26m42s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +26m42s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +26m42s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +27m40s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +27m40s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +27m40s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +28m5s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +28m5s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +28m5s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +28m5s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +28m43s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +28m43s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +28m43s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +28m43s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +29m46s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +29m46s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +29m46s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +30m48s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +30m48s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +30m48s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +30m48s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +32m40s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +32m40s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +32m40s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +32m40s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +32m40s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +36m21s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +36m21s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +36m21s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +36m21s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +38m5s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +38m5s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +38m5s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +38m5s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +39m58s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +39m58s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +39m58s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +39m58s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +41m1s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +41m1s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +41m1s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +41m1s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +41m1s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +42m27s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +42m27s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +42m27s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +42m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.1.9) [2026-03-12 18:34:39,665 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +43m26s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +43m26s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +43m26s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +43m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.1.9) [2026-03-12 18:35:38,346 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
+(raylet, ip=10.164.1.9) [2026-03-12 18:35:50,814 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.1.9) [2026-03-12 18:35:53,098 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.1.9) [2026-03-12 18:35:59,141 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(autoscaler +44m43s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +44m43s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +44m43s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +45m24s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +45m24s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +45m24s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +45m24s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +45m24s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +46m32s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +46m32s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +46m32s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +47m36s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +47m36s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +47m36s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +47m36s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +47m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +48m15s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +48m15s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +48m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +48m53s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +48m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +48m53s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +48m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +49m27s) Adding 2 node(s) of type tpu_slice_v5e_8.
+(autoscaler +49m27s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +49m27s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +51m52s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +51m52s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +51m52s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +53m33s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +53m33s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +53m33s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +54m53s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +54m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +54m53s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +54m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +55m53s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +55m53s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +55m53s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +55m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +57m1s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +57m1s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +57m1s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +57m1s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +57m1s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.1.29) [2026-03-12 18:50:21,732 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +58m44s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +58m44s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +58m44s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h56s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h56s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h56s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h56s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.1.29) [2026-03-12 18:50:21,732 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +1h1m58s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h1m58s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h1m58s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h1m58s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h3m49s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h3m49s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h3m49s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h3m49s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h4m28s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h4m28s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h4m28s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h4m28s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h5m2s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h5m2s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h5m2s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h6m26s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h6m26s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h6m26s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h6m56s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h6m56s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h6m56s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h6m56s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h7m26s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h7m26s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h7m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h8m52s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h8m52s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h8m52s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h10m46s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h10m46s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h10m46s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h10m46s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h10m46s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h12m27s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h12m27s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h12m27s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h12m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h13m7s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h13m7s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h13m7s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h13m7s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h13m7s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h13m51s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h13m51s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h13m51s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h13m51s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h15m0s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h15m0s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h15m0s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h15m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h15m35s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h15m35s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h15m35s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h17m27s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h17m27s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h17m27s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h17m27s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h17m27s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h17m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h19m20s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h19m20s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h19m20s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h19m20s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h21m17s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h21m17s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h21m17s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h21m17s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h21m17s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h22m26s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h22m26s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h22m26s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h22m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h24m14s) Adding 2 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h24m14s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h24m14s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h25m17s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h25m17s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h25m17s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h25m17s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h25m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h27m3s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h27m3s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h27m3s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h28m18s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h28m18s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h28m18s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h28m18s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h28m18s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h29m8s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h29m8s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h29m8s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h29m8s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h30m30s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h30m30s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h30m30s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h30m30s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h31m14s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h31m14s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h31m14s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h31m14s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h31m14s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h33m1s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h33m1s) Resized to 9720 CPUs, 336 TPUs.
+(autoscaler +1h33m1s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet) Task run_levanter_train_lm failed. There are 2 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.0.103, node ID: 41d3e53905b6300f3b77e975b206366dfbedc0f65d5e32107d8e2389. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=41d3e53905b6300f3b77e975b206366dfbedc0f65d5e32107d8e2389`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.0.103`.
+(raylet) The node with node id: 4de0a14ddf91236abb5c8460fc69be06ac68a78e4b256f485219dba3 and address: 10.164.0.110 and node name: 10.164.0.110 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(run_levanter_train_lm pid=9911, ip=10.164.15.198) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(run_levanter_train_lm pid=9911, ip=10.164.15.198) Resolved 535 packages in 5ms
+(autoscaler +1h35m17s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h35m17s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h35m17s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h35m17s) Removing 22 nodes of type tpu_slice_v5e_128 (idle).
+(autoscaler +1h35m17s) Resized to 9840 CPUs, 340 TPUs.
+(autoscaler +1h35m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet) The node with node id: 8ce54264e547d218c1549b0640f5ab6dadbdaebb314e904f737585a7 and address: 10.164.0.94 and node name: 10.164.0.94 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 23x across cluster]
+(raylet) The node with node id: 6c9693ab85d1cb45e343503a1166fb812664140b9b8eb525fed3e3e6 and address: 10.164.0.26 and node name: 10.164.0.26 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 46x across cluster]
+(autoscaler +1h37m19s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet) Task run_levanter_train_lm failed. There are 1 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.15.198, node ID: 611f43378a2aeee4659a42a967af6f8a42f8641a14e70a4ab677019f. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=611f43378a2aeee4659a42a967af6f8a42f8641a14e70a4ab677019f`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.15.198`.
+(raylet) The node with node id: fcbcdd27ec8d09b4220392c1e0a610ea20d5611cc4f925f2d09788bb and address: 10.164.0.39 and node name: 10.164.0.39 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 11x across cluster]
+(raylet) The node with node id: fd1ac7fa3824407bab33f116b0cdee46b45f505a83cee252810dd102 and address: 10.164.15.206 and node name: 10.164.15.206 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a         (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(raylet) The node with node id: 14641e31700fd8ac7b9c388704865560ac910e84c552ac9bea26b147 and address: 10.164.15.192 and node name: 10.164.15.192 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a         (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(run_levanter_train_lm pid=9084, ip=10.164.2.172) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(run_levanter_train_lm pid=9084, ip=10.164.2.172) Resolved 535 packages in 5ms
+(autoscaler +1h39m20s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet) The node with node id: 87f3de76c36951a0d12c64bb21bf5cf7c4a342a01d95033b38d8532b and address: 10.164.2.42 and node name: 10.164.2.42 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 11x across cluster]
+(raylet) The node with node id: a81ad58d937f5eca254ff04c62101959ef5e80f3ed6013dcc5641d92 and address: 10.164.15.225 and node name: 10.164.15.225 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a         (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 8x across cluster]
+(autoscaler +1h41m22s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h41m22s) Resized to 8280 CPUs, 288 TPUs.
+(autoscaler +1h41m22s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7. Add suitable node types to this cluster to resolve this issue.
+(raylet) The node with node id: 2608094485557c2e0753b4f67983071d9c64b034923b3821c27a9770 and address: 10.164.15.221 and node name: 10.164.15.221 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a         (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 10x across cluster]
+(raylet) The node with node id: e6fea9a5a3d59fac0497e844174fd651d99ec10b87851cb80b4401d1 and address: 10.164.1.217 and node name: 10.164.1.217 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(raylet) Task run_levanter_train_lm failed. There are 0 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.172, node ID: 6f8db1619860c8e0ee9c330234bb32507d22a262339c4ad2d383799c. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=6f8db1619860c8e0ee9c330234bb32507d22a262339c4ad2d383799c`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.172`.
+(raylet) The node with node id: 523b36907f0df7af9a4f2b0134ba2c02ded12a66f424e712e0004a72 and address: 10.164.2.163 and node name: 10.164.2.163 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +1h43m23s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h43m23s) Resized to 6360 CPUs, 224 TPUs.
+(autoscaler +1h43m23s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7. Add suitable node types to this cluster to resolve this issue.
+(run_levanter_train_lm pid=4508, ip=10.164.1.29) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(run_levanter_train_lm pid=4508, ip=10.164.1.29) Resolved 535 packages in 5ms
+(autoscaler +1h45m24s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1. Add suitable node types to this cluster to resolve this issue.
+2026-03-12 19:37:56,169 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+    raise value
+ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.1.29, node ID: ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.1.29`.
+2026-03-12 19:37:56,170 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd to finish for step checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0
+2026-03-12 19:37:56,170 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+    ray.get(self._ref, timeout=timeout)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+    raise value
+ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.1.29, node ID: ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.1.29`.
+2026-03-12 19:37:56,171 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed:
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+    ray.get(self._ref)
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+    values, debugger_breakpoint = worker.get_objects(
+                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+    raise value
+ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.1.29, node ID: ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.1.29`.
+2026-03-12 19:37:56,528 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0 failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 192, in wait
+    raise RuntimeError(f"Job {self.job_id} failed")
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/experiments/unified/unified_pretrain_demo_eu.py", line 855, in <module>
+    executor_main(
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
+    executor.run(
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 747, in run
+    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
+    raise RuntimeError(message) from failure_exceptions[0]
+RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0']
+(raylet) The node with node id: 6f8db1619860c8e0ee9c330234bb32507d22a262339c4ad2d383799c and address: 10.164.2.172 and node name: 10.164.2.172 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 8x across cluster]
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-64  -e EXP_NAME unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0 -e TEXT_STEPS 5000 -e UND_STEPS  5000 -e GEN_STEPS 0  -e W_VISUAL 0.5  -e MUON_LR 0.008 -e ADAM_LR 0.0024   -e LR_SCHEDULE   linear  -- python experiments/unified/unified_pretrain_demo_eu.py
