@@ -1,226 +1,125 @@
-You are running one unattended hill-climb iteration for Gated DeltaNet TPU kernels.
+You are running one unattended hill-climb iteration for fixed-`3/4` GDN TPU training.
 
 Iteration metadata:
 - Iteration: {{ITERATION}} / {{TOTAL_ITERATIONS}}
 - Starting commit: {{HEAD_SHA}}
 
+Read first:
+1. `/Users/calvinxu/Projects/Work/Marin/marin-gdn-pallas/lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb_summary.md`
+2. latest entries in `/Users/calvinxu/Projects/Work/Marin/marin-gdn-pallas/lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md`
+3. `/Users/calvinxu/Projects/Work/Marin/marin-gdn-pallas/docs/recipes/optimize_gdn_pallas_tpu.md`
+
 Primary objective:
-- Improve end-to-end TPU training throughput for the fixed `3/4` GDN regime.
-- `3/4` GDN is non-negotiable for this benchmark/model family.
-- Do not optimize toward smaller GDN closed-call buckets alone.
-- Optimize toward a shorter full-step critical path.
+- reduce full-step TPU training time for the fixed `3/4` GDN regime
+- optimize against the real critical path, not against old bucket names
+
+Current regime:
+- same-boundary GDN kernel hillclimbing is demoted
+- `dispatch_shard_shell_delta_ms` is the mainline budget
+- `ad_wrapper_shell_delta_ms` is the second budget
+- `interaction_remainder_ms` and `xprof_idle_attributed_ms` are safety checks
+- `S3` is complete
+- `A3` is complete and rejected
+- the next required optimization slot is `P3`
 
 Repo context:
 - GDN implementation: `lib/levanter/src/levanter/layers/gated_deltanet.py`
-- Benchmark entrypoint: `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
-- Benchmark model: `experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py`
-- Correctness tests: `lib/levanter/tests/test_gdn_kernels.py`, `lib/levanter/tests/test_gdn_layer.py`
-- Optimization recipe: `docs/recipes/optimize_gdn_pallas_tpu.md`
-- Running log: `lib/levanter/.agents/projects/gdn_pallas_tpu_hillclimb.md`
-- Harness: `scripts/gdn/gdnctl.py`
+- benchmark entrypoint: `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
+- benchmark model: `experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py`
+- correctness tests: `lib/levanter/tests/test_gdn_kernels.py`, `lib/levanter/tests/test_gdn_layer.py`
+- harness: `scripts/gdn/gdnctl.py`
 
-Current diagnosis to optimize against:
-- The deployable hybrid champion is still only about:
-  - `throughput/mfu ~= 6.09`
-  - `step_duration ~= 166.3 ms`
-- The fresh attention-only control on the same benchmark family is about:
-  - `throughput/mfu ~= 21.36`
-  - `step_duration ~= 57.13 ms`
-- The matched hybrid-vs-attention gap is about `110 ms`.
-- The tracked train path explains only about `39%` of that gap.
-- The hybrid-specific generic shell delta explains only about `18%` of that gap.
-- xprof now explains the remaining interaction remainder mostly as:
-  - `dispatch_shard_shell` first,
-  - `ad_wrapper_shell` second,
-  - with `IDLE` as the dominant manifestation of waiting / serialization rather than hidden useful math.
-- The broad `HackableDecoderLayer/*` family is too coarse to use as the main optimization target because the attention-only control also carries substantial normal layer-body compute there.
-- The next actionable target is a **hybrid-specific generic shell delta budget** computed from matched hybrid vs attention-only attribution.
-- The dominant hybrid-only generic shell buckets are categories such as:
-  - `shard_map/pallas_call`
-  - `closed_call/shard_map`
-  - `transpose(jvp(...))/closed_call/shard_map`
-  - `reshape`
-  - `add_any`
-  - `select_n`
-  - `scatter-add`
-- Therefore:
-  - same-boundary GDN Pallas hillclimbing is demoted from the mainline,
-  - broad `HackableDecoderLayer/*` attribution is only a coarse upper bound,
-  - the next serious systems bet is a fixed 4-layer block with bespoke backward and explicit sharding,
-  - the immediate mainline budget is `dispatch_shard_shell_delta_ms`,
-  - kernel-local train-path wins are secondary unless they reduce the new hybrid-specific shell delta and the full step.
-- Coverage status:
-  - `S3` is already completed and validated on the current xprof-enabled harness.
-  - Do **not** spend another mainline iteration on `S3` unless the iteration itself changes xprof plumbing, matched-pair attribution logic, or artifact extraction.
-  - The next required optimization slots are `A3` first, then `P3`.
-
-Required behavior for this iteration:
-1. Read the latest log entries and identify the current validated baseline.
-2. Generate a shortlist of 3 candidates with upside and risk.
-3. Pick exactly one coverage slot:
-   - `A3` AD-boundary prototype only (hold forward structure fixed, move the manual backward boundary outward),
-   - `P3` first fixed-4-layer block prototype with manual VJP + explicit sharding contract,
-   - `S3` hybrid-specific generic shell delta attribution only if you changed xprof / attribution plumbing in this iteration,
-   - `U` bounded CE side-arm only if CE is again implicated,
-   - `diagnostic` only if you can explain why `A3/P3/U` are lower information.
+Required behavior:
+1. Read the current summary and latest log entries.
+2. Generate a shortlist of 2-3 candidates with upside and risk.
+3. Pick exactly one slot:
+   - `P3` fixed `3 GDN + 1 attention` block with bespoke backward + explicit sharding/layout contract
+   - `A3-diagnostic` only if you can explain why a materially different AD boundary is now higher information than `P3`
+   - `S3-diagnostic` only if you changed attribution/xprof plumbing in this iteration
+   - `U` bounded CE side-arm only if fresh attribution re-implicates CE
 4. Classify the change as exactly one of:
-   - `decoder shell attribution`
    - `whole-layer boundary`
-   - `CE backend`
    - `diagnostic side-arm`
-   - `inner kernel math`
-5. Unless the run is an explicit CE side-arm, keep CE fixed at:
+   - `CE backend`
+5. Keep CE fixed unless this is an explicit CE side-arm:
    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`
    - CE backward mode `pallas`
-6. State what you expect to happen to:
+6. Before writing code, state the expected direction of:
    - `step_duration_ms`
-   - `upper_bound_gap_ms`
    - `dispatch_shard_shell_delta_ms`
    - `ad_wrapper_shell_delta_ms`
    - `hybrid_generic_shell_delta_budget_ms`
-   - `gap_explained_by_hybrid_generic_shell_delta`
    - `interaction_remainder_ms`
    - `xprof_idle_attributed_ms`
-   - `remainder_budget_ms`
-7. State whether the candidate should be rejected if:
-   - `step_duration_ms` does not improve,
-   - or `dispatch_shard_shell_delta_ms` stays flat / grows,
-   - or `ad_wrapper_shell_delta_ms` grows,
-   - or `interaction_remainder_ms` grows,
-   - or `xprof_idle_attributed_ms` grows when an XPlane pair is available.
-8. Implement the smallest code/config change needed to execute the chosen slot.
-9. Validate correctness on TPU when code changed.
+7. Reject the candidate unless it improves the step and the shell budgets, unless the run is explicitly diagnostic.
+8. Implement the smallest change needed for the chosen slot.
+9. Run TPU correctness if code changed.
 10. Run the required profile(s).
-11. Update the log with measured metrics and commit exactly one validated result commit.
+11. Update the hillclimb log and commit exactly one validated result commit.
 
-Coverage slots:
+Slots:
 
-### S3) Hybrid-specific generic shell delta attribution (diagnostic-only)
-- No kernel changes are required.
-- Use this slot only when the iteration changes xprof tooling, attribution extraction, or matched-pair comparison logic.
-- Do not spend another mainline iteration here just to reconfirm the same shell ranking.
-- Refresh hybrid vs attention-only comparison under the same:
-  - TPU family,
-  - CE settings,
-  - benchmark family,
-  - step window,
-  - fixed `3/4` GDN hybrid config.
-- Prefer xprof-backed shell accounting for this slot:
-  - compare matched XPlane artifacts with `gdnctl xprof-compare-runs`
-  - feed that JSON into `gdnctl summary-attribution --xprof-compare-json ...`
-- Record:
-  - `step_duration_ms`
-  - `train_path_budget_ms`
-  - `decoder_layer_shell_budget_ms`
-  - `hybrid_generic_shell_delta_budget_ms`
-  - `dispatch_shard_shell_delta_ms`
-  - `ad_wrapper_shell_delta_ms`
-  - `layout_shell_delta_ms`
-  - `residual_add_shell_delta_ms`
-  - `remainder_budget_ms`
-  - `interaction_remainder_ms`
-  - `upper_bound_gap_ms`
-  - `gap_explained_by_train_path`
-  - `gap_explained_by_decoder_layer_shell`
-  - `gap_explained_by_hybrid_generic_shell_delta`
-  - `hybrid_generic_shell_delta_topk`
-  - `remainder_topk`
-  - `xprof_hybrid_generic_shell_delta_budget_ms`
+### P3) Mainline prototype
+- Optimize the fixed `3 GDN + 1 attention` block as one unit.
+- The block must own:
+  - forward boundary
+  - backward/custom VJP contract
+  - sharding contract
+  - layout contract
+- Reuse current leaf kernels first.
+- Do not let generic JAX AD or generic sharding rebuild the same shell outside the new boundary.
+- Reject the prototype if:
+  - `dispatch_shard_shell_delta_ms` stays flat/up,
+  - or `ad_wrapper_shell_delta_ms` grows,
+  - or `interaction_remainder_ms` grows,
+  - or `xprof_idle_attributed_ms` stays flat/up when available,
+  - even if old train-path buckets disappear.
+
+### A3-diagnostic
+- Only if the backward/sharding contract is materially different from the rejected A3 attempt.
+- If it is just another outward layer-level manual-VJP boundary, do not do it.
+
+### S3-diagnostic
+- Only if the iteration changes xprof extraction, matched-pair attribution, or shell grouping logic.
+- Do not spend another mainline iteration here just to reconfirm the shell ranking.
+
+### U) CE side-arm
+- Only if fresh evidence points back to CE.
+
+Required metrics in the writeup:
+- `CE backend selected`
+- `CE bwd mode`
+- `gdn_layer_fraction`
+- `step_duration_ms`
+- `forward_closed_call_ms`
+- `backward_closed_call_ms`
+- `train_path_budget_ms`
+- `decoder_layer_shell_budget_ms`
+- `hybrid_generic_shell_delta_budget_ms`
+- `dispatch_shard_shell_delta_ms`
+- `ad_wrapper_shell_delta_ms`
+- `layout_shell_delta_ms`
+- `residual_add_shell_delta_ms`
+- `interaction_remainder_ms`
+- `upper_bound_gap_ms`
+- `gap_explained_by_train_path`
+- `gap_explained_by_decoder_layer_shell`
+- `gap_explained_by_hybrid_generic_shell_delta`
+- `hybrid_generic_shell_delta_topk`
+- `remainder_topk`
+- `throughput/mfu`
+- `throughput/tokens_per_second`
+- `throughput/duration`
+- xprof metrics when a matched XPlane pair is available:
   - `xprof_dispatch_shard_shell_delta_ms`
   - `xprof_ad_wrapper_shell_delta_ms`
   - `xprof_layout_shell_delta_ms`
   - `xprof_residual_add_shell_delta_ms`
   - `xprof_idle_attributed_ms`
 
-### A3) AD-boundary prototype only
-- Highest-priority optimization slot now that `S3` is established.
-- Hold the forward structure fixed.
-- Move the manual/custom VJP boundary outward so generic reverse-mode/JVP shell stops wrapping each hybrid region.
-- Target:
-  - `ad_wrapper_shell_delta_ms`
-  - `xprof_idle_attributed_ms`
-  - `interaction_remainder_ms`
-- Do not combine this with unrelated forward regrouping or kernel-local math work.
-
-### P3) First fixed-4-layer block prototype
-- Use after one real `A3` attempt, or earlier only if you can justify why `A3` is blocked.
-- One serious systems prototype only.
-- Optimize the fixed `3 GDN + 1 attention` block as a unit.
-- Own all three of:
-  - the forward block boundary,
-  - the backward / AD strategy,
-  - and the sharding/layout contract.
-- Prefer XLA-visible shell + Pallas leaf kernels initially, but do not leave backward to generic JAX AD.
-- Do not combine this with unrelated kernel-local math changes.
-- Treat the candidate as failed if the old train-path buckets disappear but the canonical shell deltas or xprof-IDLE stay flat/up.
-
-### U) Bounded CE side-arm
-- Only if the new attribution clearly points back to CE.
-- Promotion bar is strict:
-  - `ce_attributed_while_ms` must drop materially,
-  - and `step_duration_ms` must improve,
-  - with no shell-delta or interaction-remainder regression.
-
-### Diagnostic only
-- Use only if you can justify why `A3/P3/U` would be lower information.
-- Same-boundary GDN shell/tape/kernel work belongs here now unless it directly attacks the hybrid-specific shell delta or the interaction remainder.
-
-Deprioritized unless explicitly justified:
-- same-boundary GDN shell/tape rewrites,
-- forward-only GDN improvements,
-- kernel-local matmul/tiling/exp-diff work,
-- more closed-call-only wins,
-- broad `HackableDecoderLayer/*` accounting as the main shell target,
-- CE micro-tuning without a clear end-to-end path.
-
-Acceptance gate checklist (must appear in the iteration writeup):
-- Correctness:
-  - TPU tests command + result.
-  - Treat TPU correctness as complete only when it runs through `gdnctl`'s remote TPU test wrapper
-    with both `torch` and `transformers` installed. `87 passed, 2 skipped` or `88 passed, 2 skipped`
-    is the expected full parity slice depending on the current test inventory.
-- Perf:
-  - `CE backend selected: ...`
-  - `CE bwd mode: ...`
-  - `gdn_layer_fraction: ...`
-  - `Forward closed-call: ...`
-  - `Backward closed-call: ...`
-  - `Kernel budget: ...`
-  - `Control budget: ...`
-  - `Train-path budget: ...`
-  - `Decoder-layer shell budget: ...`
-  - `Hybrid generic shell delta budget: ...`
-  - `Dispatch/shard shell delta budget: ...`
-  - `AD/wrapper shell delta budget: ...`
-  - `AD shell budget: ...`
-  - `Sharding shell budget: ...`
-  - `Layout shell budget: ...`
-  - `Residual/add shell budget: ...`
-  - `xprof hybrid generic shell delta budget: ...` when a matched XPlane pair is available
-  - `xprof dispatch/shard shell delta budget: ...` when a matched XPlane pair is available
-  - `xprof AD/wrapper shell delta budget: ...` when a matched XPlane pair is available
-  - `xprof layout shell delta budget: ...` when a matched XPlane pair is available
-  - `xprof residual/add shell delta budget: ...` when a matched XPlane pair is available
-  - `xprof IDLE attributed remainder: ...` when a matched XPlane pair is available
-  - `Step duration: ...`
-  - `Remainder budget: ...`
-  - `Interaction remainder: ...`
-  - `Upper-bound gap: ...`
-  - `Gap explained by train-path: ...`
-  - `Gap explained by decoder-layer shell: ...`
-  - `Gap explained by hybrid generic shell delta: ...`
-  - `hybrid_generic_shell_delta_topk: ...`
-  - `remainder_topk: ...`
-  - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`
-- Governance:
-  - reject any candidate where `step_duration_ms` does not improve unless it is explicitly diagnostic,
-  - reject any candidate where `dispatch_shard_shell_delta_ms` is flat/up unless it is explicitly diagnostic,
-  - reject any candidate where `ad_wrapper_shell_delta_ms` is flat/up unless it is explicitly diagnostic,
-  - reject any candidate where `xprof_idle_attributed_ms` is flat/up when an XPlane pair is available unless it is explicitly diagnostic,
-  - reject any candidate where `interaction_remainder_ms` grows unless it is explicitly diagnostic,
-  - classify `train_path_budget_ms down, generic shell delta flat/up` as `namespace-only / renamed-bucket progress`,
-  - classify `generic shell delta down, xprof IDLE flat/up` as `waiting/serialization still dominant`,
-  - do not leave `Commit: (pending)` or `Commit: this commit` in the log.
+Correctness gate:
+- TPU correctness is only considered complete when run through the `gdnctl` remote TPU wrapper with `torch` and `transformers` installed.
+- Expected full parity slice is `88 passed, 2 skipped` on the current inventory.
 
 Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
@@ -231,11 +130,8 @@ Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py lint-log`
 
 Definition of done:
-- either:
-  - one current-baseline attribution result that materially improves understanding of hybrid-specific shell delta,
-  - or one AD-boundary prototype result that materially reduces `ad_wrapper_shell_delta_ms`,
-  - or one fixed-4-layer block prototype result that improves the full step,
-  - or one bounded CE side-arm that improves the full step,
+- one validated `P3` result, or
+- one explicitly diagnostic run that changes the shell attribution/tooling enough to justify itself,
 - plus TPU correctness when code changed,
-- plus one profiled run (or comparison) completed,
-- plus a log entry with explicit hybrid-specific shell-delta metrics, not only coarse decoder-layer or train-path metrics.
+- plus profiling,
+- plus a log entry with canonical shell-delta metrics.
