@@ -338,6 +338,59 @@ def test_gap_marker_payload_resolution_does_not_cross_second_idle_gap(tmp_path: 
     assert top_gap.marker_op == "iota.296"
 
 
+def test_gpu_stream_threads_and_nccl_ops(tmp_path: Path) -> None:
+    """GPU traces use 'Stream #N' threads for ops and NCCL naming for collectives.
+
+    Step markers come from host-side StepTraceAnnotation events (step_num in args)
+    rather than the TPU-style 'Steps' thread with numeric event names.
+    """
+    trace_path = tmp_path / "gpu_trace.json.gz"
+    payload = {
+        "displayTimeUnit": "ns",
+        "traceEvents": [
+            # GPU device process with stream-based threads (no "XLA Ops" thread).
+            {"ph": "M", "pid": 1, "name": "process_name", "args": {"name": "/device:GPU:0"}},
+            {"ph": "M", "pid": 1, "tid": 10, "name": "thread_name", "args": {"name": "Stream #0(compute)"}},
+            {"ph": "M", "pid": 1, "tid": 11, "name": "thread_name", "args": {"name": "Stream #1(nccl)"}},
+            # Host process with step annotations.
+            {"ph": "M", "pid": 2, "name": "process_name", "args": {"name": "/host:CPU"}},
+            {"ph": "M", "pid": 2, "tid": 1, "name": "thread_name", "args": {"name": "python3"}},
+            # Step annotations on host (as produced by jax.profiler.StepTraceAnnotation).
+            {"ph": "X", "pid": 2, "tid": 1, "name": "train", "ts": 0, "dur": 500, "args": {"step_num": "0"}},
+            {"ph": "X", "pid": 2, "tid": 1, "name": "train", "ts": 500, "dur": 400, "args": {"step_num": "1"}},
+            {"ph": "X", "pid": 2, "tid": 1, "name": "train", "ts": 900, "dur": 350, "args": {"step_num": "2"}},
+            # Compute ops on Stream #0.
+            {"ph": "X", "pid": 1, "tid": 10, "name": "fusion.1", "ts": 10, "dur": 100},
+            {"ph": "X", "pid": 1, "tid": 10, "name": "custom-call.2", "ts": 120, "dur": 80},
+            # NCCL collective on Stream #1.
+            {"ph": "X", "pid": 1, "tid": 11, "name": "ncclDevKernel_AllGather_RING_LL", "ts": 200, "dur": 50},
+            {"ph": "X", "pid": 1, "tid": 11, "name": "ncclDevKernel_ReduceScatter_RING_LL", "ts": 260, "dur": 40},
+        ],
+    }
+    with gzip.open(trace_path, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    summary = summarize_trace(trace_path, warmup_steps=1, hot_op_limit=10)
+
+    # Step markers detected via host-side step_num fallback.
+    assert summary.step_time.all_steps.count == 3
+    assert summary.step_time.steady_state_steps.count == 2
+
+    # Ops from Stream threads are recognized (not empty like the old code would produce).
+    assert len(summary.hot_ops) > 0
+    op_names = {op.name for op in summary.hot_ops}
+    assert "fusion.1" in op_names
+
+    # NCCL collectives are classified.
+    assert len(summary.communication_ops) > 0
+    collective_kinds = {op.collective for op in summary.communication_ops}
+    assert "all-gather" in collective_kinds
+    assert "reduce-scatter" in collective_kinds
+
+    # Gap analysis works on stream threads.
+    assert len(summary.gap_before_ops) > 0
+
+
 def _write_trace(path: Path, *, step_durations: list[float], softmax_duration: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {

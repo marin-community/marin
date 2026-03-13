@@ -31,6 +31,7 @@ from transformers import AutoTokenizer
 
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,8 @@ def _patch_source_config(
 
 
 def _slice_cache_in_ray(cfg: SliceCacheConfig):
-    logging.basicConfig(level=logging.INFO)
+
+    configure_logging(level=logging.INFO)
     logger.info(f"Starting slice cache with config: {cfg}")
     return _do_slice_cache(cfg)
 

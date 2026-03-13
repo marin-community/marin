@@ -41,6 +41,21 @@ Developer → docker push → ghcr.io/marin-community/iris-worker:v1
   [AR pricing](https://cloud.google.com/artifact-registry/pricing).
 - GHCR → AR cache miss incurs internet egress, but only on the first pull per image/tag.
 
+## Authentication
+
+To push images to GHCR, log in with a **classic** personal access token (PAT) that has the
+`write:packages` scope:
+
+```bash
+echo $GH_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
+```
+
+Fine-grained tokens do not support the Container Registry; use a classic token.
+
+In CI (GitHub Actions), use the automatic `GITHUB_TOKEN` secret instead — see
+`.github/workflows/marin-canary-ferry-cw.yaml` for an example. The workflow needs
+`packages: write` permission.
+
 ## Infrastructure Setup
 
 ### Create AR remote repos (one-time)

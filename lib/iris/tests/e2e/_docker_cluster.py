@@ -19,7 +19,7 @@ from iris.cluster.controller.local import LocalController
 from iris.cluster.platform.base import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.cluster.worker.bundle_cache import BundleCache
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
@@ -52,14 +52,13 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
         name="local-cpu",
         min_slices=num_workers,
         max_slices=num_workers,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         num_vms=1,
         resources=config_pb2.ScaleGroupResources(
             cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
-            gpu_count=0,
-            tpu_count=0,
+            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            device_count=0,
         ),
     )
     config.scale_groups["local-cpu"].CopyFrom(sg)
@@ -84,7 +83,7 @@ class E2ECluster:
             When None, a fresh temp directory is created per cluster.
         env_provider_factory: Optional factory for creating per-worker
             EnvironmentProviders. Signature: (worker_id, num_workers) -> provider.
-            Use TPUSimEnvironmentProvider for TPU simulation tests.
+            Use FixedEnvironmentProvider for TPU simulation tests.
     """
 
     def __init__(
@@ -150,7 +149,11 @@ class E2ECluster:
             timeout_ms=30000,
         )
 
-        bundle_provider = BundleCache(cache_path, max_bundles=10)
+        bundle_store = BundleStore(
+            db_path=cache_path / "bundles.sqlite3",
+            controller_address=f"http://127.0.0.1:{self._controller_port}",
+            max_items=10,
+        )
         self._container_runtime = DockerRuntime()
         container_runtime = self._container_runtime
 
@@ -165,14 +168,13 @@ class E2ECluster:
                 worker_id=worker_id,
                 poll_interval=Duration.from_seconds(0.1),
                 default_task_image="iris-task:latest",
-                log_prefix=f"file://{(cache_path / 'iris-logs').as_posix()}",
             )
             env_provider = None
             if self._env_provider_factory:
                 env_provider = self._env_provider_factory(i, self._num_workers)
             worker = Worker(
                 worker_config,
-                bundle_provider=bundle_provider,
+                bundle_store=bundle_store,
                 container_runtime=container_runtime,
                 environment_provider=env_provider,
             )

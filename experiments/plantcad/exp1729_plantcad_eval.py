@@ -26,7 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utilities.json_encoder import CustomJsonEncoder
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------

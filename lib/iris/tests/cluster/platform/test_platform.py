@@ -58,7 +58,7 @@ def _make_slice_config(env: PlatformEnv, group_name: str) -> config_pb2.SliceCon
         cfg = config_pb2.SliceConfig(
             name_prefix=f"iris-{group_name}",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-16",
+            accelerator_variant="v5litepod-8",
         )
         cfg.gcp.zone = env.zone
         cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -232,7 +232,7 @@ def test_gcp_quota_error_raises_quota_exhausted():
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu-group",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5litepod-16",
+        accelerator_variant="v5litepod-8",
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -257,7 +257,6 @@ def test_gcp_validate_vm_slice_config_requires_machine_type():
     cfg = config_pb2.SliceConfig(
         name_prefix="test",
         num_vms=1,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -271,7 +270,6 @@ def test_gcp_validate_vm_slice_config_rejects_preemptible():
     cfg = config_pb2.SliceConfig(
         name_prefix="test",
         num_vms=1,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         preemptible=True,
     )
     cfg.gcp.zone = "us-central2-b"
@@ -287,7 +285,6 @@ def test_gcp_validate_vm_slice_config_rejects_num_vms_not_one():
     cfg = config_pb2.SliceConfig(
         name_prefix="test",
         num_vms=2,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -331,13 +328,14 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
 
 
 def test_gcp_build_vm_slice_id_bounds_and_normalizes():
+    suffix = "20260307-1755-a3b1c9d2"
     slice_id = _build_vm_slice_id(
         "smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
-        1772123761944,
+        suffix,
     )
     assert len(slice_id) <= 63
     assert "_" not in slice_id
-    assert slice_id.endswith("-1772123761944")
+    assert slice_id.endswith(f"-{suffix}")
 
 
 def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
@@ -376,7 +374,6 @@ def test_gcp_empty_accelerator_variant_rejected():
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu-group",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="",
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -409,7 +406,7 @@ def test_gcp_list_slices_skips_deleting_tpus():
         cfg = config_pb2.SliceConfig(
             name_prefix="iris-tpu",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-16",
+            accelerator_variant="v5litepod-8",
         )
         cfg.gcp.zone = "us-central2-b"
         cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -437,7 +434,7 @@ def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5litepod-16",
+        accelerator_variant="v5litepod-8",
     )
     cfg.gcp.zone = "europe-west4-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -657,7 +654,7 @@ def test_gcp_list_all_slices_multi_zone():
         cfg_a = config_pb2.SliceConfig(
             name_prefix="iris-tpu",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-16",
+            accelerator_variant="v5litepod-8",
         )
         cfg_a.gcp.zone = "zone-a"
         cfg_a.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -666,7 +663,7 @@ def test_gcp_list_all_slices_multi_zone():
         cfg_b = config_pb2.SliceConfig(
             name_prefix="iris-tpu",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-            accelerator_variant="v5litepod-16",
+            accelerator_variant="v5litepod-8",
         )
         cfg_b.gcp.zone = "zone-b"
         cfg_b.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -787,7 +784,7 @@ def test_gcp_tpu_slice_passes_startup_script_metadata():
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5litepod-16",
+        accelerator_variant="v5litepod-8",
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -823,7 +820,7 @@ def test_gcp_tpu_bootstrap_monitors_health_endpoints():
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5litepod-4",
+        accelerator_variant="v5litepod-8",
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
@@ -859,7 +856,7 @@ def test_gcp_tpu_bootstrap_timeout_fetches_cloud_logs():
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5litepod-4",
+        accelerator_variant="v5litepod-8",
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"

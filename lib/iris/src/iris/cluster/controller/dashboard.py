@@ -16,15 +16,15 @@ The Python layer only serves HTML shells; all rendering is done client-side.
 
 import logging
 
+import httpx
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
-from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
@@ -67,6 +67,7 @@ class ControllerDashboard:
             Route("/", self._dashboard),
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
+            Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
@@ -74,25 +75,107 @@ class ControllerDashboard:
         return Starlette(routes=routes)
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Controller", "/static/controller/app.js"))
+        return HTMLResponse(html_shell("Iris Controller", "controller"))
 
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Job Detail", "/static/controller/job-detail.js"))
+        return HTMLResponse(html_shell("Job Detail", "controller"))
 
     def _worker_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Worker Detail", "/static/controller/worker-detail.js"))
+        return HTMLResponse(html_shell("Worker Detail", "controller"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
-        workers_resp = self._service.list_workers(cluster_pb2.Controller.ListWorkersRequest(), None)
-        jobs_resp = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
-        worker_count = len(workers_resp.workers)
-        job_count = len(jobs_resp.jobs)
+        return JSONResponse({"status": "ok"})
 
-        response = {
-            "status": "ok",
-            "workers": worker_count,
-            "jobs": job_count,
-        }
+    def _bundle_download(self, request: Request) -> Response:
+        bundle_id = request.path_params["bundle_id"]
+        try:
+            data = self._service.bundle_zip(bundle_id)
+        except FileNotFoundError:
+            return Response(f"Bundle not found: {bundle_id}", status_code=404)
+        return Response(data, media_type="application/zip")
 
-        return JSONResponse(response)
+
+class ProxyControllerDashboard:
+    """Dashboard that proxies RPC calls to a remote Iris controller.
+
+    Serves the same web UI locally but forwards all Connect RPC requests
+    to an upstream controller at the given URL. Useful for viewing a remote
+    controller's state without running a local controller instance.
+    """
+
+    def __init__(
+        self,
+        upstream_url: str,
+        host: str = "0.0.0.0",
+        port: int = 8080,
+    ):
+        self._upstream_url = upstream_url.rstrip("/")
+        self._host = host
+        self._port = port
+        self._client = httpx.AsyncClient(base_url=self._upstream_url, timeout=60.0)
+        self._app = self._create_app()
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    @property
+    def app(self) -> Starlette:
+        return self._app
+
+    def _create_app(self) -> Starlette:
+        routes = [
+            Route("/", self._dashboard),
+            Route("/job/{job_id:path}", self._job_detail_page),
+            Route("/worker/{worker_id:path}", self._worker_detail_page),
+            Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
+            Route("/health", self._health),
+            Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
+            static_files_mount(),
+        ]
+        return Starlette(routes=routes, on_shutdown=[self._client.aclose])
+
+    def _proxy_html(self, dashboard_type: str) -> HTMLResponse:
+        html = html_shell("Iris Controller (Proxy)", dashboard_type)
+        banner = (
+            '<div style="background:#f59e0b;color:#000;text-align:center;'
+            "padding:4px 8px;font-size:13px;font-weight:600;position:fixed;"
+            f'top:0;left:0;right:0;z-index:9999;">Proxy &rarr; {self._upstream_url}</div>'
+            '<div style="height:28px;"></div>'
+        )
+        html = html.replace('<div id="app">', banner + '<div id="app">')
+        return HTMLResponse(html)
+
+    def _dashboard(self, _request: Request) -> HTMLResponse:
+        return self._proxy_html("controller")
+
+    def _job_detail_page(self, _request: Request) -> HTMLResponse:
+        return self._proxy_html("controller")
+
+    def _worker_detail_page(self, _request: Request) -> HTMLResponse:
+        return self._proxy_html("controller")
+
+    def _health(self, _request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
+    async def _proxy_rpc(self, request: Request) -> Response:
+        method = request.path_params["method"]
+        body = await request.body()
+        upstream_resp = await self._client.post(
+            f"/iris.cluster.ControllerService/{method}",
+            content=body,
+            headers={"content-type": request.headers.get("content-type", "application/json")},
+        )
+        return Response(
+            content=upstream_resp.content,
+            status_code=upstream_resp.status_code,
+            media_type=upstream_resp.headers.get("content-type"),
+        )
+
+    async def _proxy_bundle(self, request: Request) -> Response:
+        bundle_id = request.path_params["bundle_id"]
+        upstream_resp = await self._client.get(f"/bundles/{bundle_id}.zip")
+        if upstream_resp.status_code != 200:
+            return Response(upstream_resp.text, status_code=upstream_resp.status_code)
+        return Response(upstream_resp.content, media_type="application/zip")

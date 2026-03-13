@@ -19,12 +19,11 @@ logger = _logging_module.getLogger(__name__)
 
 
 def _configure_client_s3(config) -> None:
-    """Configure S3 env vars so client-side fsspec reads (log streaming) work.
+    """Configure S3 env vars for fsspec access (e.g. bundle downloads).
 
-    The CLI reads task logs directly from S3 via LogReader/fsspec. fsspec needs
-    AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from R2_ACCESS_KEY_ID/
-    R2_SECRET_ACCESS_KEY), AWS_ENDPOINT_URL, and FSSPEC_S3 with the correct
-    endpoint. Without these, log streaming fails with NoCredentialsError.
+    fsspec needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (mapped from
+    R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY), AWS_ENDPOINT_URL, and FSSPEC_S3
+    with the correct endpoint.
     """
     from iris.cluster.platform.coreweave import _needs_virtual_host_addressing
 
@@ -147,9 +146,11 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.job import job  # noqa: E402
+from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402
 
 iris.add_command(cluster)
 iris.add_command(build)
 iris.add_command(job)
 register_rpc_commands(iris)
+register_process_status_commands(iris)

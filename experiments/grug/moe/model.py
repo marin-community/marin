@@ -5,7 +5,7 @@
 
 This variant intentionally mirrors `experiments/grug/base/model.py` and applies
 MoE-specific changes inline. Keeping the file largely self-contained follows the
-grug copy-first workflow in `docs/recipes/change_grug.md`.
+grug copy-first workflow in `.agents/skills/change-grug/`.
 """
 
 import dataclasses
@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jax.scipy as jsp
 from einops import rearrange
 from haliax.jax_utils import named_call
 from jax import random
@@ -59,6 +60,8 @@ class GrugModelConfig:
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
+    load_balancing_loss_coef: float | None = 0.01
+    router_z_loss_coef: float | None = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -77,6 +80,10 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.load_balancing_loss_coef is not None and self.load_balancing_loss_coef < 0:
+            raise ValueError("load_balancing_loss_coef must be non-negative when set")
+        if self.router_z_loss_coef is not None and self.router_z_loss_coef < 0:
+            raise ValueError("router_z_loss_coef must be non-negative when set")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -175,31 +182,58 @@ class DenseMLP(eqx.Module):
         return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
 
 
-def _routing_stats_from_selected_experts(
+def _routing_stats(
     selected_experts: Int[Array, "T K"],
+    router_probs: Float[Array, "T E"],
+    router_logits: Float[Array, "T E"],
     *,
     num_experts: int,
+    num_experts_per_token: int,
 ) -> dict[str, jax.Array]:
+    router_probs_f = router_probs.astype(jnp.float32)
+    router_logits_f = router_logits.astype(jnp.float32)
     expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
     total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
-    expert_loads = expert_counts / total_assignments
-    routing_entropy = -jnp.sum(expert_loads * jnp.log(expert_loads + 1e-6))
+    assignment_fraction = expert_counts / total_assignments
+    routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
+    # Match the Switch/OLMoE-style scaling: E * sum_i(f_i * p_i), where
+    # f_i is token fraction for expert i (counts per token, not per assignment).
+    # assignment_fraction sums to 1 over assignments, so convert with top-k.
+    token_fraction = assignment_fraction * num_experts_per_token
+    p = jnp.mean(router_probs_f, axis=0)
+    load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
+    z = jsp.special.logsumexp(router_logits_f, axis=-1)
+    router_z_loss = jnp.mean(z**2)
+
     return {
         "routing_counts": expert_counts,
         "routing_entropy": routing_entropy,
+        "load_balancing_loss": load_balancing_loss,
+        "router_z_loss": router_z_loss,
     }
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | Histogram]:
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
+    load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
+    router_z_loss = router_metrics["router_z_loss_per_layer"]
     num_layers = int(routing_entropy.shape[0])
+    aux_loss_per_layer = load_balancing_loss + router_z_loss
 
     out: dict[str, jax.Array | Histogram] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
+        # Match MaxText + Megatron/Nemotron practice: log layer-mean raw
+        # router terms for comparability across depth.
+        "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
+        "train/router/router_z_loss": jnp.mean(router_z_loss),
+        # Keep aux loss as a per-step aggregate while exposing mean terms above.
+        "train/router/aux_loss": jnp.sum(aux_loss_per_layer),
     }
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
+        out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
+        out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
     return out
 
@@ -266,9 +300,16 @@ class MoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None)))
+        router_probs = jax.nn.softmax(router_logits, axis=-1)
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
         combine_weights = jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype)
-        router_stats = _routing_stats_from_selected_experts(selected_experts, num_experts=self.cfg.num_experts)
+        router_stats = _routing_stats(
+            selected_experts,
+            router_probs,
+            router_logits,
+            num_experts=self.cfg.num_experts,
+            num_experts_per_token=self.cfg.num_experts_per_token,
+        )
 
         routed_flat = moe_mlp(
             x_flat,
@@ -368,6 +409,8 @@ class Transformer(eqx.Module):
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in all_router_stats], axis=0),
             "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in all_router_stats], axis=0),
+            "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in all_router_stats], axis=0),
+            "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in all_router_stats], axis=0),
         }
         return self.final_norm(hidden), router_metrics
 
@@ -396,7 +439,7 @@ class Transformer(eqx.Module):
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        loss = fused_linear_softmax_cross_entropy_loss(
+        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
             labels,
@@ -405,8 +448,22 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
+        # Keep router metrics raw and apply coefficients only at the final
+        # objective composition step (same separation as MaxText/Megatron).
+        load_balancing_loss_coef = (
+            0.0 if self.config.load_balancing_loss_coef is None else self.config.load_balancing_loss_coef
+        )
+        router_z_loss_coef = 0.0 if self.config.router_z_loss_coef is None else self.config.router_z_loss_coef
+        aux_loss = load_balancing_loss_coef * jnp.sum(router_metrics["load_balancing_loss_per_layer"]) + (
+            router_z_loss_coef * jnp.sum(router_metrics["router_z_loss_per_layer"])
+        )
+        include_aux_in_loss = reduction != "none" and (load_balancing_loss_coef != 0.0 or router_z_loss_coef != 0.0)
+        loss = cross_entropy_loss + aux_loss if include_aux_in_loss else cross_entropy_loss
         if return_router_metrics:
-            return loss, _summarize_router_metrics(router_metrics)
+            summarized_metrics = _summarize_router_metrics(router_metrics)
+            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+            return loss, summarized_metrics
         return loss
 
 

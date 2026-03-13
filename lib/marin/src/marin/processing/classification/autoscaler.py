@@ -13,7 +13,7 @@ from ray.util.queue import Queue
 
 from marin.processing.classification.classifier import BaseClassifier
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
