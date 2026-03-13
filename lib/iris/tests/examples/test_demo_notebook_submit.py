@@ -37,7 +37,7 @@ def demo_client() -> IrisClient:
         )
         yield client
     finally:
-        controller.stop()
+        controller.close()
 
 
 def test_demo_notebook_hello_world_submit(demo_client: IrisClient) -> None:

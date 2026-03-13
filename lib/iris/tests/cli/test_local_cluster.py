@@ -142,7 +142,7 @@ def test_cli_local_cluster_e2e(cluster_config_file: Path):
         status = job.wait(timeout=30, raise_on_failure=True)
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
     finally:
-        controller.stop()
+        controller.close()
         cli_thread.join(timeout=5)
 
     assert invoke_result, "CLI did not return"
