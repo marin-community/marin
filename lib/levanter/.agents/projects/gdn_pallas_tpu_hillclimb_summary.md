@@ -49,6 +49,10 @@ Required properties:
 - explicit sharding contract
 - explicit layout contract
 - reuse current leaf kernels initially
+- rejected variants already include Python-level block custom-VJP, array-VJP,
+  leaf-VJP, and block-local `while/cond` scan/switch shells
+- the next viable `P3` attempt likely needs one stronger primitive/sharding
+  boundary below block-local control flow, not another outward wrapper
 
 ## Anti-Goals
 
