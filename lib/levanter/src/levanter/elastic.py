@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 import fsspec
 import jax
+import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
 import optax
@@ -112,6 +113,7 @@ class DiLoCoSyncConfig(ElasticSyncConfig):
     outer_beta2: float = 0.95
     outer_epsilon: float = 1e-8
     outer_weight_decay: float = 0.0
+    outer_max_update_norm: float | None = None
     reset_inner_optimizer_on_sync: bool = False
 
     def __post_init__(self):
@@ -125,6 +127,8 @@ class DiLoCoSyncConfig(ElasticSyncConfig):
             raise ValueError(f"outer_beta2 must be in [0, 1), got {self.outer_beta2}")
         if self.outer_weight_decay < 0:
             raise ValueError(f"outer_weight_decay must be non-negative, got {self.outer_weight_decay}")
+        if self.outer_max_update_norm is not None and self.outer_max_update_norm <= 0:
+            raise ValueError(f"outer_max_update_norm must be positive, got {self.outer_max_update_norm}")
 
 
 @dataclass(frozen=True)
@@ -723,6 +727,7 @@ class FileBackedPeerSyncController:
 
     def _candidate_peer_statuses(self, *, current_step: int) -> list[ElasticWorkerStatus]:
         deadline = _utcnow() - self.config.peer_timeout
+        effective_max_peer_staleness_steps = self._effective_max_peer_staleness_steps()
         statuses = list_worker_statuses(self.paths)
         candidates: list[ElasticWorkerStatus] = []
         for status in statuses:
@@ -730,8 +735,8 @@ class FileBackedPeerSyncController:
                 continue
             if status.updated_at_dt() < deadline:
                 continue
-            if self.config.max_peer_staleness_steps is not None and current_step >= 0:
-                if current_step - status.step > self.config.max_peer_staleness_steps:
+            if effective_max_peer_staleness_steps is not None and current_step >= 0:
+                if current_step - status.step > effective_max_peer_staleness_steps:
                     continue
             if self._last_applied_peer == (status.worker_id, status.step):
                 continue
@@ -750,6 +755,13 @@ class FileBackedPeerSyncController:
 
         candidates.sort(key=lambda status: status.step, reverse=True)
         return candidates[: self.config.max_peers]
+
+    def _effective_max_peer_staleness_steps(self) -> int | None:
+        if self.config.max_peer_staleness_steps is not None:
+            return self.config.max_peer_staleness_steps
+        if isinstance(self.config.sync, DiLoCoSyncConfig):
+            return self.config.sync_interval_steps * 2
+        return None
 
     def _shareable_state(self, state: S) -> dict[str, Any]:
         opt_state = state.opt_state if self._share_optimizer_state else None
@@ -924,12 +936,26 @@ class FileBackedPeerSyncController:
             diloco_state.outer_opt_state,
             params=anchor_trainable,
         )
+        unclipped_update_norm = _tree_global_norm(updates)
+        if sync_config.outer_max_update_norm is not None:
+            updates = _clip_tree_to_global_norm(updates, sync_config.outer_max_update_norm)
         updated_trainable = optax.apply_updates(anchor_trainable, updates)
         updated_model = self._merge_trainable_model(updated_trainable, anchor_model)
         self._diloco_state = _DiLoCoState(
             anchor_model=_copy_jax_array_tree(updated_model),
             outer_opt_state=new_outer_opt_state,
         )
+        clipped_update_norm = _tree_global_norm(updates)
+
+        if jax.process_index() == 0:
+            levanter.tracker.log(
+                {
+                    "elastic/diloco_unclipped_update_norm": float(jax.device_get(unclipped_update_norm)),
+                    "elastic/diloco_update_norm": float(jax.device_get(clipped_update_norm)),
+                    "elastic/diloco_peer_count": len(peer_shareable_states),
+                },
+                step=int(state.step) - 1,
+            )
 
         opt_state = state.opt_state
         if sync_config.reset_inner_optimizer_on_sync and hasattr(state, "optimizer"):
@@ -1033,6 +1059,29 @@ def _copy_jax_array_tree(tree: Any) -> Any:
         return jax.device_put(host_value)
 
     return jtu.tree_map(_copy_leaf, tree)
+
+
+def _tree_global_norm(tree: Any) -> jax.Array:
+    total = jnp.array(0.0, dtype=jnp.float32)
+    for leaf in jtu.tree_leaves(tree):
+        if not is_jax_array_like(leaf):
+            continue
+        leaf_arr = jnp.asarray(leaf, dtype=jnp.float32)
+        total = total + jnp.sum(jnp.square(leaf_arr))
+    return jnp.sqrt(total)
+
+
+def _clip_tree_to_global_norm(tree: Any, max_norm: float) -> Any:
+    max_norm_arr = jnp.asarray(max_norm, dtype=jnp.float32)
+    norm = _tree_global_norm(tree)
+    scale = jnp.minimum(1.0, max_norm_arr / (norm + 1e-8))
+
+    def _scale_leaf(leaf: Any) -> Any:
+        if not is_jax_array_like(leaf):
+            return leaf
+        return leaf * scale
+
+    return jtu.tree_map(_scale_leaf, tree)
 
 
 def _aggregate_progress_metrics(

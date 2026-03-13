@@ -790,3 +790,37 @@
 - Next action:
   - continue monitoring `0312h` through additional publish/sync intervals
   - alert immediately if any `Array has been deleted` or `Skipping elastic transfer publish` line reappears
+
+### 2026-03-12 21:33 - Added sync-stability guardrails for cyclic spikes and launched `0312j`
+- Hypothesis:
+  - the remaining cyclic spikes are caused by large/stale sync jumps; bounding DiLoCo outer update norm and rejecting stale peers should reduce periodic loss shocks without changing batch-size semantics.
+- Command:
+  - patched:
+    - `lib/levanter/src/levanter/elastic.py`
+    - `lib/levanter/tests/test_elastic.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare_executor.py`
+  - verification:
+    - `uv run --with pytest --with pytest-timeout python -m pytest lib/levanter/tests/test_elastic.py -q`
+    - `./infra/pre-commit.py --fix lib/levanter/src/levanter/elastic.py lib/levanter/tests/test_elastic.py lib/marin/src/marin/training/elastic_budget_compare.py lib/marin/src/marin/training/elastic_budget_compare_executor.py`
+  - launched:
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --region us-central1 --job-name resilient-1e19-0312j-diloco-adam20p-maxpeers1-stale200-clip10-executor-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare_executor --benchmark-id resilient-1e19-0312j-diloco-adam20p-maxpeers1-stale200-clip10 --output-root gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-1e19-0312j-diloco-adam20p-maxpeers1-stale200-clip10 --region us-central1 --sync-every 100 --publish-every 100 --steps-per-eval 500 --max-eval-batches 1 --outer-optimizer adam --outer-learning-rate 0.02 --max-peers 1 --max-peer-staleness-steps 200 --outer-max-update-norm 10`
+- Result:
+  - DiLoCo sync now supports `outer_max_update_norm` clipping in core elastic logic.
+  - when `max_peer_staleness_steps` is unset, DiLoCo now defaults to rejecting peers older than `2 * sync_interval_steps`.
+  - added telemetry at sync points:
+    - `elastic/diloco_unclipped_update_norm`
+    - `elastic/diloco_update_norm`
+    - `elastic/diloco_peer_count`
+  - benchmark/executor CLI now forwards:
+    - `--max-peer-staleness-steps`
+    - `--outer-max-update-norm`
+  - new monitor root:
+    - `/dlwh/resilient-1e19-0312j-diloco-adam20p-maxpeers1-stale200-clip10-executor-parent`
+  - immediate scheduler state: executor parent `pending` waiting for TPU scale-up.
+- Interpretation:
+  - this is a targeted reduction in sync shock amplitude, not a change to optimizer-family or batch-schedule contract.
+  - update-norm telemetry should let us distinguish true optimizer instability from expected local-noise scatter.
+- Next action:
+  - monitor `0312j` until elastic workers are running and first sync intervals pass
+  - compare `train/loss` and validation loss against `0312i` with the new sync-norm metrics visible in W&B

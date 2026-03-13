@@ -57,6 +57,8 @@ class ElasticBudgetCompareConfig:
     outer_learning_rate: float = 0.25
     outer_optimizer: Literal["adam", "sgd"] = "sgd"
     max_peers: int | None = None
+    max_peer_staleness_steps: int | None = None
+    outer_max_update_norm: float | None = None
     data_config: LmDataConfig | None = None
     """Optional pre-resolved data config, useful when dispatching via Executor."""
 
@@ -321,6 +323,8 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
             "outer_learning_rate": config.outer_learning_rate,
             "outer_optimizer": config.outer_optimizer,
             "max_peers": max_peers,
+            "max_peer_staleness_steps": config.max_peer_staleness_steps,
+            "outer_max_update_norm": config.outer_max_update_norm,
         },
     }
     _write_json(summary_path, summary)
@@ -382,8 +386,10 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
                     sync=DiLoCoSyncConfig(
                         outer_learning_rate=config.outer_learning_rate,
                         outer_optimizer=config.outer_optimizer,
+                        outer_max_update_norm=config.outer_max_update_norm,
                     ),
                     max_peers=max_peers,
+                    max_peer_staleness_steps=config.max_peer_staleness_steps,
                     transfer_timeout=timedelta(minutes=10),
                     request_poll_interval_seconds=0.1,
                 ),
@@ -422,6 +428,8 @@ def _parse_args() -> ElasticBudgetCompareConfig:
     parser.add_argument("--outer-learning-rate", type=float, default=0.25)
     parser.add_argument("--outer-optimizer", choices=("adam", "sgd"), default="sgd")
     parser.add_argument("--max-peers", type=int, default=None)
+    parser.add_argument("--max-peer-staleness-steps", type=int, default=None)
+    parser.add_argument("--outer-max-update-norm", type=float, default=None)
     args = parser.parse_args()
 
     return ElasticBudgetCompareConfig(
@@ -446,6 +454,8 @@ def _parse_args() -> ElasticBudgetCompareConfig:
         outer_learning_rate=args.outer_learning_rate,
         outer_optimizer=args.outer_optimizer,
         max_peers=args.max_peers,
+        max_peer_staleness_steps=args.max_peer_staleness_steps,
+        outer_max_update_norm=args.outer_max_update_norm,
     )
 
 

@@ -16,10 +16,12 @@ from levanter.elastic import (
     ElasticWorkerStatus,
     FileBackedPeerSyncController,
     PeerAveragingSyncConfig,
+    _clip_tree_to_global_norm,
     _remove_if_exists,
     _aggregate_progress_metrics,
     _flatten_transfer_payload,
     _restore_transfer_payload,
+    _tree_global_norm,
     read_completion,
     read_worker_status,
 )
@@ -346,3 +348,55 @@ def test_jax_transfer_publish_prepares_payload_when_not_staged(tmp_path):
     )
     assert transfer_runtime.prepare_calls == 1
     assert transfer_runtime.publish_calls == [(0, {"prepared": 1})]
+
+
+def test_clip_tree_to_global_norm_scales_arrays():
+    tree = {"x": jnp.array([3.0, 4.0], dtype=jnp.float32)}
+    clipped = _clip_tree_to_global_norm(tree, max_norm=2.0)
+    clipped_norm = float(_tree_global_norm(clipped))
+    assert clipped_norm == pytest.approx(2.0, abs=1e-5)
+
+
+def test_diloco_default_peer_staleness_filter_uses_sync_interval(tmp_path):
+    elastic_root = str(tmp_path / "elastic")
+    mesh = _single_device_mesh()
+
+    peer_controller = FileBackedPeerSyncController(
+        config=ElasticTrainingConfig(
+            enabled=True,
+            group_id="run",
+            worker_id="w001",
+            state_path=elastic_root,
+            sync_interval_steps=3,
+            publish_interval_steps=3,
+            sync=DiLoCoSyncConfig(outer_optimizer="sgd", outer_learning_rate=0.25),
+        ),
+        checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w001"),
+        run_id="run-w001",
+        axis_mapping={},
+        mesh=mesh,
+    )
+    local_controller = FileBackedPeerSyncController(
+        config=ElasticTrainingConfig(
+            enabled=True,
+            group_id="run",
+            worker_id="w000",
+            state_path=elastic_root,
+            sync_interval_steps=3,
+            publish_interval_steps=3,
+            sync=DiLoCoSyncConfig(outer_optimizer="sgd", outer_learning_rate=0.25),
+        ),
+        checkpoint_base_path=str(tmp_path / "checkpoints" / "run-w000"),
+        run_id="run-w000",
+        axis_mapping={},
+        mesh=mesh,
+    )
+
+    peer_controller._publish_state(  # noqa: SLF001
+        DummyState(step=1, model={"weight": jnp.array([2.0], dtype=jnp.float32)}),
+        step=0,
+    )
+    peer_controller._manager.wait_until_finished()  # noqa: SLF001
+
+    assert local_controller._candidate_peer_statuses(current_step=5)  # noqa: SLF001
+    assert not local_controller._candidate_peer_statuses(current_step=7)  # noqa: SLF001
