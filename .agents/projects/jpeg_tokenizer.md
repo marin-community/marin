@@ -380,7 +380,7 @@ Deliverables:
 
 Metrics:
 
-- teacher-forced loss,
+- whole-sequence / whole-image loss only (sum NLL over each image sequence),
 - bits-per-pixel or another normalized cross-tokenizer metric,
 - sequence length statistics,
 - tokens/sec and loader stall time,
@@ -477,11 +477,17 @@ Keep the first evaluation stack narrow and aligned with the research question.
 
 ### Primary metrics
 
-- training/eval NLL,
+- whole-image sequence loss (sum NLL per image sequence),
+- bits/image (primary cross-representation comparison metric),
 - normalized likelihood metric such as bits-per-pixel,
 - tokens/sec,
 - loader stall time,
 - rollout decode success rate.
+
+### Reporting policy (hard rule)
+
+- Mean next-token loss is diagnostic only and should not be used for final conclusions.
+- Any final comparison across tokenizers must be reported on whole-sequence / whole-image metrics (`bits/image` and related sequence-level summaries).
 
 ### Stability metrics
 
