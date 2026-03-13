@@ -698,8 +698,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
     def _fs_size(self, url: str) -> int | None:
         fs, fspath = self._get_fs_and_path(url)
-        size = fs.size(fspath)
-        return size if size is not None else None
+        return fs.size(fspath)
 
     def _fs_copy(self, src_url: str, dst_url: str) -> None:
         src_fs, src_path = self._get_fs_and_path(src_url)
@@ -729,10 +728,6 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         local_url = self._local_url(path)
         remote_url = self._remote_url(source_prefix, path)
 
-        size = self._fs_size(remote_url)
-        if size is not None:
-            self._budget.record(size, remote_url)
-
         lock = create_lock(self._lock_path_for(path), self._worker_id)
 
         if not lock.try_acquire():
@@ -750,6 +745,10 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         try:
             if self._fs_exists(local_url):
                 return
+
+            size = self._fs_size(remote_url)
+            if size is not None:
+                self._budget.record(size, remote_url)
 
             logger.info("Mirror: copying %s → %s", remote_url, local_url)
             self._fs_copy(remote_url, local_url)
