@@ -684,17 +684,14 @@ class IrisClient:
             else:
                 constraints = merge_constraints(parent_constraints, constraints)
 
-            # If the parent is running in a known region and the child has no
-            # explicit region constraint, pin the child to the same region.
-            # This ensures children of reservation jobs stay co-located with
-            # the reservation's claimed workers.
-            if (
-                job_info
-                and job_info.worker_region
-                and not any(c.key == WellKnownAttribute.REGION for c in constraints or [])
-            ):
+            # Always inherit the parent's region unless the child already has
+            # an explicit region constraint.  This applies even when the caller
+            # passes constraints=[] to clear other inherited constraints —
+            # region pinning ensures children stay co-located with the
+            # reservation's claimed workers.
+            if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
                 inherited_region = region_constraint([job_info.worker_region])
-                constraints = [*list(constraints or []), inherited_region]
+                constraints = [*constraints, inherited_region]
 
         # Convert to wire format
         resources_proto = resources.to_proto()
