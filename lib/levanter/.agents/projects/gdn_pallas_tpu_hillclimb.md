@@ -8442,3 +8442,243 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
     - the backward/custom-VJP contract,
     - and the sharding/layout contract.
   - Make the first fixed-4-layer design/prototype explicitly beat `dispatch_shard_shell_delta_ms`, `ad_wrapper_shell_delta_ms`, and the remaining interaction remainder rather than chasing smaller same-boundary bucket names.
+
+### Iteration 94 - Coverage Slot S3 / matched hybrid-shell refresh on `4459400` with Ray fallback (validated, attribution-only)
+
+- Coverage slot: `S3`
+- Change class: `decoder shell attribution`
+- Why this is mainline-worthy now:
+  - The latest validated log entry (Iteration 93) already showed an xprof-backed `S3` shell split on a later descendant, but this run starts from the older `4459400625b8c4ef3a6df57b289812898a00c814` head and still needs a matched refresh before spending another mainline iteration on `A3` or `P3`.
+  - `S3` is still higher information than `A3`, `P3`, `U`, or a generic diagnostic side-arm because CE has not been re-implicated and the immediate budget is still the hybrid-only shell delta, especially `dispatch/shard` first and `AD/wrapper` second.
+  - No repo code change was required for this slot. The smallest executable fix was operational only: restore the missing local `dev-tpu-calvinxu-gdn` SSH alias to the live held host so `gdnctl xprof-compare-runs` could stage and analyze the matched XPlane pair.
+
+- Codex loop iteration: `1 / 10`
+- Date: `2026-03-13T00:56:08Z`
+- Starting commit: `4459400625b8c4ef3a6df57b289812898a00c814`
+- Commit: `final validated result commit descended from 4459400625b8c4ef3a6df57b289812898a00c814`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Latest validated `S3`/xprof baseline from the log (Iteration 93):
+    - hybrid `throughput/mfu=6.036753`
+    - hybrid `throughput/tokens_per_second=195287.805612`
+    - hybrid `throughput/duration=0.167793375 s`
+    - hybrid `step_duration=167.793375 ms`
+    - control `throughput/duration=0.057256827 s`
+    - `train_path_budget_ms=42.682894`
+    - `hybrid_generic_shell_delta_budget_ms=20.103367`
+    - `dispatch_shard_shell_delta_ms=9.771419`
+    - `ad_wrapper_shell_delta_ms=6.178290`
+    - `interaction_remainder_ms=47.750288`
+    - `xprof_dispatch_shard_shell_delta_ms=31.572807`
+    - `xprof_ad_wrapper_shell_delta_ms=11.057602`
+    - `xprof_idle_attributed_ms=38.362912`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot S3 (selected):** refresh a matched hybrid-vs-attention pair on `4459400` and confirm whether the shell ranking still lands on `dispatch/shard`, `AD/wrapper`, and `IDLE` (`highest information`, `low implementation risk`, `directly informs A3/P3`).
+  2. **Coverage slot A3:** move the manual backward/custom-VJP boundary outward while holding the forward structure fixed (`direct shell upside`, `medium-to-high correctness risk`, `lower information until the older head’s shell picture is refreshed`).
+  3. **Coverage slot P3:** build the first fixed `3 GDN + 1 attention` block with bespoke backward and explicit sharding (`highest upside`, `highest implementation risk`, `too easy to steer against stale shell accounting`).
+
+- Selected slot rationale:
+  - `S3` is the only slot that can answer whether this older starting head still carries the same hybrid-only shell budget before spending a whole iteration on a boundary prototype.
+  - `A3` and `P3` remain next in line, but they should only move once the matched pair confirms or changes the target budgets on this head.
+  - `U` stays lower information because CE remained bounded in the fresh pair and did not re-emerge as the main unresolved wall.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - Why CE stayed fixed:
+    - This is not a CE side-arm, and the fresh matched pair again left CE-attributed `while` in the single-digit-ms range.
+
+- Expected effect on `step_duration_ms`:
+  - approximately flat versus the carried `S3` baseline, allowing for a few milliseconds of Ray fallback noise because this is an attribution iteration, not a speed candidate.
+- Expected effect on `upper_bound_gap_ms`:
+  - approximately flat in the `~110-114 ms` range on a fresh matched pair.
+- Expected effect on `dispatch_shard_shell_delta_ms`:
+  - approximately flat near `~9.8 ms` in the summary-based shell-delta view.
+- Expected effect on `ad_wrapper_shell_delta_ms`:
+  - approximately flat near `~6.1 ms`.
+- Expected effect on `hybrid_generic_shell_delta_budget_ms`:
+  - approximately flat near `~20.1 ms`.
+- Expected effect on `gap_explained_by_hybrid_generic_shell_delta`:
+  - approximately high-teens share of the matched hybrid-vs-attention gap.
+- Expected effect on `interaction_remainder_ms`:
+  - approximately flat in the high-`40 ms` to low-`50 ms` range.
+- Expected effect on `xprof_idle_attributed_ms`:
+  - approximately high-`30 ms` to low-`40 ms`.
+- Expected effect on `remainder_budget_ms`:
+  - approximately `~125-130 ms`.
+- Reject if `step_duration_ms` does not improve? **No for iteration validity; yes for promotion.**
+  - `S3` is an attribution slot, so information quality matters more than speed for validity.
+- Reject if `dispatch_shard_shell_delta_ms` stays flat / grows? **No for iteration validity; yes for promotion.**
+  - The point here is to refresh the budget, not to claim a speedup.
+- Reject if `ad_wrapper_shell_delta_ms` grows? **No for iteration validity; yes for promotion.**
+  - A rise blocks promotion but does not invalidate the attribution result.
+- Reject if `interaction_remainder_ms` grows? **No for iteration validity; yes for promotion.**
+  - A larger remainder is still useful if it sharpens the waiting/serialization diagnosis.
+- Reject if `xprof_idle_attributed_ms` grows when an XPlane pair is available? **No for iteration validity; yes for promotion.**
+  - An `S3` refresh can still succeed if it proves `IDLE` remains the dominant manifestation of the remainder.
+- Reject if `hybrid_generic_shell_delta_budget_ms` stays flat / grows? **No for iteration validity; yes for promotion.**
+  - `S3` is measuring the current shell delta cleanly; promotion requires improvement, validity does not.
+
+- Change summary:
+  - No repo code, kernel, model, or benchmark math changed.
+  - Dev TPU wrapper commands failed on `source $HOME/.local/bin/env`, so the required TPU validation/profile work fell back to `ray-test` and `ray-profile` exactly as the session directive allows.
+  - Restored the missing local `dev-tpu-calvinxu-gdn` SSH alias to the live held host `34.152.119.242` / `t1v-n-1f796970-w-0` so `gdnctl xprof-compare-runs` could run unchanged against the held Linux/TPU host.
+
+- Correctness checks:
+  - Preferred dev TPU path:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - result: failed before pytest start because `/home/calvinxu/.local/bin/env` was missing on the held dev TPU wrapper path.
+  - Required fallback TPU parity slice:
+    - `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - result: `88 passed, 2 skipped in 238.10s (0:03:58)`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - Fresh hybrid rerun:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --profile-env WANDB_DISABLE_CODE=true --run-name-prefix gdn_s3_i1_hybrid_ray --no-wait`
+    - waited with: `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-bash-20260313-004345 --timeout 1800 --show-logs --tail 400`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s3_i1_hybrid_ray_gdn3of4_130m_ch128_seg16_20steps-edc6ef`
+    - profiler summary: `scratch/gdn_s3_i1_hybrid_summary_200.json`
+  - Fresh attention-only control:
+    - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --profile-env WANDB_DISABLE_CODE=true --run-name-prefix gdn_s3_i1_attn_ray --no-wait`
+    - waited with: `uv run python scripts/gdn/gdnctl.py ray-wait --cluster us-east5-a ray-run-calvinxu-bash-20260313-004844 --timeout 1800 --show-logs --tail 400`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_s3_i1_attn_ray_attnonly_130m_ch128_seg16_20steps-6f50df`
+    - profiler summary: `scratch/gdn_s3_i1_attn_summary_200.json`
+  - Matched XPlane comparison:
+    - `uv run python scripts/gdn/gdnctl.py xprof-compare-runs --cluster us-east5-a --tpu-name calvinxu-gdn --before-run-target https://wandb.ai/marin-community/marin/runs/gdn_s3_i1_attn_ray_attnonly_130m_ch128_seg16_20steps-6f50df --after-run-target https://wandb.ai/marin-community/marin/runs/gdn_s3_i1_hybrid_ray_gdn3of4_130m_ch128_seg16_20steps-edc6ef --normalize-positive-deltas-ms 51.14985671534285 --remote-stage-dir .agents/xprof_compare/gdn_s3_i1 --output scratch/gdn_s3_i1_xprof_compare.json`
+    - artifact: `scratch/gdn_s3_i1_xprof_compare.json`
+  - Combined attribution artifact:
+    - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_s3_i1_hybrid_summary_200.json --baseline-summary scratch/gdn_s3_i1_attn_summary_200.json --step-duration-ms 172.2713310000472 --baseline-step-duration-ms 58.310302999871055 --upper-bound-step-ms 58.310302999871055 --gdn-layer-fraction 0.833333 --baseline-gdn-layer-fraction 0.0 --gdn-layers-per-block 3 --baseline-gdn-layers-per-block 0 --gdn-block-size 4 --baseline-gdn-block-size 4 --xprof-compare-json scratch/gdn_s3_i1_xprof_compare.json --output scratch/gdn_s3_i1_attribution.json`
+    - artifact: `scratch/gdn_s3_i1_attribution.json`
+  - Throughput metrics use the required history-window median over steps `10-18` (`9` points).
+
+- Refreshed `S3` attribution metrics (fresh attention-only control -> fresh hybrid rerun):
+  - `CE backend selected: pallas_tpu -> pallas_tpu`
+  - `CE bwd mode: pallas -> pallas`
+  - `gdn_layer_fraction: 0.000000 -> 0.833333`
+  - `Forward closed-call: 0.000000 ms -> 20.663542 ms`
+  - `Backward closed-call: 0.000000 ms -> 13.128435 ms`
+  - `while: 8.560251 ms -> 8.915192 ms`
+  - `conditional: 0.001194 ms -> 0.001364 ms`
+  - `CE-attributed while: 8.560251 ms -> 8.915192 ms`
+  - `Kernel budget: 0.000000 ms -> 33.791976 ms`
+  - `Control budget: 8.561446 ms -> 8.916556 ms`
+  - `Train-path budget: 8.561446 ms -> 42.708532 ms`
+  - `Decoder-layer shell budget: 20.138258 ms -> 20.389042 ms`
+  - `Hybrid generic shell delta budget: 0.000000 ms -> 20.102639 ms`
+  - `Dispatch/shard shell delta budget: 0.000000 ms -> 9.775948 ms`
+  - `AD/wrapper shell delta budget: 0.000000 ms -> 6.172656 ms`
+  - `AD shell budget: 0.000000 ms -> 6.984796 ms`
+  - `Sharding shell budget: 11.795400 ms -> 13.243144 ms`
+  - `Layout shell budget: 0.868106 ms -> 2.178456 ms`
+  - `Residual/add shell budget: 0.325214 ms -> 2.322337 ms`
+  - `xprof hybrid generic shell delta budget: 0.000000 ms -> 51.149857 ms`
+  - `xprof dispatch/shard shell delta budget: 0.000000 ms -> 33.802121 ms`
+  - `xprof AD/wrapper shell delta budget: 0.000000 ms -> 11.871175 ms`
+  - `xprof layout shell delta budget: 0.000000 ms -> 2.764414 ms`
+  - `xprof residual/add shell delta budget: 0.000000 ms -> 2.712146 ms`
+  - `xprof IDLE attributed remainder: 0.000000 ms -> 44.358870 ms`
+  - `Step duration: 58.310303 ms -> 172.271331 ms`
+  - `Remainder budget: 49.748857 ms -> 129.562799 ms`
+  - `Interaction remainder: 0.000000 ms -> 51.149857 ms`
+  - `Upper-bound gap: 0.000000 ms -> 113.961028 ms`
+  - `Gap explained by train-path: 0.00% -> 37.48%`
+  - `Gap explained by decoder-layer shell: 0.00% -> 17.89%`
+  - `Gap explained by hybrid generic shell delta: 0.00% -> 17.64%`
+  - `hybrid_generic_shell_delta_topk: dispatch_shard_shell HackableDecoderLayer/shard_map/pallas_call: +5.216205 ms; dispatch_shard_shell HackableDecoderLayer/closed_call/shard_map: +4.519319 ms; ad_wrapper_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: +1.998333 ms; layout_shell HackableDecoderLayer/reshape: +1.831699 ms; residual_add_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: +1.789583 ms`
+  - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call: 5.216205 ms; HackableDecoderLayer/closed_call/shard_map: 4.519319 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: 1.998333 ms; HackableDecoderLayer/reshape: 1.831699 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: 1.789583 ms`
+  - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call: 5.216205 ms; HackableDecoderLayer/closed_call/shard_map: 4.519319 ms; CE forward pallas_call 2.703038 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: 1.998333 ms; HackableDecoderLayer/reshape: 1.831699 ms`
+  - Hybrid `throughput/mfu=5.879836`, `throughput/tokens_per_second=190211.568052`, `throughput/duration=0.172271331 s`
+  - Control `throughput/mfu=20.923669`, `throughput/tokens_per_second=561959.007486`, `throughput/duration=0.058310303 s`
+
+- Interpretation:
+  - The summary-based shell ranking stayed stable on `4459400`, but the fresh Ray-backed pair was materially noisier than the carried `S3`/xprof baseline:
+    - `step_duration_ms: 167.793375 -> 172.271331` (`+4.477956 ms`)
+    - `train_path_budget_ms: 42.682894 -> 42.708532` (`+0.025638 ms`)
+    - `hybrid_generic_shell_delta_budget_ms: 20.103367 -> 20.102639` (`-0.000728 ms`)
+    - `dispatch_shard_shell_delta_ms: 9.771419 -> 9.775948` (`+0.004529 ms`)
+    - `ad_wrapper_shell_delta_ms: 6.178290 -> 6.172656` (`-0.005634 ms`)
+    - `interaction_remainder_ms: 47.750288 -> 51.149857` (`+3.399569 ms`)
+    - `xprof_dispatch_shard_shell_delta_ms: 31.572807 -> 33.802121` (`+2.229314 ms`)
+    - `xprof_ad_wrapper_shell_delta_ms: 11.057602 -> 11.871175` (`+0.813573 ms`)
+    - `xprof_idle_attributed_ms: 38.362912 -> 44.358870` (`+5.995958 ms`)
+  - The mainline shell ranking did not change:
+    - summary-based `dispatch/shard` remains the largest hybrid-only shell family,
+    - summary-based `AD/wrapper` remains second,
+    - `layout` and `residual/add` remain secondary.
+  - The xprof-backed pair strengthened the same qualitative conclusion but with a larger waiting remainder:
+    - xprof framework-family normalization attributed the full `51.149857 ms` normalized remainder to classified shell families,
+    - the largest shares were `dispatch/shard` (`33.802121 ms`) and `AD/wrapper` (`11.871175 ms`),
+    - independent op-profile-category normalization attributed `44.358870 ms` of that normalized remainder to `IDLE`, `3.695332 ms` to `custom-call`, and `1.169960 ms` to `all-gather`.
+    - This is still `waiting/serialization still dominant`, not a CE rebound.
+  - CE stayed bounded:
+    - `CE-attributed while: 8.560251 -> 8.915192 ms`
+    - `CE forward pallas_call` remained visible but secondary at `2.703038 ms` inside `remainder_topk`.
+  - Fresh vs governance-fixed upper bound:
+    - the fresh attention-only control landed at `58.310303 ms`, which is `+0.449804 ms` slower than the fixed governance ceiling `57.860499 ms`,
+    - so the fresh matched-pair gap is `113.961028 ms`,
+    - while the gap against the fixed governance ceiling is `114.410832 ms`.
+  - Required shell questions answered:
+    - the older `4459400` head still preserves the same hybrid-only shell ranking as the carried baseline,
+    - `dispatch/shard` remains the immediate budget and `AD/wrapper` remains second,
+    - the fresh pair increased `interaction_remainder_ms` and `xprof_idle_attributed_ms`, so another same-boundary GDN-local iteration would still be steering against the wrong budget.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both` -> `88 passed, 2 skipped in 238.10s (0:03:58)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `Forward closed-call: 0.000000 ms -> 20.663542 ms`
+    - `Backward closed-call: 0.000000 ms -> 13.128435 ms`
+    - `while: 8.560251 ms -> 8.915192 ms`
+    - `conditional: 0.001194 ms -> 0.001364 ms`
+    - `CE-attributed while: 8.560251 ms -> 8.915192 ms`
+    - `Kernel budget: 0.000000 ms -> 33.791976 ms`
+    - `Control budget: 8.561446 ms -> 8.916556 ms`
+    - `Train-path budget: 8.561446 ms -> 42.708532 ms`
+    - `Decoder-layer shell budget: 20.138258 ms -> 20.389042 ms`
+    - `Hybrid generic shell delta budget: 0.000000 ms -> 20.102639 ms`
+    - `Dispatch/shard shell delta budget: 0.000000 ms -> 9.775948 ms`
+    - `AD/wrapper shell delta budget: 0.000000 ms -> 6.172656 ms`
+    - `xprof hybrid generic shell delta budget: 0.000000 ms -> 51.149857 ms`
+    - `xprof dispatch/shard shell delta budget: 0.000000 ms -> 33.802121 ms`
+    - `xprof AD/wrapper shell delta budget: 0.000000 ms -> 11.871175 ms`
+    - `xprof layout shell delta budget: 0.000000 ms -> 2.764414 ms`
+    - `xprof residual/add shell delta budget: 0.000000 ms -> 2.712146 ms`
+    - `xprof IDLE attributed remainder: 0.000000 ms -> 44.358870 ms`
+    - `AD shell budget: 0.000000 ms -> 6.984796 ms`
+    - `Sharding shell budget: 11.795400 ms -> 13.243144 ms`
+    - `Layout shell budget: 0.868106 ms -> 2.178456 ms`
+    - `Residual/add shell budget: 0.325214 ms -> 2.322337 ms`
+    - `Step duration: 58.310303 ms -> 172.271331 ms`
+    - `Remainder budget: 49.748857 ms -> 129.562799 ms`
+    - `Interaction remainder: 0.000000 ms -> 51.149857 ms`
+    - `Upper-bound gap: 0.000000 ms -> 113.961028 ms`
+    - `Gap explained by train-path: 0.00% -> 37.48%`
+    - `Gap explained by decoder-layer shell: 0.00% -> 17.89%`
+    - `Gap explained by hybrid generic shell delta: 0.00% -> 17.64%`
+    - `hybrid_generic_shell_delta_topk: dispatch_shard_shell HackableDecoderLayer/shard_map/pallas_call: +5.216205 ms; dispatch_shard_shell HackableDecoderLayer/closed_call/shard_map: +4.519319 ms; ad_wrapper_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: +1.998333 ms; layout_shell HackableDecoderLayer/reshape: +1.831699 ms; residual_add_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: +1.789583 ms`
+    - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call: 5.216205 ms; HackableDecoderLayer/closed_call/shard_map: 4.519319 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: 1.998333 ms; HackableDecoderLayer/reshape: 1.831699 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: 1.789583 ms`
+    - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call: 5.216205 ms; HackableDecoderLayer/closed_call/shard_map: 4.519319 ms; CE forward pallas_call 2.703038 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/closed_call/shard_map: 1.998333 ms; HackableDecoderLayer/reshape: 1.831699 ms`
+    - `throughput/mfu=5.879836`, `throughput/tokens_per_second=190211.568052`, `throughput/duration=0.172271331 s`
+  - Governance:
+    - This is a validated `S3` attribution slot, so it is informative rather than promotable.
+    - CE stayed fixed at `pallas_tpu` + `pallas`.
+    - Rejected as a speedup candidate because `step_duration_ms` regressed versus the carried `S3` baseline.
+    - Rejected as a speedup candidate because `dispatch_shard_shell_delta_ms` was effectively flat/up.
+    - Rejected as a speedup candidate because `interaction_remainder_ms` grew by `+3.399569 ms`.
+    - Rejected as a speedup candidate because `xprof_idle_attributed_ms` grew by `+5.995958 ms`.
+    - This iteration is best classified as `waiting/serialization still dominant`, not `namespace-only / renamed-bucket progress`.
+
+- Assessment: **validated, attribution-only, and still high-information despite fallback noise**. On `4459400`, the matched pair kept the same shell ranking as the carried baseline: `dispatch/shard` first, `AD/wrapper` second, and `IDLE` still the dominant manifestation of the remainder. The pair was noisier and slower, so it is not promotable, but it still reinforces that the next serious systems bet should be `A3` or `P3`, not another same-boundary GDN-local tweak.
+- Next bold hypothesis:
+  - Spend the next mainline iteration on `A3` or `P3`, with the chosen boundary directly targeting `dispatch_shard_shell_delta_ms`, `ad_wrapper_shell_delta_ms`, and the xprof-attributed `IDLE` remainder.
+  - Treat another same-boundary GDN-local iteration as diagnostic only unless it can measurably reduce the hybrid-specific shell delta and the full-step remainder together.
