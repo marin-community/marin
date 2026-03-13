@@ -31,7 +31,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import EnvironmentSpec, ResourceSpec
+from iris.cluster.types import EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
@@ -402,8 +402,6 @@ class IrisActorGroup:
         allowing the caller to start work immediately and discover more
         workers later via discover_new().
         """
-        from iris.cluster.types import is_job_finished
-
         target = count if count is not None else self._count
         start = time.monotonic()
         sleep_secs = 0.5
@@ -435,8 +433,6 @@ class IrisActorGroup:
 
     def is_done(self) -> bool:
         """Return True if the Iris worker job has permanently terminated."""
-        return is_job_finished(job_status.state)
-
         client = self._get_client()
         job_status = client.status(self._job_id)
         return is_job_finished(job_status.state)
