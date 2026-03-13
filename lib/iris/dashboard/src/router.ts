@@ -30,12 +30,16 @@ const routes = [
     component: () => import('./components/controller/UsersTab.vue'),
   },
   {
-    path: '/job/:jobId(.+)/task/:taskId(.+)/threads',
+    path: '/system/controller/threads',
+    component: () => import('./components/controller/ThreadDump.vue'),
+  },
+  {
+    path: '/system/worker/:workerId(.+)/threads',
     component: () => import('./components/controller/ThreadDump.vue'),
     props: true,
   },
   {
-    path: '/system/worker/task/:taskId(.+)/threads',
+    path: '/job/:jobId(.+)/task/:taskId(.+)/threads',
     component: () => import('./components/controller/ThreadDump.vue'),
     props: true,
   },
