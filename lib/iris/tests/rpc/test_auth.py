@@ -383,19 +383,49 @@ def test_null_auth_interceptor_resets_context_on_error():
 # ---------------------------------------------------------------------------
 
 
-def test_create_client_token_provider_gcp():
+def test_create_client_token_provider_gcp(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
     from iris.cli.main import create_client_token_provider
-    from iris.rpc.auth import GcpAccessTokenProvider
     from iris.rpc.config_pb2 import AuthConfig
+
+    # Isolate from real token store
+    monkeypatch.setattr("iris.cli.main.load_token", lambda *a, **kw: None)
+    monkeypatch.setattr("iris.cli.main.load_any_token", lambda *a, **kw: None)
 
     config = AuthConfig(gcp={"project_id": "my-project"})
     provider = create_client_token_provider(config)
-    assert isinstance(provider, GcpAccessTokenProvider)
+
+    # Verify it actually produces a GCP token when called
+    mock_creds = MagicMock()
+    mock_creds.token = "gcp-access-token"
+    mock_creds.expiry = None
+    with patch("google.auth.default", return_value=(mock_creds, "my-project")):
+        assert provider.get_token() == "gcp-access-token"
 
 
-def test_create_client_token_provider_none_when_no_provider():
+def test_create_client_token_provider_uses_stored_token(tmp_path, monkeypatch):
+    from iris.cli.main import create_client_token_provider
+    from iris.cli.token_store import ClusterCredential
+    from iris.rpc.config_pb2 import AuthConfig
+
+    monkeypatch.setattr(
+        "iris.cli.main.load_token",
+        lambda name, **kw: ClusterCredential(url="http://x", token="stored-tok") if name == "mycluster" else None,
+    )
+    monkeypatch.setattr("iris.cli.main.load_any_token", lambda **kw: None)
+
+    config = AuthConfig(gcp={"project_id": "my-project"})
+    provider = create_client_token_provider(config, cluster_name="mycluster")
+    assert provider.get_token() == "stored-tok"
+
+
+def test_create_client_token_provider_none_when_no_provider(monkeypatch):
     from iris.cli.main import create_client_token_provider
     from iris.rpc.config_pb2 import AuthConfig
+
+    monkeypatch.setattr("iris.cli.main.load_token", lambda *a, **kw: None)
+    monkeypatch.setattr("iris.cli.main.load_any_token", lambda *a, **kw: None)
 
     config = AuthConfig()
     assert create_client_token_provider(config) is None
