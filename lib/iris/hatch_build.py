@@ -89,9 +89,7 @@ class CustomBuildHook(BuildHookInterface):
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Protobuf generation failed:\n{result.stdout}\n{result.stderr}"
-            )
+            raise RuntimeError(f"Protobuf generation failed:\n{result.stdout}\n{result.stderr}")
         logger.info("Protobuf generation complete")
 
     def _maybe_build_dashboard(self, root: Path) -> None:
