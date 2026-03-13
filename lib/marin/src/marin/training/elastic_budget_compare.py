@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import uuid
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import timedelta
 from math import ceil
 from typing import Any, Literal
@@ -26,6 +27,7 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 
 from fray.v2 import ResourceConfig
+from marin.execution.executor import ExecutorStep, InputName, OutputName, VersionedValue
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.training.validation_sets import config_with_default_validation_sets
 
@@ -57,6 +59,7 @@ class ElasticBudgetCompareConfig:
     outer_learning_rate: float = 0.25
     outer_optimizer: Literal["adam", "sgd", "nesterov_sgd"] = "sgd"
     outer_momentum: float = 0.9
+    model_sync_mix: float = 1.0
     max_peers: int | None = None
     max_peer_staleness_steps: int | None = None
     outer_max_update_norm: float | None = None
@@ -130,6 +133,41 @@ def _cached_data_config(base_data: LmDataConfig, *, dataset_cache_dir: str, toke
         max_train_batches=None,
     )
     return config_with_default_validation_sets(train_only_data)
+
+
+def _assert_data_config_has_no_executor_placeholders(data_config: LmDataConfig) -> None:
+    unresolved: list[tuple[str, str]] = []
+
+    def _walk(value: Any, *, path: str) -> None:
+        if isinstance(value, (InputName, OutputName, ExecutorStep, VersionedValue)):
+            unresolved.append((path, type(value).__name__))
+            return
+
+        if is_dataclass(value):
+            for field in fields(value):
+                _walk(getattr(value, field.name), path=f"{path}.{field.name}")
+            return
+
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                _walk(item, path=f"{path}[{key!r}]")
+            return
+
+        if isinstance(value, list | tuple):
+            for index, item in enumerate(value):
+                _walk(item, path=f"{path}[{index}]")
+
+    _walk(data_config, path="data_config")
+    if not unresolved:
+        return
+
+    sample = ", ".join(f"{path} ({kind})" for path, kind in unresolved[:3])
+    suffix = " ..." if len(unresolved) > 3 else ""
+    raise ValueError(
+        "Data config contains unresolved executor placeholders. Launch this benchmark via "
+        "`python -m marin.training.elastic_budget_compare_executor` (or pass a pre-resolved data_config). "
+        f"Examples: {sample}{suffix}"
+    )
 
 
 def _num_train_steps_for_target_flops(
@@ -252,6 +290,7 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
             dataset_cache_dir=config.dataset_cache_dir,
             tokenizer=config.tokenizer,
         )
+    _assert_data_config_has_no_executor_placeholders(data_config)
 
     baseline_steps = _num_train_steps_for_target_flops(
         model_config=model_config,
@@ -324,6 +363,7 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
             "outer_learning_rate": config.outer_learning_rate,
             "outer_optimizer": config.outer_optimizer,
             "outer_momentum": config.outer_momentum,
+            "model_sync_mix": config.model_sync_mix,
             "max_peers": max_peers,
             "max_peer_staleness_steps": config.max_peer_staleness_steps,
             "outer_max_update_norm": config.outer_max_update_norm,
@@ -389,6 +429,7 @@ def run_elastic_budget_compare(config: ElasticBudgetCompareConfig) -> dict[str, 
                         outer_learning_rate=config.outer_learning_rate,
                         outer_optimizer=config.outer_optimizer,
                         outer_momentum=config.outer_momentum,
+                        model_sync_mix=config.model_sync_mix,
                         outer_max_update_norm=config.outer_max_update_norm,
                     ),
                     max_peers=max_peers,
@@ -431,6 +472,7 @@ def _parse_args() -> ElasticBudgetCompareConfig:
     parser.add_argument("--outer-learning-rate", type=float, default=0.25)
     parser.add_argument("--outer-optimizer", choices=("adam", "sgd", "nesterov_sgd"), default="sgd")
     parser.add_argument("--outer-momentum", type=float, default=0.9)
+    parser.add_argument("--model-sync-mix", type=float, default=1.0)
     parser.add_argument("--max-peers", type=int, default=None)
     parser.add_argument("--max-peer-staleness-steps", type=int, default=None)
     parser.add_argument("--outer-max-update-norm", type=float, default=None)
@@ -458,6 +500,7 @@ def _parse_args() -> ElasticBudgetCompareConfig:
         outer_learning_rate=args.outer_learning_rate,
         outer_optimizer=args.outer_optimizer,
         outer_momentum=args.outer_momentum,
+        model_sync_mix=args.model_sync_mix,
         max_peers=args.max_peers,
         max_peer_staleness_steps=args.max_peer_staleness_steps,
         outer_max_update_norm=args.outer_max_update_norm,

@@ -29,6 +29,7 @@ class ElasticBudgetCompareExecutorConfig:
     dataset_cache_dir: str = "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-6fbcbb"
     tokenizer: str = "meta-llama/Meta-Llama-3.1-8B"
     region: str = "us-central1"
+    mode: Literal["both", "baseline", "elastic"] = "both"
     benchmark_id: str | None = None
     output_root: str | None = None
     target_flops: float = 1e19
@@ -45,6 +46,7 @@ class ElasticBudgetCompareExecutorConfig:
     outer_learning_rate: float = 0.25
     outer_optimizer: Literal["adam", "sgd", "nesterov_sgd"] = "sgd"
     outer_momentum: float = 0.9
+    model_sync_mix: float = 1.0
     max_peers: int | None = None
     max_peer_staleness_steps: int | None = None
     outer_max_update_norm: float | None = None
@@ -87,6 +89,7 @@ def _budget_compare_step(
             outer_learning_rate=config.outer_learning_rate,
             outer_optimizer=config.outer_optimizer,
             outer_momentum=config.outer_momentum,
+            model_sync_mix=config.model_sync_mix,
             max_peers=config.max_peers,
             max_peer_staleness_steps=config.max_peer_staleness_steps,
             outer_max_update_norm=config.outer_max_update_norm,
@@ -106,25 +109,32 @@ def run_elastic_budget_compare_executor(config: ElasticBudgetCompareExecutorConf
         tokenizer=config.tokenizer,
     )
 
-    baseline_step = _budget_compare_step(
-        benchmark_id=benchmark_id,
-        output_root=output_root,
-        mode="baseline",
-        config=config,
-        data_config=data_config,
-    )
-    elastic_step = _budget_compare_step(
-        benchmark_id=benchmark_id,
-        output_root=output_root,
-        mode="elastic",
-        config=config,
-        data_config=data_config,
-    )
+    steps: list[ExecutorStep[ElasticBudgetCompareConfig]] = []
+    if config.mode in ("both", "baseline"):
+        steps.append(
+            _budget_compare_step(
+                benchmark_id=benchmark_id,
+                output_root=output_root,
+                mode="baseline",
+                config=config,
+                data_config=data_config,
+            )
+        )
+    if config.mode in ("both", "elastic"):
+        steps.append(
+            _budget_compare_step(
+                benchmark_id=benchmark_id,
+                output_root=output_root,
+                mode="elastic",
+                config=config,
+                data_config=data_config,
+            )
+        )
 
     executor_main.__wrapped__(
         ExecutorMainConfig(),
-        steps=[baseline_step, elastic_step],
-        description=f"Elastic budget compare via executor for {benchmark_id}",
+        steps=steps,
+        description=f"Elastic budget compare via executor for {benchmark_id} ({config.mode})",
     )
 
 
@@ -134,6 +144,11 @@ if __name__ == "__main__":
     parser.add_argument("--dataset-cache-dir", default=ElasticBudgetCompareExecutorConfig.dataset_cache_dir)
     parser.add_argument("--tokenizer", default=ElasticBudgetCompareExecutorConfig.tokenizer)
     parser.add_argument("--region", default=ElasticBudgetCompareExecutorConfig.region)
+    parser.add_argument(
+        "--mode",
+        choices=("both", "baseline", "elastic"),
+        default=ElasticBudgetCompareExecutorConfig.mode,
+    )
     parser.add_argument("--benchmark-id", default=None)
     parser.add_argument("--output-root", default=None)
     parser.add_argument(
@@ -196,6 +211,7 @@ if __name__ == "__main__":
         default=ElasticBudgetCompareExecutorConfig.outer_optimizer,
     )
     parser.add_argument("--outer-momentum", type=float, default=ElasticBudgetCompareExecutorConfig.outer_momentum)
+    parser.add_argument("--model-sync-mix", type=float, default=ElasticBudgetCompareExecutorConfig.model_sync_mix)
     parser.add_argument("--max-peers", type=int, default=None)
     parser.add_argument("--max-peer-staleness-steps", type=int, default=None)
     parser.add_argument("--outer-max-update-norm", type=float, default=None)
@@ -207,6 +223,7 @@ if __name__ == "__main__":
             dataset_cache_dir=args.dataset_cache_dir,
             tokenizer=args.tokenizer,
             region=args.region,
+            mode=args.mode,
             benchmark_id=args.benchmark_id,
             output_root=args.output_root,
             target_flops=args.target_flops,
@@ -223,6 +240,7 @@ if __name__ == "__main__":
             outer_learning_rate=args.outer_learning_rate,
             outer_optimizer=args.outer_optimizer,
             outer_momentum=args.outer_momentum,
+            model_sync_mix=args.model_sync_mix,
             max_peers=args.max_peers,
             max_peer_staleness_steps=args.max_peer_staleness_steps,
             outer_max_update_norm=args.outer_max_update_norm,

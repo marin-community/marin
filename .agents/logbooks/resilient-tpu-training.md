@@ -877,3 +877,50 @@
 - Next action:
   - keep monitoring `0312l` for first worker admission
   - publish W&B links + first sync-norm/loss snapshots once training logs appear
+
+### 2026-03-12 22:12 - Fixed unresolved validation placeholders in direct launch path
+- Hypothesis:
+  - the recurrent `TypeError: object of type 'InputName' has no len()` failures came from unresolved `ExecutorStep/InputName` objects in `LmDataConfig` when running `elastic_budget_compare` directly; forcing executor-resolved dispatch should remove this failure class.
+- Command:
+  - patched:
+    - `lib/marin/src/marin/training/elastic_budget_compare.py`
+    - `lib/marin/src/marin/training/elastic_budget_compare_executor.py`
+  - verification:
+    - `./infra/pre-commit.py --fix lib/marin/src/marin/training/elastic_budget_compare.py lib/marin/src/marin/training/elastic_budget_compare_executor.py`
+    - `uv run python - <<'PY' ... _cached_data_config(...); _assert_data_config_has_no_executor_placeholders(...) ... PY`
+    - `uv run --with pytest --with pytest-timeout python -m pytest lib/levanter/tests/test_elastic.py -q`
+- Result:
+  - added explicit preflight guard in `run_elastic_budget_compare` to reject unresolved `InputName`/`ExecutorStep` placeholders with a clear action:
+    - launch via `marin.training.elastic_budget_compare_executor`, or pass pre-resolved `data_config`.
+  - executor launcher now supports `--mode {both,baseline,elastic}` so we can run elastic-only A/B safely through executor resolution.
+- Interpretation:
+  - this removes the silent bad-config path that previously reached worker startup and then failed inside dataset glob expansion.
+  - validation defaults now resolve to concrete tokenized paths when launched through executor.
+- Next action:
+  - relaunch hard-vs-soft sync A/B using executor `--mode elastic`
+  - monitor for startup/eval and then compare post-sync loss behavior
+
+### 2026-03-12 22:15 - Relaunched elastic hard-vs-soft sync A/B through executor (`0313a`)
+- Hypothesis:
+  - with executor-resolved validation sets and milder outer update settings (`lr=0.01`, `sync_every=50`), we should avoid the prior launch crash and get a cleaner signal on whether `model_sync_mix=0.2` dampens zigzag versus hard sync.
+- Command:
+  - hard-sync arm:
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --region us-central1 --job-name resilient-2e18-0313a-adam10p-hardmix100-elastic2-exec-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare_executor --mode elastic --benchmark-id resilient-2e18-0313a-adam10p-hardmix100-elastic2 --output-root gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-2e18-0313a-adam10p-hardmix100-elastic2 --region us-central1 --target-flops 2e18 --elastic-tpu-type v5p-8 --elastic-slice-count 2 --sync-every 50 --publish-every 50 --steps-per-eval 500 --max-eval-batches 1 --outer-optimizer adam --outer-learning-rate 0.01 --model-sync-mix 1.0 --max-peers 1 --max-peer-staleness-steps 100 --outer-max-update-norm 10`
+  - soft-sync arm:
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --region us-central1 --job-name resilient-2e18-0313a-adam10p-softmix20-elastic2-exec-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare_executor --mode elastic --benchmark-id resilient-2e18-0313a-adam10p-softmix20-elastic2 --output-root gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-2e18-0313a-adam10p-softmix20-elastic2 --region us-central1 --target-flops 2e18 --elastic-tpu-type v5p-8 --elastic-slice-count 2 --sync-every 50 --publish-every 50 --steps-per-eval 500 --max-eval-batches 1 --outer-optimizer adam --outer-learning-rate 0.01 --model-sync-mix 0.2 --max-peers 1 --max-peer-staleness-steps 100 --outer-max-update-norm 10`
+  - monitor snapshots:
+    - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /dlwh/resilient-2e18-0313a-adam10p-hardmix100-elastic2`
+    - `uv run iris --config lib/iris/examples/marin.yaml job list --json --prefix /dlwh/resilient-2e18-0313a-adam10p-softmix20-elastic2`
+    - `uv run iris --config lib/iris/examples/marin.yaml job logs --since-seconds 1800 --include-children ... | rg ...`
+- Result:
+  - both launcher trees and both `train_lm-w000/w001` workers are currently `JOB_STATE_RUNNING`.
+  - executor resolved and reused cached default validation tokenized datasets (`paloma` + `uncheatable_eval`) instead of passing unresolved placeholders.
+  - startup W&B runs:
+    - hard: `resilient-2e18-0313a-adam10p-hardmix100-elastic2-elastic-w000/w001`
+    - soft: `resilient-2e18-0313a-adam10p-softmix20-elastic2-elastic-w000/w001`
+  - both arms reached initial eval + training progress (`2/4583`); no `InputName has no len()` failures in this relaunch.
+- Interpretation:
+  - executor dispatch fixed the launch-path crash.
+  - comparison is now live and collecting metrics; zigzag assessment requires first sync windows (step 50+) to accumulate.
+- Next action:
+  - continue monitoring for first sync cycles and compare `train/loss` plus `elastic/diloco_*` metrics between hard vs soft mix.
