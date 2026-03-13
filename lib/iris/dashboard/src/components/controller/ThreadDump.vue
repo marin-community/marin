@@ -8,7 +8,7 @@ const route = useRoute()
 
 const taskId = computed(() => (route.params.taskId as string) ?? '')
 const jobId = computed(() => (route.params.jobId as string) ?? '')
-const source = computed(() => (route.meta.source as string) ?? 'controller')
+const isWorker = computed(() => !jobId.value)
 
 const threadDump = ref('')
 const loading = ref(false)
@@ -16,13 +16,13 @@ const error = ref<string | null>(null)
 const lastFetched = ref<string | null>(null)
 
 const backTo = computed(() => {
-  if (source.value === 'controller' && jobId.value) {
+  if (jobId.value) {
     return `/job/${encodeURIComponent(jobId.value)}`
   }
   return '/'
 })
 
-const backLabel = computed(() => source.value === 'worker' ? 'Worker Dashboard' : 'Back')
+const backLabel = computed(() => isWorker.value ? 'Worker Dashboard' : 'Back')
 
 async function fetchThreadDump() {
   if (!taskId.value) {
@@ -37,7 +37,7 @@ async function fetchThreadDump() {
       durationSeconds: 10,
       profileType: { threads: {} },
     }
-    const rpcCall = source.value === 'worker' ? workerRpcCall : controllerRpcCall
+    const rpcCall = isWorker.value ? workerRpcCall : controllerRpcCall
     const resp = await rpcCall<{ profileData?: string; error?: string }>('ProfileTask', body)
     if (resp.error) {
       error.value = resp.error

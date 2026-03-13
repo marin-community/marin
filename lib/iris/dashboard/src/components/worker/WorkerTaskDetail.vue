@@ -124,7 +124,8 @@ async function handleProfile(profilerType: string) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `profile-${props.taskId.replace(/\//g, '_')}.out`
+      const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
+      a.download = `${ts}_profile-${props.taskId.replace(/\//g, '_')}.out`
       a.click()
       URL.revokeObjectURL(url)
     }
