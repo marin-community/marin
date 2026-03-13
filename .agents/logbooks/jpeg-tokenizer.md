@@ -1157,3 +1157,67 @@
   - under whole-image sequence loss, ordering is unchanged in both regimes:
     `coeff K=64` best, `symbols` second, `bytes` worst
   - this resolves the previously pending long/large whole-image head-to-head with terminal successful runs.
+
+### 2026-03-13 11:06 - Iris relaunch in `europe-west4-a` completed
+
+- Goal:
+  - relaunch the long whole-image representation eval using Iris in `europe-west4-a` and verify region-local execution
+- Commands:
+  - initial Iris submit path (executor step):
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --tpu v6e-8 --region europe-west4 --zone europe-west4-a --job-name jpeg-tokenizer-representation-eval-long-r3-iris3 -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-representation-eval-long-r3"]'`
+  - effective direct relaunch (to bypass executor dedupe):
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --cpu 1.0 --memory 16GB --extra marin:tpu --tpu v6e-8 --region europe-west4 --zone europe-west4-a --job-name jpeg-tokenizer-representation-eval-long-direct-iris2 -- python scripts/jpeg_tokenizer/evaluate_representation_head2head.py --run-spec name=coeff_k64_long,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-long-5272ec/checkpoints/step-8000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0,sliding_window=4096,unit_name=block,unit_count=1024 --run-spec name=symbols_long,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-long-b4aa28/checkpoints/step-8000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0,sliding_window=4096 --run-spec name=bytes_long,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-swa4096-long-64db87/checkpoints/step-8000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_whole_v0,sliding_window=4096 --output-dir gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-long-r4-iris2`
+- Notable Iris issues and fixes:
+  - `iris job run` initially stalled because workspace bundling included large untracked `artifacts/` files (`git ls-files --others` path); fixed by adding `artifacts/` to local git excludes (`.git/info/exclude`) for this workspace.
+  - first direct Iris run (`...direct-iris1`) failed with container OOM (`exit 137`) under default `memory=1GB`; relaunch with `--memory 16GB --cpu 1.0` succeeded.
+  - executor-based Iris relaunches were terminal-success but executed `0` steps due existing completed step status for that executor step.
+- Result:
+  - terminal Iris job: `/dlwh/jpeg-tokenizer-representation-eval-long-direct-iris2` -> `JOB_STATE_SUCCEEDED`
+  - worker: `marin-tpu_v6e_8-europe-west4-a-20260313-1731-e4119b4d-worker-0`
+  - output: `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-long-r4-iris2`
+  - summary metrics (`mean bits/image`):
+    - `coeff_k64_long`: `133,249.02`
+    - `symbols_long`: `137,400.13`
+    - `bytes_long`: `152,544.19`
+- Interpretation:
+  - Iris region-constrained run reproduces prior long-eval ordering with equivalent whole-image loss numbers.
+
+### 2026-03-13 15:52 - AC-dense context-ablation stream staged and smoke launched
+
+- Goal:
+  - isolate the effect of symbol run-length structure by keeping JPEG coefficient semantics but removing variable-length
+    AC run/EOB encoding
+- Changes:
+  - added a new codec path in `experiments/jpeg_tokenizer/base/jpeg_codecs.py`:
+    - `AcDenseTokenizerConfig`
+    - `encode_jpeg_ac_dense_tokens(...)` (`DC delta` + `63` dense AC tokens per block)
+    - `ac_dense_vocab_size(...)`
+  - added store builder:
+    `scripts/jpeg_tokenizer/build_whole_image_ac_dense_token_store.py`
+  - added launch steps in `experiments/jpeg_tokenizer/base/launch.py`:
+    - `tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-smoke`
+    - `tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-trial`
+  - added deterministic codec coverage in `tests/test_jpeg_tokenizer_scaffold.py`
+- Data:
+  - full store build command:
+    `uv run python scripts/jpeg_tokenizer/build_whole_image_ac_dense_token_store.py --source libjpeg --log-every 1000 --output-dir artifacts/jpeg_tokenizer/token_store/imagenette_ac_dense_whole_libjpeg_v0`
+  - mirrored to:
+    `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_ac_dense_whole_libjpeg_v0`
+  - store stats:
+    - local size: `3.3G`
+    - `seq_len=65536`
+    - `vocab_size=6142`
+    - train examples: `9469`
+    - validation examples: `3925`
+- Launch:
+  - submitted smoke run:
+    `ray-run-dlwh-launch-20260313-224035`
+  - command:
+    `RAY_AUTH_MODE=token uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a -e WANDB_API_KEY=$WANDB_API_KEY -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-smoke"]'`
+- Current status:
+  - executor status is `RUNNING`; training has been dispatched via Fray but is still in TPU scheduling wait (no
+    checkpoint directory yet at
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-smoke-666ade`)
+- Next action:
+  - continue monitoring to terminal state; if smoke succeeds, run the `ac-dense` trial and then add whole-image
+    comparison against `symbols` and `coeff_k64`.
