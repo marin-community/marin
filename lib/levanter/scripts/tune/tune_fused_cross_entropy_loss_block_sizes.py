@@ -678,7 +678,7 @@ def main() -> None:
             # Env vars affect compile-time kernel behavior, so force retrace.
             jax.clear_caches()
 
-        variant_configs = pallas_configs if variant.implementation == "pallas_tpu" else [("none", None)]
+        variant_configs = pallas_configs if variant.implementation in ("pallas_tpu", "xla") else [("none", None)]
         with _variant_env(variant):
             for label, cfg in variant_configs:
                 print("variant", variant.name, variant.implementation, label, cfg)

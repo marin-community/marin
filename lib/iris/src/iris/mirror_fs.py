@@ -36,7 +36,7 @@ from typing import Any
 
 import fsspec
 
-from iris.distributed_lock import DistributedLock, default_worker_id
+from iris.distributed_lock import create_lock, default_worker_id
 from iris.marin_fs import (
     REGION_TO_DATA_BUCKET,
     marin_prefix,
@@ -152,7 +152,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
                 f"Consider running in the source region instead."
             )
 
-        lock = DistributedLock(self._lock_path_for(path), self._worker_id)
+        lock = create_lock(self._lock_path_for(path), self._worker_id)
 
         if not lock.try_acquire():
             for _ in range(60):

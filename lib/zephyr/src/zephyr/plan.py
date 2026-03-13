@@ -88,7 +88,6 @@ class Write:
     # Writer-specific parameters
     levanter_metadata: dict | None = None
     schema: Any = None  # For parquet
-    batch_size: int = 1000  # For parquet and levanter_cache
 
 
 @dataclass
@@ -410,7 +409,6 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
                     skip_existing=op.skip_existing,
                     levanter_metadata=op.levanter_metadata,
                     schema=op.schema,
-                    batch_size=op.batch_size,
                 )
             )
 
@@ -807,16 +805,16 @@ def run_stage(
             if op.writer_type == "jsonl":
                 result = write_jsonl_file(stream, output_path)["path"]
             elif op.writer_type == "parquet":
-                result = write_parquet_file(stream, output_path, op.schema, op.batch_size)["path"]
+                result = write_parquet_file(stream, output_path, schema=op.schema)["path"]
             elif op.writer_type == "levanter_cache":
                 metadata = op.levanter_metadata if op.levanter_metadata is not None else {}
-                result = write_levanter_cache(stream, output_path, metadata, op.batch_size)["path"]
+                result = write_levanter_cache(stream, output_path, metadata=metadata)["path"]
             elif op.writer_type == "binary":
                 result = write_binary_file(stream, output_path)["path"]
             elif op.writer_type == "vortex":
                 from zephyr.writers import write_vortex_file
 
-                result = write_vortex_file(stream, output_path)["path"]
+                result = write_vortex_file(stream, output_path, schema=op.schema)["path"]
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
 

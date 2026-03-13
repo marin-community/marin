@@ -5,7 +5,7 @@
 
 This variant intentionally mirrors `experiments/grug/base/model.py` and applies
 MoE-specific changes inline. Keeping the file largely self-contained follows the
-grug copy-first workflow in `docs/recipes/change_grug.md`.
+grug copy-first workflow in `.agents/skills/change-grug/`.
 """
 
 import dataclasses

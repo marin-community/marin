@@ -265,7 +265,7 @@ class ScaleGroupConfig(_message.Message):
     def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., scale_up_rate_limit: _Optional[int] = ..., scale_down_rate_limit: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ...) -> None: ...
 
 class WorkerConfig(_message.Message):
-    __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "default_task_image", "default_task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "preemptible", "worker_attributes", "poll_interval", "heartbeat_timeout", "platform")
+    __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "default_task_image", "default_task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "preemptible", "worker_attributes", "poll_interval", "heartbeat_timeout", "slice_id", "platform", "storage_prefix", "auth_token")
     class DefaultTaskEnvEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -297,7 +297,10 @@ class WorkerConfig(_message.Message):
     WORKER_ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     POLL_INTERVAL_FIELD_NUMBER: _ClassVar[int]
     HEARTBEAT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    SLICE_ID_FIELD_NUMBER: _ClassVar[int]
     PLATFORM_FIELD_NUMBER: _ClassVar[int]
+    STORAGE_PREFIX_FIELD_NUMBER: _ClassVar[int]
+    AUTH_TOKEN_FIELD_NUMBER: _ClassVar[int]
     docker_image: str
     host: str
     port: int
@@ -315,8 +318,11 @@ class WorkerConfig(_message.Message):
     worker_attributes: _containers.ScalarMap[str, str]
     poll_interval: _time_pb2.Duration
     heartbeat_timeout: _time_pb2.Duration
+    slice_id: str
     platform: PlatformConfig
-    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., default_task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., preemptible: _Optional[bool] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ...) -> None: ...
+    storage_prefix: str
+    auth_token: str
+    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., default_task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., preemptible: _Optional[bool] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., slice_id: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., storage_prefix: _Optional[str] = ..., auth_token: _Optional[str] = ...) -> None: ...
 
 class SshConfig(_message.Message):
     __slots__ = ("user", "key_file", "port", "connect_timeout")
@@ -414,8 +420,37 @@ class DefaultsConfig(_message.Message):
     worker: WorkerConfig
     def __init__(self, ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerConfig, _Mapping]] = ...) -> None: ...
 
+class GcpAuthConfig(_message.Message):
+    __slots__ = ("project_id",)
+    PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
+    project_id: str
+    def __init__(self, project_id: _Optional[str] = ...) -> None: ...
+
+class StaticAuthConfig(_message.Message):
+    __slots__ = ("tokens",)
+    class TokensEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    TOKENS_FIELD_NUMBER: _ClassVar[int]
+    tokens: _containers.ScalarMap[str, str]
+    def __init__(self, tokens: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
+class AuthConfig(_message.Message):
+    __slots__ = ("gcp", "static", "admin_users")
+    GCP_FIELD_NUMBER: _ClassVar[int]
+    STATIC_FIELD_NUMBER: _ClassVar[int]
+    ADMIN_USERS_FIELD_NUMBER: _ClassVar[int]
+    gcp: GcpAuthConfig
+    static: StaticAuthConfig
+    admin_users: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ...) -> None: ...
+
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("platform", "defaults", "storage", "controller", "scale_groups")
+    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -423,14 +458,18 @@ class IrisClusterConfig(_message.Message):
         key: str
         value: ScaleGroupConfig
         def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[ScaleGroupConfig, _Mapping]] = ...) -> None: ...
+    NAME_FIELD_NUMBER: _ClassVar[int]
     PLATFORM_FIELD_NUMBER: _ClassVar[int]
     DEFAULTS_FIELD_NUMBER: _ClassVar[int]
     STORAGE_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUPS_FIELD_NUMBER: _ClassVar[int]
+    AUTH_FIELD_NUMBER: _ClassVar[int]
+    name: str
     platform: PlatformConfig
     defaults: DefaultsConfig
     storage: StorageConfig
     controller: ControllerVmConfig
     scale_groups: _containers.MessageMap[str, ScaleGroupConfig]
-    def __init__(self, platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ...) -> None: ...
+    auth: AuthConfig
+    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ...) -> None: ...

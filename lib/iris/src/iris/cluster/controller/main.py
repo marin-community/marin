@@ -11,11 +11,13 @@ from pathlib import Path
 
 import click
 
+from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
+from iris.cluster.controller.checkpoint import is_remote_path
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.controller.snapshot import read_snapshot_from_path
-from iris.cluster.controller.state import HEARTBEAT_FAILURE_THRESHOLD
+from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
 from iris.marin_fs import marin_temp_bucket
+from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
@@ -46,9 +48,9 @@ def cli():
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
 @click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
 @click.option(
-    "--snapshot-path",
+    "--checkpoint-path",
     default=None,
-    help="Restore from this specific snapshot file instead of the default latest.json",
+    help="Restore from this specific checkpoint DB copy instead of latest.sqlite3",
 )
 @click.option(
     "--checkpoint-interval",
@@ -63,7 +65,7 @@ def serve(
     scheduler_interval: float,
     config_file: str | None,
     log_level: str,
-    snapshot_path: str | None,
+    checkpoint_path: str | None,
     checkpoint_interval: float | None,
 ):
     """Start the Iris controller service.
@@ -72,9 +74,9 @@ def serve(
     that provisions/terminates VM slices based on pending task demand.
     """
     from iris.cluster.controller.autoscaler import Autoscaler
+    from iris.cluster.controller.db import ControllerDB
     from iris.cluster.config import load_config, create_autoscaler
     from iris.cluster.platform.factory import create_platform
-    from iris.rpc import config_pb2
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -83,6 +85,7 @@ def serve(
     # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
     cluster_config = None
+    db: ControllerDB | None = None
     if config_file:
         logger.info("Loading cluster config from %s", config_file)
         try:
@@ -96,6 +99,10 @@ def serve(
         if bundle_prefix is None and cluster_config.storage.bundle_prefix:
             bundle_prefix = cluster_config.storage.bundle_prefix
             logger.info("Using bundle_prefix from config: %s", bundle_prefix)
+
+        _CONTROLLER_LOG_DIR = Path("/tmp/iris/controller-logs")
+        _CONTROLLER_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        db = ControllerDB(db_path=_CONTROLLER_LOG_DIR / "controller.sqlite3")
 
         try:
             platform = create_platform(
@@ -118,6 +125,7 @@ def serve(
                 scale_groups=cluster_config.scale_groups,
                 label_prefix=cluster_config.platform.label_prefix or "iris",
                 base_worker_config=base_worker_config,
+                db=db,
             )
             logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
         except Exception as e:
@@ -134,8 +142,23 @@ def serve(
         bundle_prefix = default_bundle_prefix()
         logger.info("Using auto-detected bundle_prefix: %s", bundle_prefix)
 
+    # Workers need the resolved bundle_prefix to upload task artifacts (profiles).
+    if base_worker_config is not None:
+        base_worker_config.storage_prefix = bundle_prefix
+
+    # Default to hourly checkpointing when bundle_prefix is remote (GCS/S3)
+    # so controller state is periodically uploaded for post-mortem analysis.
+    _HOURLY_CHECKPOINT_SECONDS = 3600.0
+    if checkpoint_interval is None and is_remote_path(bundle_prefix):
+        checkpoint_interval = _HOURLY_CHECKPOINT_SECONDS
+        logger.info("Defaulting to hourly checkpointing (remote bundle_prefix detected)")
+
     logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
+
+    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
+    if auth.worker_token and base_worker_config is not None:
+        base_worker_config.auth_token = auth.worker_token
 
     config = ControllerConfig(
         host=host,
@@ -145,6 +168,9 @@ def serve(
         heartbeat_failure_threshold=heartbeat_failure_threshold,
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
         log_dir=Path("/tmp/iris/controller-logs"),
+        auth_verifier=auth.verifier,
+        auth_provider=auth.provider,
+        auth=auth,
     )
 
     try:
@@ -152,26 +178,26 @@ def serve(
             config=config,
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=autoscaler,
+            db=db,
         )
         logger.info("Controller instance created")
     except Exception as e:
         logger.exception("Failed to create controller")
         raise click.ClickException(f"Failed to create controller: {e}") from e
 
-    # Restore from a specific snapshot file if requested; otherwise fall back to latest.json.
-    if snapshot_path:
-        logger.info("Restoring from explicit snapshot: %s", snapshot_path)
+    # Restore from a specific checkpoint DB copy if requested; otherwise use latest.sqlite3.
+    if checkpoint_path:
+        logger.info("Restoring from explicit checkpoint DB: %s", checkpoint_path)
         try:
-            proto = read_snapshot_from_path(snapshot_path)
-            if proto is None:
-                raise click.ClickException(f"Snapshot not found: {snapshot_path}")
-            controller.restore_from_snapshot(proto)
-            logger.info("Snapshot restored from %s", snapshot_path)
+            restored = controller.restore_from_checkpoint(checkpoint_path)
+            if not restored:
+                raise click.ClickException(f"Checkpoint DB not found: {checkpoint_path}")
+            logger.info("Checkpoint DB restored from %s", checkpoint_path)
         except Exception as e:
-            logger.exception("Failed to restore snapshot from %s", snapshot_path)
-            raise click.ClickException(f"Failed to restore snapshot: {e}") from e
+            logger.exception("Failed to restore checkpoint DB from %s", checkpoint_path)
+            raise click.ClickException(f"Failed to restore checkpoint DB: {e}") from e
     else:
-        controller.restore_from_snapshot()
+        controller.restore_from_checkpoint()
 
     try:
         controller.start()
@@ -185,7 +211,19 @@ def serve(
     stop_event = threading.Event()
 
     def handle_shutdown(_signum, _frame):
-        logger.info("Shutdown signal received, stopping controller...")
+        logger.info("Shutdown signal received, writing final checkpoint...")
+        try:
+            path, result = controller.begin_checkpoint()
+            logger.info(
+                "Final checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
+                path,
+                result.job_count,
+                result.task_count,
+                result.worker_count,
+            )
+        except Exception:
+            logger.exception("Final checkpoint on shutdown failed")
+        logger.info("Stopping controller...")
         controller.stop()
         logger.info("Controller stopped")
         stop_event.set()

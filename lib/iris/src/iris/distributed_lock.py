@@ -3,20 +3,21 @@
 
 """Generic distributed locking with lease-based semantics.
 
-Provides a ``DistributedLock`` that works on GCS, local filesystems, and any
-fsspec-compatible filesystem as a best-effort fallback.
+Provides lease-based distributed locks backed by a single lock file.
+Three backend implementations are available:
 
-- **GCS**: generation-based conditional writes for atomicity.
-- **Local**: ``fcntl`` file locking for mutual exclusion.
-- **Other** (any fsspec filesystem): best-effort write-then-read-back.
-  Not fully atomic, but sufficient for advisory locking where races are
-  unlikely and the worst case is duplicate work.
+- **GcsLease**: generation-based conditional writes for atomicity.
+- **LocalFileLease**: ``fcntl`` file locking for mutual exclusion.
+- **FsspecLease**: best-effort write-then-read-back (advisory only).
+
+Use ``create_lock()`` to obtain the appropriate implementation for a given path.
 
 The lock is lease-based: holders must periodically refresh the lease,
 and stale leases (older than ``HEARTBEAT_TIMEOUT``) can be taken over
 by other holders.
 """
 
+import abc
 import json
 import logging
 import os
@@ -32,9 +33,16 @@ HEARTBEAT_INTERVAL = 30  # seconds between lease refreshes
 HEARTBEAT_TIMEOUT = 90  # seconds before considering a lease stale
 
 
+class LeaseLostError(Exception):
+    """The lease is held by another worker.
+
+    This is a fatal condition: the step must terminate immediately.
+    """
+
+
 @dataclass
 class Lease:
-    """A lease held by a lock holder."""
+    """Persisted lease state: who holds it and when it was last refreshed."""
 
     worker_id: str
     timestamp: float
@@ -56,16 +64,19 @@ def _is_gcs_path(path: str) -> bool:
     return path.startswith("gs://")
 
 
-class DistributedLock:
-    """Lease-based distributed lock backed by a single lock file.
+# ---------------------------------------------------------------------------
+# Abstract base
+# ---------------------------------------------------------------------------
 
-    On GCS (paths starting with ``gs://``), uses generation-based conditional
-    writes for atomicity.  On local filesystems, uses ``fcntl`` for mutual
-    exclusion.  On any other fsspec filesystem, uses a best-effort
-    write-then-read-back approach.
+
+class DistributedLease(abc.ABC):
+    """Base class for lease-based distributed locks.
+
+    Subclasses implement storage operations (read/write/delete);
+    the locking protocol (acquire, refresh, release) is defined here.
 
     Args:
-        lock_path: Path to the lock file (``gs://...``, local, or any fsspec URL).
+        lock_path: Path to the lock file.
         worker_id: Unique identifier for this lock holder.
     """
 
@@ -73,34 +84,107 @@ class DistributedLock:
         self.lock_path = lock_path
         self.worker_id = worker_id or default_worker_id()
 
-    def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
-        """Read lock file and its generation. Returns (0, None) if doesn't exist."""
-        if _is_gcs_path(self.lock_path):
-            return self._read_gcs()
-        elif _is_local_path(self.lock_path):
-            return self._read_local()
-        else:
-            return self._read_fsspec()
+    # -- abstract storage ops ------------------------------------------------
 
-    def _write_lock(self, lease: Lease, if_generation_match: int) -> None:
+    @abc.abstractmethod
+    def _read_with_generation(self) -> tuple[int, Lease | None]:
+        """Read lock file.  Returns ``(generation, lease)`` or ``(0, None)`` if absent."""
+        ...
+
+    @abc.abstractmethod
+    def _write(self, lease: Lease, if_generation_match: int) -> None:
         """Write lock file with generation/concurrency precondition."""
-        if _is_gcs_path(self.lock_path):
-            self._write_gcs(lease, if_generation_match)
-        elif _is_local_path(self.lock_path):
-            self._write_local(lease)
-        else:
-            self._write_fsspec(lease)
+        ...
 
-    # -- GCS backend ----------------------------------------------------------
+    @abc.abstractmethod
+    def _delete(self) -> None:
+        """Delete lock file.  Must not raise if already absent."""
+        ...
+
+    # -- public API ----------------------------------------------------------
+
+    def try_acquire(self) -> bool:
+        """Try to acquire the lock.  Returns True if acquired."""
+        generation, lock_data = self._read_with_generation()
+
+        if lock_data and not lock_data.is_stale():
+            if lock_data.worker_id == self.worker_id:
+                logger.debug("[%s] Already hold lock at %s", self.worker_id, self.lock_path)
+                return True
+            logger.debug("[%s] Lock %s held by %s (fresh)", self.worker_id, self.lock_path, lock_data.worker_id)
+            return False
+
+        if lock_data:
+            logger.debug("[%s] Found stale lock at %s from %s", self.worker_id, self.lock_path, lock_data.worker_id)
+
+        lease = Lease(worker_id=self.worker_id, timestamp=time.time())
+        try:
+            self._write(lease, if_generation_match=generation)
+        except FileExistsError:
+            logger.debug("[%s] Lost lock race for %s", self.worker_id, self.lock_path)
+            return False
+        except Exception as e:
+            if "PreconditionFailed" in type(e).__name__:
+                logger.debug("[%s] Lost lock race for %s (precondition)", self.worker_id, self.lock_path)
+                return False
+            raise
+
+        return True
+
+    def refresh(self) -> None:
+        """Refresh a lease held by the current holder.
+
+        Raises ``LeaseLostError`` if the lock is held by a different worker
+        **or** if the lock file has disappeared.  A missing lock file means
+        another worker deleted it (e.g. took over a stale lease and released
+        it), so the current holder has irrecoverably lost ownership.
+        """
+        generation, lock_data = self._read_with_generation()
+        if lock_data and lock_data.worker_id == self.worker_id:
+            self._write(Lease(self.worker_id, time.time()), generation)
+        elif lock_data is None:
+            raise LeaseLostError(f"Lease lost: lock file {self.lock_path} disappeared — another worker likely took over")
+        else:
+            raise LeaseLostError(
+                f"Lease lost: lock at {self.lock_path} held by {lock_data.worker_id}, expected {self.worker_id}"
+            )
+
+    def release(self) -> None:
+        """Release the lock if held by this holder.  Idempotent."""
+        try:
+            _, lock_data = self._read_with_generation()
+            if lock_data and lock_data.worker_id == self.worker_id:
+                self._delete()
+                logger.debug("[%s] Released lock %s", self.worker_id, self.lock_path)
+        except FileNotFoundError:
+            pass
+
+    def has_active_holder(self) -> bool:
+        """Check if any holder has an active (non-stale) lock."""
+        try:
+            _, lock_data = self._read_with_generation()
+        except FileNotFoundError:
+            return False
+        return lock_data is not None and not lock_data.is_stale()
+
+
+# ---------------------------------------------------------------------------
+# GCS backend
+# ---------------------------------------------------------------------------
+
+
+class GcsLease(DistributedLease):
+    """GCS-backed lease using generation-based conditional writes."""
 
     @staticmethod
     def _parse_gcs_path(path: str) -> tuple[str, str]:
-        """Parse gs://bucket/path into (bucket, blob_path)."""
+        """Parse ``gs://bucket/path`` into ``(bucket, blob_path)``."""
         path = path[5:]  # Remove gs://
         bucket, _, blob_path = path.partition("/")
         return (bucket, blob_path)
 
-    def _read_gcs(self) -> tuple[int, Lease | None]:
+    def _read_with_generation(self) -> tuple[int, Lease | None]:
+        from google.api_core.exceptions import NotFound
         from google.cloud import storage
 
         client = storage.Client()
@@ -109,10 +193,15 @@ class DistributedLock:
         blob = bucket.get_blob(blob_path)
         if blob is None:
             return (0, None)
-        data = json.loads(blob.download_as_string())
+        try:
+            data = json.loads(blob.download_as_string())
+        except NotFound:
+            # Blob was deleted between get_blob and download_as_string
+            logger.debug("[%s] Lock blob %s disappeared during read (race)", self.worker_id, self.lock_path)
+            return (0, None)
         return (blob.generation, Lease(**data))
 
-    def _write_gcs(self, lease: Lease, if_generation_match: int) -> None:
+    def _write(self, lease: Lease, if_generation_match: int) -> None:
         from google.cloud import storage
 
         client = storage.Client()
@@ -121,18 +210,29 @@ class DistributedLock:
         blob = bucket.blob(blob_path)
         blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
 
-    def _delete_gcs(self) -> None:
+    def _delete(self) -> None:
+        from google.api_core.exceptions import NotFound
         from google.cloud import storage
 
         client = storage.Client()
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_path)
-        blob.delete()
+        try:
+            blob.delete()
+        except NotFound:
+            logger.debug("Lock blob %s already deleted", self.lock_path)
 
-    # -- Local backend --------------------------------------------------------
 
-    def _read_local(self) -> tuple[int, Lease | None]:
+# ---------------------------------------------------------------------------
+# Local filesystem backend
+# ---------------------------------------------------------------------------
+
+
+class LocalFileLease(DistributedLease):
+    """Local-filesystem lease using ``fcntl`` file locking."""
+
+    def _read_with_generation(self) -> tuple[int, Lease | None]:
         import fcntl
 
         try:
@@ -146,7 +246,7 @@ class DistributedLock:
         except FileNotFoundError:
             return (0, None)
 
-    def _write_local(self, lease: Lease) -> None:
+    def _write(self, lease: Lease, if_generation_match: int) -> None:
         import fcntl
 
         parent = os.path.dirname(self.lock_path)
@@ -164,13 +264,26 @@ class DistributedLock:
             f.truncate()
             f.write(json.dumps(asdict(lease)))
 
-    # -- fsspec best-effort backend -------------------------------------------
+    def _delete(self) -> None:
+        try:
+            os.remove(self.lock_path)
+        except FileNotFoundError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# fsspec best-effort backend
+# ---------------------------------------------------------------------------
+
+
+class FsspecLease(DistributedLease):
+    """Best-effort lease for arbitrary fsspec filesystems."""
 
     def _get_fs(self) -> tuple[fsspec.AbstractFileSystem, str]:
-        """Return (fs, path) for the lock path via fsspec."""
+        """Return ``(fs, path)`` for the lock path via fsspec."""
         return fsspec.core.url_to_fs(self.lock_path)
 
-    def _read_fsspec(self) -> tuple[int, Lease | None]:
+    def _read_with_generation(self) -> tuple[int, Lease | None]:
         fs, path = self._get_fs()
         try:
             with fs.open(path, "r") as f:
@@ -182,7 +295,7 @@ class DistributedLock:
         except FileNotFoundError:
             return (0, None)
 
-    def _write_fsspec(self, lease: Lease) -> None:
+    def _write(self, lease: Lease, if_generation_match: int) -> None:
         """Best-effort lock: write lease, then read back to check if we won."""
         fs, path = self._get_fs()
         data = json.dumps(asdict(lease))
@@ -201,64 +314,28 @@ class DistributedLock:
         except FileNotFoundError as err:
             raise FileExistsError("Lock file disappeared after write") from err
 
-    # -- public API -----------------------------------------------------------
-
-    def try_acquire(self) -> bool:
-        """Try to acquire the lock. Returns True if acquired."""
-        generation, lock_data = self._read_lock_with_generation()
-
-        if lock_data and not lock_data.is_stale():
-            if lock_data.worker_id == self.worker_id:
-                logger.debug("[%s] Already hold lock at %s", self.worker_id, self.lock_path)
-                return True
-            logger.debug("[%s] Lock %s held by %s (fresh)", self.worker_id, self.lock_path, lock_data.worker_id)
-            return False
-
-        if lock_data:
-            logger.debug("[%s] Found stale lock at %s from %s", self.worker_id, self.lock_path, lock_data.worker_id)
-
-        lease = Lease(worker_id=self.worker_id, timestamp=time.time())
+    def _delete(self) -> None:
+        fs, path = self._get_fs()
         try:
-            self._write_lock(lease, if_generation_match=generation)
-        except FileExistsError:
-            logger.debug("[%s] Lost lock race for %s", self.worker_id, self.lock_path)
-            return False
-        except Exception as e:
-            if _is_gcs_path(self.lock_path) and "PreconditionFailed" in type(e).__name__:
-                logger.debug("[%s] Lost lock race for %s", self.worker_id, self.lock_path)
-                return False
-            raise
-
-        return True
-
-    def refresh(self) -> None:
-        """Refresh a lock held by the current holder."""
-        generation, lock_data = self._read_lock_with_generation()
-        if lock_data and lock_data.worker_id == self.worker_id:
-            self._write_lock(Lease(self.worker_id, time.time()), generation)
-        else:
-            current_holder = lock_data.worker_id if lock_data else "unknown"
-            raise ValueError(
-                f"Cannot refresh: lock at {self.lock_path} held by {current_holder}, expected {self.worker_id}"
-            )
-
-    def release(self) -> None:
-        """Release the lock if held by this holder."""
-        try:
-            _, lock_data = self._read_lock_with_generation()
-            if lock_data and lock_data.worker_id == self.worker_id:
-                if _is_gcs_path(self.lock_path):
-                    self._delete_gcs()
-                elif _is_local_path(self.lock_path):
-                    os.remove(self.lock_path)
-                else:
-                    fs, path = self._get_fs()
-                    fs.rm(path)
-                logger.debug("[%s] Released lock %s", self.worker_id, self.lock_path)
+            fs.rm(path)
         except FileNotFoundError:
             pass
 
-    def has_active_holder(self) -> bool:
-        """Check if any holder has an active (non-stale) lock."""
-        _, lock_data = self._read_lock_with_generation()
-        return lock_data is not None and not lock_data.is_stale()
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+
+def create_lock(lock_path: str, worker_id: str | None = None) -> DistributedLease:
+    """Create the appropriate lease implementation for *lock_path*."""
+    if _is_gcs_path(lock_path):
+        return GcsLease(lock_path, worker_id)
+    elif _is_local_path(lock_path):
+        return LocalFileLease(lock_path, worker_id)
+    else:
+        return FsspecLease(lock_path, worker_id)
+
+
+# Backward-compatible alias — call sites should migrate to create_lock().
+DistributedLock = create_lock

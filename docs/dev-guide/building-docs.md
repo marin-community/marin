@@ -14,7 +14,7 @@ Before you begin, ensure you have the following installed:
 
 1. Install the documentation dependencies:
    ```bash
-   uv sync --group docs
+   uv sync --package marin --group docs
    ```
 
 ## Building Documentation
@@ -132,8 +132,13 @@ The documentation is automatically deployed when changes are pushed to the main 
 
 1. Create a new branch for your changes
 2. Make your changes
-3. Test locally using `uv run mkdocs serve`
-4. Submit a pull request
+3. Preview the docs locally with `uv run mkdocs serve`
+4. Run `./infra/pre-commit.py --all-files --fix`
+5. Run `uv run mkdocs build --strict`
+6. Submit a pull request whose body references an issue with `Fixes #NNNN` or `Part of #NNNN`
+
+For the full contributor workflow, including targeted test guidance, see
+[Contributing to Marin](contributing.md).
 
 ## Common Issues
 

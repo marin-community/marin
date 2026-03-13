@@ -10,7 +10,9 @@ aggregated from task states.
 
 import json
 import logging
+import secrets
 import uuid
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from connectrpc.code import Code
@@ -18,29 +20,54 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.controller.bundle_store import BundleStore
-from iris.cluster.controller.events import (
-    JobCancelledEvent,
-    JobSubmittedEvent,
-    WorkerRegisteredEvent,
+from iris.cluster.controller.auth import (
+    ControllerAuth,
+    create_api_key,
+    list_api_keys,
+    revoke_api_key,
+    revoke_login_keys_for_user,
 )
-from iris.cluster.controller.pending_diagnostics import build_job_pending_hints
+from iris.rpc.auth import get_verified_user, hash_token
+from iris.cluster.bundle import BundleStore
+from iris.cluster.controller.db import (
+    ACTIVE_TASK_STATES,
+    API_KEYS,
+    ATTEMPTS,
+    ENDPOINTS,
+    JOBS,
+    TASKS,
+    TERMINAL_JOB_STATES,
+    TXN_ACTIONS,
+    WORKERS,
+    WORKER_RESOURCE_HISTORY,
+    WORKER_TASK_HISTORY,
+    ControllerDB,
+    Endpoint,
+    EndpointQuery,
+    Job,
+    Join,
+    Order,
+    SelectExpr,
+    Task,
+    TaskJobSummary,
+    UserStats,
+    Worker,
+    _tasks_with_attempts,
+    endpoint_query_predicate,
+    running_tasks_by_worker,
+    tasks_for_job_with_attempts,
+)
+from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.snapshot import SnapshotResult
-from iris.cluster.controller.state import (
-    ControllerEndpoint,
-    ControllerJob,
-    ControllerState,
-    ControllerTask,
-    ControllerWorker,
-)
-from iris.cluster.log_store import PROCESS_LOG_KEY, task_log_key
+from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
+from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.proto_utils import job_state_name, task_state_name
-from iris.time_utils import Timestamp
+from iris.time_utils import Timestamp, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +77,6 @@ DEFAULT_MAX_TOTAL_LINES = 10000
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
-TERMINAL_USER_JOB_STATES = frozenset(
-    {
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-    }
-)
 USER_TASK_STATES = (
     cluster_pb2.TASK_STATE_PENDING,
     cluster_pb2.TASK_STATE_ASSIGNED,
@@ -82,8 +100,8 @@ USER_JOB_STATES = (
 )
 
 
-def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2.TaskStatus:
-    """Convert a ControllerTask to a TaskStatus proto.
+def task_to_proto(task: Task, worker_address: str = "") -> cluster_pb2.TaskStatus:
+    """Convert a task row to a TaskStatus proto.
 
     Handles attempt conversion, timestamps, and resource_usage.
     The caller is responsible for resolving worker_address from worker_id if needed.
@@ -110,7 +128,7 @@ def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2
         task_id=task.task_id.to_wire(),
         state=task.state,
         worker_id=str(task.active_worker_id) if task.active_worker_id else "",
-        worker_address=worker_address,
+        worker_address=worker_address or task.current_worker_address or "",
         exit_code=task.exit_code or 0,
         error=task.error or "",
         current_attempt_id=task.current_attempt_id,
@@ -123,7 +141,7 @@ def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2
     if task.resource_usage:
         proto.resource_usage.CopyFrom(task.resource_usage)
     # For pending tasks with prior terminal attempts, surface retry context.
-    if task.state == cluster_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].is_terminal():
+    if task.state == cluster_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].is_terminal:
         last = task.attempts[-1]
         proto.pending_reason = (
             f"Retrying (attempt {len(task.attempts)}, " f"last: {cluster_pb2.TaskState.Name(last.state).lower()})"
@@ -132,7 +150,7 @@ def task_to_proto(task: ControllerTask, worker_address: str = "") -> cluster_pb2
     return proto
 
 
-def worker_status_message(w: ControllerWorker) -> str:
+def worker_status_message(w: Worker) -> str:
     """Build a human-readable status message for unhealthy workers."""
     if w.healthy:
         return ""
@@ -140,6 +158,21 @@ def worker_status_message(w: ControllerWorker) -> str:
         age = w.last_heartbeat.age_ms()
         return f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {age // 1000}s ago)"
     return "Unhealthy (no failures recorded)"
+
+
+_WORKER_TARGET_PREFIX = "/system/worker/"
+
+
+def _parse_worker_target(target: str) -> str | None:
+    """Extract worker_id from a /system/worker/<worker_id> target.
+
+    Returns the worker_id string, or None if the target does not match.
+    """
+    if target.startswith(_WORKER_TARGET_PREFIX):
+        worker_id = target[len(_WORKER_TARGET_PREFIX) :]
+        if worker_id:
+            return worker_id
+    return None
 
 
 def _task_state_key(state: int) -> str:
@@ -154,7 +187,7 @@ def _job_state_key(state: int) -> str:
 
 def _active_job_count(job_state_counts: dict[int, int]) -> int:
     """Return the count of non-terminal jobs in a user aggregate."""
-    return sum(count for state, count in job_state_counts.items() if state not in TERMINAL_USER_JOB_STATES)
+    return sum(count for state, count in job_state_counts.items() if state not in TERMINAL_JOB_STATES)
 
 
 def _task_state_counts_for_summary(task_state_counts: dict[int, int]) -> dict[str, int]:
@@ -173,6 +206,218 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
     return counts
 
 
+# =============================================================================
+# DB query helpers — thin wrappers over snapshot() for common read patterns
+# =============================================================================
+
+
+def _read_job(db: ControllerDB, job_id: JobName) -> Job | None:
+    with db.snapshot() as q:
+        return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
+
+
+def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> Task | None:
+    task_wire = task_id.to_wire()
+    with db.snapshot() as q:
+        task = q.one(TASKS, where=TASKS.c.task_id == task_wire)
+        if task is None:
+            return None
+        attempts = q.select(
+            ATTEMPTS,
+            where=ATTEMPTS.c.task_id == task_wire,
+            order_by=(ATTEMPTS.c.attempt_id.asc(),),
+        )
+    return _tasks_with_attempts([task], attempts)[0]
+
+
+def _read_worker(db: ControllerDB, worker_id: WorkerId) -> Worker | None:
+    with db.snapshot() as q:
+        return q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+
+
+@dataclass(frozen=True)
+class _WorkerDetail:
+    worker: Worker
+    running_tasks: frozenset[JobName]
+    resource_history: tuple[cluster_pb2.WorkerResourceSnapshot, ...]
+
+
+def _read_worker_detail(
+    db: ControllerDB, worker_id: WorkerId, *, resource_history_limit: int = 200
+) -> _WorkerDetail | None:
+    with db.snapshot() as q:
+        worker = q.one(WORKERS, where=WORKERS.c.worker_id == str(worker_id))
+        if worker is None:
+            return None
+        running_rows = q.raw(
+            "SELECT t.task_id FROM tasks t "
+            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
+            "WHERE a.worker_id = ? AND t.state IN (?, ?, ?)",
+            (str(worker_id), *ACTIVE_TASK_STATES),
+            decoders={"task_id": JobName.from_wire},
+        )
+        resource_rows = q.select(
+            WORKER_RESOURCE_HISTORY,
+            columns=(WORKER_RESOURCE_HISTORY.c.snapshot_proto,),
+            where=WORKER_RESOURCE_HISTORY.c.worker_id == str(worker_id),
+            order_by=(WORKER_RESOURCE_HISTORY.c.timestamp_ms.desc(),),
+            limit=max(resource_history_limit, 0),
+        )
+    resource_history = tuple(reversed([r.snapshot_proto for r in resource_rows]))
+    return _WorkerDetail(
+        worker=worker,
+        running_tasks=frozenset(r.task_id for r in running_rows),
+        resource_history=resource_history,
+    )
+
+
+def _child_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
+    with db.snapshot() as q:
+        return q.select(
+            JOBS,
+            where=JOBS.c.parent_job_id == job_id.to_wire(),
+            order_by=(Order(JOBS.c.submitted_at_ms), Order(JOBS.c.job_id)),
+        )
+
+
+def _tasks_for_listing(db: ControllerDB, *, job_id: JobName | None = None) -> list[Task]:
+    with db.snapshot() as q:
+        tasks = q.select(
+            TASKS,
+            where=(TASKS.c.job_id == job_id.to_wire()) if job_id else None,
+            order_by=((TASKS.c.job_id.asc(), TASKS.c.task_index.asc()) if job_id else (TASKS.c.task_id.asc(),)),
+        )
+        if not tasks:
+            return []
+        attempts = q.select(
+            ATTEMPTS,
+            where=ATTEMPTS.c.task_id.in_([t.task_id.to_wire() for t in tasks]),
+            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        )
+    return _tasks_with_attempts(tasks, attempts)
+
+
+def _worker_addresses(db: ControllerDB) -> dict[WorkerId, str]:
+    with db.snapshot() as q:
+        workers = q.select(WORKERS, columns=(WORKERS.c.worker_id, WORKERS.c.address))
+    return {row.worker_id: row.address for row in workers}
+
+
+def _jobs_in_states(db: ControllerDB, states: tuple[int, ...]) -> list[Job]:
+    with db.snapshot() as q:
+        return q.select(JOBS, where=JOBS.c.state.in_(list(states)))
+
+
+def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
+    with db.snapshot() as q:
+        rows = q.select(
+            TASKS,
+            columns=(
+                TASKS.c.job_id,
+                TASKS.c.state,
+                TASKS.c.failure_count,
+                TASKS.c.preemption_count,
+            ),
+            where=TASKS.c.job_id.in_([j.to_wire() for j in job_ids]) if job_ids else None,
+        )
+    summaries: dict[JobName, TaskJobSummary] = {}
+    for row in rows:
+        summary = summaries.get(row.job_id, TaskJobSummary(job_id=row.job_id))
+        state_count = summary.task_state_counts.get(row.state, 0) + 1
+        summaries[row.job_id] = TaskJobSummary(
+            job_id=row.job_id,
+            task_count=summary.task_count + 1,
+            completed_count=summary.completed_count
+            + (1 if row.state in (cluster_pb2.TASK_STATE_SUCCEEDED, cluster_pb2.TASK_STATE_KILLED) else 0),
+            failure_count=summary.failure_count + row.failure_count,
+            preemption_count=summary.preemption_count + row.preemption_count,
+            task_state_counts={**summary.task_state_counts, row.state: state_count},
+        )
+    return summaries
+
+
+def _worker_roster(db: ControllerDB) -> list[Worker]:
+    with db.snapshot() as q:
+        return q.select(WORKERS)
+
+
+def _query_endpoints(db: ControllerDB, query: EndpointQuery = EndpointQuery()) -> list[Endpoint]:
+    joins, where = endpoint_query_predicate(query)
+    with db.snapshot() as q:
+        return q.select(
+            ENDPOINTS,
+            where=where,
+            joins=tuple(joins),
+            order_by=(ENDPOINTS.c.registered_at_ms.desc(), ENDPOINTS.c.endpoint_id.asc()),
+            limit=query.limit,
+        )
+
+
+def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[Job]:
+    with db.snapshot() as q:
+        return q.select(JOBS, where=JOBS.c.job_id.like(f"{job_id.to_wire()}/%"))
+
+
+def _transaction_actions(db: ControllerDB, limit: int = 100) -> list:
+    with db.snapshot() as q:
+        actions = q.select(
+            TXN_ACTIONS,
+            order_by=(TXN_ACTIONS.c.created_at_ms.desc(),),
+            limit=limit,
+        )
+    return list(reversed(actions))
+
+
+def _live_user_stats(db: ControllerDB) -> list[UserStats]:
+    jobs_for_tasks = JOBS.with_alias("ju")
+    with db.snapshot() as q:
+        job_rows = q.select(
+            JOBS,
+            columns=(SelectExpr("j.user_id", str, "user_id"), JOBS.c.state),
+        )
+        task_rows = q.select(
+            TASKS,
+            columns=(SelectExpr("ju.user_id", str, "user_id"), TASKS.c.state),
+            joins=(Join(table=jobs_for_tasks, on=TASKS.c.job_id == jobs_for_tasks.c.job_id),),
+        )
+    by_user: dict[str, UserStats] = {}
+    for row in job_rows:
+        stats = by_user.setdefault(row.user_id, UserStats(user=row.user_id))
+        stats.job_state_counts[row.state] = stats.job_state_counts.get(row.state, 0) + 1
+    for row in task_rows:
+        stats = by_user.setdefault(row.user_id, UserStats(user=row.user_id))
+        stats.task_state_counts[row.state] = stats.task_state_counts.get(row.state, 0) + 1
+    return list(by_user.values())
+
+
+def _tasks_for_worker(db: ControllerDB, worker_id: WorkerId, limit: int = 50) -> list[Task]:
+    with db.snapshot() as q:
+        history_rows = q.select(
+            WORKER_TASK_HISTORY,
+            columns=(WORKER_TASK_HISTORY.c.task_id,),
+            where=WORKER_TASK_HISTORY.c.worker_id == str(worker_id),
+            order_by=(WORKER_TASK_HISTORY.c.assigned_at_ms.desc(),),
+            limit=limit,
+        )
+    task_ids = [r.task_id for r in history_rows]
+    if not task_ids:
+        return []
+    task_wires = [tid.to_wire() for tid in task_ids]
+    with db.snapshot() as q:
+        tasks = q.select(
+            TASKS,
+            where=TASKS.c.task_id.in_(task_wires),
+            order_by=(TASKS.c.task_id.asc(),),
+        )
+        attempts = q.select(
+            ATTEMPTS,
+            where=ATTEMPTS.c.task_id.in_(task_wires),
+            order_by=(ATTEMPTS.c.task_id.asc(), ATTEMPTS.c.attempt_id.asc()),
+        )
+    task_map = {t.task_id: t for t in _tasks_with_attempts(tasks, attempts)}
+    return [task for tid in task_ids if (task := task_map.get(tid)) is not None]
+
+
 class AutoscalerProtocol(Protocol):
     """Protocol for autoscaler operations used by ControllerServiceImpl."""
 
@@ -182,6 +427,14 @@ class AutoscalerProtocol(Protocol):
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get info for a specific VM."""
+        ...
+
+    def check_coscheduling_feasibility(
+        self,
+        replicas: int,
+        constraints: list[cluster_pb2.Constraint],
+    ) -> str | None:
+        """Check if a coscheduled job can be scheduled. Returns error message or None."""
         ...
 
     def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
@@ -203,11 +456,11 @@ class ControllerProtocol(Protocol):
 
     def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None: ...
 
-    def create_scheduling_context(self, workers: list[ControllerWorker]) -> SchedulingContext: ...
+    def create_scheduling_context(self, workers: list[Worker]) -> SchedulingContext: ...
 
-    def get_job_scheduling_diagnostics(self, job: ControllerJob, context: SchedulingContext) -> str: ...
+    def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
-    def begin_checkpoint(self) -> tuple[str, SnapshotResult]: ...
+    def begin_checkpoint(self) -> tuple[str, Any]: ...
 
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...
@@ -245,23 +498,34 @@ class ControllerServiceImpl:
     """ControllerService RPC implementation.
 
     Args:
-        state: Controller state containing jobs, tasks, and workers
-        scheduler: Background scheduler for task dispatch (any object with wake() method)
-        bundle_prefix: URI prefix for storing bundles (e.g., gs://bucket/path or file:///path).
-                      Required for job submission with bundles.
+        transitions: State machine for DB mutations (submit, cancel, register, etc.)
+        db: Query interface for direct DB reads
+        controller: Controller runtime for scheduling and worker management
+        bundle_store: Bundle store for zip storage.
+        log_store: Log store for task and process logs.
     """
 
     def __init__(
         self,
-        state: ControllerState,
+        transitions: ControllerTransitions,
+        db: ControllerDB,
         controller: ControllerProtocol,
-        bundle_prefix: str,
+        bundle_store: BundleStore,
+        log_store: LogStore,
+        auth: ControllerAuth | None = None,
     ):
-        self._state = state
+        self._transitions = transitions
+        self._db = db
         self._controller = controller
-        self._bundle_store = BundleStore(bundle_prefix)
+        self._bundle_store = bundle_store
+        self._log_store = log_store
+        self._timer = Timer()
+        self._auth = auth or ControllerAuth()
 
-    def _get_autoscaler_pending_hints(self) -> dict[str, str]:
+    def bundle_zip(self, bundle_id: str) -> bytes:
+        return self._bundle_store.get_zip(bundle_id)
+
+    def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""
         autoscaler = self._controller.autoscaler
         if autoscaler is None:
@@ -270,6 +534,22 @@ class ControllerServiceImpl:
         if not status.HasField("last_routing_decision"):
             return {}
         return build_job_pending_hints(status.last_routing_decision)
+
+    def _authorize_job_owner(self, job_id: JobName) -> None:
+        """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
+
+        Skipped when no auth provider is configured (null-auth mode).
+        """
+        if not self._auth.provider:
+            return
+        verified_user = get_verified_user()
+        if verified_user is None:
+            return
+        if job_id.user != verified_user:
+            raise ConnectError(
+                Code.PERMISSION_DENIED,
+                f"User '{verified_user}' cannot modify job {job_id} owned by '{job_id.user}'",
+            )
 
     def launch_job(
         self,
@@ -286,9 +566,20 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
+        # When an auth provider is configured, override the user segment with
+        # the verified identity to prevent impersonation. Only override for
+        # root-level submissions; child jobs inherit the parent's user.
+        verified_user = get_verified_user()
+        if self._auth.provider and verified_user is not None and job_id.is_root:
+            job_id = JobName.root(verified_user, job_id.name)
+
+        # For non-root jobs, verify the caller owns the parent hierarchy
+        if self._auth.provider and verified_user is not None and not job_id.is_root:
+            self._authorize_job_owner(job_id)
+
         # Reject submissions if the parent job has already terminated
         if job_id.parent:
-            parent_job = self._state.get_job(job_id.parent)
+            parent_job = _read_job(self._db, job_id.parent)
             if parent_job and parent_job.is_finished():
                 raise ConnectError(
                     Code.FAILED_PRECONDITION,
@@ -296,7 +587,7 @@ class ControllerServiceImpl:
                     f"(state={cluster_pb2.JobState.Name(parent_job.state)})",
                 )
 
-        existing_job = self._state.get_job(job_id)
+        existing_job = _read_job(self._db, job_id)
         if existing_job:
             # By default (fail_if_exists=False), replace finished jobs
             if existing_job.is_finished() and not request.fail_if_exists:
@@ -305,7 +596,7 @@ class ControllerServiceImpl:
                     job_id,
                     cluster_pb2.JobState.Name(existing_job.state),
                 )
-                self._state.remove_finished_job(job_id)
+                self._transitions.remove_finished_job(job_id)
             elif existing_job.is_finished():
                 raise ConnectError(
                     Code.ALREADY_EXISTS,
@@ -327,12 +618,12 @@ class ControllerServiceImpl:
                     f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
                 )
 
-            bundle_path = self._bundle_store.write_bundle(job_id.to_wire(), request.bundle_blob)
+            bundle_id = self._bundle_store.write_zip(request.bundle_blob)
 
             new_request = cluster_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             new_request.ClearField("bundle_blob")
-            new_request.bundle_gcs_path = bundle_path
+            new_request.bundle_id = bundle_id
             request = new_request
 
         # Auto-inject device constraints from the resource spec.
@@ -340,17 +631,26 @@ class ControllerServiceImpl:
         # device-variant, etc.) replace auto-generated ones.
         request = _inject_resource_constraints(request)
 
-        # Submit job via event API
-        self._state.handle_event(
-            JobSubmittedEvent(
-                job_id=job_id,
-                request=request,
-                timestamp=Timestamp.now(),
-            )
-        )
+        # Reject coscheduled jobs that can never be scheduled: if no scaling
+        # group has num_vms matching the replica count, the job would sit in
+        # the queue forever.
+        if request.HasField("coscheduling"):
+            autoscaler = self._controller.autoscaler
+            if autoscaler is not None:
+                error = autoscaler.check_coscheduling_feasibility(
+                    replicas=request.replicas,
+                    constraints=list(request.constraints),
+                )
+                if error:
+                    raise ConnectError(
+                        Code.FAILED_PRECONDITION,
+                        f"Job is unschedulable: {error}",
+                    )
+
+        self._transitions.submit_job(job_id, request, Timestamp.now())
         self._controller.wake()
 
-        num_tasks = len(self._state.get_job_tasks(job_id))
+        num_tasks = len(tasks_for_job_with_attempts(self._db, job_id))
         logger.info(f"Job {job_id} submitted with {num_tasks} task(s)")
         return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
@@ -360,18 +660,13 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.GetJobStatusResponse:
         """Get status of a specific job including all task statuses."""
-        job = self._state.get_job(JobName.from_wire(request.job_id))
+        job = _read_job(self._db, JobName.from_wire(request.job_id))
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
         # Build task statuses with attempts, aggregate counts in single pass
-        tasks = self._state.get_job_tasks(job.job_id)
-
-        # Batch-fetch all referenced workers in one lock acquisition instead of
-        # acquiring the lock per task. Use active_worker_id so pruned (dead)
-        # workers are not looked up.
-        worker_ids = {t.active_worker_id for t in tasks if t.active_worker_id}
-        workers_by_id = self._state.get_workers_batch(worker_ids)
+        tasks = tasks_for_job_with_attempts(self._db, job.job_id)
+        worker_addr_by_id = _worker_addresses(self._db)
 
         task_statuses = []
         total_failure_count = 0
@@ -380,25 +675,18 @@ class ControllerServiceImpl:
             total_failure_count += task.failure_count
             total_preemption_count += task.preemption_count
 
-            worker = workers_by_id.get(task.active_worker_id) if task.active_worker_id else None
-            worker_address = worker.address if worker else ""
+            task_statuses.append(task_to_proto(task, worker_address=worker_addr_by_id.get(task.worker_id, "")))
 
-            task_statuses.append(task_to_proto(task, worker_address=worker_address))
-
-        # Get scheduling diagnostics for pending jobs
+        # Get scheduling diagnostics for pending jobs from cache
+        # (populated each scheduling cycle by the controller).
         pending_reason = ""
         if job.state == cluster_pb2.JOB_STATE_PENDING:
-            # Create scheduling context once for all tasks
-            workers = self._state.list_all_workers()
-            sched_context = self._controller.create_scheduling_context(workers)
-            # Get job-level diagnostics (expensive but only for detail view)
-            pending_reason = self._controller.get_job_scheduling_diagnostics(job, sched_context)
-            autoscaler_hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire(), "")
-            # Only override scheduler diagnostics when autoscaler is actively
-            # requesting new capacity. Otherwise, scheduler root-cause details
-            # (e.g., constraint/resource mismatch) are more actionable.
-            if autoscaler_hint:
-                pending_reason = autoscaler_hint
+            sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
+            pending_reason = sched_reason or "Pending scheduler feedback"
+            hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire())
+            if hint is not None:
+                scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
+                pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
         # Build the JobStatus proto and set timestamps
         proto_job_status = cluster_pb2.JobStatus(
@@ -436,38 +724,34 @@ class ControllerServiceImpl:
         Cascade termination is performed depth-first: all children are
         terminated before the parent. All tasks within each job are killed.
         """
-        job = self._state.get_job(JobName.from_wire(request.job_id))
+        job_id = JobName.from_wire(request.job_id)
+        job = _read_job(self._db, job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        self._terminate_job_tree(JobName.from_wire(request.job_id))
+        self._authorize_job_owner(job_id)
+        self._terminate_job_tree(job_id)
         return cluster_pb2.Empty()
 
     def _terminate_job_tree(self, job_id: JobName) -> None:
         """Recursively terminate a job and all its descendants (depth-first)."""
-        job = self._state.get_job(job_id)
+        job = _read_job(self._db, job_id)
         if not job:
             return
 
         # First, terminate all children recursively
-        children = self._state.get_children(job_id)
+        children = _child_jobs(self._db, job_id)
         for child in children:
             self._terminate_job_tree(child.job_id)
 
         if job.is_finished():
             return
 
-        # Cancel the job via event API (this will kill all tasks)
-        txn = self._state.handle_event(
-            JobCancelledEvent(
-                job_id=job_id,
-                reason="Terminated by user",
-            )
-        )
+        result = self._transitions.cancel_job(job_id, reason="Terminated by user")
 
         # Send kill RPCs to workers for any tasks that were killed
-        if txn.tasks_to_kill:
-            self._controller.kill_tasks_on_workers(txn.tasks_to_kill)
+        if result.tasks_to_kill:
+            self._controller.kill_tasks_on_workers(result.tasks_to_kill)
 
     def list_jobs(
         self,
@@ -493,7 +777,10 @@ class ControllerServiceImpl:
         state_filter = request.state_filter.lower() if request.state_filter else ""
         autoscaler_pending_hints = self._get_autoscaler_pending_hints()
 
-        for j in self._state.list_all_jobs():
+        jobs = _jobs_in_states(self._db, USER_JOB_STATES)
+        task_summaries = _task_summaries_for_jobs(self._db, {job.job_id for job in jobs})
+
+        for j in jobs:
             # Apply name filter
             job_name = j.request.name if j.request else ""
             if name_filter and name_filter not in job_name.lower():
@@ -505,39 +792,34 @@ class ControllerServiceImpl:
                 continue
 
             # Aggregate counts from all tasks in single pass
-            tasks = self._state.get_job_tasks(j.job_id)
-            total_failure_count = 0
-            total_preemption_count = 0
-            task_state_counts: dict[str, int] = {}
-            completed_count = 0
-
-            for task in tasks:
-                total_failure_count += task.failure_count
-                total_preemption_count += task.preemption_count
-                state_name = task_state_name(task.state)
-                friendly_name = state_name.replace("TASK_STATE_", "").lower()
-                task_state_counts[friendly_name] = task_state_counts.get(friendly_name, 0) + 1
-                if state_name in ("TASK_STATE_SUCCEEDED", "TASK_STATE_KILLED"):
-                    completed_count += 1
+            task_summary = task_summaries.get(j.job_id)
+            task_state_counts = (
+                {_task_state_key(state): count for state, count in task_summary.task_state_counts.items()}
+                if task_summary
+                else {}
+            )
 
             pending_reason = j.error or ""
             if j.state == cluster_pb2.JOB_STATE_PENDING:
-                autoscaler_hint = autoscaler_pending_hints.get(j.job_id.to_wire(), "")
-                if autoscaler_hint:
-                    pending_reason = autoscaler_hint
+                sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
+                pending_reason = sched_reason or "Pending scheduler feedback"
+                hint = autoscaler_pending_hints.get(j.job_id.to_wire())
+                if hint is not None:
+                    scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
+                    pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
             proto_job = cluster_pb2.JobStatus(
                 job_id=j.job_id.to_wire(),
                 state=j.state,
                 error=j.error or "",
                 exit_code=j.exit_code or 0,
-                failure_count=total_failure_count,
-                preemption_count=total_preemption_count,
+                failure_count=task_summary.failure_count if task_summary else 0,
+                preemption_count=task_summary.preemption_count if task_summary else 0,
                 name=job_name,
                 resources=j.request.resources if j.request else cluster_pb2.ResourceSpecProto(),
                 task_state_counts=task_state_counts,
-                task_count=len(tasks),
-                completed_count=completed_count,
+                task_count=task_summary.task_count if task_summary else 0,
+                completed_count=task_summary.completed_count if task_summary else 0,
                 pending_reason=pending_reason,
             )
             if j.started_at:
@@ -637,14 +919,13 @@ class ControllerServiceImpl:
             task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
-        task = self._state.get_task(task_id)
+        task = _read_task_with_attempts(self._db, task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
-
         # Look up worker address
         worker_address = ""
         if task.worker_id:
-            worker = self._state.get_worker(task.worker_id)
+            worker = _read_worker(self._db, task.worker_id)
             if worker:
                 worker_address = worker.address
 
@@ -659,24 +940,12 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.ListTasksResponse:
         """List all tasks, optionally filtered by job_id."""
         job_id = JobName.from_wire(request.job_id) if request.job_id else None
-        tasks = []
-
-        if job_id:
-            tasks = self._state.get_job_tasks(job_id)
-        else:
-            for job in self._state.list_all_jobs():
-                tasks.extend(self._state.get_job_tasks(job.job_id))
-
-        # Batch-fetch all referenced workers in one lock acquisition.
-        worker_ids = {t.worker_id for t in tasks if t.worker_id}
-        workers_by_id = self._state.get_workers_batch(worker_ids)
+        tasks = _tasks_for_listing(self._db, job_id=job_id)
+        worker_addr_by_id = _worker_addresses(self._db)
 
         task_statuses = []
         for task in tasks:
-            worker = workers_by_id.get(task.worker_id) if task.worker_id else None
-            worker_address = worker.address if worker else ""
-
-            proto_task_status = task_to_proto(task, worker_address=worker_address)
+            proto_task_status = task_to_proto(task, worker_address=worker_addr_by_id.get(task.worker_id, ""))
 
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics
@@ -698,16 +967,23 @@ class ControllerServiceImpl:
 
         Worker registers once, then waits for heartbeats from the controller.
         """
-        # Derive worker_id from vm_address if present, otherwise from address
-        worker_id = WorkerId(request.metadata.vm_address or request.address)
+        if self._auth.provider is not None:
+            caller = self._require_auth()
+            self._require_role(caller, "worker")
 
-        self._state.handle_event(
-            WorkerRegisteredEvent(
-                worker_id=worker_id,
-                address=request.address,
-                metadata=request.metadata,
-                timestamp=Timestamp.now(),
+        if not request.worker_id:
+            logger.error("Worker at %s registered without worker_id", request.address)
+            return cluster_pb2.Controller.RegisterResponse(
+                worker_id="",
+                accepted=False,
             )
+        worker_id = WorkerId(request.worker_id)
+
+        self._transitions.register_or_refresh_worker(
+            worker_id=worker_id,
+            address=request.address,
+            metadata=request.metadata,
+            ts=Timestamp.now(),
         )
         self._controller.wake()
 
@@ -717,20 +993,6 @@ class ControllerServiceImpl:
             accepted=True,
         )
 
-    def notify_task_update(
-        self,
-        request: cluster_pb2.Controller.NotifyTaskUpdateRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Empty:
-        """Hint from worker that it has new completions. Triggers priority heartbeat.
-
-        This is a lightweight ping - the actual completion data comes via the next
-        heartbeat response.
-        """
-        # Just wake the scheduler; it will trigger a priority heartbeat for this worker
-        self._controller.wake()
-        return cluster_pb2.Empty()
-
     def list_workers(
         self,
         request: cluster_pb2.Controller.ListWorkersRequest,
@@ -738,17 +1000,19 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.ListWorkersResponse:
         """List all workers with their running task counts."""
         workers = []
-        for w in self._state.list_all_workers():
+        worker_rows = _worker_roster(self._db)
+        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in worker_rows})
+        for worker in worker_rows:
             workers.append(
                 cluster_pb2.Controller.WorkerHealthStatus(
-                    worker_id=w.worker_id,
-                    healthy=w.healthy,
-                    consecutive_failures=w.consecutive_failures,
-                    last_heartbeat=w.last_heartbeat.to_proto(),
-                    running_job_ids=[task_id.to_wire() for task_id in w.running_tasks],
-                    address=w.address,
-                    metadata=w.metadata,
-                    status_message=worker_status_message(w),
+                    worker_id=worker.worker_id,
+                    healthy=worker.healthy,
+                    consecutive_failures=worker.consecutive_failures,
+                    last_heartbeat=worker.last_heartbeat.to_proto(),
+                    running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
+                    address=worker.address,
+                    metadata=worker.metadata,
+                    status_message=worker_status_message(worker),
                 )
             )
         return cluster_pb2.Controller.ListWorkersResponse(workers=workers)
@@ -762,25 +1026,44 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         """Register a service endpoint.
 
-        Endpoints are registered regardless of job state, but only become visible to clients
-        (via lookup/list) when the job is executing (not in a terminal state).
+        The ``task_id`` field carries the calling task's wire-format task ID
+        (e.g. ``/user/job/0``).  The endpoint is associated with the owning
+        task so that retry cleanup removes stale endpoints from earlier
+        attempts.
+
+        Endpoints are registered regardless of job state, but only become
+        visible to clients (via lookup/list) when the job is executing (not
+        in a terminal state).
         """
-        endpoint_id = str(uuid.uuid4())
+        endpoint_id = request.endpoint_id or str(uuid.uuid4())
 
-        job = self._state.get_job(JobName.from_wire(request.job_id))
+        task_id = JobName.from_wire(request.task_id)
+        job_id, _task_index = task_id.require_task()
+
+        job = _read_job(self._db, job_id)
         if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.task_id} not found")
 
-        endpoint = ControllerEndpoint(
+        task = _read_task_with_attempts(self._db, task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        if request.attempt_id != task.current_attempt_id:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Stale attempt: task {request.task_id} attempt {request.attempt_id} "
+                f"!= current {task.current_attempt_id}",
+            )
+
+        endpoint = Endpoint(
             endpoint_id=endpoint_id,
             name=request.name,
             address=request.address,
-            job_id=JobName.from_wire(request.job_id),
+            job_id=job_id,
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
         )
 
-        self._state.add_endpoint(endpoint)
+        self._transitions.add_endpoint(endpoint, task_id=task_id)
 
         return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
@@ -790,7 +1073,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Empty:
         """Unregister a service endpoint. Idempotent."""
-        self._state.remove_endpoint(request.endpoint_id)
+        self._transitions.remove_endpoint(request.endpoint_id)
         return cluster_pb2.Empty()
 
     def list_endpoints(
@@ -799,14 +1082,20 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.ListEndpointsResponse:
         """List endpoints by name prefix (or exact name when request.exact is set)."""
-        endpoints = self._state.list_endpoints(request.prefix, exact=request.exact)
+        endpoints = _query_endpoints(
+            self._db,
+            EndpointQuery(
+                exact_name=request.prefix if request.exact else None,
+                name_prefix=None if request.exact else request.prefix,
+            ),
+        )
         return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[
                 cluster_pb2.Controller.Endpoint(
                     endpoint_id=e.endpoint_id,
                     name=e.name,
                     address=e.address,
-                    job_id=e.job_id.to_wire(),
+                    task_id=e.job_id.to_wire(),
                     metadata=e.metadata,
                 )
                 for e in endpoints
@@ -827,28 +1116,26 @@ class ControllerServiceImpl:
 
         status = autoscaler.get_status()
 
-        # Build a map of VM address -> worker info for enriching VmInfo
-        # Workers register with vm_address in metadata which matches VM's address
-        workers = self._state.list_all_workers()
-        vm_address_to_worker: dict[str, tuple[str, bool]] = {}
+        # Build a map of worker_id -> (worker_id, healthy) for enriching VmInfo
+        workers = _worker_roster(self._db)
+        worker_id_to_info: dict[str, tuple[str, bool]] = {}
         for w in workers:
-            # worker_id is derived from vm_address, use it to match
-            if w.metadata and w.metadata.vm_address:
-                vm_address_to_worker[w.metadata.vm_address] = (w.worker_id, w.healthy)
-            elif w.address:
-                # Fallback: match by worker address (without port) if no vm_address
-                host = w.address.split(":")[0] if ":" in w.address else w.address
-                vm_address_to_worker[host] = (w.worker_id, w.healthy)
+            worker_id_to_info[w.worker_id] = (w.worker_id, w.healthy)
 
-        # Enrich VmInfo objects with worker information
+        # Fetch running task counts per worker for dashboard display
+        all_worker_ids = {WorkerId(w.worker_id) for w in workers}
+        running_by_worker = running_tasks_by_worker(self._db, all_worker_ids) if all_worker_ids else {}
+
+        # Enrich VmInfo objects with worker information by matching vm_id to worker_id
         for group in status.groups:
             for slice_info in group.slices:
                 for vm in slice_info.vms:
-                    if vm.address:
-                        worker_info = vm_address_to_worker.get(vm.address)
-                        if worker_info:
-                            vm.worker_id = worker_info[0]
-                            vm.worker_healthy = worker_info[1]
+                    worker_info = worker_id_to_info.get(vm.vm_id)
+                    if worker_info:
+                        vm.worker_id = worker_info[0]
+                        vm.worker_healthy = worker_info[1]
+                        wid = WorkerId(vm.worker_id)
+                        vm.running_task_count = len(running_by_worker.get(wid, set()))
 
         return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
@@ -874,24 +1161,22 @@ class ControllerServiceImpl:
         job_name = JobName.from_wire(request.id)
         max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
         requested_attempt_id = request.attempt_id
-        log_store = self._state.log_store
+        log_store = self._log_store
 
         # Collect child job statuses when requested (for streaming UI).
         child_job_statuses: list[cluster_pb2.JobStatus] = []
         if not job_name.is_task and request.include_children:
-            prefix = job_name.to_wire()
-            for job in self._state.list_all_jobs():
-                job_wire = job.job_id.to_wire()
-                if job_wire != prefix and job_wire.startswith(prefix + "/"):
-                    child_status = cluster_pb2.JobStatus(
-                        job_id=job_wire,
-                        state=job.state,
-                        exit_code=job.exit_code or 0,
-                        error=job.error or "",
-                    )
-                    if job.finished_at:
-                        child_status.finished_at.CopyFrom(job.finished_at.to_proto())
-                    child_job_statuses.append(child_status)
+            jobs = _descendant_jobs(self._db, job_name)
+            for job in jobs:
+                child_status = cluster_pb2.JobStatus(
+                    job_id=job.job_id.to_wire(),
+                    state=job.state,
+                    exit_code=job.exit_code or 0,
+                    error=job.error or "",
+                )
+                if job.finished_at:
+                    child_status.finished_at.CopyFrom(job.finished_at.to_proto())
+                child_job_statuses.append(child_status)
 
         # Build the log key or prefix for the query.
         job_wire = job_name.to_wire()
@@ -901,11 +1186,12 @@ class ControllerServiceImpl:
         if job_name.is_task and requested_attempt_id >= 0:
             # Exact key: single task + single attempt
             log_result = log_store.get_logs(
-                task_log_key(job_name, requested_attempt_id),
+                task_log_key(TaskAttempt(task_id=job_name, attempt_id=requested_attempt_id)),
                 since_ms=request.since_ms,
                 cursor=cursor,
                 substring_filter=substring_filter,
                 max_lines=max_lines,
+                tail=request.tail,
                 min_level=request.min_level,
             )
             for entry in log_result.entries:
@@ -918,6 +1204,7 @@ class ControllerServiceImpl:
                 since_ms=request.since_ms,
                 substring_filter=substring_filter,
                 max_lines=max_lines,
+                tail=request.tail,
                 min_level=request.min_level,
             )
         else:
@@ -930,6 +1217,7 @@ class ControllerServiceImpl:
                 since_ms=request.since_ms,
                 substring_filter=substring_filter,
                 max_lines=max_lines,
+                tail=request.tail,
                 min_level=request.min_level,
                 shallow=not request.include_children,
             )
@@ -950,6 +1238,15 @@ class ControllerServiceImpl:
 
     # --- Profiling ---
 
+    def _resolve_worker_stub(self, worker_id_str: str) -> WorkerServiceClientSync:
+        """Resolve a worker ID to a healthy stub, raising ConnectError on failure."""
+        worker = self._transitions.get_worker(WorkerId(worker_id_str))
+        if not worker:
+            raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
+        if not worker.healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id_str} is unavailable")
+        return self._controller.stub_factory.get_stub(worker.address)
+
     def profile_task(
         self,
         request: cluster_pb2.ProfileTaskRequest,
@@ -958,8 +1255,8 @@ class ControllerServiceImpl:
         """Profile a running task or system process.
 
         Target routing:
-        - /system/process with threads: handled locally (controller thread dump)
-        - /system/process with cpu/memory: not yet supported
+        - /system/process: the controller process itself
+        - /system/worker/<worker_id>: proxy to a specific worker (profiles the worker process)
         - /job/.../task/N: proxied to the task's worker
         """
         # Handle controller-local targets: profile the controller process itself
@@ -973,24 +1270,39 @@ class ControllerServiceImpl:
             except Exception as e:
                 return cluster_pb2.ProfileTaskResponse(error=str(e))
 
+        # /system/worker/<worker_id>: proxy profile to the worker's own process
+        worker_id = _parse_worker_target(request.target)
+        if worker_id is not None:
+            stub = self._resolve_worker_stub(worker_id)
+            forwarded = cluster_pb2.ProfileTaskRequest(
+                target="/system/process",
+                duration_seconds=request.duration_seconds,
+                profile_type=request.profile_type,
+            )
+            timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
+            resp = stub.profile_task(forwarded, timeout_ms=timeout_ms)
+            return cluster_pb2.ProfileTaskResponse(
+                profile_data=resp.profile_data,
+                error=resp.error,
+            )
+
         # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
-            parsed = parse_profile_target(request.target)
-            task_name = JobName.from_wire(parsed.task_id)
-            task_name.require_task()
+            target = parse_profile_target(request.target)
+            target.task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
-        task = self._state.get_task(task_name)
+        task = _read_task_with_attempts(self._db, target.task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 
-        worker_id = task.worker_id
-        if not worker_id:
+        task_worker_id = task.worker_id
+        if not task_worker_id:
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not assigned to a worker")
 
-        worker = self._state.get_worker(worker_id)
+        worker = _read_worker(self._db, task_worker_id)
         if not worker or not worker.healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
         stub = self._controller.stub_factory.get_stub(worker.address)
@@ -1009,45 +1321,17 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.GetTransactionsResponse:
         """Get recent controller actions for the dashboard action log."""
         limit = request.limit if request.limit > 0 else DEFAULT_TRANSACTION_LIMIT
-        transactions = self._state.get_transactions(limit=limit)
         actions = []
-        for txn in transactions:
-            for action in txn.actions:
-                details_str = json.dumps(action.details) if action.details else ""
-                proto_action = cluster_pb2.Controller.TransactionAction(
-                    action=action.action,
-                    entity_id=action.entity_id,
-                    details=details_str,
-                )
-                proto_action.timestamp.CopyFrom(action.timestamp.to_proto())
-                actions.append(proto_action)
+        for action in _transaction_actions(self._db, limit=limit):
+            details_str = json.dumps(action.details) if action.details else ""
+            proto_action = cluster_pb2.Controller.TransactionAction(
+                action=action.action,
+                entity_id=action.entity_id,
+                details=details_str,
+            )
+            proto_action.timestamp.CopyFrom(action.timestamp.to_proto())
+            actions.append(proto_action)
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
-
-    # --- Cluster Summary ---
-
-    def get_cluster_summary(
-        self,
-        request: cluster_pb2.Controller.GetClusterSummaryRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.GetClusterSummaryResponse:
-        """Lightweight cluster-wide counters for the dashboard header."""
-        jobs = self._state.list_all_jobs()
-        state_counts: dict[str, int] = {}
-        for job in jobs:
-            name = job_state_name(job.state)
-            key = name.removeprefix("JOB_STATE_").lower()
-            state_counts[key] = state_counts.get(key, 0) + 1
-
-        workers = self._state.list_all_workers()
-        healthy = sum(1 for w in workers if w.healthy)
-
-        return cluster_pb2.Controller.GetClusterSummaryResponse(
-            job_state_counts=state_counts,
-            total_jobs=len(jobs),
-            total_workers=len(workers),
-            healthy_workers=healthy,
-            total_users=len(self._state.list_user_stats()),
-        )
 
     def list_users(
         self,
@@ -1057,7 +1341,7 @@ class ControllerServiceImpl:
         """Return live per-user aggregate counts for the dashboard."""
         del request, ctx
         users = sorted(
-            self._state.list_user_stats(),
+            _live_user_stats(self._db),
             key=lambda entry: (
                 -_active_job_count(entry.job_state_counts),
                 -(entry.task_state_counts.get(cluster_pb2.TASK_STATE_RUNNING, 0)),
@@ -1080,9 +1364,28 @@ class ControllerServiceImpl:
         request: cluster_pb2.FetchLogsRequest,
         ctx: Any,
     ) -> cluster_pb2.FetchLogsResponse:
-        """Fetch logs from the LogStore by key with filtering and pagination."""
+        """Fetch logs by source key with filtering and pagination.
+
+        Source routing:
+        - /system/process, /job/...: served from the controller's own LogStore
+        - /system/worker/<worker_id>: proxied to the worker's FetchLogs(/system/process)
+        """
+        worker_id = _parse_worker_target(request.source)
+        if worker_id is not None:
+            stub = self._resolve_worker_stub(worker_id)
+            forwarded = cluster_pb2.FetchLogsRequest(
+                source="/system/process",
+                since_ms=request.since_ms,
+                cursor=request.cursor,
+                substring=request.substring,
+                max_lines=request.max_lines,
+                tail=request.tail,
+                min_level=request.min_level,
+            )
+            return stub.fetch_logs(forwarded, timeout_ms=10000)
+
         max_lines = request.max_lines if request.max_lines > 0 else 1000
-        result = self._state.log_store.get_logs(
+        result = self._log_store.get_logs(
             request.source,
             since_ms=request.since_ms,
             cursor=request.cursor,
@@ -1109,16 +1412,17 @@ class ControllerServiceImpl:
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
-        worker = self._state.get_worker(request.id)
-        if not worker:
+        detail = _read_worker_detail(self._db, WorkerId(str(request.id)))
+        if not detail:
             raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
+        worker = detail.worker
         worker_health = cluster_pb2.Controller.WorkerHealthStatus(
             worker_id=worker.worker_id,
             healthy=worker.healthy,
             consecutive_failures=worker.consecutive_failures,
             last_heartbeat=worker.last_heartbeat.to_proto(),
-            running_job_ids=[tid.to_wire() for tid in worker.running_tasks],
+            running_job_ids=[tid.to_wire() for tid in detail.running_tasks],
             address=worker.address,
             metadata=worker.metadata,
             status_message=worker_status_message(worker),
@@ -1142,7 +1446,7 @@ class ControllerServiceImpl:
                 logger.debug("Failed to fetch worker logs for %s", request.id, exc_info=True)
 
         # Collect recent task history for this worker
-        tasks = self._state.get_tasks_for_worker(worker.worker_id, limit=50)
+        tasks = _tasks_for_worker(self._db, worker.worker_id, limit=50)
         recent_tasks = [task_to_proto(task) for task in tasks]
 
         resp = cluster_pb2.Controller.GetWorkerStatusResponse(
@@ -1150,9 +1454,10 @@ class ControllerServiceImpl:
             recent_tasks=recent_tasks,
         )
         resp.worker.CopyFrom(worker_health)
-        if worker.resource_snapshot:
-            resp.current_resources.CopyFrom(worker.resource_snapshot)
-        for snapshot in worker.resource_history:
+        resource_history = detail.resource_history
+        if resource_history:
+            resp.current_resources.CopyFrom(resource_history[-1])
+        for snapshot in resource_history:
             resp.resource_history.append(snapshot)
         return resp
 
@@ -1163,10 +1468,193 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.BeginCheckpointResponse:
         path, result = self._controller.begin_checkpoint()
         resp = cluster_pb2.Controller.BeginCheckpointResponse(
-            snapshot_path=path,
+            checkpoint_path=path,
             job_count=result.job_count,
             task_count=result.task_count,
             worker_count=result.worker_count,
         )
-        resp.created_at.CopyFrom(result.proto.created_at)
+        resp.created_at.CopyFrom(result.created_at.to_proto())
         return resp
+
+    def get_process_status(
+        self,
+        request: cluster_pb2.GetProcessStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetProcessStatusResponse:
+        """Return process info and recent logs.
+
+        Target routing (same convention as ProfileTask/FetchLogs):
+        - empty or /system/process: the controller process itself
+        - /system/worker/<worker_id>: proxy to a specific worker
+        """
+        target = request.target
+        if not target or target == "/system/process":
+            return get_process_status(request, self._log_store, self._timer)
+
+        # Parse /system/worker/<worker_id>
+        worker_id = _parse_worker_target(target)
+        if worker_id is None:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
+
+        worker = self._transitions.get_worker(WorkerId(worker_id))
+        if not worker:
+            raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
+        if not worker.healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+
+        stub = self._controller.stub_factory.get_stub(worker.address)
+        # Forward with target set to /system/process so the worker returns its own status
+        forwarded = cluster_pb2.GetProcessStatusRequest(
+            max_log_lines=request.max_log_lines,
+            log_substring=request.log_substring,
+            min_log_level=request.min_log_level,
+            target="/system/process",
+        )
+        return stub.get_process_status(forwarded, timeout_ms=10000)
+
+    # ── Auth RPCs ────────────────────────────────────────────────────────
+
+    def get_auth_info(
+        self,
+        request: cluster_pb2.GetAuthInfoRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetAuthInfoResponse:
+        return cluster_pb2.GetAuthInfoResponse(
+            provider=self._auth.provider or "",
+            gcp_project_id=self._auth.gcp_project_id or "",
+        )
+
+    def login(
+        self,
+        request: cluster_pb2.LoginRequest,
+        ctx: Any,
+    ) -> cluster_pb2.LoginResponse:
+        if not self._auth.login_verifier:
+            raise ConnectError(Code.UNIMPLEMENTED, "Login not available (no identity provider configured)")
+
+        try:
+            username = self._auth.login_verifier.verify(request.identity_token)
+        except ValueError as exc:
+            raise ConnectError(Code.UNAUTHENTICATED, f"Identity verification failed: {exc}") from exc
+
+        if username.startswith("system:"):
+            raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
+
+        now = Timestamp.now()
+        self._db.ensure_user(username, now)
+
+        revoked = revoke_login_keys_for_user(self._db, username, now)
+
+        raw_token = secrets.token_urlsafe(32)
+        key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        create_api_key(
+            self._db,
+            key_id=key_id,
+            key_hash=hash_token(raw_token),
+            key_prefix=raw_token[:8],
+            user_id=username,
+            name=f"login-{now.epoch_ms()}",
+            now=now,
+        )
+        logger.info("Login: user=%s, new_key=%s, revoked=%d old login keys", username, key_id, revoked)
+        return cluster_pb2.LoginResponse(token=raw_token, key_id=key_id, user_id=username)
+
+    def create_api_key(
+        self,
+        request: cluster_pb2.CreateApiKeyRequest,
+        ctx: Any,
+    ) -> cluster_pb2.CreateApiKeyResponse:
+        caller = self._require_auth()
+        target_user = request.user_id or caller
+        if target_user != caller:
+            self._require_admin(caller)
+
+        now = Timestamp.now()
+        self._db.ensure_user(target_user, now)
+
+        raw_token = secrets.token_urlsafe(32)
+        key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        expires_at = Timestamp.from_ms(now.epoch_ms() + request.ttl_ms) if request.ttl_ms > 0 else None
+        create_api_key(
+            self._db,
+            key_id=key_id,
+            key_hash=hash_token(raw_token),
+            key_prefix=raw_token[:8],
+            user_id=target_user,
+            name=request.name or f"key-{now.epoch_ms()}",
+            now=now,
+            expires_at=expires_at,
+        )
+        return cluster_pb2.CreateApiKeyResponse(key_id=key_id, token=raw_token, key_prefix=raw_token[:8])
+
+    def revoke_api_key(
+        self,
+        request: cluster_pb2.RevokeApiKeyRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Empty:
+        caller = self._require_auth()
+        with self._db.snapshot() as q:
+            key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
+        if key is None:
+            raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
+        if key.user_id != caller:
+            self._require_admin(caller)
+        revoke_api_key(self._db, request.key_id, Timestamp.now())
+        return cluster_pb2.Empty()
+
+    def list_api_keys(
+        self,
+        request: cluster_pb2.ListApiKeysRequest,
+        ctx: Any,
+    ) -> cluster_pb2.ListApiKeysResponse:
+        caller = self._require_auth()
+        target_user = request.user_id or caller
+        if target_user != caller:
+            self._require_admin(caller)
+
+        keys = list_api_keys(self._db, user_id=target_user if target_user else None)
+        key_infos = []
+        for k in keys:
+            key_infos.append(
+                cluster_pb2.ApiKeyInfo(
+                    key_id=k.key_id,
+                    key_prefix=k.key_prefix,
+                    user_id=k.user_id,
+                    name=k.name,
+                    created_at_ms=k.created_at.epoch_ms(),
+                    last_used_at_ms=k.last_used_at.epoch_ms() if k.last_used_at else 0,
+                    expires_at_ms=k.expires_at.epoch_ms() if k.expires_at else 0,
+                    revoked=k.revoked_at is not None,
+                )
+            )
+        return cluster_pb2.ListApiKeysResponse(keys=key_infos)
+
+    def get_current_user(
+        self,
+        request: cluster_pb2.GetCurrentUserRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetCurrentUserResponse:
+        user_id = get_verified_user()
+        if user_id is None:
+            user_id = "anonymous"
+        role = self._db.get_user_role(user_id)
+        return cluster_pb2.GetCurrentUserResponse(
+            user_id=user_id,
+            role=role or "",
+        )
+
+    def _require_auth(self) -> str:
+        """Get the verified user or raise UNAUTHENTICATED."""
+        user = get_verified_user()
+        if user is None:
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
+        return user
+
+    def _require_role(self, user_id: str, role: str) -> None:
+        actual_role = self._db.get_user_role(user_id)
+        if actual_role != role:
+            raise ConnectError(Code.PERMISSION_DENIED, f"{role} role required")
+
+    def _require_admin(self, user_id: str) -> None:
+        """Raise PERMISSION_DENIED if user is not an admin."""
+        self._require_role(user_id, "admin")

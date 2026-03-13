@@ -37,10 +37,10 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.cluster.controller.local import (
     LocalController,
     make_local_cluster_config,
-    wait_for_worker_registration,
 )
 from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import (
@@ -51,6 +51,7 @@ from iris.cluster.types import (
     Namespace,
     ReservationEntry,
     ResourceSpec,
+    TaskAttempt,
     adjust_tpu_replicas,
 )
 from iris.rpc import cluster_pb2
@@ -376,11 +377,11 @@ class NamespacedEndpointRegistry:
         self,
         cluster: ClusterClient,
         namespace: Namespace,
-        job_id: JobName,
+        task_attempt: TaskAttempt,
     ):
         self._cluster = cluster
         self._namespace = namespace
-        self._job_id = job_id
+        self._task_attempt = task_attempt
 
     def register(
         self,
@@ -406,7 +407,7 @@ class NamespacedEndpointRegistry:
         return self._cluster.register_endpoint(
             name=prefixed_name,
             address=address,
-            job_id=self._job_id,
+            task_attempt=self._task_attempt,
             metadata=metadata,
         )
 
@@ -525,7 +526,6 @@ class IrisClient:
         config_proto = make_local_cluster_config(cfg.max_workers)
         controller = LocalController(config_proto)
         address = controller.start()
-        wait_for_worker_registration(address)
         cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
         return cls(cluster, controller=controller)
 
@@ -535,8 +535,9 @@ class IrisClient:
         controller_address: str,
         *,
         workspace: Path | None = None,
-        bundle_gcs_path: str | None = None,
+        bundle_id: str | None = None,
         timeout_ms: int = 30000,
+        token_provider: TokenProvider | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for RPC-based cluster execution.
 
@@ -545,9 +546,10 @@ class IrisClient:
             workspace: Path to workspace directory containing pyproject.toml.
                 If provided, this directory will be bundled and sent to workers.
                 Required for external job submission.
-            bundle_gcs_path: GCS path to workspace bundle for sub-job inheritance.
-                When set, sub-jobs use this path instead of creating new bundles.
+            bundle_id: Workspace bundle identifier for sub-job inheritance.
+                When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
+            token_provider: When set, attaches bearer tokens to all outgoing RPCs.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -558,11 +560,16 @@ class IrisClient:
             bundle_blob = creator.create_bundle()
             logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
 
+        interceptors = []
+        if token_provider is not None:
+            interceptors.append(AuthTokenInjector(token_provider))
+
         cluster = RemoteClusterClient(
             controller_address=controller_address,
-            bundle_gcs_path=bundle_gcs_path,
+            bundle_id=bundle_id,
             bundle_blob=bundle_blob,
             timeout_ms=timeout_ms,
+            interceptors=interceptors,
         )
         return cls(cluster)
 
@@ -884,14 +891,16 @@ class IrisContext:
 
     Attributes:
         job_id: Unique identifier for this job (hierarchical: "/root/parent/child")
-        attempt_id: Attempt number for this job execution (0-based)
+        task_attempt: Structured task identity (task_id + attempt_id). Used for endpoint
+            registration so the controller can associate endpoints with the
+            specific task and clean them up on retry.
         worker_id: Identifier for the worker executing this job (may be None)
         client: IrisClient for job operations (submit, status, wait, etc.)
         ports: Allocated ports by name (e.g., {"actor": 50001})
     """
 
     job_id: JobName | None
-    attempt_id: int = 0
+    task_attempt: TaskAttempt | None = None
     worker_id: str | None = None
     client: "IrisClient | None" = None
     ports: dict[str, int] | None = None
@@ -904,17 +913,20 @@ class IrisContext:
     def registry(self) -> NamespacedEndpointRegistry:
         """Endpoint registry for this job context. Creates on demand.
 
+        Passes the task_attempt so the controller can associate endpoints with
+        the specific task for retry cleanup.
+
         Raises:
-            RuntimeError: If no client is available
+            RuntimeError: If no client or task_attempt is available
         """
         if self.client is None:
             raise RuntimeError("No client available - ensure controller_address is set")
-        if self.job_id is None:
-            raise RuntimeError("No job id available - ensure IrisContext is initialized from a job")
+        if self.task_attempt is None:
+            raise RuntimeError("No task_attempt available - ensure IrisContext is initialized from a task")
         return NamespacedEndpointRegistry(
             self.client._cluster_client,
             self.namespace,
-            self.job_id,
+            self.task_attempt,
         )
 
     @property
@@ -987,7 +999,7 @@ class IrisContext:
         """
         return IrisContext(
             job_id=info.job_id,
-            attempt_id=info.attempt_id,
+            task_attempt=info.task_attempt,
             worker_id=info.worker_id,
             client=client,
             ports=dict(info.ports),
@@ -1037,10 +1049,10 @@ def get_iris_ctx() -> IrisContext | None:
     # Set up client if controller address is available
     client = None
     if job_info.controller_address:
-        bundle_gcs_path = job_info.bundle_gcs_path
+        bundle_id = job_info.bundle_id
         client = IrisClient.remote(
             controller_address=job_info.controller_address,
-            bundle_gcs_path=bundle_gcs_path,
+            bundle_id=bundle_id,
         )
 
     ctx = IrisContext.from_job_info(job_info, client=client)

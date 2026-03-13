@@ -9,7 +9,7 @@ import time
 import pytest
 
 from iris.client.client import IrisClient, Job
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt
 from iris.rpc import cluster_pb2
 
 
@@ -41,7 +41,7 @@ def test_command_entrypoint_preserves_env_vars(client):
     job_id = JobName.root("test-user", "test-env-vars")
 
     # Create a command that echoes an environment variable
-    entrypoint = Entrypoint.from_command("sh", "-c", "echo IRIS_JOB_ID=$IRIS_JOB_ID")
+    entrypoint = Entrypoint.from_command("sh", "-c", "echo IRIS_TASK_ID=$IRIS_TASK_ID")
 
     resources = cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
@@ -52,10 +52,11 @@ def test_command_entrypoint_preserves_env_vars(client):
 
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
-    # Check logs contain the job ID
+    # Check logs contain the task ID with correct wire format (task_id:attempt_id)
+    expected = TaskAttempt(task_id=job_id.task(0), attempt_id=0).to_wire()
     response = client.fetch_task_logs(job_id.task(0))
     log_text = extract_log_text(response)
-    assert f"IRIS_JOB_ID={job_id.to_wire()}" in log_text
+    assert f"IRIS_TASK_ID={expected}" in log_text
 
 
 def test_log_streaming_captures_output_without_trailing_newline(client):

@@ -219,7 +219,7 @@ def cluster(ctx):
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.option(
-    "--bundle-prefix", default=None, help="Override bundle/snapshot storage prefix (e.g. file:///tmp/iris-bundles)"
+    "--bundle-prefix", default=None, help="Override bundle/checkpoint storage prefix (e.g. file:///tmp/iris-bundles)"
 )
 @click.pass_context
 def cluster_start(ctx, local: bool, bundle_prefix: str | None):
@@ -254,6 +254,15 @@ def cluster_start(ctx, local: bool, bundle_prefix: str | None):
     try:
         address = platform.start_controller(config)
         click.echo(f"Controller started at {address}")
+        if is_local:
+            from iris.cluster.platform.local import LocalPlatform
+
+            assert isinstance(platform, LocalPlatform)
+            token = platform.auto_login_token
+            if token:
+                click.echo(f"Dashboard: {address}?session_token={token}")
+            else:
+                click.echo(f"Dashboard: {address}")
         click.echo("\nController is running with integrated autoscaler.")
         if is_local:
             click.echo("Press Ctrl+C to stop.")
@@ -316,11 +325,17 @@ def cluster_status_cmd(ctx):
     controller_url = require_controller_url(ctx)
     click.echo("Checking controller status...")
     try:
-        as_status = _get_autoscaler_status(controller_url)
+        client = cluster_connect.ControllerServiceClientSync(controller_url)
+        proc = client.get_process_status(cluster_pb2.GetProcessStatusRequest()).process_info
+        workers = client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers
+        as_status = client.get_autoscaler_status(cluster_pb2.Controller.GetAutoscalerStatusRequest()).status
+        healthy = sum(1 for w in workers if w.healthy)
         click.echo("Controller Status:")
         click.echo("  Running: True")
         click.echo("  Healthy: True")
         click.echo(f"  Address: {controller_url}")
+        click.echo(f"  Git Hash: {proc.git_hash}")
+        click.echo(f"  Workers: {healthy}/{len(workers)} healthy")
         click.echo("\nAutoscaler Status:")
         if not as_status.groups:
             click.echo("  No scale groups configured")
@@ -353,6 +368,31 @@ def cluster_dashboard(ctx):
     click.echo(f"Controller RPC: {controller_url}")
     click.echo("\nPress Ctrl+C to close tunnel.")
     stop.wait()
+
+
+@cluster.command("dashboard-proxy")
+@click.option("--port", default=8080, type=int, help="Local port to serve the dashboard on")
+@click.pass_context
+def cluster_dashboard_proxy(ctx, port: int):
+    """Start a local dashboard that proxies RPC calls to the remote controller.
+
+    Serves the Vue dashboard UI locally and forwards all Connect RPC requests
+    to the upstream controller. Useful for viewing a remote controller without
+    SSH tunneling. Rebuilds dashboard assets on each run.
+    """
+    import uvicorn
+
+    from iris.cli.build import _ensure_dashboard_dist
+    from iris.cluster.controller.dashboard import ProxyControllerDashboard
+
+    # Rebuild dashboard assets so the proxy always serves the latest UI.
+    _ensure_dashboard_dist()
+
+    controller_url = require_controller_url(ctx)
+    dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
+    click.echo(f"Proxying to controller at {controller_url}")
+    click.echo(f"Dashboard: http://localhost:{port}")
+    uvicorn.run(dashboard.app, host="127.0.0.1", port=port, log_level="info")
 
 
 # =============================================================================
@@ -463,7 +503,7 @@ def controller_checkpoint(ctx, stop: bool):
     """Take a checkpoint of the controller state.
 
     Calls BeginCheckpoint on the running controller, which pauses scheduling
-    briefly and writes a consistent snapshot to storage.
+    briefly and writes a consistent checkpoint DB copy.
     """
     controller_url = require_controller_url(ctx)
     client = cluster_connect.ControllerServiceClientSync(controller_url)
@@ -473,7 +513,7 @@ def controller_checkpoint(ctx, stop: bool):
         click.echo(f"Checkpoint failed: {e}", err=True)
         raise SystemExit(1) from e
 
-    click.echo(f"Snapshot written: {resp.snapshot_path}")
+    click.echo(f"Checkpoint DB written: {resp.checkpoint_path}")
     click.echo(f"  Jobs:    {resp.job_count}")
     click.echo(f"  Tasks:   {resp.task_count}")
     click.echo(f"  Workers: {resp.worker_count}")
@@ -497,7 +537,7 @@ def controller_checkpoint(ctx, stop: bool):
 
 
 @controller.command("restart")
-@click.option("--bundle-prefix", default=None, help="Override bundle/snapshot storage prefix (e.g. gs://bucket/path)")
+@click.option("--bundle-prefix", default=None, help="Override bundle/checkpoint storage prefix (e.g. gs://bucket/path)")
 @click.pass_context
 def controller_restart(ctx, bundle_prefix: str | None):
     """Restart controller with state preservation (remote platforms only).
@@ -531,7 +571,7 @@ def controller_restart(ctx, bundle_prefix: str | None):
         raise SystemExit(1) from e
     finally:
         client.close()
-    click.echo(f"Checkpoint: {resp.snapshot_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
+    click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
     # Build fresh images so the new controller VM gets the latest code
     _pin_latest_images(config)

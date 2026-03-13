@@ -16,12 +16,12 @@ tasks are in the BUILDING state per worker, preventing resource exhaustion from
 too many concurrent uv sync operations.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
 
@@ -246,10 +246,10 @@ class ContainerRuntime(Protocol):
     def stage_bundle(
         self,
         *,
-        bundle_gcs_path: str,
+        bundle_id: str,
         workdir: Path,
         workdir_files: dict[str, bytes],
-        fetch_bundle: Callable[[str], Path],
+        bundle_store: BundleStore,
     ) -> None:
         """Materialize task bundle/workdir files for this runtime.
 

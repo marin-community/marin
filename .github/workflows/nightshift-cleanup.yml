@@ -1,0 +1,229 @@
+name: Nightshift Cleanup
+
+on:
+  schedule:
+    # Run at 2 AM Pacific (10:00 UTC) on weekdays
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      agent_count:
+        description: 'Number of cleanup agents to spawn (1-5)'
+        required: false
+        default: '5'
+        type: choice
+        options: ['1', '2', '3', '4', '5']
+      target_folder:
+        description: 'Specific folder to target (leave empty for random selection)'
+        required: false
+        type: string
+
+concurrency:
+  group: nightshift-cleanup
+  cancel-in-progress: false
+
+jobs:
+  # Phase 1: Pick random folders for each agent
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Pick target folders
+        id: pick
+        shell: bash
+        env:
+          INPUT_AGENT_COUNT: ${{ inputs.agent_count || '5' }}
+          INPUT_TARGET_FOLDER: ${{ inputs.target_folder }}
+        run: |
+          AGENT_COUNT="$INPUT_AGENT_COUNT"
+          OVERRIDE="$INPUT_TARGET_FOLDER"
+
+          # Candidate top-level source directories (excludes scripts/, infra/, docs/)
+          CANDIDATES=(
+            "lib/marin/src/marin"
+            "lib/levanter/src/levanter"
+            "lib/iris/src/iris"
+            "lib/haliax/src/haliax"
+            "lib/zephyr/src/zephyr"
+            "lib/fray/src/fray"
+            "experiments"
+            "tests"
+          )
+
+          # Build list of all subdirectories with >=3 python files
+          ALL_DIRS=()
+          for base in "${CANDIDATES[@]}"; do
+            if [ -d "$base" ]; then
+              while IFS= read -r dir; do
+                count=$(find "$dir" -maxdepth 1 -name '*.py' | wc -l)
+                if [ "$count" -ge 3 ]; then
+                  ALL_DIRS+=("$dir")
+                fi
+              done < <(find "$base" -type d -maxdepth 3)
+            fi
+          done
+
+          if [ "${#ALL_DIRS[@]}" -eq 0 ]; then
+            echo "No candidate directories found"
+            exit 1
+          fi
+
+          # Pick AGENT_COUNT random directories (or use override)
+          if [ -n "$OVERRIDE" ]; then
+            SELECTED=()
+            for i in $(seq 1 "$AGENT_COUNT"); do
+              SELECTED+=("$OVERRIDE")
+            done
+          else
+            readarray -t SELECTED < <(printf '%s\n' "${ALL_DIRS[@]}" | shuf -n "$AGENT_COUNT")
+          fi
+
+          MATRIX='{"include":['
+          for i in $(seq 0 $(( ${#SELECTED[@]} - 1 ))); do
+            FOLDER="${SELECTED[$i]}"
+            AGENT_NUM=$((i + 1))
+
+            # Generate a haiku seed for the agent
+            HAIKU_SEED=$(od -An -tx4 -N4 /dev/urandom | tr -d ' ')
+
+            if [ "$AGENT_NUM" -gt 1 ]; then MATRIX+=','; fi
+            MATRIX+="{\"agent_id\":$AGENT_NUM,\"folder\":\"$FOLDER\",\"haiku_seed\":\"$HAIKU_SEED\"}"
+          done
+          MATRIX+=']}'
+
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Selected folders:"
+          echo "$MATRIX" | python3 -m json.tool
+
+  # Phase 2: Spawn parallel cleanup agents
+  cleanup:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+      fail-fast: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run Cleanup Agent ${{ matrix.agent_id }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: 'claude[bot]'
+          direct_prompt: true
+          prompt: |
+            You are Nightshift Cleanup Agent #${{ matrix.agent_id }}.
+
+            Your random seed is: ${{ matrix.haiku_seed }}
+            Use this seed to compose a haiku that will serve as the epigraph
+            for your PR description. The haiku should relate to code maintenance.
+
+            ## Your Mission
+
+            Scan the folder `${{ matrix.folder }}` for code cleanup opportunities.
+            Read `docs/dev-guide/coding-standards.md` for the full set of rules.
+            Read `AGENTS.md` for project conventions.
+
+            ## What to Look For
+
+            Scan for issues across three dimensions. Within each, items are in priority order.
+
+            ### 1. Code Reuse
+
+            - **Duplicated utilities**: search for existing helpers in `lib/*/src/` that could
+              replace newly written or existing hand-rolled code. Flag any function that
+              duplicates existing functionality and suggest the existing one instead.
+            - **Inline logic that should use an existing utility**: hand-rolled string
+              manipulation, manual path handling, custom environment checks, ad-hoc type
+              guards, and similar patterns that a codebase utility already handles.
+
+            ### 2. Code Quality
+
+            - **Dead code**: unused imports, unreferenced functions, commented-out blocks,
+              stale `TODO`/`FIXME` (>90 days via `git blame`)
+            - **Redundant state**: state that duplicates existing state, cached values that
+              could be derived, observers/effects that could be direct calls
+            - **Parameter sprawl**: functions with >5 parameters, or new parameters added
+              instead of generalizing or restructuring existing ones
+            - **Copy-paste with slight variation**: near-duplicate code blocks that should be
+              unified with a shared abstraction
+            - **Leaky abstractions**: exposing internal details that should be encapsulated,
+              or breaking existing abstraction boundaries
+            - **Stringly-typed code**: using raw strings where constants, enums, or typed
+              alternatives already exist in the codebase
+            - **LLM anti-patterns**: over-protective try/except, defensive None checks,
+              verbose docstrings restating the code, unnecessary abstractions
+            - **Test quality**: tests with no assertions, `time.sleep()` in tests,
+              mocks of internal functions, `@pytest.mark.skip` without linked issue
+            - **Import hygiene**: mid-function imports (except cycle-breaking), `TYPE_CHECKING`
+              guards, wrong dependency direction
+
+            ### 3. Efficiency
+
+            - **Unnecessary work**: redundant computations, repeated file reads, duplicate
+              network/API calls, N+1 query patterns
+            - **Missed concurrency**: independent operations run sequentially when they could
+              run in parallel
+            - **Hot-path bloat**: blocking work added to startup or per-request hot paths
+            - **Recurring no-op updates**: state updates inside polling loops or event handlers
+              that fire unconditionally — add a change-detection guard so downstream consumers
+              aren't notified when nothing changed
+            - **Unnecessary existence checks**: pre-checking file/resource existence before
+              operating (TOCTOU anti-pattern) — operate directly and handle the error
+            - **Memory**: unbounded data structures, missing cleanup, listener leaks
+            - **Overly broad operations**: reading entire files when only a portion is needed,
+              loading all items when filtering for one
+
+            ## Rules of Engagement
+
+            - Only make changes you are confident are correct improvements.
+            - Do NOT refactor working code for style alone — focus on genuine issues.
+            - Do NOT create a PR unless you have identified genuinely high-value fixes.
+              Cosmetic-only or marginal improvements do not warrant a PR. If nothing
+              meaningful is found, exit cleanly instead.
+            - Do NOT touch files outside `${{ matrix.folder }}` unless fixing an import.
+            - Run `./infra/pre-commit.py --all-files --fix` before committing.
+            - Run `uv run pytest -m 'not slow'` on any test files you modified or that
+              test modules you changed.
+            - If you find issues but the fix is non-trivial, file a GitHub issue instead
+              of making a risky change.
+            - Keep each PR focused: one concern per PR. If you find multiple independent
+              issues, pick the most impactful one.
+
+            ## Output
+
+            Create a branch named `nightshift/cleanup-${{ matrix.agent_id }}-$(date +%Y%m%d)`
+            and open a PR with:
+            - Title: `[nightshift] <concise description of cleanup>`
+            - Body: your haiku, then a summary of what was cleaned and why
+            - Labels: `agent-generated`, `nightshift`
+
+            If you find nothing worth changing, do NOT create a PR. Instead, exit cleanly
+            with a message saying the folder is in good shape.
+          claude_args: |
+            --model opus
+            --max-turns 80
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)"

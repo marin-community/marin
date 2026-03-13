@@ -44,9 +44,9 @@ from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.manager import connect_cluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
+from iris.logging import configure_logging
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +93,10 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
     """Build a local cluster config with diverse TPU scale groups.
 
     Creates a realistic mix of TPU slice sizes to stress-test the scheduler:
-    - 40% small slices (v5litepod-4: 2x2 cores)
-    - 32% medium slices (v5litepod-8: 2x4 cores)
-    - 20% large slices (v5litepod-16: 4x4 cores)
-    - 8% xlarge slices (v5litepod-32: 4x8 cores)
+    - 40% small slices (v5litepod-4: 1x4-chip VM)
+    - 32% medium slices (v5litepod-8: 1x8-chip VM)
+    - 20% large slices (v5litepod-16: 4x4-chip VMs)
+    - 8% xlarge slices (v5litepod-32: 8x4-chip VMs)
 
     Args:
         num_slices: Total number of slices to create across all groups
@@ -150,7 +150,7 @@ def _parse_size(size_str: str) -> int:
 
 def _dummy_training_task():
     """Simulate a training task that runs briefly."""
-    time.sleep(0.1)
+    time.sleep(10.0)
     return "done"
 
 
