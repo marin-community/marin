@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import sleep
@@ -1019,64 +1020,57 @@ class Controller:
 
     def _profile_all_running_tasks(self) -> None:
         """Capture a CPU profile for every running task and store in the DB."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         workers = healthy_active_workers_with_attributes(self._db)
         if not workers:
             return
-        worker_ids = {w.worker_id for w in workers}
-        tasks_by_worker = running_tasks_by_worker(self._db, worker_ids)
         workers_by_id = {w.worker_id: w for w in workers}
+        tasks_by_worker = running_tasks_by_worker(self._db, set(workers_by_id.keys()))
 
-        # Build (task_id, worker) pairs for all running tasks
         profile_targets: list[tuple[JobName, Worker]] = []
         for worker_id, task_ids in tasks_by_worker.items():
-            worker = workers_by_id.get(worker_id)
-            if not worker:
-                continue
+            worker = workers_by_id[worker_id]
             for task_id in task_ids:
                 profile_targets.append((task_id, worker))
 
         if not profile_targets:
             return
 
-        duration = self._config.profile_duration
-
-        def _capture_one(task_id: JobName, worker: Worker) -> None:
-            try:
-                stub = self.stub_factory.get_stub(worker.address)
-                request = cluster_pb2.ProfileTaskRequest(
-                    target=task_id.to_wire(),
-                    duration_seconds=duration,
-                    profile_type=cluster_pb2.ProfileType(
-                        cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
-                    ),
-                )
-                timeout_ms = duration * 1000 + 30000
-                resp = stub.profile_task(request, timeout_ms=timeout_ms)
-                if resp.error:
-                    logger.debug("Profile failed for %s: %s", task_id, resp.error)
-                    return
-                if not resp.profile_data:
-                    logger.debug("Empty profile for %s", task_id)
-                    return
-                insert_task_profile(
-                    self._db,
-                    task_id=task_id.to_wire(),
-                    profile_data=resp.profile_data,
-                    captured_at=Timestamp.now(),
-                )
-                logger.debug("Stored %d byte profile for %s", len(resp.profile_data), task_id)
-            except Exception:
-                logger.debug("Profile capture failed for %s", task_id, exc_info=True)
-
         concurrency = min(self._config.profile_concurrency, len(profile_targets))
         with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="profile") as pool:
-            futures = [pool.submit(_capture_one, task_id, worker) for task_id, worker in profile_targets]
+            futures = [pool.submit(self._capture_one_profile, task_id, worker) for task_id, worker in profile_targets]
             for future in as_completed(futures):
                 future.result()
 
         logger.info("Profile round: captured profiles for %d tasks", len(profile_targets))
+
+    def _capture_one_profile(self, task_id: JobName, worker: Worker) -> None:
+        """Capture a single task profile via RPC and store it in the DB."""
+        try:
+            stub = self.stub_factory.get_stub(worker.address)
+            duration = self._config.profile_duration
+            request = cluster_pb2.ProfileTaskRequest(
+                target=task_id.to_wire(),
+                duration_seconds=duration,
+                profile_type=cluster_pb2.ProfileType(
+                    cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
+                ),
+            )
+            resp = stub.profile_task(request, timeout_ms=duration * 1000 + 30000)
+            if resp.error:
+                logger.debug("Profile failed for %s: %s", task_id, resp.error)
+                return
+            if not resp.profile_data:
+                logger.debug("Empty profile for %s", task_id)
+                return
+            insert_task_profile(
+                self._db,
+                task_id=task_id.to_wire(),
+                profile_data=resp.profile_data,
+                captured_at=Timestamp.now(),
+            )
+            logger.debug("Stored %d byte profile for %s", len(resp.profile_data), task_id)
+        except Exception:
+            logger.debug("Profile capture failed for %s", task_id, exc_info=True)
 
     def _is_reservation_satisfied(
         self,
