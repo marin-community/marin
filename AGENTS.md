@@ -42,6 +42,7 @@ uv run pyrefly
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
 - NEVER stop, restart, or bounce a Ray or Iris cluster unless the user gives express permission.
+- In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 
 ## Communication & Commits
 
