@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useWorkerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
@@ -12,6 +13,7 @@ import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 
+const router = useRouter()
 const MAX_HISTORY_SAMPLES = 60
 
 const props = defineProps<{
@@ -99,6 +101,10 @@ function buildProfileType(profilerType: string): Record<string, unknown> {
 }
 
 async function handleProfile(profilerType: string) {
+  if (profilerType === 'threads') {
+    router.push({ path: '/threads', query: { task_id: props.taskId, source: 'worker' } })
+    return
+  }
   profiling.value = true
   try {
     const { workerRpcCall } = await import('@/composables/useRpc')
@@ -114,22 +120,13 @@ async function handleProfile(profilerType: string) {
     }
     if (resp.profileData) {
       const decoded = atob(resp.profileData)
-      if (profilerType === 'threads') {
-        const w = window.open('', '_blank')
-        if (w) {
-          w.document.open()
-          w.document.write(`<html><head><title>Thread Dump – ${props.taskId}</title></head><body><pre>${decoded.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></body></html>`)
-          w.document.close()
-        }
-      } else {
-        const blob = new Blob([decoded], { type: 'application/octet-stream' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `profile-${props.taskId.replace(/\//g, '_')}.out`
-        a.click()
-        URL.revokeObjectURL(url)
-      }
+      const blob = new Blob([decoded], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `profile-${props.taskId.replace(/\//g, '_')}.out`
+      a.click()
+      URL.revokeObjectURL(url)
     }
   } catch (e) {
     alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
