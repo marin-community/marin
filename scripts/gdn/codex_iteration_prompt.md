@@ -28,6 +28,11 @@ Current diagnosis to optimize against:
   - `step_duration ~= 57.13 ms`
 - The matched hybrid-vs-attention gap is about `110 ms`.
 - The tracked train path explains only about `39%` of that gap.
+- The hybrid-specific generic shell delta explains only about `18%` of that gap.
+- xprof now explains the remaining interaction remainder mostly as:
+  - `dispatch_shard_shell` first,
+  - `ad_wrapper_shell` second,
+  - with `IDLE` as the dominant manifestation of waiting / serialization rather than hidden useful math.
 - The broad `HackableDecoderLayer/*` family is too coarse to use as the main optimization target because the attention-only control also carries substantial normal layer-body compute there.
 - The next actionable target is a **hybrid-specific generic shell delta budget** computed from matched hybrid vs attention-only attribution.
 - The dominant hybrid-only generic shell buckets are categories such as:
@@ -42,6 +47,7 @@ Current diagnosis to optimize against:
   - same-boundary GDN Pallas hillclimbing is demoted from the mainline,
   - broad `HackableDecoderLayer/*` attribution is only a coarse upper bound,
   - the next serious systems bet is a fixed 4-layer block with bespoke backward and explicit sharding,
+  - the immediate mainline budget is `dispatch_shard_shell_delta_ms`,
   - kernel-local train-path wins are secondary unless they reduce the new hybrid-specific shell delta and the full step.
 
 Required behavior for this iteration:
@@ -49,10 +55,10 @@ Required behavior for this iteration:
 2. Generate a shortlist of 3 candidates with upside and risk.
 3. Pick exactly one coverage slot:
    - `S3` hybrid-specific generic shell delta attribution,
-   - `L3` fixed-4-layer block design / skeleton with manual VJP + explicit sharding contract,
+   - `A3` AD-boundary prototype only (hold forward structure fixed, move the manual backward boundary outward),
    - `P3` first fixed-4-layer block prototype with manual VJP + explicit sharding contract,
    - `U` bounded CE side-arm only if CE is again implicated,
-   - `diagnostic` only if you can explain why `S3/L3/P3/U` are lower information.
+   - `diagnostic` only if you can explain why `S3/A3/P3/U` are lower information.
 4. Classify the change as exactly one of:
    - `decoder shell attribution`
    - `whole-layer boundary`
@@ -65,15 +71,19 @@ Required behavior for this iteration:
 6. State what you expect to happen to:
    - `step_duration_ms`
    - `upper_bound_gap_ms`
+   - `dispatch_shard_shell_delta_ms`
+   - `ad_wrapper_shell_delta_ms`
    - `hybrid_generic_shell_delta_budget_ms`
    - `gap_explained_by_hybrid_generic_shell_delta`
-   - `train_path_budget_ms`
    - `interaction_remainder_ms`
+   - `xprof_idle_attributed_ms`
    - `remainder_budget_ms`
 7. State whether the candidate should be rejected if:
    - `step_duration_ms` does not improve,
-   - or `hybrid_generic_shell_delta_budget_ms` stays flat / grows,
-   - or `interaction_remainder_ms` grows.
+   - or `dispatch_shard_shell_delta_ms` stays flat / grows,
+   - or `ad_wrapper_shell_delta_ms` grows,
+   - or `interaction_remainder_ms` grows,
+   - or `xprof_idle_attributed_ms` grows when an XPlane pair is available.
 8. Implement the smallest code/config change needed to execute the chosen slot.
 9. Validate correctness on TPU when code changed.
 10. Run the required profile(s).
@@ -116,11 +126,13 @@ Coverage slots:
   - `xprof_residual_add_shell_delta_ms`
   - `xprof_idle_attributed_ms`
 
-### L3) Fixed-4-layer block design / skeleton
-- This is a design-and-scaffold iteration, not a promotion candidate unless it also improves step time.
-- Keep the exact `3 GDN + 1 attention` block pattern and benchmark config.
-- Build the minimal specialized 4-layer block boundary with manual/custom VJP and an explicit sharding contract.
-- Target the hybrid-specific generic shell families, not another chunk-kernel/tape tweak.
+### A3) AD-boundary prototype only
+- Hold the forward structure fixed.
+- Move the manual/custom VJP boundary outward so generic reverse-mode/JVP shell stops wrapping each hybrid region.
+- Target:
+  - `ad_wrapper_shell_delta_ms`
+  - `xprof_idle_attributed_ms`
+- Do not combine this with unrelated forward regrouping or kernel-local math work.
 
 ### P3) First fixed-4-layer block prototype
 - One serious systems prototype only.
@@ -131,6 +143,7 @@ Coverage slots:
   - and the sharding/layout contract.
 - Prefer XLA-visible shell + Pallas leaf kernels initially, but do not leave backward to generic JAX AD.
 - Do not combine this with unrelated kernel-local math changes.
+- Treat the candidate as failed if the old train-path buckets disappear but the canonical shell deltas or xprof-IDLE stay flat/up.
 
 ### U) Bounded CE side-arm
 - Only if the new attribution clearly points back to CE.
@@ -140,7 +153,7 @@ Coverage slots:
   - with no shell-delta or interaction-remainder regression.
 
 ### Diagnostic only
-- Use only if you can justify why `S3/L3/P3/U` would be lower information.
+- Use only if you can justify why `S3/A3/P3/U` would be lower information.
 - Same-boundary GDN shell/tape/kernel work belongs here now unless it directly attacks the hybrid-specific shell delta or the interaction remainder.
 
 Deprioritized unless explicitly justified:
@@ -192,9 +205,12 @@ Acceptance gate checklist (must appear in the iteration writeup):
   - `throughput/mfu`, `throughput/tokens_per_second`, `throughput/duration`
 - Governance:
   - reject any candidate where `step_duration_ms` does not improve unless it is explicitly diagnostic,
-  - reject any candidate where `hybrid_generic_shell_delta_budget_ms` is flat/up unless it is explicitly diagnostic,
+  - reject any candidate where `dispatch_shard_shell_delta_ms` is flat/up unless it is explicitly diagnostic,
+  - reject any candidate where `ad_wrapper_shell_delta_ms` is flat/up unless it is explicitly diagnostic,
+  - reject any candidate where `xprof_idle_attributed_ms` is flat/up when an XPlane pair is available unless it is explicitly diagnostic,
   - reject any candidate where `interaction_remainder_ms` grows unless it is explicitly diagnostic,
   - classify `train_path_budget_ms down, generic shell delta flat/up` as `namespace-only / renamed-bucket progress`,
+  - classify `generic shell delta down, xprof IDLE flat/up` as `waiting/serialization still dominant`,
   - do not leave `Commit: (pending)` or `Commit: this commit` in the log.
 
 Preferred commands:
@@ -208,7 +224,7 @@ Preferred commands:
 Definition of done:
 - either:
   - one current-baseline attribution result that materially improves understanding of hybrid-specific shell delta,
-  - or one fixed-4-layer block design/skeleton result that makes the new boundary concrete,
+  - or one AD-boundary prototype result that materially reduces `ad_wrapper_shell_delta_ms`,
   - or one fixed-4-layer block prototype result that improves the full step,
   - or one bounded CE side-arm that improves the full step,
 - plus TPU correctness when code changed,

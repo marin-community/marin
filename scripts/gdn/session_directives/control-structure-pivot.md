@@ -13,8 +13,13 @@ Implications for this session:
 - do not treat vanished `HackableDecoderLayer/*` buckets as wins unless the namespace-invariant shell delta also improves,
 - prefer:
   - `S3` hybrid-specific shell-delta attribution,
+  - `A3` AD-boundary prototypes that move the manual backward outward,
   - or `P3` whole-block prototypes with bespoke backward/sharding.
 
 Hard guardrail:
-- If the result is another `train_path_budget_ms down, hybrid_generic_shell_delta_budget_ms flat/up, step_duration_ms flat/up`
-  iteration, classify it as `namespace-only / renamed-bucket progress`, revert it, and pivot again.
+- If the result is another iteration where old buckets shrink but:
+  - `dispatch_shard_shell_delta_ms` stays flat/up,
+  - or `ad_wrapper_shell_delta_ms` stays flat/up,
+  - or `xprof_idle_attributed_ms` stays flat/up,
+  - or `step_duration_ms` stays flat/up,
+  classify it as renamed-bucket / waiting-dominant progress, revert it, and pivot again.

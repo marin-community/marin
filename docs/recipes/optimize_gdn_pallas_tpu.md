@@ -207,7 +207,11 @@ Updated mainline target:
 Updated promotion policy:
 
 - Reject candidates whose `step_duration_ms` does not improve, unless they are explicitly diagnostic.
-- Reject candidates whose `hybrid_generic_shell_delta_budget_ms` stays flat or grows, unless they are explicitly diagnostic.
+- Reject candidates whose `dispatch_shard_shell_delta_ms` stays flat or grows, unless they are explicitly diagnostic.
+- Reject candidates whose `ad_wrapper_shell_delta_ms` stays flat or grows, unless they are explicitly diagnostic.
+- Reject candidates whose `xprof_idle_attributed_ms` stays flat or grows when a matched XPlane pair is available, unless they are explicitly diagnostic.
+- Treat `dispatch_shard_shell_delta_ms` as the immediate mainline budget; treat `ad_wrapper_shell_delta_ms` as the second priority.
+- `train_path_budget_ms` and coarse `decoder_layer_shell_budget_ms` are now secondary diagnostics, not primary promotion metrics.
 - Reject candidates whose `interaction_remainder_ms` grows, unless they are explicitly diagnostic.
 - Classify `train_path_budget_ms down, hybrid_generic_shell_delta_budget_ms flat/up` as `namespace-only / renamed-bucket progress`.
 
@@ -217,6 +221,7 @@ Updated systems direction:
   - a manual/custom VJP at the block boundary,
   - an explicit sharding contract,
   - and existing leaf kernels reused initially.
+- Precede or pair that with an AD-boundary prototype that moves the manual backward/custom-VJP boundary outward while holding the forward structure fixed.
 - A larger forward wrapper without bespoke backward/sharding is not enough; Iteration 90 already showed that such work just re-emits cost under `HackableDecoderBlock/*`.
 
 ## ejkernel / EasyDeL takeaways (March 2026)
