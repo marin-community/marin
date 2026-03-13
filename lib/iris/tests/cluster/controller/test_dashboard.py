@@ -15,11 +15,13 @@ from starlette.testclient import TestClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
+    JOBS,
     TASKS,
     ATTEMPTS,
     ControllerDB,
     Endpoint,
     _tasks_with_attempts,
+    healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -178,10 +180,24 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
+    def _get_cached_scheduling_diagnostic(job_wire_id):
+        """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
+        with state._db.snapshot() as q:
+            rows = q.select(JOBS, where=JOBS.c.job_id == job_wire_id)
+        if not rows:
+            return None
+        job = rows[0]
+        if job.state != cluster_pb2.JOB_STATE_PENDING:
+            return None
+        workers = healthy_active_workers_with_attributes(state._db)
+        context = _create_scheduling_context(workers)
+        return _get_job_scheduling_diagnostics(job, context)
+
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.create_scheduling_context = _create_scheduling_context
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
+    controller_mock.get_cached_scheduling_diagnostic = _get_cached_scheduling_diagnostic
     controller_mock.autoscaler = autoscaler
     controller_mock.stub_factory = Mock()
     return controller_mock

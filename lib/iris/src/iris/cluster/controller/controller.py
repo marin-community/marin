@@ -800,6 +800,12 @@ class Controller:
 
         self._heartbeat_iteration = 0
 
+        # Cached scheduling diagnostics: populated each scheduling cycle for
+        # pending jobs that could not be assigned.  Keyed by job wire ID.
+        # RPC handlers read this dict instead of recomputing diagnostics,
+        # avoiding expensive scheduler work on every CLI poll.
+        self._scheduling_diagnostics: dict[str, str] = {}
+
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
         self._started = False
@@ -1125,6 +1131,7 @@ class Controller:
         state_read_ms = timer.elapsed_ms()
 
         if not pending_tasks:
+            self._scheduling_diagnostics = {}
             return
 
         # Handle timeouts and reservation gates before scheduling.
@@ -1163,6 +1170,7 @@ class Controller:
                     has_reservation.add(task.job_id)
 
         if not schedulable_task_ids:
+            self._scheduling_diagnostics = {}
             return
 
         # Inject reservation taints: claimed workers get a taint attribute,
@@ -1198,6 +1206,52 @@ class Controller:
                 timer.elapsed_ms(),
                 state_read_ms,
             )
+
+        # Cache diagnostics for jobs that still have unassigned tasks.
+        # RPCs read from this cache instead of recomputing per request.
+        self._cache_scheduling_diagnostics(context, jobs, all_assignments, schedulable_task_ids)
+
+    def _cache_scheduling_diagnostics(
+        self,
+        context: SchedulingContext,
+        jobs: dict[JobName, JobRequirements],
+        assignments: list[tuple[JobName, WorkerId]],
+        schedulable_task_ids: list[JobName],
+    ) -> None:
+        """Compute and cache scheduling diagnostics for unassigned jobs."""
+        assigned_task_ids = {task_id for task_id, _ in assignments}
+
+        # Find unassigned jobs with a representative task
+        unscheduled: dict[JobName, tuple[JobName, int]] = {}
+        for task_id in schedulable_task_ids:
+            if task_id in assigned_task_ids or task_id.parent is None:
+                continue
+            job_id = task_id.parent
+            if job_id in unscheduled:
+                _, count = unscheduled[job_id]
+                unscheduled[job_id] = (unscheduled[job_id][0], count + 1)
+            else:
+                unscheduled[job_id] = (task_id, 1)
+
+        diagnostics: dict[str, str] = {}
+        for job_id, (representative_task, num_tasks) in unscheduled.items():
+            req = jobs.get(job_id)
+            if req is None:
+                continue
+            reason = self._scheduler.get_job_scheduling_diagnostics(
+                req,
+                context,
+                representative_task,
+                num_tasks=num_tasks,
+            )
+            diagnostics[job_id.to_wire()] = reason
+
+        # Atomic replacement — safe for concurrent reads under the GIL.
+        self._scheduling_diagnostics = diagnostics
+
+    def get_cached_scheduling_diagnostic(self, job_wire_id: str) -> str | None:
+        """Return cached scheduling diagnostic for a job, or None if unavailable."""
+        return self._scheduling_diagnostics.get(job_wire_id)
 
     def _buffer_assignments(
         self,

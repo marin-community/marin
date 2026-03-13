@@ -44,7 +44,6 @@ from iris.cluster.controller.db import (
     Worker,
     _tasks_with_attempts,
     endpoint_query_predicate,
-    healthy_active_workers_with_attributes,
     running_tasks_by_worker,
     tasks_for_job_with_attempts,
 )
@@ -451,6 +450,8 @@ class ControllerProtocol(Protocol):
 
     def get_job_scheduling_diagnostics(self, job: Job, context: SchedulingContext) -> str: ...
 
+    def get_cached_scheduling_diagnostic(self, job_wire_id: str) -> str | None: ...
+
     def begin_checkpoint(self) -> tuple[str, Any]: ...
 
     @property
@@ -639,17 +640,13 @@ class ControllerServiceImpl:
 
             task_statuses.append(task_to_proto(task, worker_address=worker_addr_by_id.get(task.worker_id, "")))
 
-        # Get scheduling diagnostics for pending jobs
+        # Get scheduling diagnostics for pending jobs from cache
+        # (populated each scheduling cycle by the controller).
         pending_reason = ""
         if job.state == cluster_pb2.JOB_STATE_PENDING:
-            # Create scheduling context once for all tasks
-            workers = healthy_active_workers_with_attributes(self._db)
-            sched_context = self._controller.create_scheduling_context(workers)
-            # Get job-level diagnostics (expensive but only for detail view)
-            pending_reason = self._controller.get_job_scheduling_diagnostics(job, sched_context)
+            sched_reason = self._controller.get_cached_scheduling_diagnostic(job.job_id.to_wire())
+            pending_reason = sched_reason or "Pending scheduler feedback"
             hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire())
-            # Always show both scheduler and autoscaler diagnostics so users
-            # see the full picture (root-cause + scaling status).
             if hint is not None:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
@@ -744,13 +741,6 @@ class ControllerServiceImpl:
         jobs = _jobs_in_states(self._db, USER_JOB_STATES)
         task_summaries = _task_summaries_for_jobs(self._db, {job.job_id for job in jobs})
 
-        # Lazily create scheduling context for pending job diagnostics
-        pending_jobs = [j for j in jobs if j.state == cluster_pb2.JOB_STATE_PENDING]
-        sched_context: SchedulingContext | None = None
-        if pending_jobs:
-            workers = healthy_active_workers_with_attributes(self._db)
-            sched_context = self._controller.create_scheduling_context(workers)
-
         for j in jobs:
             # Apply name filter
             job_name = j.request.name if j.request else ""
@@ -771,8 +761,9 @@ class ControllerServiceImpl:
             )
 
             pending_reason = j.error or ""
-            if j.state == cluster_pb2.JOB_STATE_PENDING and sched_context is not None:
-                pending_reason = self._controller.get_job_scheduling_diagnostics(j, sched_context)
+            if j.state == cluster_pb2.JOB_STATE_PENDING:
+                sched_reason = self._controller.get_cached_scheduling_diagnostic(j.job_id.to_wire())
+                pending_reason = sched_reason or "Pending scheduler feedback"
                 hint = autoscaler_pending_hints.get(j.job_id.to_wire())
                 if hint is not None:
                     scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
