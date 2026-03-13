@@ -81,6 +81,7 @@ Keep it grug-style:
 - Equinox modules with `init` + `__call__`
 - minimal config knobs
 - keep legibility first; if a block gets hard to read, introduce a small local helper instead of adding framework indirection
+- when HBM is tight, use `docs/references/hbm-optimization.md` before introducing bespoke memory hacks
 
 ### 5) Delete stale paths
 
