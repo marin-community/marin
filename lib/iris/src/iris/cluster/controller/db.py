@@ -738,6 +738,19 @@ class TaskJobSummary:
     task_state_counts: dict[int, int] = field(default_factory=dict)
 
 
+@db_row_model
+class ApiKey:
+    key_id: str = db_field("key_id", _decode_str)
+    key_hash: str = db_field("key_hash", _decode_str)
+    key_prefix: str = db_field("key_prefix", _decode_str)
+    user_id: str = db_field("user_id", _decode_str)
+    name: str = db_field("name", _decode_str)
+    created_at: Timestamp = db_field("created_at_ms", _decode_timestamp_ms)
+    last_used_at: Timestamp | None = db_field("last_used_at_ms", _nullable(_decode_timestamp_ms), default=None)
+    expires_at: Timestamp | None = db_field("expires_at_ms", _nullable(_decode_timestamp_ms), default=None)
+    revoked_at: Timestamp | None = db_field("revoked_at_ms", _nullable(_decode_timestamp_ms), default=None)
+
+
 @dataclass(frozen=True)
 class EndpointQuery:
     endpoint_ids: tuple[str, ...] = ()
@@ -756,6 +769,7 @@ ATTEMPTS = _table_for_model(Attempt, "task_attempts", "a")
 WORKERS = _table_for_model(Worker, "workers", "w")
 ENDPOINTS = _table_for_model(Endpoint, "endpoints", "e")
 TXN_ACTIONS = _table_for_model(TransactionAction, "txn_actions", "ta")
+API_KEYS = _table_for_model(ApiKey, "api_keys", "ak")
 WORKER_ATTRIBUTES = Table[tuple[str, str]](
     sql_name="worker_attributes",
     alias="wa",
@@ -1074,6 +1088,27 @@ class ControllerDB:
                     "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
                     (path.name, Timestamp.now().epoch_ms()),
                 )
+
+    def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
+        """Create user if not exists. Does not update role for existing users."""
+        self.execute(
+            "INSERT OR IGNORE INTO users (user_id, created_at_ms, role) VALUES (?, ?, ?)",
+            (user_id, now.epoch_ms(), role),
+        )
+
+    def set_user_role(self, user_id: str, role: str) -> None:
+        """Update the role for an existing user."""
+        self.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
+
+    def get_user_role(self, user_id: str) -> str:
+        """Get a user's role. Returns 'user' if not found."""
+        with self.snapshot() as q:
+            rows = q.raw(
+                "SELECT role FROM users WHERE user_id = ?",
+                (user_id,),
+                decoders={"role": str},
+            )
+            return rows[0].role if rows else "user"
 
     def next_sequence(self, key: str, *, cur: TransactionCursor) -> int:
         row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()

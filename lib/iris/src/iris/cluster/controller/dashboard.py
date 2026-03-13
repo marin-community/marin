@@ -20,15 +20,31 @@ import httpx
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import html_shell, static_files_mount
+from iris.rpc.auth import SESSION_COOKIE, AuthInterceptor, NullAuthInterceptor, TokenVerifier
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
 
 logger = logging.getLogger(__name__)
+
+
+_UNAUTHENTICATED_RPCS = {"Login", "GetAuthInfo"}
+
+
+class _SelectiveAuthInterceptor:
+    """Auth interceptor that skips authentication for specific RPC methods."""
+
+    def __init__(self, verifier: TokenVerifier):
+        self._inner = AuthInterceptor(verifier)
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        if ctx.method().name in _UNAUTHENTICATED_RPCS:
+            return call_next(request, ctx)
+        return self._inner.intercept_unary_sync(call_next, request, ctx)
 
 
 class ControllerDashboard:
@@ -45,10 +61,14 @@ class ControllerDashboard:
         service: ControllerServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
+        auth_verifier: TokenVerifier | None = None,
+        auth_provider: str | None = None,
     ):
         self._service = service
         self._host = host
         self._port = port
+        self._auth_verifier = auth_verifier
+        self._auth_provider = auth_provider
         self._app = self._create_app()
 
     @property
@@ -60,11 +80,19 @@ class ControllerDashboard:
         return self._app
 
     def _create_app(self) -> Starlette:
-        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=[RequestTimingInterceptor()])
+        interceptors = [RequestTimingInterceptor()]
+        if self._auth_provider is not None:
+            interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
+        else:
+            interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
+        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
             Route("/", self._dashboard),
+            Route("/auth/config", self._auth_config),
+            Route("/auth/session", self._auth_session, methods=["POST"]),
+            Route("/auth/logout", self._auth_logout, methods=["POST"]),
             Route("/job/{job_id:path}", self._job_detail_page),
             Route("/worker/{worker_id:path}", self._worker_detail_page),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
@@ -74,7 +102,23 @@ class ControllerDashboard:
         ]
         return Starlette(routes=routes)
 
-    def _dashboard(self, _request: Request) -> HTMLResponse:
+    def _dashboard(self, request: Request) -> Response:
+        session_token = request.query_params.get("session_token")
+        if session_token and self._auth_verifier is not None:
+            try:
+                self._auth_verifier.verify(session_token)
+                response = RedirectResponse("/", status_code=302)
+                response.set_cookie(
+                    SESSION_COOKIE,
+                    session_token,
+                    httponly=True,
+                    samesite="strict",
+                    secure=request.url.scheme == "https",
+                    path="/",
+                )
+                return response
+            except ValueError:
+                pass
         return HTMLResponse(html_shell("Iris Controller", "controller"))
 
     def _job_detail_page(self, _request: Request) -> HTMLResponse:
@@ -83,11 +127,49 @@ class ControllerDashboard:
     def _worker_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Worker Detail", "controller"))
 
+    def _auth_config(self, request: Request) -> JSONResponse:
+        """Unauthenticated endpoint telling the frontend whether auth is required."""
+        has_session = SESSION_COOKIE in request.cookies
+        return JSONResponse(
+            {
+                "auth_enabled": self._auth_provider is not None,
+                "provider": self._auth_provider,
+                "has_session": has_session,
+            }
+        )
+
+    async def _auth_session(self, request: Request) -> JSONResponse:
+        """Set auth cookie from bearer token."""
+        body = await request.json()
+        token = body.get("token", "").strip()
+        if not token:
+            return JSONResponse({"error": "token required"}, status_code=400)
+        response = JSONResponse({"ok": True})
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            httponly=True,
+            samesite="strict",
+            secure=request.url.scheme == "https",
+            path="/",
+        )
+        return response
+
+    async def _auth_logout(self, request: Request) -> JSONResponse:
+        """Clear auth cookie."""
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
         return JSONResponse({"status": "ok"})
 
     def _bundle_download(self, request: Request) -> Response:
+        # TODO(#3291): Add bearer token auth once Kubernetes init-containers
+        # support Authorization headers. Currently bundle IDs are SHA-256 hashes
+        # (256 bits of entropy) serving as capability URLs. Workers and K8s
+        # init-containers fetch via stdlib urlopen with no auth header support.
         bundle_id = request.path_params["bundle_id"]
         try:
             data = self._service.bundle_zip(bundle_id)

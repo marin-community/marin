@@ -59,6 +59,7 @@ from iris.cluster.controller.scheduler import (
     SchedulingContext,
     WorkerSnapshot,
 )
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
@@ -79,6 +80,7 @@ from iris.cluster.types import (
 from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
+from iris.rpc.auth import TokenVerifier
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
 
@@ -90,7 +92,7 @@ _UNLIMITED = sys.maxsize
 _SLOW_HEARTBEAT_MS = 5000
 
 
-_HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
+_HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
@@ -686,6 +688,15 @@ class ControllerConfig:
     log_dir: Path | None = None
     """Persistent directory for task log files. When None, uses a temp dir."""
 
+    auth_verifier: TokenVerifier | None = None
+    """When set, all RPC calls require a valid bearer token verified by this verifier."""
+
+    auth_provider: str | None = None
+    """Name of the auth provider (e.g. "gcp", "static") for the dashboard UI."""
+
+    auth: ControllerAuth | None = None
+    """Full auth config passed to the service layer for login and API key management."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -766,11 +777,14 @@ class Controller:
             controller=self,
             bundle_store=self._bundle_store,
             log_store=self._log_store,
+            auth=config.auth,
         )
         self._dashboard = ControllerDashboard(
             self._service,
             host=config.host,
             port=config.port,
+            auth_verifier=config.auth_verifier,
+            auth_provider=config.auth_provider,
         )
 
         # Ingest process logs into the LogStore so they are available via FetchLogs.
@@ -1420,7 +1434,7 @@ class Controller:
         logger.log(level, fmt, *args)
 
         self._heartbeat_iteration += 1
-        if self._heartbeat_iteration % _HEALTH_SUMMARY_INTERVAL == 0:
+        if _HEALTH_SUMMARY_INTERVAL.should_run():
             workers = healthy_active_workers_with_attributes(self._db)
             with self._db.snapshot() as snapshot:
                 active = snapshot.count(JOBS, where=JOBS.c.state == cluster_pb2.JOB_STATE_RUNNING)
