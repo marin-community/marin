@@ -2,7 +2,6 @@ name: Nightshift Doc Drift
 
 on:
   schedule:
-    # Run weekly on Sunday at 3 AM Pacific (11:00 UTC)
     - cron: '0 11 * * 0'
   workflow_dispatch: {}
 
@@ -34,25 +33,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Load doc-drift prompt
-        id: prompt
-        run: |
-          PROMPT=$(cat infra/scripts/nightshift/doc_drift_prompt.md)
-          PROMPT="${PROMPT//\{\{run_id\}\}/${{ github.run_id }}}"
-          PROMPT="${PROMPT//\{\{run_attempt\}\}/${{ github.run_attempt }}}"
-          EOF_MARKER=$(openssl rand -hex 16)
-          echo "value<<${EOF_MARKER}" >> "$GITHUB_OUTPUT"
-          echo "$PROMPT" >> "$GITHUB_OUTPUT"
-          echo "${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
 
       - name: Detect documentation drift
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: 'claude[bot]'
-          direct_prompt: true
-          prompt: ${{ steps.prompt.outputs.value }}
-          claude_args: |
-            --model opus
-            --max-turns 60
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)"
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python infra/scripts/nightshift_doc_drift.py --run-id ${{ github.run_id }} --run-attempt ${{ github.run_attempt }}

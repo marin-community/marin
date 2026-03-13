@@ -2,7 +2,6 @@ name: Nightshift Cleanup
 
 on:
   schedule:
-    # Run at 2 AM Pacific (10:00 UTC) on weekdays
     - cron: '0 10 * * 1-5'
   workflow_dispatch:
     inputs:
@@ -22,7 +21,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Phase 1: Pick random folders for each agent
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -36,12 +34,8 @@ jobs:
 
       - name: Pick target folders
         id: pick
-        env:
-          AGENT_COUNT: ${{ inputs.agent_count || '5' }}
-          TARGET_FOLDER: ${{ inputs.target_folder }}
-        run: bash infra/scripts/nightshift/pick_cleanup_targets.sh
+        run: python infra/scripts/nightshift_cleanup.py plan --agent-count ${{ inputs.agent_count || '5' }} ${{ inputs.target_folder && format('--target-folder {0}', inputs.target_folder) || '' }}
 
-  # Phase 2: Spawn parallel cleanup agents
   cleanup:
     needs: plan
     runs-on: ubuntu-latest
@@ -69,26 +63,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Load cleanup prompt
-        id: prompt
-        run: |
-          PROMPT=$(cat infra/scripts/nightshift/cleanup_prompt.md)
-          PROMPT="${PROMPT//\{\{agent_id\}\}/${{ matrix.agent_id }}}"
-          PROMPT="${PROMPT//\{\{haiku_seed\}\}/${{ matrix.haiku_seed }}}"
-          PROMPT="${PROMPT//\{\{folder\}\}/${{ matrix.folder }}}"
-          EOF_MARKER=$(openssl rand -hex 16)
-          echo "value<<${EOF_MARKER}" >> "$GITHUB_OUTPUT"
-          echo "$PROMPT" >> "$GITHUB_OUTPUT"
-          echo "${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
 
       - name: Run Cleanup Agent ${{ matrix.agent_id }}
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: 'claude[bot]'
-          direct_prompt: true
-          prompt: ${{ steps.prompt.outputs.value }}
-          claude_args: |
-            --model opus
-            --max-turns 80
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)"
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python infra/scripts/nightshift_cleanup.py run --agent-id ${{ matrix.agent_id }} --folder ${{ matrix.folder }} --haiku-seed ${{ matrix.haiku_seed }}

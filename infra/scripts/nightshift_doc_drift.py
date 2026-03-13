@@ -1,8 +1,17 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Nightshift doc drift detector: finds documentation that has drifted from the code."""
+
+import argparse
+import subprocess
+
+DOC_DRIFT_PROMPT = """\
 You are the Nightshift Doc Drift detector.
 
 ## Ritual
 
-Your random seed is: {{run_id}}-{{run_attempt}}
+Your random seed is: {run_id}-{run_attempt}
 Before you begin, use this seed to inspire a haiku about
 documentation drift. Keep the haiku — you will include it as an epigraph
 in any PR or issue you create.
@@ -53,3 +62,35 @@ If meaningful drift is found:
   your haiku.
 
 If nothing is found, exit cleanly.
+"""
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Nightshift doc drift detector")
+    parser.add_argument("--run-id", type=str, required=True)
+    parser.add_argument("--run-attempt", type=str, required=True)
+    args = parser.parse_args()
+
+    prompt = DOC_DRIFT_PROMPT.format(
+        run_id=args.run_id,
+        run_attempt=args.run_attempt,
+    )
+
+    subprocess.run(
+        [
+            "claude",
+            "--model=opus",
+            "--print",
+            "--dangerously-skip-permissions",
+            "--tools=Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)",
+            "--max-turns",
+            "60",
+            "--",
+            prompt,
+        ],
+        check=True,
+    )
+
+
+if __name__ == "__main__":
+    main()
