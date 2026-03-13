@@ -39,6 +39,20 @@ const routes = [
     component: () => import('./components/controller/AccountTab.vue'),
   },
   {
+    path: '/system/controller/threads',
+    component: () => import('./components/controller/ThreadDump.vue'),
+  },
+  {
+    path: '/system/worker/:workerId(.+)/threads',
+    component: () => import('./components/controller/ThreadDump.vue'),
+    props: true,
+  },
+  {
+    path: '/job/:jobId(.+)/task/:taskId(.+)/threads',
+    component: () => import('./components/controller/ThreadDump.vue'),
+    props: true,
+  },
+  {
     path: '/job/:jobId(.+)/task/:taskId(.+)',
     component: () => import('./components/controller/TaskDetail.vue'),
     props: true,
