@@ -51,7 +51,6 @@ from iris.cluster.controller.db import (
     _tasks_with_attempts,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
-    tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.scheduler import (
@@ -800,6 +799,12 @@ class Controller:
 
         self._heartbeat_iteration = 0
 
+        # Cached scheduling diagnostics: populated each scheduling cycle for
+        # pending jobs that could not be assigned.  Keyed by job wire ID.
+        # RPC handlers read this dict instead of recomputing diagnostics,
+        # avoiding expensive scheduler work on every CLI poll.
+        self._scheduling_diagnostics: dict[str, str] = {}
+
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
         self._started = False
@@ -1125,6 +1130,7 @@ class Controller:
         state_read_ms = timer.elapsed_ms()
 
         if not pending_tasks:
+            self._scheduling_diagnostics = {}
             return
 
         # Handle timeouts and reservation gates before scheduling.
@@ -1163,6 +1169,7 @@ class Controller:
                     has_reservation.add(task.job_id)
 
         if not schedulable_task_ids:
+            self._scheduling_diagnostics = {}
             return
 
         # Inject reservation taints: claimed workers get a taint attribute,
@@ -1199,6 +1206,52 @@ class Controller:
                 state_read_ms,
             )
 
+        # Cache diagnostics for jobs that still have unassigned tasks.
+        # RPCs read from this cache instead of recomputing per request.
+        self._cache_scheduling_diagnostics(context, jobs, all_assignments, schedulable_task_ids)
+
+    def _cache_scheduling_diagnostics(
+        self,
+        context: SchedulingContext,
+        jobs: dict[JobName, JobRequirements],
+        assignments: list[tuple[JobName, WorkerId]],
+        schedulable_task_ids: list[JobName],
+    ) -> None:
+        """Compute and cache scheduling diagnostics for unassigned jobs."""
+        assigned_task_ids = {task_id for task_id, _ in assignments}
+
+        # Find unassigned jobs with a representative task
+        unscheduled: dict[JobName, tuple[JobName, int]] = {}
+        for task_id in schedulable_task_ids:
+            if task_id in assigned_task_ids or task_id.parent is None:
+                continue
+            job_id = task_id.parent
+            if job_id in unscheduled:
+                _, count = unscheduled[job_id]
+                unscheduled[job_id] = (unscheduled[job_id][0], count + 1)
+            else:
+                unscheduled[job_id] = (task_id, 1)
+
+        diagnostics: dict[str, str] = {}
+        for job_id, (representative_task, num_tasks) in unscheduled.items():
+            req = jobs.get(job_id)
+            if req is None:
+                continue
+            reason = self._scheduler.get_job_scheduling_diagnostics(
+                req,
+                context,
+                representative_task,
+                num_tasks=num_tasks,
+            )
+            diagnostics[job_id.to_wire()] = reason
+
+        # Atomic replacement — safe for concurrent reads under the GIL.
+        self._scheduling_diagnostics = diagnostics
+
+    def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None:
+        """Return cached scheduling diagnostic for a job, or None if unavailable."""
+        return self._scheduling_diagnostics.get(job_wire_id)
+
     def _buffer_assignments(
         self,
         assignments: list[tuple[JobName, WorkerId]],
@@ -1230,21 +1283,6 @@ class Controller:
         return self._scheduler.create_scheduling_context(
             workers,
             building_counts=building_counts,
-        )
-
-    def get_job_scheduling_diagnostics(self, job: Job, context: SchedulingContext) -> str:
-        """Get detailed diagnostics for why a job cannot be scheduled."""
-        req = job_requirements_from_job(job)
-        schedulable_task_id = next(
-            (t.task_id for t in _schedulable_tasks(self._db) if t.job_id == job.job_id),
-            None,
-        )
-        num_tasks = len(tasks_for_job_with_attempts(self._db, job.job_id))
-        return self._scheduler.get_job_scheduling_diagnostics(
-            req,
-            context,
-            schedulable_task_id,
-            num_tasks=num_tasks,
         )
 
     def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:
