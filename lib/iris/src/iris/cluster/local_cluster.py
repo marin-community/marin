@@ -1,14 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Local in-process controller for testing.
+"""Local in-process cluster for testing.
 
-This module provides LocalController which runs the controller and autoscaler
-in the current process for local testing. Workers are threads, not VMs.
+Runs Controller + Autoscaler(LocalPlatform) in the current process.
+Workers are threads, not VMs. No Docker, no GCS, no SSH.
+
+This module lives outside both controller/ and platform/ to avoid the
+circular dependency that existed when this code lived in controller/local.py.
 
 Provides:
 - create_local_autoscaler: Factory for creating autoscaler with LocalPlatform
-- LocalController: In-process controller implementation for testing
+- LocalCluster: In-process cluster implementation for testing
+- make_local_cluster_config: Build a fully-configured IrisClusterConfig for local execution
 """
 
 from __future__ import annotations
@@ -17,15 +21,14 @@ import secrets
 import tempfile
 import threading
 from pathlib import Path
-from typing import Protocol
 
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller.auth import create_api_key, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
-    Controller as _InnerController,
-    ControllerConfig as _InnerControllerConfig,
+    Controller,
+    ControllerConfig,
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller.db import ControllerDB
@@ -136,22 +139,8 @@ def create_local_autoscaler(
     return autoscaler, temp_dir
 
 
-class _InProcessController(Protocol):
-    """Protocol for the in-process Controller used by LocalController.
-
-    Avoids importing iris.cluster.controller.controller at module level
-    which would create a circular dependency through the autoscaler.
-    """
-
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-
-    @property
-    def url(self) -> str: ...
-
-
-class LocalController:
-    """In-process controller for local testing.
+class LocalCluster:
+    """In-process cluster for local testing.
 
     Runs Controller + Autoscaler(LocalPlatform) in the current process.
     Workers are threads, not VMs. No Docker, no GCS, no SSH.
@@ -168,7 +157,7 @@ class LocalController:
     ):
         self._config = config
         self._threads = threads
-        self._controller: _InProcessController | None = None
+        self._controller: Controller | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
@@ -205,8 +194,8 @@ class LocalController:
             db=db,
         )
 
-        self._controller = _InnerController(
-            config=_InnerControllerConfig(
+        self._controller = Controller(
+            config=ControllerConfig(
                 host="127.0.0.1",
                 port=port,
                 remote_state_dir=self._config.storage.remote_state_dir or f"file://{bundle_dir}",
@@ -238,7 +227,9 @@ class LocalController:
             name="local-auto-login",
             now=Timestamp.now(),
         )
-        # Local import to break circular dependency: iris.cli -> iris.cluster.controller.local
+
+        # Local import to break circular dependency:
+        # local_cluster → cli.token_store → cli.__init__ → cli.main → client → local_cluster
         from iris.cli.token_store import store_token
 
         cluster_name = self._config.name or "local"
@@ -266,7 +257,7 @@ class LocalController:
             self._temp_dir = None
 
     def close(self) -> None:
-        """Stop the controller and release all resources including the DB dir."""
+        """Stop the cluster and release all resources including the DB dir."""
         self.stop()
         self._db_dir.cleanup()
 

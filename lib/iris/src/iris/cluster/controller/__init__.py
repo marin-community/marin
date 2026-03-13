@@ -16,7 +16,6 @@ from iris.cluster.controller.vm_lifecycle import (
     start_controller,
     stop_controller,
 )
-from iris.cluster.controller.local import LocalController
 from iris.cluster.controller.scaling_group import AvailabilityState, GroupAvailability, ScalingGroup
 
 __all__ = [
@@ -26,7 +25,6 @@ __all__ = [
     "ControllerConfig",
     "DemandEntry",
     "GroupAvailability",
-    "LocalController",
     "ReservationClaim",
     "RoutingDecision",
     "ScalingAction",

@@ -38,11 +38,8 @@ from iris.cluster.client import (
     resolve_job_user,
 )
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.cluster.controller.local import (
-    LocalController,
-    make_local_cluster_config,
-)
-from iris.cluster.constraints import Constraint, merge_constraints
+from iris.cluster.local_cluster import LocalCluster, make_local_cluster_config
+from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -498,7 +495,7 @@ class IrisClient:
         self,
         cluster: ClusterClient,
         namespace: Namespace = Namespace(""),
-        controller: LocalController | None = None,
+        controller: LocalCluster | None = None,
     ):
         """Initialize IrisClient with a cluster client.
 
@@ -506,7 +503,7 @@ class IrisClient:
 
         Args:
             cluster: Low-level cluster client (RemoteClusterClient)
-            controller: Optional LocalController to manage lifecycle for local mode.
+            controller: Optional LocalCluster to manage lifecycle for local mode.
         """
         self._cluster_client = cluster
         self._namespace = namespace
@@ -524,7 +521,7 @@ class IrisClient:
         """
         cfg = config or LocalClientConfig()
         config_proto = make_local_cluster_config(cfg.max_workers)
-        controller = LocalController(config_proto)
+        controller = LocalCluster(config_proto)
         address = controller.start()
         cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
         return cls(cluster, controller=controller)
@@ -683,6 +680,15 @@ class IrisClient:
                 constraints = []
             else:
                 constraints = merge_constraints(parent_constraints, constraints)
+
+            # Always inherit the parent's region unless the child already has
+            # an explicit region constraint.  This applies even when the caller
+            # passes constraints=[] to clear other inherited constraints —
+            # region pinning ensures children stay co-located with the
+            # reservation's claimed workers.
+            if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
+                inherited_region = region_constraint([job_info.worker_region])
+                constraints = [*constraints, inherited_region]
 
         # Convert to wire format
         resources_proto = resources.to_proto()
@@ -879,7 +885,7 @@ class IrisClient:
         """
         self._cluster_client.shutdown(wait=wait)
         if self._controller is not None:
-            self._controller.stop()
+            self._controller.close()
 
 
 @dataclass
