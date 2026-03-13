@@ -369,11 +369,15 @@ def cluster_dashboard_proxy(ctx, port: int):
 
     Serves the Vue dashboard UI locally and forwards all Connect RPC requests
     to the upstream controller. Useful for viewing a remote controller without
-    SSH tunneling.
+    SSH tunneling. Rebuilds dashboard assets on each run.
     """
     import uvicorn
 
+    from iris.cli.build import _ensure_dashboard_dist
     from iris.cluster.controller.dashboard import ProxyControllerDashboard
+
+    # Rebuild dashboard assets so the proxy always serves the latest UI.
+    _ensure_dashboard_dist()
 
     controller_url = require_controller_url(ctx)
     dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
