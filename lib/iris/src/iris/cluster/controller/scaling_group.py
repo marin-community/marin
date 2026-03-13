@@ -794,7 +794,12 @@ class ScalingGroup:
                 break
 
             if not self.acquire_scale_down_token(timestamp):
-                logger.info("Scale group %s: scale down rate-limited after %d terminations", self.name, len(terminated))
+                if terminated:
+                    logger.info(
+                        "Scale group %s: scale down rate-limited after %d terminations",
+                        self.name,
+                        len(terminated),
+                    )
                 break
 
             if self._verify_slice_idle(slice_state, worker_status_map):

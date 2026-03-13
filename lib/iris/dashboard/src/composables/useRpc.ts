@@ -19,6 +19,12 @@ export interface RpcState<T> {
   refresh: () => Promise<void>
 }
 
+function handleUnauthorized(resp: Response): void {
+  if (resp.status === 401) {
+    window.dispatchEvent(new CustomEvent('iris-auth-required'))
+  }
+}
+
 function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T> {
   const data = ref<T | null>(null) as Ref<T | null>
   const loading = ref(false)
@@ -34,6 +40,7 @@ function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(resolvedBody),
       })
+      handleUnauthorized(resp)
       if (!resp.ok) {
         throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
       }
@@ -72,6 +79,7 @@ export async function controllerRpcCall<T>(method: string, body?: Record<string,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   })
+  handleUnauthorized(resp)
   if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
   return resp.json() as Promise<T>
 }
@@ -82,6 +90,7 @@ export async function workerRpcCall<T>(method: string, body?: Record<string, unk
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   })
+  handleUnauthorized(resp)
   if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
   return resp.json() as Promise<T>
 }

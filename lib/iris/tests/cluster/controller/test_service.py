@@ -176,7 +176,7 @@ class MockSchedulerWake:
         self.wake = Mock()
         self.kill_tasks_on_workers = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
-        self.get_job_scheduling_diagnostics = Mock(return_value="")
+        self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
         self.stub_factory = Mock()
 
@@ -488,6 +488,97 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
     assert parent_status.job.state == cluster_pb2.JOB_STATE_KILLED
 
 
+# =============================================================================
+# Authorization Tests
+# =============================================================================
+
+
+def test_terminate_job_allowed_by_owner(service, job_request):
+    """Job owner can terminate their own job."""
+    from iris.rpc.auth import _verified_user
+
+    service.launch_job(job_request("/alice/my-job"), None)
+
+    token = _verified_user.set("alice")
+    try:
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+        service.terminate_job(request, None)
+    finally:
+        _verified_user.reset(token)
+
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
+    """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_user
+
+    auth_service = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles_owner.sqlite3"),
+        log_store=state._log_store,
+        auth=ControllerAuth(provider="static"),
+    )
+
+    auth_service.launch_job(job_request("/alice/my-job"), None)
+
+    token = _verified_user.set("bob")
+    try:
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+        with pytest.raises(ConnectError) as exc_info:
+            auth_service.terminate_job(request, None)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_user.reset(token)
+
+    # Job should still be running
+    status = auth_service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
+    """Cannot submit a child job under another user's hierarchy."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_user
+
+    auth_service = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles_child.sqlite3"),
+        log_store=state._log_store,
+        auth=ControllerAuth(provider="static"),
+    )
+
+    auth_service.launch_job(job_request("/alice/parent-job"), None)
+
+    token = _verified_user.set("bob")
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            auth_service.launch_job(job_request("/alice/parent-job/sneaky-child"), None)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_user.reset(token)
+
+
+def test_terminate_job_allowed_when_auth_disabled(service, job_request):
+    """When auth is disabled (no verified user), anyone can terminate."""
+    service.launch_job(job_request("/alice/my-job"), None)
+
+    # No _verified_user set => auth disabled
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+    service.terminate_job(request, None)
+
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_KILLED
+
+
 def test_parent_job_failure_cascades_to_children(service, state, job_request):
     """Verify when a parent job fails, all children are automatically cancelled."""
     # Launch parent and children via RPC
@@ -589,15 +680,23 @@ def test_list_jobs_returns_all_jobs(service, job_request):
 # =============================================================================
 
 
-def test_list_workers_returns_all(service, worker_metadata):
+def test_list_workers_returns_all(service, state, worker_metadata):
     """Verify list_workers returns all registered workers."""
-    for i in range(3):
-        request = cluster_pb2.Controller.RegisterRequest(
-            address=f"host{i}:8080",
-            metadata=worker_metadata(),
-            worker_id=f"worker-{i}",
-        )
-        service.register(request, None)
+    from iris.rpc.auth import _verified_user
+
+    db = state._db
+    db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    token = _verified_user.set("system:worker")
+    try:
+        for i in range(3):
+            request = cluster_pb2.Controller.RegisterRequest(
+                address=f"host{i}:8080",
+                metadata=worker_metadata(),
+                worker_id=f"worker-{i}",
+            )
+            service.register(request, None)
+    finally:
+        _verified_user.reset(token)
 
     request = cluster_pb2.Controller.ListWorkersRequest()
     response = service.list_workers(request, None)
@@ -681,3 +780,79 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 
     job = _query_job(state, JobName.root("test-user", "cpu-job"))
     assert len(job.request.constraints) == 0
+
+
+# =============================================================================
+# Register Role-Gating Tests
+# =============================================================================
+
+
+def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+    """Non-worker user gets PERMISSION_DENIED on register()."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_user
+
+    db = state._db
+    now = Timestamp.now()
+    db.ensure_user("alice", now, role="user")
+
+    auth = ControllerAuth(provider="static")
+    service = ControllerServiceImpl(
+        state,
+        db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
+        auth=auth,
+    )
+
+    token = _verified_user.set("alice")
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            service.register(
+                cluster_pb2.Controller.RegisterRequest(
+                    worker_id="w-1",
+                    address="localhost:8080",
+                    metadata=worker_metadata(),
+                ),
+                None,
+            )
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_user.reset(token)
+
+
+def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+    """Worker-role user can call register()."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_user
+
+    db = state._db
+    now = Timestamp.now()
+    db.ensure_user("system:worker", now, role="worker")
+
+    auth = ControllerAuth(provider="static")
+    service = ControllerServiceImpl(
+        state,
+        db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
+        auth=auth,
+    )
+
+    token = _verified_user.set("system:worker")
+    try:
+        resp = service.register(
+            cluster_pb2.Controller.RegisterRequest(
+                worker_id="w-1",
+                address="localhost:8080",
+                metadata=worker_metadata(),
+            ),
+            None,
+        )
+        assert resp.accepted
+    finally:
+        _verified_user.reset(token)
