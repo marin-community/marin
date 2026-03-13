@@ -48,6 +48,7 @@ from iris.cluster.controller.db import (
     Worker,
     _tasks_with_attempts,
     healthy_active_workers_with_attributes,
+    insert_task_profile,
     running_tasks_by_worker,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
@@ -80,7 +81,7 @@ from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_conta
 from iris.rpc import cluster_pb2
 from iris.rpc.auth import TokenVerifier
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -682,6 +683,15 @@ class ControllerConfig:
     """If set, take a periodic best-effort snapshot this often.
     Runs in the autoscaler loop thread; does not pause scheduling."""
 
+    profile_interval: Duration = field(default_factory=lambda: Duration.from_seconds(600))
+    """How often the controller captures CPU profiles for all running tasks."""
+
+    profile_duration: int = 10
+    """Duration in seconds for each py-spy profile capture."""
+
+    profile_concurrency: int = 8
+    """Maximum parallel profile RPCs to workers."""
+
     local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
     """Local directory for controller DB, logs, bundle cache."""
 
@@ -790,6 +800,7 @@ class Controller:
         self._scheduling_thread: ManagedThread | None = None
         self._heartbeat_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
+        self._profile_thread: ManagedThread | None = None
 
         # Thread pool for parallel heartbeat dispatch, owned by the ThreadContainer
         # so it is shut down automatically during stop().
@@ -850,6 +861,7 @@ class Controller:
         self._started = True
         self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
         self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="heartbeat-loop")
+        self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
@@ -981,6 +993,90 @@ class Controller:
                 self._heartbeat_all_workers()
             except Exception:
                 logger.exception("Heartbeat round failed, will retry next interval")
+
+    def _run_profile_loop(self, stop_event: threading.Event) -> None:
+        """Periodically capture CPU profiles for all running tasks.
+
+        Runs on its own thread with a 10-minute rate limiter. For each running
+        task, sends a ProfileTask RPC to the task's worker and stores the result
+        in the controller DB. Profile RPCs are dispatched with bounded concurrency.
+        """
+
+        limiter = RateLimiter(interval_seconds=self._config.profile_interval.to_seconds())
+        while not stop_event.is_set():
+            remaining = limiter.time_until_next()
+            if remaining > 0:
+                stop_event.wait(timeout=remaining)
+            if stop_event.is_set():
+                break
+            limiter.mark_run()
+            if self._checkpoint_in_progress:
+                continue
+            try:
+                self._profile_all_running_tasks()
+            except Exception:
+                logger.exception("Profile loop iteration failed")
+
+    def _profile_all_running_tasks(self) -> None:
+        """Capture a CPU profile for every running task and store in the DB."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        workers = healthy_active_workers_with_attributes(self._db)
+        if not workers:
+            return
+        worker_ids = {w.worker_id for w in workers}
+        tasks_by_worker = running_tasks_by_worker(self._db, worker_ids)
+        workers_by_id = {w.worker_id: w for w in workers}
+
+        # Build (task_id, worker) pairs for all running tasks
+        profile_targets: list[tuple[JobName, Worker]] = []
+        for worker_id, task_ids in tasks_by_worker.items():
+            worker = workers_by_id.get(worker_id)
+            if not worker:
+                continue
+            for task_id in task_ids:
+                profile_targets.append((task_id, worker))
+
+        if not profile_targets:
+            return
+
+        duration = self._config.profile_duration
+
+        def _capture_one(task_id: JobName, worker: Worker) -> None:
+            try:
+                stub = self.stub_factory.get_stub(worker.address)
+                request = cluster_pb2.ProfileTaskRequest(
+                    target=task_id.to_wire(),
+                    duration_seconds=duration,
+                    profile_type=cluster_pb2.ProfileType(
+                        cpu=cluster_pb2.CpuProfile(format=cluster_pb2.CpuProfile.RAW),
+                    ),
+                )
+                timeout_ms = duration * 1000 + 30000
+                resp = stub.profile_task(request, timeout_ms=timeout_ms)
+                if resp.error:
+                    logger.debug("Profile failed for %s: %s", task_id, resp.error)
+                    return
+                if not resp.profile_data:
+                    logger.debug("Empty profile for %s", task_id)
+                    return
+                insert_task_profile(
+                    self._db,
+                    task_id=task_id.to_wire(),
+                    profile_data=resp.profile_data,
+                    captured_at=Timestamp.now(),
+                )
+                logger.debug("Stored %d byte profile for %s", len(resp.profile_data), task_id)
+            except Exception:
+                logger.debug("Profile capture failed for %s", task_id, exc_info=True)
+
+        concurrency = min(self._config.profile_concurrency, len(profile_targets))
+        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="profile") as pool:
+            futures = [pool.submit(_capture_one, task_id, worker) for task_id, worker in profile_targets]
+            for future in as_completed(futures):
+                future.result()
+
+        logger.info("Profile round: captured profiles for %d tasks", len(profile_targets))
 
     def _is_reservation_satisfied(
         self,
