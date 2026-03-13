@@ -51,6 +51,7 @@ from iris.cluster.controller.db import (
     _tasks_with_attempts,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
+    store_profile,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.scheduler import (
@@ -80,7 +81,7 @@ from iris.logging import slow_log
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer
+from iris.time_utils import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -686,14 +687,24 @@ class ControllerConfig:
     log_dir: Path | None = None
     """Persistent directory for task log files. When None, uses a temp dir."""
 
+    profiling_enabled: bool = True
+    """Whether to enable the periodic profiling loop."""
+
+    profiling_interval: Duration = field(default_factory=lambda: Duration.from_seconds(600.0))
+    """How often to run periodic profiling (default: 10 minutes)."""
+
+    max_profiling_parallelism: int = 32
+    """Maximum concurrent profile RPCs per round."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
 
-    Runs three background loops:
+    Runs up to four background loops:
     - Scheduling loop: finds task assignments, checks worker timeouts
     - Heartbeat loop: sends heartbeat RPCs to workers, delivering buffered dispatches/kills
     - Autoscaler loop: evaluates scaling decisions, manages slice lifecycle
+    - Profiling loop: periodically collects thread dumps from healthy workers
 
     Each loop runs on its own thread so blocking operations in one don't
     stall the others.
@@ -787,6 +798,7 @@ class Controller:
         self._scheduling_thread: ManagedThread | None = None
         self._heartbeat_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
+        self._profiling_thread: ManagedThread | None = None
 
         # Thread pool for parallel heartbeat dispatch, owned by the ThreadContainer
         # so it is shut down automatically during stop().
@@ -868,6 +880,9 @@ class Controller:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
+        if self._config.profiling_enabled:
+            self._profiling_thread = self._threads.spawn(self._run_profiling_loop, name="profiling-loop")
+
         # Register atexit hook to capture final state for post-mortem analysis.
         # Unregistered in stop() so it doesn't fire against a closed DB.
         self._atexit_registered = True
@@ -904,6 +919,9 @@ class Controller:
         if self._autoscaler_thread:
             self._autoscaler_thread.stop()
             self._autoscaler_thread.join(timeout=join_timeout)
+        if self._profiling_thread:
+            self._profiling_thread.stop()
+            self._profiling_thread.join(timeout=join_timeout)
 
         if self._autoscaler:
             self._autoscaler.shutdown()
@@ -990,6 +1008,70 @@ class Controller:
                 self._heartbeat_all_workers()
             except Exception:
                 logger.exception("Heartbeat round failed, will retry next interval")
+
+    def _run_profiling_loop(self, stop_event: threading.Event) -> None:
+        """Periodic profiling loop: collects thread dumps from all healthy workers."""
+        limiter = RateLimiter(interval_seconds=self._config.profiling_interval.to_seconds())
+        while not stop_event.is_set():
+            stop_event.wait(timeout=limiter.time_until_next())
+            limiter.mark_run()
+            if stop_event.is_set():
+                break
+            if self._checkpoint_in_progress:
+                continue
+            try:
+                self._profile_all_workers()
+            except Exception:
+                logger.exception("Profiling round failed, will retry next interval")
+
+    def _profile_all_workers(self) -> None:
+        """Snapshot healthy workers, collect thread dumps in parallel, store results."""
+        workers = healthy_active_workers_with_attributes(self._db)
+        if not workers:
+            return
+
+        work_queue: queue.Queue[Worker] = queue.Queue()
+        result_queue: queue.Queue[tuple[WorkerId, bytes | None, str | None]] = queue.Queue()
+        for w in workers:
+            work_queue.put(w)
+
+        batch_size = min(self._config.max_profiling_parallelism, len(workers))
+
+        request = cluster_pb2.ProfileTaskRequest(
+            target="/system/process",
+            profile_type=cluster_pb2.ProfileType(
+                threads=cluster_pb2.ThreadsProfile(),
+            ),
+        )
+
+        def _profile_one() -> None:
+            while True:
+                try:
+                    worker = work_queue.get_nowait()
+                except queue.Empty:
+                    return
+                try:
+                    stub = self.stub_factory.get_stub(worker.address)
+                    resp = stub.profile_task(request, timeout_ms=30_000)
+                    if resp.error:
+                        result_queue.put((worker.worker_id, None, resp.error))
+                    else:
+                        result_queue.put((worker.worker_id, resp.profile_data, None))
+                except Exception as e:
+                    result_queue.put((worker.worker_id, None, str(e)))
+
+        futures = [self._dispatch_executor.submit(_profile_one) for _ in range(batch_size)]
+
+        now_ms = Timestamp.now().epoch_ms()
+        for _ in workers:
+            worker_id, data, error = result_queue.get()
+            if data is not None:
+                store_profile(self._db, str(worker_id), "threads", data, now_ms)
+            elif error:
+                logger.debug("Profile failed for %s: %s", worker_id, error)
+
+        for f in futures:
+            f.result()
 
     def _is_reservation_satisfied(
         self,

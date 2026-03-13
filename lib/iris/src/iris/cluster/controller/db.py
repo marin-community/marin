@@ -61,6 +61,10 @@ def _decode_str(value: Any) -> str:
     return str(value)
 
 
+def _decode_bytes(value: Any) -> bytes:
+    return bytes(value)
+
+
 def _decode_json_dict(value: Any) -> dict[str, Any]:
     if not value:
         return {}
@@ -750,12 +754,22 @@ class EndpointQuery:
     limit: int | None = None
 
 
+@db_row_model
+class Profile:
+    id: int = db_field("id", _decode_int)
+    target_id: str = db_field("target_id", _decode_str)
+    profile_type: str = db_field("profile_type", _decode_str)
+    data: bytes = db_field("data", _decode_bytes)
+    captured_at: Timestamp = db_field("captured_at_ms", _decode_timestamp_ms)
+
+
 JOBS = _table_for_model(Job, "jobs", "j")
 TASKS = _table_for_model(Task, "tasks", "t")
 ATTEMPTS = _table_for_model(Attempt, "task_attempts", "a")
 WORKERS = _table_for_model(Worker, "workers", "w")
 ENDPOINTS = _table_for_model(Endpoint, "endpoints", "e")
 TXN_ACTIONS = _table_for_model(TransactionAction, "txn_actions", "ta")
+PROFILES = _table_for_model(Profile, "profiles", "pr")
 WORKER_ATTRIBUTES = Table[tuple[str, str]](
     sql_name="worker_attributes",
     alias="wa",
@@ -1207,3 +1221,34 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list[Worker]:
         )
     attrs_by_worker = _decode_attribute_rows(attrs)
     return [dc_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+
+
+def store_profile(
+    db: ControllerDB,
+    target_id: str,
+    profile_type: str,
+    data: bytes,
+    captured_at_ms: int,
+) -> None:
+    """Insert a profile record. The ring buffer trigger handles retention."""
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT INTO profiles (target_id, profile_type, data, captured_at_ms) " "VALUES (?, ?, ?, ?)",
+            (target_id, profile_type, data, captured_at_ms),
+        )
+
+
+def recent_profiles(
+    db: ControllerDB,
+    target_id: str,
+    profile_type: str,
+    limit: int = 10,
+) -> list[Profile]:
+    """Fetch recent profiles for a target, newest first."""
+    with db.snapshot() as q:
+        return q.select(
+            PROFILES,
+            where=(PROFILES.c.target_id == target_id) & (PROFILES.c.profile_type == profile_type),
+            order_by=(PROFILES.c.captured_at_ms.desc(),),
+            limit=limit,
+        )
