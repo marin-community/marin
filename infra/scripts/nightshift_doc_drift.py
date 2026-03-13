@@ -57,11 +57,18 @@ If meaningful drift is found:
 - Fix straightforward issues (broken links, wrong imports in examples).
 - For larger issues, file a GitHub issue with labels `documentation`,
   `agent-generated`, and `nightshift`. Begin the body with your haiku.
-- If you made fixes, open a PR titled `[nightshift] fix documentation drift`
-  with labels `agent-generated` and `nightshift`. Begin the PR body with
-  your haiku.
+- If you made fixes, you MUST follow these steps in order:
+  1. Create and switch to a new branch:
+     `git checkout -b nightshift/doc-drift-$(date +%Y%m%d)`
+  2. Stage your changes: `git add -A`
+  3. Commit: `git commit -m "[nightshift] fix documentation drift"`
+  4. Push the branch: `git push -u origin HEAD`
+  5. Open a PR with `gh pr create`:
+     `gh pr create --title "[nightshift] fix doc drift" \
+       --body "<haiku + summary>" \
+       --label agent-generated --label nightshift`
 
-If nothing is found, exit cleanly.
+All git and gh commands are available. GH_TOKEN is already configured.
 """
 
 

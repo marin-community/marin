@@ -139,14 +139,21 @@ Read `AGENTS.md` for project conventions.
 
 ## Output
 
-Create a branch named `nightshift/cleanup-{agent_id}-$(date +%Y%m%d)`
-and open a PR with:
-- Title: `[nightshift] <concise description of cleanup>`
-- Body: your haiku, then a summary of what was cleaned and why
-- Labels: `agent-generated`, `nightshift`
-
 If you find nothing worth changing, do NOT create a PR. Instead, exit cleanly
 with a message saying the folder is in good shape.
+
+If you made meaningful changes, you MUST follow these steps in order:
+1. Create and switch to a new branch:
+   `git checkout -b nightshift/cleanup-{agent_id}-$(date +%Y%m%d)`
+2. Stage your changes: `git add -A`
+3. Commit: `git commit -m "[nightshift] <concise description>"`
+4. Push the branch: `git push -u origin HEAD`
+5. Open a PR with `gh pr create`:
+   `gh pr create --title "[nightshift] <description>" \
+     --body "<haiku + summary>" \
+     --label agent-generated --label nightshift`
+
+All git and gh commands are available. GH_TOKEN is already configured.
 """
 
 
