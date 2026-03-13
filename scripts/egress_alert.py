@@ -12,12 +12,21 @@
 """CLI for monitoring and alerting on GCS cross-region egress in hai-gcp-models.
 
 Usage:
+    # Show top network consumers and bucket egress over the last 6 hours
     uv run scripts/egress_alert.py report --hours 6
+
+    # Deploy full alerting infrastructure (Pub/Sub, alert policy, Cloud Function)
     uv run scripts/egress_alert.py install --slack-webhook-url https://hooks.slack.com/...
+
+    # Fire a test alert to Slack (reads webhook from Secret Manager if omitted)
+    uv run scripts/egress_alert.py test
 """
 
+import json
 import logging
+import shlex
 import subprocess
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -36,6 +45,7 @@ NOTIFICATION_CHANNEL_DISPLAY_NAME = "Egress Alert Pub/Sub"
 CLOUD_FUNCTION_NAME = "egress-alert-slack"
 CLOUD_FUNCTION_DIR = Path(__file__).parent / "egress_alert_fn"
 
+# Keep in sync with scripts/egress_alert_fn/main.py
 METRICS = [
     ("VM sent", "compute.googleapis.com/instance/network/sent_bytes_count"),
     ("VM recv", "compute.googleapis.com/instance/network/received_bytes_count"),
@@ -92,6 +102,38 @@ def query_metric(client: monitoring_v3.MetricServiceClient, metric_type: str, ho
     return totals
 
 
+def query_bucket_egress(client: monitoring_v3.MetricServiceClient, hours: int) -> list[dict]:
+    """Query GCS sent_bytes_count per bucket, return sorted list of {bucket, bytes}."""
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(hours=hours)
+    interval = monitoring_v3.TimeInterval(start_time=start, end_time=now)
+
+    results = client.list_time_series(
+        request={
+            "name": f"projects/{PROJECT}",
+            "filter": 'metric.type="storage.googleapis.com/network/sent_bytes_count"' ' AND resource.type="gcs_bucket"',
+            "interval": interval,
+            "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL,
+            "aggregation": monitoring_v3.Aggregation(
+                alignment_period={"seconds": hours * 3600},
+                per_series_aligner=monitoring_v3.Aggregation.Aligner.ALIGN_SUM,
+                cross_series_reducer=monitoring_v3.Aggregation.Reducer.REDUCE_SUM,
+                group_by_fields=["resource.labels.bucket_name"],
+            ),
+        }
+    )
+
+    buckets: dict[str, int] = {}
+    for ts in results:
+        bucket = ts.resource.labels.get("bucket_name", "unknown")
+        total = sum(p.value.int64_value for p in ts.points)
+        buckets[bucket] = buckets.get(bucket, 0) + total
+
+    items = [{"bucket": k, "bytes": v} for k, v in buckets.items()]
+    items.sort(key=lambda x: x["bytes"], reverse=True)
+    return items
+
+
 def top_consumers(hours: int, limit: int = 15) -> list[dict]:
     """Query all four metrics and return the top N consumers sorted by bytes desc."""
     client = monitoring_v3.MetricServiceClient()
@@ -112,7 +154,7 @@ def top_consumers(hours: int, limit: int = 15) -> list[dict]:
 def run_gcloud(
     cmd: str, *, check: bool = True, capture: bool = False, input_data: str | None = None
 ) -> subprocess.CompletedProcess:
-    parts = cmd.split()
+    parts = shlex.split(cmd)
     logger.info("Running: %s", cmd)
     kwargs: dict = {"check": check}
     if capture:
@@ -334,6 +376,22 @@ def report(hours: int, limit: int):
     if eu_recv or eu_sent:
         click.echo(f"\n  EU total in top {limit}: recv={fmt_bytes(eu_recv)}, sent={fmt_bytes(eu_sent)}")
 
+    # Bucket egress
+    click.echo("\nQuerying GCS bucket egress...")
+    client = monitoring_v3.MetricServiceClient()
+    buckets = query_bucket_egress(client, hours)
+    if buckets:
+        click.echo(f"\n{'=' * 80}")
+        click.echo(f"  GCS BUCKET EGRESS (last {hours}h)")
+        click.echo(f"{'=' * 80}")
+        click.echo(f"  {'BUCKET':<55} {'EGRESS':<15}")
+        click.echo(f"  {'-' * 55} {'-' * 15}")
+        for b in buckets[:limit]:
+            click.echo(f"  {b['bucket']:<55} {fmt_bytes(b['bytes']):<15}")
+        total = sum(b["bytes"] for b in buckets)
+        click.echo(f"  {'-' * 55} {'-' * 15}")
+        click.echo(f"  {'TOTAL':<55} {fmt_bytes(total):<15}")
+
 
 @cli.command()
 @click.option("--slack-webhook-url", prompt="Slack webhook URL for #gcp-alerts", help="Slack Incoming Webhook URL.")
@@ -378,14 +436,31 @@ def install(slack_webhook_url: str, threshold_gib_per_hour: int):
     )
 
 
+def get_slack_webhook_from_secret() -> str:
+    """Read the Slack webhook URL from Secret Manager."""
+    result = run_gcloud(
+        f"gcloud secrets versions access latest --secret={SECRET_ID} --project={PROJECT}",
+        capture=True,
+    )
+    url = result.stdout.strip()
+    if not url:
+        raise click.ClickException(f"Secret {SECRET_ID} is empty. Run 'install' first or pass --slack-webhook-url.")
+    return url
+
+
 @cli.command()
-@click.option("--slack-webhook-url", required=True, help="Slack Incoming Webhook URL to post to.")
+@click.option(
+    "--slack-webhook-url",
+    default=None,
+    help="Slack webhook URL. If omitted, reads from Secret Manager.",
+)
 @click.option("--hours", default=6, show_default=True, help="Lookback window in hours.")
 @click.option("--limit", default=15, show_default=True, help="Number of top consumers to include.")
-def test(slack_webhook_url: str, hours: int, limit: int):
+def test(slack_webhook_url: str | None, hours: int, limit: int):
     """Fire a test alert to Slack with the current top consumers."""
-    import json
-    import urllib.request
+    if not slack_webhook_url:
+        click.echo("Reading Slack webhook from Secret Manager...")
+        slack_webhook_url = get_slack_webhook_from_secret()
 
     click.echo(f"Querying top {limit} consumers over last {hours}h...")
     items = top_consumers(hours, limit)
