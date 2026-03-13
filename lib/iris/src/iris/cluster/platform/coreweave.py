@@ -86,6 +86,14 @@ _S3_SECRET_NAME = "iris-s3-credentials"
 _CONTROLLER_CPU_REQUEST = "2"
 _CONTROLLER_MEMORY_REQUEST = "4Gi"
 
+# CoreWeave GPU nodes may carry this taint; all pods that target GPU nodes must
+# tolerate it or they will be evicted / remain Pending.
+_CW_INTERRUPTABLE_TOLERATION: dict = {
+    "key": "qos.coreweave.cloud/interruptable",
+    "operator": "Exists",
+    "effect": "NoExecute",
+}
+
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
 # bucket name is a subdomain (https://<bucket>.cwobject.com). Path-style
 # requests are rejected with PathStyleRequestNotAllowed.
@@ -834,6 +842,7 @@ class CoreweavePlatform:
                 "nodeSelector": {
                     self._iris_labels.iris_scale_group: handle.scale_group,
                 },
+                "tolerations": [_CW_INTERRUPTABLE_TOLERATION],
                 "containers": [container_spec],
                 "volumes": [
                     {"name": "worker-config", "configMap": {"name": wc_cm_name}},
@@ -1388,13 +1397,7 @@ def _build_controller_deployment(
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "nodeSelector": node_selector,
-                    "tolerations": [
-                        {
-                            "key": "qos.coreweave.cloud/interruptable",
-                            "operator": "Exists",
-                            "effect": "NoExecute",
-                        },
-                    ],
+                    "tolerations": [_CW_INTERRUPTABLE_TOLERATION],
                     "containers": [
                         {
                             "name": "iris-controller",
