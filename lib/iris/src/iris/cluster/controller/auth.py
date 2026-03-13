@@ -190,26 +190,29 @@ def _preload_static_tokens(
     db: ControllerDB,
     now: Timestamp,
 ) -> None:
-    """Insert static config tokens into the api_keys table (idempotent)."""
+    """Insert static config tokens into the api_keys table.
+
+    Deletes all previous static tokens first so removed config entries are revoked.
+    """
     tokens = dict(static_config.tokens)
     if not tokens:
         raise ValueError("Static auth config requires at least one token")
 
+    db.execute("DELETE FROM api_keys WHERE key_id LIKE 'iris_k_static_%'")
+
     for raw_token, username in tokens.items():
         db.ensure_user(username, now)
         key_hash = hash_token(raw_token)
-        existing = lookup_api_key_by_hash(db, key_hash)
-        if existing is None:
-            key_id = f"iris_k_static_{username}"
-            create_api_key(
-                db,
-                key_id=key_id,
-                key_hash=key_hash,
-                key_prefix=raw_token[:8],
-                user_id=username,
-                name=f"static-config-{username}",
-                now=now,
-            )
+        key_id = f"iris_k_static_{username}"
+        create_api_key(
+            db,
+            key_id=key_id,
+            key_hash=key_hash,
+            key_prefix=raw_token[:8],
+            user_id=username,
+            name=f"static-config-{username}",
+            now=now,
+        )
     logger.info("Preloaded %d static token(s) into api_keys", len(tokens))
 
 

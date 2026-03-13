@@ -132,7 +132,7 @@ class ControllerDashboard:
         has_session = SESSION_COOKIE in request.cookies
         return JSONResponse(
             {
-                "auth_enabled": self._auth_verifier is not None,
+                "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 "has_session": has_session,
             }

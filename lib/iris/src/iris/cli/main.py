@@ -200,6 +200,13 @@ def iris(
         name = resolve_cluster_name(None, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
 
+        # Load stored token from `iris login` when no config is available
+        credential = load_token(name)
+        if credential is None:
+            credential = load_any_token()
+        if credential is not None:
+            ctx.obj["token_provider"] = StaticTokenProvider(credential.token)
+
     # Store direct controller URL; tunnel from config is established lazily
     # in require_controller_url() so commands like ``cluster start`` don't block.
     if controller_url:

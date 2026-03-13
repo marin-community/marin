@@ -797,6 +797,7 @@ def test_gpu_worker_metadata(tmp_path):
     works in local mode — it doesn't run against real GPU/TPU clusters.
     """
     config = _make_controller_only_config()
+
     with connect_cluster(config) as url:
         original_run = subprocess.run
         with patch(

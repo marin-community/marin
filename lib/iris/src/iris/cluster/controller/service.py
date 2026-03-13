@@ -967,8 +967,9 @@ class ControllerServiceImpl:
 
         Worker registers once, then waits for heartbeats from the controller.
         """
-        caller = self._require_auth()
-        self._require_role(caller, "worker")
+        if self._auth.provider is not None:
+            caller = self._require_auth()
+            self._require_role(caller, "worker")
 
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
