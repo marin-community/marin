@@ -52,6 +52,11 @@ def _oldest_mtime(root: Path, globs: list[str]) -> float:
     return oldest if found else 0.0
 
 
+def _outputs_exist(root: Path, output_globs: list[str]) -> bool:
+    """Return True if at least one output file exists."""
+    return _oldest_mtime(root, output_globs) > 0.0
+
+
 def _needs_rebuild(root: Path, source_globs: list[str], output_globs: list[str]) -> bool:
     """Return True if any source file is newer than the oldest output file."""
     source_newest = _newest_mtime(root, source_globs)
@@ -68,17 +73,30 @@ class CustomBuildHook(BuildHookInterface):
         self._maybe_build_dashboard(root)
 
     def _maybe_generate_protos(self, root: Path) -> None:
-        if not _needs_rebuild(root, _PROTO_SOURCE_GLOBS, _PROTO_OUTPUT_GLOBS):
+        outputs_present = _outputs_exist(root, _PROTO_OUTPUT_GLOBS)
+
+        if outputs_present and not _needs_rebuild(root, _PROTO_SOURCE_GLOBS, _PROTO_OUTPUT_GLOBS):
             logger.info("Protobuf outputs are up-to-date, skipping generation")
             return
 
         generate_script = root / "scripts" / "generate_protos.py"
         if not generate_script.exists():
-            logger.warning("scripts/generate_protos.py not found, skipping protobuf generation")
+            if not outputs_present:
+                raise RuntimeError(
+                    "Protobuf outputs are missing and scripts/generate_protos.py not found. "
+                    "Cannot build iris without generated protobuf files."
+                )
+            logger.warning("scripts/generate_protos.py not found, using existing protobuf outputs")
             return
 
         if shutil.which("npx") is None:
-            logger.warning("npx not found, skipping protobuf generation (install Node.js to enable)")
+            if not outputs_present:
+                raise RuntimeError(
+                    "Protobuf outputs are missing and npx is not installed. "
+                    "Install Node.js (which provides npx) to generate protobuf files: "
+                    "https://nodejs.org/ or run `make install_node`"
+                )
+            logger.warning("npx not found, using existing (possibly stale) protobuf outputs")
             return
 
         logger.info("Regenerating protobuf files from .proto sources...")
@@ -98,13 +116,19 @@ class CustomBuildHook(BuildHookInterface):
             logger.info("Dashboard source not found, skipping build")
             return
 
+        dist_dir = root / _DASHBOARD_OUTPUT_DIR
+        dist_present = dist_dir.exists() and any(dist_dir.iterdir())
+
         if shutil.which("npm") is None:
-            logger.warning("npm not found, skipping dashboard build (install Node.js to enable)")
+            if not dist_present:
+                logger.warning(
+                    "npm not found and dashboard/dist is missing. "
+                    "Dashboard will not be available. Install Node.js to build it."
+                )
             return
 
-        dist_dir = root / _DASHBOARD_OUTPUT_DIR
         source_newest = _newest_mtime(root, _DASHBOARD_SOURCE_GLOBS)
-        if dist_dir.exists() and source_newest > 0:
+        if dist_present and source_newest > 0:
             output_oldest = _oldest_mtime(root, [f"{_DASHBOARD_OUTPUT_DIR}/**/*"])
             if output_oldest > 0 and source_newest <= output_oldest:
                 logger.info("Dashboard assets are up-to-date, skipping build")
