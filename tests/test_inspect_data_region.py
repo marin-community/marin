@@ -1,4 +1,9 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 """Tests for region validation in inspect_data.py."""
+
+import click
+import logging
 
 import pytest
 
@@ -27,8 +32,6 @@ def test_validate_data_region_same_region(monkeypatch):
 
 def test_validate_data_region_mismatch(monkeypatch):
     """Error when data is in a different region than the cluster."""
-    import click
-
     wandb_dict = {
         "components": {
             "pile": "gs://marin-us-central1/data/pile",
@@ -45,8 +48,6 @@ def test_validate_data_region_unknown_bucket_warns(caplog):
             "custom": "gs://my-custom-bucket/data/stuff",
         }
     }
-    import logging
-
     with caplog.at_level(logging.WARNING):
         # Should not raise
         _validate_data_region(wandb_dict, "us-central2")
