@@ -141,6 +141,7 @@ grug_base_trial = ExecutorStep(
             tags=["grug", "template"],
             group="grug-base-trial",
             name=None,  # filled from run_id in _resolve_tracker
+            replicate_path=this_output_path(),
         ),
         optimizer=versioned(
             AdamConfig(
