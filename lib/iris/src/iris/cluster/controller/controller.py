@@ -317,8 +317,9 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     return {task.task_id: task for task in _tasks_with_attempts(tasks, attempts)}
 
 
-def _building_counts(queries: ControllerDB) -> dict[WorkerId, int]:
-    workers = healthy_active_workers_with_attributes(queries)
+def _building_counts(queries: ControllerDB, workers: list[Worker] | None = None) -> dict[WorkerId, int]:
+    if workers is None:
+        workers = healthy_active_workers_with_attributes(queries)
     if not workers:
         return {}
     running_by_worker = running_tasks_by_worker(queries, {worker.worker_id for worker in workers})
@@ -1178,7 +1179,7 @@ class Controller:
         jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
         with slow_log(logger, "building_counts", threshold_ms=50):
-            building_counts = _building_counts(self._db)
+            building_counts = _building_counts(self._db, workers=workers)
         context = self._scheduler.create_scheduling_context(
             modified_workers,
             building_counts=building_counts,
