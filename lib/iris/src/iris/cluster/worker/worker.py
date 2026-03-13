@@ -25,6 +25,7 @@ from iris.cluster.worker.env_probe import (
     HostMetricsCollector,
     build_worker_metadata,
     check_worker_health,
+    construct_worker_id,
     infer_worker_id,
     probe_hardware,
 )
@@ -51,6 +52,7 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
+    slice_id: str | None = None
     worker_attributes: dict[str, str] = field(default_factory=dict)
     default_task_env: dict[str, str] = field(default_factory=dict)
     default_task_image: str | None = None
@@ -88,6 +90,7 @@ def worker_config_from_proto(
         port_range=(port_start, port_end),
         controller_address=controller_address or None,
         worker_id=proto.worker_id or None,
+        slice_id=proto.slice_id or None,
         worker_attributes=dict(proto.worker_attributes),
         default_task_env=dict(proto.default_task_env),
         default_task_image=proto.default_task_image or None,
@@ -180,9 +183,12 @@ class Worker:
         self._threads = threads if threads is not None else get_thread_container()
         self._task_threads = self._threads.create_child("tasks")
 
-        # Resolve worker_id: config > GCP metadata inference > assigned by controller
+        # Resolve worker_id: config > slice_id + TPU index > GCP metadata inference > assigned by controller
         worker_id = config.worker_id
-        if worker_id is None and hardware is not None:
+        if worker_id is None and config.slice_id and hardware is not None:
+            worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
+            worker_id = construct_worker_id(config.slice_id, worker_index)
+        elif worker_id is None and hardware is not None:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None

@@ -69,6 +69,9 @@ message VmInfo {
   string init_log_tail = 21;
   string init_error = 22;
 
+  // Running task count (populated by autoscaler status)
+  int32 running_task_count = 25;
+
   // Labels/metadata
   map<string, string> labels = 30;
 }
