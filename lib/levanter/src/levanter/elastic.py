@@ -752,13 +752,11 @@ class FileBackedPeerSyncController:
         return candidates[: self.config.max_peers]
 
     def _shareable_state(self, state: S) -> dict[str, Any]:
-        sync_state = self._sync_state_payload(state)
         opt_state = state.opt_state if self._share_optimizer_state else None
         return {
             "model": state.model,
             "model_averaging": state.model_averaging,
             "opt_state": opt_state,
-            "sync_state": sync_state,
         }
 
     def _publish_state(self, state: S, step: int) -> None:
@@ -853,7 +851,6 @@ class FileBackedPeerSyncController:
         force_copy: bool = False,
     ) -> S:
         if isinstance(self.config.sync, DiLoCoSyncConfig):
-            self._update_diloco_state_from_shareable(shareable_state, state=state)
             model = shareable_state["model"] if force_copy else _copy_jax_array_tree(self._diloco_anchor_model(state))
             return dataclasses.replace(state, model=model)
 
@@ -880,15 +877,6 @@ class FileBackedPeerSyncController:
         if isinstance(sync_config, PeerAveragingSyncConfig):
             return sync_config.share_optimizer_state
         return False
-
-    def _sync_state_payload(self, state: S) -> dict[str, Any] | None:
-        if not isinstance(self.config.sync, DiLoCoSyncConfig):
-            return None
-        diloco_state = self._ensure_diloco_state(state)
-        return {
-            "anchor_model": diloco_state.anchor_model,
-            "outer_opt_state": diloco_state.outer_opt_state,
-        }
 
     def _ensure_diloco_state(self, state: S) -> _DiLoCoState:
         if self._diloco_state is None:
@@ -923,7 +911,6 @@ class FileBackedPeerSyncController:
 
     def _apply_diloco_sync(self, state: S, peer_shareable_states: list[dict[str, Any]]) -> S:
         sync_config = cast(DiLoCoSyncConfig, self.config.sync)
-        self._update_diloco_state_from_shareable(peer_shareable_states[0], state=state)
         diloco_state = self._ensure_diloco_state(state)
 
         models = [state.model, *(peer_state["model"] for peer_state in peer_shareable_states)]
@@ -949,16 +936,6 @@ class FileBackedPeerSyncController:
             opt_state = init_optimizer_for_trainables(state.optimizer, self._trainable_model(updated_model, state))
 
         return dataclasses.replace(state, model=updated_model, opt_state=opt_state)
-
-    def _update_diloco_state_from_shareable(self, shareable_state: dict[str, Any], *, state: S) -> None:
-        sync_state = shareable_state.get("sync_state")
-        if sync_state is None:
-            self._ensure_diloco_state(state)
-            return
-        self._diloco_state = _DiLoCoState(
-            anchor_model=_copy_jax_array_tree(sync_state["anchor_model"]),
-            outer_opt_state=sync_state["outer_opt_state"],
-        )
 
     def _trainable_model(self, model: Any, state: S) -> Any:
         if hasattr(state, "is_trainable"):
