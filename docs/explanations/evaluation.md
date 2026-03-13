@@ -5,13 +5,15 @@ This document explains how Marin evaluates models and where to find runnable wor
 For step-by-step usage, start with:
 - [Running LM Evaluations](../tutorials/run-lm-evals.md) for multiple-choice and key eval suites.
 - [Running Alpaca Eval](../tutorials/run-alpaca-eval.md) for generation-focused Alpaca evaluation.
+- [Harbor Framework Integration](../harbor-integration.md) for Harbor-backed agent and benchmark evaluation.
 
 ## Evaluation modes
 
-Marin supports two primary evaluation modes:
+Marin supports three primary evaluation paths:
 
 - **Multiple-choice tasks**: run through `lm-evaluation-harness` (during training or as standalone eval jobs).
 - **Generation tasks**: run through a vLLM-backed evaluator pipeline.
+- **Harbor tasks**: run through Marin's Harbor integration for containerized agent benchmarks and registry datasets.
 
 ## Multiple-choice evaluation (LM Evaluation Harness)
 
@@ -55,9 +57,18 @@ Generation tasks (for example AlpacaEval, HumanEval, GSM8K, and MATH) use a fast
 
 In current Marin workflows, generation evals are commonly run with `Dockerfile.vllm` or on a dedicated vLLM Ray cluster (for example [`marin-us-east5-b-vllm.yaml`](https://github.com/marin-community/marin/blob/main/infra/marin-us-east5-b-vllm.yaml)).
 
+## Harbor-based evaluation
+
+Harbor tasks use [`evaluate_harbor`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py) and the Harbor evaluator integration to run registry datasets in containerized environments.
+
+- Harbor supports agent-style benchmarks such as AIME, Terminal-Bench, SWE-bench Verified, and other registry datasets.
+- Marin's Harbor integration supports local Docker and hosted environments such as Daytona, E2B, and Modal.
+- Setup, examples, and environment requirements are documented in [Harbor Framework Integration](../harbor-integration.md).
+
 ## Where to go next
 
 - [Running LM Evaluations](../tutorials/run-lm-evals.md)
 - [Running Alpaca Eval](../tutorials/run-alpaca-eval.md)
+- [Harbor Framework Integration](../harbor-integration.md)
 - [`experiments/evals/evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py)
 - [`experiments/evals/task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py)
