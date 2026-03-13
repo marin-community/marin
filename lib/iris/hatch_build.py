@@ -10,6 +10,7 @@ to check generated files into git or manually run build steps.
 """
 
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -76,6 +77,10 @@ class CustomBuildHook(BuildHookInterface):
             logger.warning("scripts/generate_protos.py not found, skipping protobuf generation")
             return
 
+        if shutil.which("npx") is None:
+            logger.warning("npx not found, skipping protobuf generation (install Node.js to enable)")
+            return
+
         logger.info("Regenerating protobuf files from .proto sources...")
         result = subprocess.run(
             [sys.executable, str(generate_script)],
@@ -93,6 +98,10 @@ class CustomBuildHook(BuildHookInterface):
         dashboard_dir = root / "dashboard"
         if not (dashboard_dir / "package.json").exists():
             logger.info("Dashboard source not found, skipping build")
+            return
+
+        if shutil.which("npm") is None:
+            logger.warning("npm not found, skipping dashboard build (install Node.js to enable)")
             return
 
         dist_dir = root / _DASHBOARD_OUTPUT_DIR
