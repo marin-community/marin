@@ -32,8 +32,6 @@ from iris.cluster.constraints import (
 from iris.cluster.controller.autoscaler import Autoscaler, DemandEntry
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
-    maybe_periodic_checkpoint,
-    restore_db_from_checkpoint,
     write_checkpoint,
 )
 from iris.cluster.controller.db import (
@@ -656,8 +654,8 @@ class ControllerConfig:
     port: int = 0
     """Port to bind the HTTP server to. Use 0 for auto-assign."""
 
-    bundle_prefix: str | None = None
-    """Storage prefix for snapshots (e.g. gs://bucket/path, s3://bucket/path)."""
+    remote_state_dir: str = ""
+    """Remote URI for controller checkpoints and worker profiles (e.g. gs://bucket/iris/state)."""
 
     scheduler_interval: Duration = field(default_factory=lambda: Duration.from_seconds(0.5))
     """How often to run the scheduling loop."""
@@ -684,8 +682,8 @@ class ControllerConfig:
     """If set, take a periodic best-effort snapshot this often.
     Runs in the autoscaler loop thread; does not pause scheduling."""
 
-    log_dir: Path | None = None
-    """Persistent directory for task log files. When None, uses a temp dir."""
+    local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
+    """Local directory for controller DB, logs, bundle cache."""
 
     auth_verifier: TokenVerifier | None = None
     """When set, all RPC calls require a valid bearer token verified by this verifier."""
@@ -738,28 +736,21 @@ class Controller:
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
     ):
-        if not config.bundle_prefix:
+        if not config.remote_state_dir:
             raise ValueError(
-                "bundle_prefix is required. Set via ControllerConfig.bundle_prefix. "
-                "Example: bundle_prefix='gs://my-bucket/iris/bundles'"
+                "remote_state_dir is required. Set via ControllerConfig.remote_state_dir. "
+                "Example: remote_state_dir='gs://my-bucket/iris/state'"
             )
 
         self._config = config
         self.stub_factory = worker_stub_factory
 
+        config.local_state_dir.mkdir(parents=True, exist_ok=True)
         if db is not None:
             self._db = db
-            log_db_path = db.db_path.parent / "logs.sqlite3"
-        elif config.log_dir is not None:
-            db_path = config.log_dir / "controller.sqlite3"
-            self._db = ControllerDB(db_path=db_path)
-            log_db_path = config.log_dir / "logs.sqlite3"
         else:
-            tmp = Path(tempfile.mkdtemp(prefix="iris_controller_state_"))
-            db_path = tmp / "controller.sqlite3"
-            self._db = ControllerDB(db_path=db_path)
-            log_db_path = tmp / "logs.sqlite3"
-        self._log_store = LogStore(db_path=log_db_path)
+            self._db = ControllerDB(db_path=config.local_state_dir / "controller.sqlite3")
+        self._log_store = LogStore(db_path=config.local_state_dir / "logs.sqlite3")
         self._transitions = ControllerTransitions(
             db=self._db,
             log_store=self._log_store,
@@ -767,8 +758,7 @@ class Controller:
         )
         self._scheduler = Scheduler()
 
-        bundle_db_path = Path(tempfile.gettempdir()) / "iris-controller-bundles.sqlite3"
-        self._bundle_store = BundleStore(db_path=bundle_db_path)
+        self._bundle_store = BundleStore(db_path=config.local_state_dir / "bundles.sqlite3")
 
         self._service = ControllerServiceImpl(
             self._transitions,
@@ -935,7 +925,7 @@ class Controller:
     def _atexit_checkpoint(self) -> None:
         """Best-effort checkpoint at interpreter shutdown for post-mortem analysis."""
         try:
-            path, _result = write_checkpoint(self._db, self._config.bundle_prefix)
+            path, _result = write_checkpoint(self._db, self._config.remote_state_dir)
             logger.info("atexit checkpoint written: %s", path)
         except Exception:
             logger.exception("atexit checkpoint failed")
@@ -956,17 +946,6 @@ class Controller:
 
             self._run_scheduling()
 
-            # Run periodic checkpoints here when autoscaler is not configured,
-            # since _run_autoscaler_loop (which normally drives checkpoints)
-            # is only started when an autoscaler is present.
-            if self._autoscaler is None:
-                maybe_periodic_checkpoint(
-                    self._db,
-                    self._config.bundle_prefix,
-                    self._periodic_checkpoint_limiter,
-                    self._checkpoint_in_progress,
-                )
-
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
         don't stall scheduling or heartbeats."""
@@ -981,12 +960,11 @@ class Controller:
             except Exception:
                 logger.exception("Autoscaler loop iteration failed")
 
-            maybe_periodic_checkpoint(
-                self._db,
-                self._config.bundle_prefix,
-                self._periodic_checkpoint_limiter,
-                self._checkpoint_in_progress,
-            )
+            if self._periodic_checkpoint_limiter is not None and self._periodic_checkpoint_limiter.should_run():
+                try:
+                    write_checkpoint(self._db, self._config.remote_state_dir)
+                except Exception:
+                    logger.exception("Periodic checkpoint failed")
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
@@ -1516,7 +1494,7 @@ class Controller:
         try:
             # Wait for any in-flight heartbeat round to complete.
             with self._heartbeat_lock:
-                path, result = write_checkpoint(self._db, self._config.bundle_prefix)
+                path, result = write_checkpoint(self._db, self._config.remote_state_dir)
             logger.info(
                 "Checkpoint written: %s (jobs=%d tasks=%d workers=%d)",
                 path,
@@ -1524,16 +1502,9 @@ class Controller:
                 result.task_count,
                 result.worker_count,
             )
-            return str(path), result
+            return path, result
         finally:
             self._checkpoint_in_progress = False
-
-    def restore_from_checkpoint(self, checkpoint_path: str | None = None) -> bool:
-        """Restore full controller state from a checkpoint SQLite copy."""
-        restored = restore_db_from_checkpoint(self._db, self._config.bundle_prefix, checkpoint_path)
-        if restored and self._autoscaler is not None:
-            self._autoscaler.restore_from_db(self._db)
-        return restored
 
     def launch_job(
         self,

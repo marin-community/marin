@@ -944,7 +944,7 @@ def _make_cluster_config(
     port: int = 10000,
     service_name: str = "iris-controller-svc",
     image: str = "ghcr.io/marin-community/iris-controller:latest",
-    bundle_prefix: str = "gs://test-bucket/bundles",
+    remote_state_dir: str = "gs://test-bucket/bundles",
     controller_scale_group: str = "cpu-erapids",
 ) -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig(
@@ -964,7 +964,7 @@ def _make_cluster_config(
             ),
         ),
         storage=config_pb2.StorageConfig(
-            bundle_prefix=bundle_prefix,
+            remote_state_dir=remote_state_dir,
         ),
     )
     # Add the controller's scale group so start_controller can validate it
@@ -984,7 +984,7 @@ def _make_cluster_config(
 def test_start_controller_creates_all_resources(fake_kubectl: FakeKubectl):
     """start_controller creates ConfigMap, shared NodePools, Deployment, and Service."""
     platform = _make_platform()
-    cluster_config = _make_cluster_config(bundle_prefix="s3://test-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
     # Make Deployment available once it exists
     def auto_ready_deployment():
@@ -1047,7 +1047,7 @@ def test_start_controller_reconciles_when_already_available(fake_kubectl: FakeKu
 def test_stop_controller_deletes_resources_except_nodepool(fake_kubectl: FakeKubectl):
     """stop_controller deletes Deployment, Service, ConfigMap, and S3 secret but not NodePool."""
     platform = _make_platform()
-    cluster_config = _make_cluster_config(bundle_prefix="s3://test-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
     # Pre-populate resources
     fake_kubectl._deployments["iris-controller"] = {
@@ -1163,7 +1163,7 @@ def test_controller_deployment_includes_endpoint_url(fake_kubectl: FakeKubectl):
     )
     platform = CoreweavePlatform(config=cw_config, label_prefix="iris", poll_interval=0.05)
 
-    cluster_config = _make_cluster_config(bundle_prefix="s3://test-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     cluster_config.platform.coreweave.object_storage_endpoint = "https://object.lga1.coreweave.com"
 
     def auto_ready():
@@ -1304,7 +1304,7 @@ def test_start_controller_errors_without_s3_credentials(fake_kubectl: FakeKubect
     monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
     platform = _make_platform()
-    cluster_config = _make_cluster_config(bundle_prefix="s3://my-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="s3://my-bucket/bundles")
 
     with pytest.raises(PlatformError, match="R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY"):
         platform.start_controller(cluster_config)
@@ -1456,7 +1456,7 @@ def test_start_controller_skips_s3_for_gs_storage(fake_kubectl: FakeKubectl, mon
     monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
     platform = _make_platform()
-    cluster_config = _make_cluster_config(bundle_prefix="gs://test-bucket/bundles")
+    cluster_config = _make_cluster_config(remote_state_dir="gs://test-bucket/bundles")
 
     def auto_ready():
         _wait_for_condition(lambda: "iris-controller" in fake_kubectl._deployments, timeout=10)
@@ -1541,14 +1541,14 @@ def _make_cluster_config_with_workers(
     controller_image: str = "ghcr.io/marin-community/iris-controller:v2",
     port: int = 10000,
     service_name: str = "iris-controller-svc",
-    bundle_prefix: str = "gs://test-bucket/bundles",
+    remote_state_dir: str = "gs://test-bucket/bundles",
 ) -> config_pb2.IrisClusterConfig:
     """Build a cluster config with scale_groups and worker config for reload tests."""
     config = _make_cluster_config(
         port=port,
         service_name=service_name,
         image=controller_image,
-        bundle_prefix=bundle_prefix,
+        remote_state_dir=remote_state_dir,
     )
     config.defaults.worker.CopyFrom(
         config_pb2.WorkerConfig(

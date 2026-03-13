@@ -39,13 +39,13 @@ def unique_name(prefix: str) -> str:
 def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
 
-    Sets up controller.local, bundle_prefix, scale groups with local vm_type,
+    Sets up controller.local, remote_state_dir, scale groups with local vm_type,
     and fast autoscaler evaluation for tests.
     """
     config = config_pb2.IrisClusterConfig()
 
     config.controller.local.port = 0
-    config.storage.bundle_prefix = ""
+    config.storage.remote_state_dir = ""
     config.platform.local.SetInParent()
 
     sg = config_pb2.ScaleGroupConfig(
@@ -136,7 +136,7 @@ class E2ECluster:
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
-            bundle_prefix=f"file://{bundle_dir}",
+            remote_state_dir=f"file://{bundle_dir}",
         )
         self._controller = Controller(
             config=controller_config,
