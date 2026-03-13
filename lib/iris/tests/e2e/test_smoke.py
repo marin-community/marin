@@ -566,6 +566,30 @@ def test_reservation_gates_scheduling(smoke_cluster):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+def test_cancel_job_releases_resources(smoke_cluster):
+    """Cancelling a running job decommits worker resources so new jobs can schedule.
+
+    Submits a resource-heavy job, cancels it, then verifies a second job with
+    the same resource requirements succeeds — proving the worker's committed
+    resources were fully released by cancel_job().
+
+    Regression test for #3553.
+    """
+    heavy_cpu = 7000  # close to the 8000m worker capacity
+
+    job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    smoke_cluster.kill(job)
+    killed_status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    assert killed_status.state == cluster_pb2.JOB_STATE_KILLED
+
+    # If resources weren't released, this job would stay PENDING forever.
+    followup = smoke_cluster.submit(TestJobs.quick, "smoke-cancel-followup", cpu=heavy_cpu)
+    followup_status = smoke_cluster.wait(followup, timeout=smoke_cluster.job_timeout)
+    assert followup_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
 # ============================================================================
 # Log level verification
 # ============================================================================
