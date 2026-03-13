@@ -24,7 +24,6 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.jpeg_tokenizer.base.data import build_passthrough_lm_data_config_from_store
 from experiments.jpeg_tokenizer.base.model import JPEG_TOKENIZER_V0_MODEL, JPEG_TOKENIZER_V1_LARGE_MODEL, JpegLmConfig
 from experiments.jpeg_tokenizer.base.train import JpegEvalConfig, JpegRunConfig, JpegTrainerConfig, run_jpeg_tokenizer
-from scripts.jpeg_tokenizer.evaluate_representation_head2head import main as evaluate_representation_head2head_main
 
 DEFAULT_COEFF_K4_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k4_v0"
 DEFAULT_COEFF_K8_STORE_PATH = "gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k8_v0"
@@ -152,6 +151,10 @@ def run_jpeg_tokenizer_trial(config: JpegTokenizerLaunchConfig) -> None:
 
 
 def _run_representation_eval_local(config: JpegRepresentationEvalLaunchConfig) -> None:
+    # Import lazily to avoid a package-init cycle:
+    # evaluate_representation_head2head -> experiments.jpeg_tokenizer.base -> launch.
+    from scripts.jpeg_tokenizer.evaluate_representation_head2head import main as evaluate_representation_head2head_main
+
     args = Namespace(
         run_spec=list(config.run_specs),
         split=config.split,

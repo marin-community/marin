@@ -1124,3 +1124,36 @@
   - the core ordering is stable under both longer training and the larger model:
     `K=64` best, `symbols` second, `bytes` last
   - this reduces the chance that earlier ordering was a short-training or too-small-model artifact
+
+### 2026-03-12 23:10 - Representation eval relaunch succeeded (whole-image metrics)
+
+- Goal:
+  - complete the `long-r3` and `large-r3` whole-image representation evaluations and report only whole-sequence loss metrics
+- Command:
+  - `uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a --submission-id ray-run-dlwh-launch-20260313-054701 -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-representation-eval-long-r3"]'`
+  - `uv run lib/marin/src/marin/run/ray_run.py --no_wait --cluster marin-eu-west4-a --submission-id ray-run-dlwh-launch-20260313-054708 -- python experiments/jpeg_tokenizer/base/launch.py --prefix gs://marin-eu-west4 --executor_info_base_path gs://marin-eu-west4/experiments --run_only '["tokexplore/jpeg-tokenizer-representation-eval-large-r3"]'`
+- Fix applied before relaunch:
+  - removed a circular import by making `evaluate_representation_head2head` a lazy import inside
+    `experiments/jpeg_tokenizer/base/launch.py::_run_representation_eval_local`
+  - prior failed submissions (`ray-run-dlwh-launch-20260313-053321`, `...053348`) died with
+    `ImportError: cannot import name 'main' from partially initialized module ...`
+- Result:
+  - relaunch jobs:
+    - `ray-run-dlwh-launch-20260313-054701`: `SUCCEEDED`
+    - `ray-run-dlwh-launch-20260313-054708`: `SUCCEEDED`
+  - whole-image sequence loss (`mean bits/image`) from summaries:
+    - long (`step 8000`):
+      - `coeff_k64_long`: `133,249.02`
+      - `symbols_long`: `137,400.13`
+      - `bytes_long`: `152,544.14`
+    - large (`8L/768d`, `step 2000`):
+      - `coeff_k64_large`: `166,994.45`
+      - `symbols_large`: `171,295.41`
+      - `bytes_large`: `190,202.97`
+  - output summaries:
+    - `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-long-r3/summary.md`
+    - `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-representation-eval-large-r3/summary.md`
+- Interpretation:
+  - under whole-image sequence loss, ordering is unchanged in both regimes:
+    `coeff K=64` best, `symbols` second, `bytes` worst
+  - this resolves the previously pending long/large whole-image head-to-head with terminal successful runs.
