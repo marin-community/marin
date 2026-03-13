@@ -55,11 +55,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure git identity
-        run: |
-          git config user.name "nightshift-bot"
-          git config user.email "nightshift-bot@users.noreply.github.com"
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -74,5 +69,4 @@ jobs:
       - name: Run Cleanup Agent ${{ matrix.agent_id }}
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          GH_TOKEN: ${{ github.token }}
         run: python infra/scripts/nightshift_cleanup.py run --agent-id ${{ matrix.agent_id }} --folder ${{ matrix.folder }} --haiku-seed ${{ matrix.haiku_seed }}
