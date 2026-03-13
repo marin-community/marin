@@ -102,7 +102,7 @@ function buildProfileType(profilerType: string): Record<string, unknown> {
 
 async function handleProfile(profilerType: string) {
   if (profilerType === 'threads') {
-    router.push({ path: '/threads', query: { task_id: props.taskId, source: 'worker' } })
+    router.push({ name: 'threads', query: { task_id: props.taskId, source: 'worker' } })
     return
   }
   profiling.value = true

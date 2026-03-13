@@ -31,6 +31,7 @@ const routes = [
   },
   {
     path: '/threads',
+    name: 'threads',
     component: () => import('./components/controller/ThreadDump.vue'),
   },
   {
