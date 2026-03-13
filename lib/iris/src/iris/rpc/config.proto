@@ -265,7 +265,7 @@ message WorkerConfig {
   PlatformConfig platform = 50;
 
   // Storage prefix for task artifacts (profiles). Injected by the controller
-  // from the resolved bundle_prefix. Empty disables profile upload.
+  // from the resolved remote_state_dir. Empty disables profile upload.
   string storage_prefix = 60;
 
   // Bearer token for worker→controller authentication.
@@ -286,7 +286,11 @@ message SshConfig {
 // ============================================================================
 
 message StorageConfig {
-  string bundle_prefix = 1;  // URI prefix for job bundles (e.g. s3://iris/bundles, gs://bucket/path)
+  string local_state_dir = 1;      // Local directory for controller DB, logs, bundle cache.
+                                    // Must be on a volume that survives container restarts.
+                                    // Default: /var/cache/iris/controller
+  string remote_state_dir = 2;     // Remote URI for controller checkpoints and worker profiles
+                                    // (e.g. gs://bucket/iris/state). Required for production.
 }
 
 // ============================================================================

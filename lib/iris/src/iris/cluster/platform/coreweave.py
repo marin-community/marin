@@ -422,7 +422,7 @@ class CoreweavePlatform:
 
     def _uses_s3_storage(self, config: config_pb2.IrisClusterConfig) -> bool:
         """Check if any storage URI uses S3."""
-        return config.storage.bundle_prefix.startswith("s3://")
+        return config.storage.remote_state_dir.startswith("s3://")
 
     # -- S3 Credentials -------------------------------------------------------
 
@@ -1076,7 +1076,6 @@ class CoreweavePlatform:
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
-            bundle_prefix=config.storage.bundle_prefix,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             s3_env_vars=s3_env,
         )
@@ -1363,7 +1362,6 @@ def _build_controller_deployment(
     namespace: str,
     image: str,
     port: int,
-    bundle_prefix: str,
     node_selector: dict[str, str],
     s3_env_vars: list[dict],
 ) -> dict:
@@ -1410,13 +1408,13 @@ def _build_controller_deployment(
                                 "--host=0.0.0.0",
                                 f"--port={port}",
                                 "--config=/etc/iris/config.json",
-                                f"--bundle-prefix={bundle_prefix}",
                             ],
                             "ports": [{"containerPort": port}],
                             "env": s3_env_vars,
                             "resources": controller_resources,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
+                                {"name": "local-state", "mountPath": "/var/cache/iris/controller"},
                             ],
                             "readinessProbe": {
                                 "httpGet": {"path": "/health", "port": port},
@@ -1432,6 +1430,7 @@ def _build_controller_deployment(
                     ],
                     "volumes": [
                         {"name": "config", "configMap": {"name": "iris-cluster-config"}},
+                        {"name": "local-state", "emptyDir": {}},
                     ],
                 },
             },

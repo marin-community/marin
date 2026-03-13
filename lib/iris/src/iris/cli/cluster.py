@@ -218,11 +218,8 @@ def cluster(ctx):
 
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
-@click.option(
-    "--bundle-prefix", default=None, help="Override bundle/checkpoint storage prefix (e.g. file:///tmp/iris-bundles)"
-)
 @click.pass_context
-def cluster_start(ctx, local: bool, bundle_prefix: str | None):
+def cluster_start(ctx, local: bool):
     """Start controller and wait for health.
 
     Each platform handles its own controller lifecycle:
@@ -237,8 +234,6 @@ def cluster_start(ctx, local: bool, bundle_prefix: str | None):
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
-    if bundle_prefix:
-        config.storage.bundle_prefix = bundle_prefix
     is_local = config.controller.WhichOneof("controller") == "local"
     if not is_local:
         _pin_latest_images(config)
@@ -537,9 +532,8 @@ def controller_checkpoint(ctx, stop: bool):
 
 
 @controller.command("restart")
-@click.option("--bundle-prefix", default=None, help="Override bundle/checkpoint storage prefix (e.g. gs://bucket/path)")
 @click.pass_context
-def controller_restart(ctx, bundle_prefix: str | None):
+def controller_restart(ctx):
     """Restart controller with state preservation (remote platforms only).
 
     Takes a checkpoint, builds fresh images, stops the controller, and starts
@@ -556,9 +550,6 @@ def controller_restart(ctx, bundle_prefix: str | None):
             "controller restart is not supported for local clusters. "
             "Stop and restart the 'iris cluster start --local' process instead."
         )
-
-    if bundle_prefix:
-        config.storage.bundle_prefix = bundle_prefix
 
     controller_url = require_controller_url(ctx)
 

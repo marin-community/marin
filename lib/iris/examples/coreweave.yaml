@@ -38,7 +38,7 @@ platform:
     object_storage_endpoint: https://a5a1f66f973e2196a26bae21c81b899b.r2.cloudflarestorage.com
 
 storage:
-  bundle_prefix: s3://marin-test/iris/bundles
+  remote_state_dir: s3://marin-test/iris/state
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

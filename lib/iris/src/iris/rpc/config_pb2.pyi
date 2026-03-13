@@ -337,10 +337,12 @@ class SshConfig(_message.Message):
     def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class StorageConfig(_message.Message):
-    __slots__ = ("bundle_prefix",)
-    BUNDLE_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    bundle_prefix: str
-    def __init__(self, bundle_prefix: _Optional[str] = ...) -> None: ...
+    __slots__ = ("local_state_dir", "remote_state_dir")
+    LOCAL_STATE_DIR_FIELD_NUMBER: _ClassVar[int]
+    REMOTE_STATE_DIR_FIELD_NUMBER: _ClassVar[int]
+    local_state_dir: str
+    remote_state_dir: str
+    def __init__(self, local_state_dir: _Optional[str] = ..., remote_state_dir: _Optional[str] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
     __slots__ = ("zone", "machine_type", "boot_disk_size_gb", "port")
