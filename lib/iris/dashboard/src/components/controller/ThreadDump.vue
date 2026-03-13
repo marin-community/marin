@@ -6,8 +6,9 @@ import PageShell from '@/components/layout/PageShell.vue'
 
 const route = useRoute()
 
-const taskId = computed(() => (route.query.task_id as string) ?? '')
-const source = computed(() => (route.query.source as string) ?? 'controller')
+const taskId = computed(() => (route.params.taskId as string) ?? '')
+const jobId = computed(() => (route.params.jobId as string) ?? '')
+const source = computed(() => (route.meta.source as string) ?? 'controller')
 
 const threadDump = ref('')
 const loading = ref(false)
@@ -15,12 +16,8 @@ const error = ref<string | null>(null)
 const lastFetched = ref<string | null>(null)
 
 const backTo = computed(() => {
-  if (source.value === 'worker') return '/'
-  // Try to derive a job detail link from the task ID (e.g. /my-job/0 -> /job/my-job)
-  const parts = taskId.value.split('/')
-  if (parts.length >= 2) {
-    const jobId = parts.slice(0, -1).join('/')
-    return `/job/${encodeURIComponent(jobId)}`
+  if (source.value === 'controller' && jobId.value) {
+    return `/job/${encodeURIComponent(jobId.value)}`
   }
   return '/'
 })

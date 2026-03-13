@@ -169,7 +169,7 @@ function buildProfileType(profilerType: string, format: string | null): Record<s
 }
 
 function openThreadDump(taskId: string) {
-  router.push({ name: 'threads', query: { task_id: taskId, source: 'controller' } })
+  router.push(`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(taskId)}/threads`)
 }
 
 async function handleProfile(taskId: string, profilerType: string, format: string | null) {
