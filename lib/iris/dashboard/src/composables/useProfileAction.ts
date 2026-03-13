@@ -43,16 +43,18 @@ function handleProfileResult(decoded: string, profilerType: ProfilerType, label:
  * Returns reactive profiling state and a `profile()` function.
  *
  * @param rpcCall  One-shot RPC caller (controllerRpcCall or workerRpcCall)
- * @param target   The profiling target string (e.g. "/system/process" or a task ID)
+ * @param target   The profiling target — a string or getter for reactive targets (e.g. task IDs)
  */
-export function useProfileAction(rpcCall: RpcCall, target: string) {
+export function useProfileAction(rpcCall: RpcCall, target: string | (() => string)) {
   const profiling = ref(false)
+  const resolveTarget = typeof target === 'function' ? target : () => target
 
   async function profile(profilerType: ProfilerType) {
+    const currentTarget = resolveTarget()
     profiling.value = true
     try {
       const body = {
-        target,
+        target: currentTarget,
         durationSeconds: 10,
         profileType: buildProfileType(profilerType),
       }
@@ -62,7 +64,7 @@ export function useProfileAction(rpcCall: RpcCall, target: string) {
         return
       }
       if (resp.profileData) {
-        handleProfileResult(atob(resp.profileData), profilerType, target)
+        handleProfileResult(atob(resp.profileData), profilerType, currentTarget)
       }
     } catch (e) {
       alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)

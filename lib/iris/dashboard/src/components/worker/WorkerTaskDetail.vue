@@ -91,8 +91,8 @@ const ports = computed<[string, number][]>(() => {
   return Object.entries(p)
 })
 
-// Profiling — calls the worker's ProfileTask RPC via Connect
-const { profiling, profile: handleProfile } = useProfileAction(workerRpcCall, props.taskId)
+// Profiling — calls the worker's ProfileTask RPC via Connect; use getter so target stays current on route change
+const { profiling, profile: handleProfile } = useProfileAction(workerRpcCall, () => props.taskId)
 
 const { active: autoRefreshActive, start: startRefresh, stop: stopRefresh } = useAutoRefresh(
   fetchTask,
