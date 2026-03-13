@@ -180,13 +180,23 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       return
     }
     if (resp.profileData) {
-      const blob = new Blob([atob(resp.profileData)], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `profile-${taskId.replace(/\//g, '_')}.out`
-      a.click()
-      URL.revokeObjectURL(url)
+      const decoded = atob(resp.profileData)
+      if (profilerType === 'threads') {
+        const w = window.open('', '_blank')
+        if (w) {
+          w.document.open()
+          w.document.write(`<html><head><title>Thread Dump – ${taskId}</title></head><body><pre>${decoded.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></body></html>`)
+          w.document.close()
+        }
+      } else {
+        const blob = new Blob([decoded], { type: 'application/octet-stream' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `profile-${taskId.replace(/\//g, '_')}.out`
+        a.click()
+        URL.revokeObjectURL(url)
+      }
     }
   } catch (e) {
     alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
@@ -407,5 +417,6 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <LogViewer :task-id="jobId" />
       </div>
     </template>
+
   </PageShell>
 </template>
