@@ -183,7 +183,7 @@ def compute_demand_entries(
     # All tasks participate — holders and real tasks alike.
     absorbed_task_ids: set[JobName] = set()
     if scheduler is not None and workers is not None and workers:
-        building_counts = _building_counts(queries)
+        building_counts = _building_counts(queries, workers)
         task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
         dry_run_workers = _inject_reservation_taints(workers, claims)
@@ -319,8 +319,7 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     return {task.task_id: task for task in _tasks_with_attempts(tasks, attempts)}
 
 
-def _building_counts(queries: ControllerDB) -> dict[WorkerId, int]:
-    workers = healthy_active_workers_with_attributes(queries)
+def _building_counts(queries: ControllerDB, workers: list[Worker]) -> dict[WorkerId, int]:
     if not workers:
         return {}
     running_by_worker = running_tasks_by_worker(queries, {worker.worker_id for worker in workers})
@@ -1192,7 +1191,7 @@ class Controller:
         jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
         with slow_log(logger, "building_counts", threshold_ms=50):
-            building_counts = _building_counts(self._db)
+            building_counts = _building_counts(self._db, workers=workers)
         context = self._scheduler.create_scheduling_context(
             modified_workers,
             building_counts=building_counts,
@@ -1293,7 +1292,7 @@ class Controller:
 
     def create_scheduling_context(self, workers: list[Worker]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
-        building_counts = _building_counts(self._db)
+        building_counts = _building_counts(self._db, workers)
         return self._scheduler.create_scheduling_context(
             workers,
             building_counts=building_counts,
