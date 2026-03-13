@@ -243,29 +243,31 @@ def cluster_start(ctx, local: bool):
             click.echo("Built image tags:")
             for name, tag in built.items():
                 click.echo(f"  {name}: {tag}")
-    iris_config = IrisConfig(config)
-    platform = iris_config.platform()
     click.echo("Starting controller...")
     try:
-        address = platform.start_controller(config)
-        click.echo(f"Controller started at {address}")
         if is_local:
-            from iris.cluster.platform.local import LocalPlatform
+            from iris.cluster.local_cluster import LocalCluster
 
-            assert isinstance(platform, LocalPlatform)
-            token = platform.auto_login_token
+            cluster = LocalCluster(config)
+            address = cluster.start()
+            click.echo(f"Controller started at {address}")
+            token = cluster.auto_login_token
             if token:
                 click.echo(f"Dashboard: {address}?session_token={token}")
             else:
                 click.echo(f"Dashboard: {address}")
-        click.echo("\nController is running with integrated autoscaler.")
-        if is_local:
+            click.echo("\nController is running with integrated autoscaler.")
             click.echo("Press Ctrl+C to stop.")
             if threading.current_thread() is threading.main_thread():
-                signal.signal(signal.SIGINT, lambda *_: platform.stop_controller(config))
-                signal.signal(signal.SIGTERM, lambda *_: platform.stop_controller(config))
-            platform.wait_for_controller()
+                signal.signal(signal.SIGINT, lambda *_: cluster.close())
+                signal.signal(signal.SIGTERM, lambda *_: cluster.close())
+            cluster.wait()
         else:
+            iris_config = IrisConfig(config)
+            platform = iris_config.platform()
+            address = platform.start_controller(config)
+            click.echo(f"Controller started at {address}")
+            click.echo("\nController is running with integrated autoscaler.")
             click.echo("Use 'iris --config=... cluster status' to check cluster state.")
     except Exception as e:
         click.echo(f"Failed to start controller: {e}", err=True)
