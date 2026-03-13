@@ -858,6 +858,15 @@ ENDPOINT_TASKS = Table[tuple[str, str]](
         "task_id": Column("et", "task_id", _decode_job_name),
     },
 )
+TASK_PROFILES = Table[tuple[str, str]](
+    sql_name="task_profiles",
+    alias="tp",
+    columns={
+        "task_id": Column("tp", "task_id", _decode_str),
+        "profile_data": Column("tp", "profile_data", _identity),
+        "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
+    },
+)
 JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(_decode_job_name))
 TASKS.columns["priority_neg_depth"] = Column("t", "priority_neg_depth", _decode_int)
 TASKS.columns["priority_root_submitted_ms"] = Column("t", "priority_root_submitted_ms", _decode_timestamp_ms)
@@ -1242,3 +1251,25 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list[Worker]:
         )
     attrs_by_worker = _decode_attribute_rows(attrs)
     return [dc_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+
+
+def insert_task_profile(db: ControllerDB, task_id: str, profile_data: bytes, captured_at: Timestamp) -> None:
+    """Insert a captured profile snapshot for a task.
+
+    The DB trigger caps profiles at 10 per task, evicting the oldest automatically.
+    """
+    db.execute(
+        "INSERT INTO task_profiles (task_id, profile_data, captured_at_ms) VALUES (?, ?, ?)",
+        (task_id, profile_data, captured_at.epoch_ms()),
+    )
+
+
+def get_task_profiles(db: ControllerDB, task_id: str) -> list[tuple[bytes, Timestamp]]:
+    """Return all stored profile snapshots for a task, newest first."""
+    with db.snapshot() as q:
+        rows = q.raw(
+            "SELECT profile_data, captured_at_ms FROM task_profiles WHERE task_id = ? ORDER BY id DESC",
+            (task_id,),
+            decoders={"captured_at_ms": _decode_timestamp_ms},
+        )
+    return [(row.profile_data, row.captured_at_ms) for row in rows]
