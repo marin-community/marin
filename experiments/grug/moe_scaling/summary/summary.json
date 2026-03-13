@@ -1,0 +1,38 @@
+{
+  "model": "moe_iteration_01",
+  "metric": "eval/uncheatable_eval/macro_loss",
+  "predictions": {
+    "1e18": {
+      "optimal_tokens": 1013750676.6240091,
+      "optimal_model_params": 343272586.46645266,
+      "predicted_loss": 3.492553094093849
+    },
+    "1e19": {
+      "optimal_tokens": 4446488321.384837,
+      "optimal_model_params": 1205587908.8778043,
+      "predicted_loss": 2.9391743644059414
+    },
+    "1e20": {
+      "optimal_tokens": 19503077875.17739,
+      "optimal_model_params": 4234075959.847726,
+      "predicted_loss": 2.3857956347180327
+    },
+    "1e21": {
+      "optimal_tokens": 85543921205.39024,
+      "optimal_model_params": 14870254671.389025,
+      "predicted_loss": 1.8324169050301258
+    }
+  },
+  "best_1e19_run": {
+    "name": "isoflop-moe-v2-1e+19-d1024",
+    "hidden_dim": 1024,
+    "mean_mfu": 22.351578572588963,
+    "tokens": 4661805619.2047415,
+    "tokens_per_second": 191756.38444469418,
+    "total_params": 1262666304,
+    "active_params": 413319744,
+    "runtime_seconds": 28135.227439707,
+    "resource_type": "v5p-8",
+    "hardware_flops_per_second": 1836000000000000
+  }
+}
