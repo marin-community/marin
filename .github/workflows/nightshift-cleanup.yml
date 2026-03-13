@@ -147,22 +147,55 @@ jobs:
             Read `docs/dev-guide/coding-standards.md` for the full set of rules.
             Read `AGENTS.md` for project conventions.
 
-            ## What to Look For (in priority order)
+            ## What to Look For
 
-            1. **Dead code**: unused imports, unreferenced functions, commented-out blocks,
-               stale `TODO`/`FIXME` (>90 days via `git blame`)
-            2. **Type annotation gaps**: public functions missing return types, `Any` where
-               a concrete type is known, `Dict[str, Any]` → dataclass/TypedDict
-            3. **Complexity smells**: functions >50 lines, >3 nesting levels, >5 parameters,
-               boolean flags that should be separate classes
-            4. **Documentation drift**: docstrings whose params don't match the signature,
-               stale examples
-            5. **LLM anti-patterns**: over-protective try/except, defensive None checks,
-               verbose docstrings restating the code, unnecessary abstractions
-            6. **Test quality**: tests with no assertions, `time.sleep()` in tests,
-               mocks of internal functions, `@pytest.mark.skip` without linked issue
-            7. **Import hygiene**: mid-function imports (except cycle-breaking), `TYPE_CHECKING`
-               guards, wrong dependency direction
+            Scan for issues across three dimensions. Within each, items are in priority order.
+
+            ### 1. Code Reuse
+
+            - **Duplicated utilities**: search for existing helpers in `lib/*/src/` that could
+              replace newly written or existing hand-rolled code. Flag any function that
+              duplicates existing functionality and suggest the existing one instead.
+            - **Inline logic that should use an existing utility**: hand-rolled string
+              manipulation, manual path handling, custom environment checks, ad-hoc type
+              guards, and similar patterns that a codebase utility already handles.
+
+            ### 2. Code Quality
+
+            - **Dead code**: unused imports, unreferenced functions, commented-out blocks,
+              stale `TODO`/`FIXME` (>90 days via `git blame`)
+            - **Redundant state**: state that duplicates existing state, cached values that
+              could be derived, observers/effects that could be direct calls
+            - **Parameter sprawl**: functions with >5 parameters, or new parameters added
+              instead of generalizing or restructuring existing ones
+            - **Copy-paste with slight variation**: near-duplicate code blocks that should be
+              unified with a shared abstraction
+            - **Leaky abstractions**: exposing internal details that should be encapsulated,
+              or breaking existing abstraction boundaries
+            - **Stringly-typed code**: using raw strings where constants, enums, or typed
+              alternatives already exist in the codebase
+            - **LLM anti-patterns**: over-protective try/except, defensive None checks,
+              verbose docstrings restating the code, unnecessary abstractions
+            - **Test quality**: tests with no assertions, `time.sleep()` in tests,
+              mocks of internal functions, `@pytest.mark.skip` without linked issue
+            - **Import hygiene**: mid-function imports (except cycle-breaking), `TYPE_CHECKING`
+              guards, wrong dependency direction
+
+            ### 3. Efficiency
+
+            - **Unnecessary work**: redundant computations, repeated file reads, duplicate
+              network/API calls, N+1 query patterns
+            - **Missed concurrency**: independent operations run sequentially when they could
+              run in parallel
+            - **Hot-path bloat**: blocking work added to startup or per-request hot paths
+            - **Recurring no-op updates**: state updates inside polling loops or event handlers
+              that fire unconditionally — add a change-detection guard so downstream consumers
+              aren't notified when nothing changed
+            - **Unnecessary existence checks**: pre-checking file/resource existence before
+              operating (TOCTOU anti-pattern) — operate directly and handle the error
+            - **Memory**: unbounded data structures, missing cleanup, listener leaks
+            - **Overly broad operations**: reading entire files when only a portion is needed,
+              loading all items when filtering for one
 
             ## Rules of Engagement
 

@@ -11,9 +11,11 @@ from pathlib import Path
 
 import click
 
+from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD
 from iris.logging import configure_logging
+from iris.rpc import config_pb2
 from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
@@ -64,7 +66,6 @@ def serve(
     from iris.cluster.controller.db import ControllerDB
     from iris.cluster.config import load_config, create_autoscaler
     from iris.cluster.platform.factory import create_platform
-    from iris.rpc import config_pb2
 
     configure_logging(level=getattr(logging, log_level))
 
@@ -153,6 +154,10 @@ def serve(
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
     logger.info("Configuration: scheduler_interval=%.2fs", scheduler_interval)
 
+    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
+    if auth.worker_token and base_worker_config is not None:
+        base_worker_config.auth_token = auth.worker_token
+
     config = ControllerConfig(
         host=host,
         port=port,
@@ -161,6 +166,9 @@ def serve(
         heartbeat_failure_threshold=heartbeat_failure_threshold,
         checkpoint_interval=Duration.from_seconds(checkpoint_interval) if checkpoint_interval else None,
         local_state_dir=local_state_dir,
+        auth_verifier=auth.verifier,
+        auth_provider=auth.provider,
+        auth=auth,
     )
 
     try:

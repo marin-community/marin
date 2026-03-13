@@ -7,12 +7,16 @@ import logging
 import time
 import uuid
 
+from collections.abc import Iterable
+
+from connectrpc.errors import ConnectError
+from connectrpc.interceptor import InterceptorSync
+
 from iris.cluster.client.protocol import TaskStateLogger
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from connectrpc.errors import ConnectError
 from iris.rpc.errors import call_with_retry, format_connect_error
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
 
@@ -31,6 +35,7 @@ class RemoteClusterClient:
         bundle_id: str | None = None,
         bundle_blob: bytes | None = None,
         timeout_ms: int = 30000,
+        interceptors: Iterable[InterceptorSync] = (),
     ):
         """Initialize RPC cluster operations.
 
@@ -39,6 +44,7 @@ class RemoteClusterClient:
             bundle_id: Workspace bundle identifier for job inheritance
             bundle_blob: Workspace bundle as bytes (for initial job submission)
             timeout_ms: RPC timeout in milliseconds
+            interceptors: Client-side interceptors (e.g. AuthTokenInjector for token auth)
         """
         self._address = controller_address
         self._bundle_id = bundle_id
@@ -47,6 +53,7 @@ class RemoteClusterClient:
         self._client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=timeout_ms,
+            interceptors=interceptors,
         )
 
     def submit_job(

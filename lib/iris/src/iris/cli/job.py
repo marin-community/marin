@@ -38,6 +38,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import cluster_pb2
+from iris.rpc.auth import TokenProvider
 from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
@@ -435,6 +436,7 @@ def run_iris_job(
     zone: str | None = None,
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
+    token_provider: TokenProvider | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -505,6 +507,7 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         reservation=reservation,
+        token_provider=token_provider,
     )
 
 
@@ -525,13 +528,14 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
+    token_provider: TokenProvider | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
     Only KeyboardInterrupt terminates the remote job; connection failures
     are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=token_provider)
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
@@ -720,6 +724,7 @@ def run(
             regions=region or None,
             zone=zone,
             reserve=reserve or None,
+            token_provider=ctx.obj.get("token_provider"),
         )
     except Exception:
         platform = ctx.obj.get("platform")
@@ -744,7 +749,7 @@ def run(
 def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -760,7 +765,7 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -773,7 +778,7 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
     """List jobs with optional filtering."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
     states: list[cluster_pb2.JobState] | None = None
     if state is not None:
@@ -863,7 +868,7 @@ def logs(
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
@@ -905,7 +910,9 @@ def logs(
 def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, labels: str):
     """Generate a diagnostic bug report for a job."""
     controller_url = require_controller_url(ctx)
-    report = gather_bug_report(controller_url, JobName.from_wire(job_id), tail=tail)
+    report = gather_bug_report(
+        controller_url, JobName.from_wire(job_id), tail=tail, token_provider=ctx.obj.get("token_provider")
+    )
     markdown = format_bug_report(report)
 
     if file_issue:

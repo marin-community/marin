@@ -13,6 +13,7 @@ Provides:
 
 from __future__ import annotations
 
+import secrets
 import tempfile
 import threading
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Protocol
 
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
+from iris.cluster.controller.auth import create_api_key, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
@@ -37,9 +39,9 @@ from iris.cluster.platform.base import find_free_port
 from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from iris.rpc import config_pb2
+from iris.rpc.auth import hash_token
+from iris.time_utils import Duration, Timestamp
 
 
 def create_local_autoscaler(
@@ -116,11 +118,19 @@ def create_local_autoscaler(
             db=db,
         )
 
+    # Build base_worker_config from defaults so auth_token (and other fields)
+    # flow through the autoscaler to locally-spawned workers.
+    base_worker_config: config_pb2.WorkerConfig | None = None
+    if config.defaults.worker.auth_token:
+        base_worker_config = config_pb2.WorkerConfig()
+        base_worker_config.CopyFrom(config.defaults.worker)
+
     autoscaler = Autoscaler.from_config(
         scale_groups=scale_groups,
         config=config.defaults.autoscaler,
         platform=platform,
         threads=threads,
+        base_worker_config=base_worker_config,
         db=db,
     )
     return autoscaler, temp_dir
@@ -163,6 +173,7 @@ class LocalController:
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
         self._stopped = threading.Event()
+        self._auto_login_token: str | None = None
         # Persistent across stop()/start() so checkpoints survive restart().
         self._db_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_db_")
 
@@ -176,10 +187,15 @@ class LocalController:
         port = self._config.controller.local.port or find_free_port()
         address = f"http://127.0.0.1:{port}"
 
+        db = ControllerDB(db_path=Path(self._db_dir.name) / "controller.sqlite3")
+
+        # Derive auth from config proto so callers never need to wire it manually.
+        auth = create_controller_auth(self._config.auth, db=db)
+        if auth.worker_token:
+            self._config.defaults.worker.auth_token = auth.worker_token
+
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
-
-        db = ControllerDB(db_path=Path(self._db_dir.name) / "controller.sqlite3")
 
         # Autoscaler creates its own temp dirs for worker resources
         self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
@@ -197,6 +213,9 @@ class LocalController:
                 heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
                 local_state_dir=Path(self._db_dir.name),
+                auth_verifier=auth.verifier,
+                auth_provider=auth.provider,
+                auth=auth,
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,
@@ -204,7 +223,33 @@ class LocalController:
             db=db,
         )
         self._controller.start()
-        return self._controller.url
+
+        # Auto-login: create an API key and store it for CLI usage
+        url = self._controller.url
+        raw_token = secrets.token_urlsafe(32)
+        key_id = f"iris_k_local_{secrets.token_hex(8)}"
+        db.ensure_user("local-admin", Timestamp.now(), role="admin")
+        create_api_key(
+            db,
+            key_id=key_id,
+            key_hash=hash_token(raw_token),
+            key_prefix=raw_token[:8],
+            user_id="local-admin",
+            name="local-auto-login",
+            now=Timestamp.now(),
+        )
+        # Local import to break circular dependency: iris.cli -> iris.cluster.controller.local
+        from iris.cli.token_store import store_token
+
+        cluster_name = self._config.name or "local"
+        store_token(cluster_name, url, raw_token)
+        self._auto_login_token = raw_token
+
+        return url
+
+    @property
+    def auto_login_token(self) -> str | None:
+        return self._auto_login_token
 
     def stop(self) -> None:
         self._stopped.set()
@@ -273,27 +318,3 @@ def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
     base_config.scale_groups["local-cpu"].CopyFrom(sg)
 
     return make_local_config(base_config)
-
-
-def wait_for_worker_registration(controller_address: str, timeout: float = 10.0) -> None:
-    """Poll the controller until at least one worker has registered.
-
-    Args:
-        controller_address: Address of the controller to poll.
-        timeout: Maximum time to wait in seconds.
-
-    Raises:
-        TimeoutError: If no worker registers within the timeout.
-    """
-    temp_client = ControllerServiceClientSync(
-        address=controller_address,
-        timeout_ms=30000,
-    )
-    try:
-        ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
-            lambda: bool(temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers),
-            timeout=Duration.from_seconds(timeout),
-            error_message="Worker failed to register with controller",
-        )
-    finally:
-        temp_client.close()
