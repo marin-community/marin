@@ -63,6 +63,8 @@ Before marking a PR ready for review:
 - Run `./infra/pre-commit.py --all-files --fix` and fix any issues.
 - Do not substitute `uv run pre-commit ...`; use `./infra/pre-commit.py` directly so checks run in all environments.
 - Run `uv run pytest -m 'not slow'` for the relevant test directories.
+- When a PR adds, deletes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py` before pushing so stale GitHub source links fail locally instead of in CI.
+- For docs-heavy changes, also run `uv run mkdocs build --strict`.
 - Ensure all CI checks pass after pushing. Monitor with
   `gh pr view <number> --json statusCheckRollup`.
 - If CI fails, investigate and push fixes. Do not consider the PR complete
