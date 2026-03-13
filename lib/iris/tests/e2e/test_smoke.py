@@ -889,54 +889,74 @@ def test_dashboard_login_flow():
     controller = LocalController(config)
     url = controller.start()
 
+    # Run Playwright in a separate thread to avoid conflict with the asyncio
+    # event loop that AnyIO worker threads may have installed.
+    errors: list[Exception] = []
+
+    def _run_browser_flow():
+        try:
+            with pw.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+
+                # Navigate to dashboard root — auth guard should redirect to login
+                page.goto(f"{url}/")
+                page.wait_for_load_state("domcontentloaded")
+                wait_for_dashboard_ready(page)
+
+                page.wait_for_function(
+                    "() => window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+
+                # Login page should show the token textarea and login button
+                assert_visible(page, "text=Iris Dashboard")
+                assert_visible(page, "text=bearer token")
+                assert_visible(page, "button:has-text('Login')")
+
+                # Enter the token and submit
+                page.fill("textarea#token", _AUTH_TOKEN)
+                page.click("button:has-text('Login')")
+
+                # After login, should redirect to jobs tab (root hash)
+                page.wait_for_function(
+                    "() => !window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+                wait_for_dashboard_ready(page)
+
+                # Verify the dashboard loaded — the Jobs tab heading or
+                # an empty "No jobs" state should be visible
+                page.wait_for_function(
+                    "() => document.body.textContent.includes('Jobs') || "
+                    "document.body.textContent.includes('No jobs')",
+                    timeout=10000,
+                )
+
+                # Logout should redirect back to login
+                page.click("button:has-text('Logout')")
+                page.wait_for_function(
+                    "() => window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+                assert_visible(page, "text=bearer token")
+
+                page.close()
+                browser.close()
+        except Exception as exc:
+            errors.append(exc)
+
+    import threading
+
+    t = threading.Thread(target=_run_browser_flow)
+    t.start()
+    t.join(timeout=60)
+
     try:
-        with pw.sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page(viewport={"width": 1400, "height": 900})
-
-            # Navigate to dashboard root — auth guard should redirect to login
-            page.goto(f"{url}/")
-            page.wait_for_load_state("domcontentloaded")
-            wait_for_dashboard_ready(page)
-
-            page.wait_for_function(
-                "() => window.location.hash.includes('/login')",
-                timeout=10000,
-            )
-
-            # Login page should show the token textarea and login button
-            assert_visible(page, "text=Iris Dashboard")
-            assert_visible(page, "text=bearer token")
-            assert_visible(page, "button:has-text('Login')")
-
-            # Enter the token and submit
-            page.fill("textarea#token", _AUTH_TOKEN)
-            page.click("button:has-text('Login')")
-
-            # After login, should redirect to jobs tab (root hash)
-            page.wait_for_function(
-                "() => !window.location.hash.includes('/login')",
-                timeout=10000,
-            )
-            wait_for_dashboard_ready(page)
-
-            # Verify the dashboard loaded — the Jobs tab heading or
-            # an empty "No jobs" state should be visible
-            page.wait_for_function(
-                "() => document.body.textContent.includes('Jobs') || " "document.body.textContent.includes('No jobs')",
-                timeout=10000,
-            )
-
-            # Logout should redirect back to login
-            page.click("button:has-text('Logout')")
-            page.wait_for_function(
-                "() => window.location.hash.includes('/login')",
-                timeout=10000,
-            )
-            assert_visible(page, "text=bearer token")
-
-            page.close()
-            browser.close()
+        if errors:
+            raise errors[0]
+        if t.is_alive():
+            raise TimeoutError("Browser flow did not complete within 60s")
     finally:
         controller.close()
 

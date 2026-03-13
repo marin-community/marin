@@ -797,7 +797,7 @@ def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_m
     now = Timestamp.now()
     db.ensure_user("alice", now, role="user")
 
-    auth = ControllerAuth()
+    auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
         db,
@@ -833,7 +833,7 @@ def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_met
     now = Timestamp.now()
     db.ensure_user("system:worker", now, role="worker")
 
-    auth = ControllerAuth()
+    auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
         db,
