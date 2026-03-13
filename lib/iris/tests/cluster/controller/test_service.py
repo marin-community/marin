@@ -176,7 +176,7 @@ class MockSchedulerWake:
         self.wake = Mock()
         self.kill_tasks_on_workers = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
-        self.get_job_scheduling_diagnostics = Mock(return_value="")
+        self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
         self.stub_factory = Mock()
 
