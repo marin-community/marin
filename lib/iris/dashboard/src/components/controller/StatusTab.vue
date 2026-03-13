@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { useControllerRpc } from '@/composables/useRpc'
+import { useControllerRpc, controllerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useProfileAction } from '@/composables/useProfileAction'
 import type { GetProcessStatusResponse, ProcessInfo } from '@/types/rpc'
 import { formatBytes, formatUptime } from '@/utils/formatting'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 
 const { data, loading, error, refresh } = useControllerRpc<GetProcessStatusResponse>('GetProcessStatus')
+const { profiling, profile } = useProfileAction(controllerRpcCall, '/system/process')
 
 useAutoRefresh(refresh, 10_000)
 onMounted(refresh)
@@ -96,6 +99,9 @@ const totalBytes = computed(() => {
         </InfoRow>
       </InfoCard>
     </div>
+
+    <!-- Process profiling -->
+    <ProfileButtons :profiling="profiling" @profile="profile" />
 
     <!-- Process logs -->
     <div>
