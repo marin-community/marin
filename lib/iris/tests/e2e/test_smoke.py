@@ -575,7 +575,7 @@ def test_cancel_job_releases_resources(smoke_cluster):
 
     Regression test for #3553.
     """
-    heavy_cpu = 7000  # close to the 8000m worker capacity
+    heavy_cpu = 900  # close to the 1000-core local worker capacity (ResourceSpec.cpu is in cores)
 
     job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
     smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
