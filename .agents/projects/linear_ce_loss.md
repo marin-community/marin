@@ -1,5 +1,25 @@
 # Linear CE Loss Pallas Kernel – Status (2026-01-31)
 
+## 2026-03-11: XLA explicit batch-block override for tuning
+- Plumbed explicit `block_sizes.b_block_size` through the XLA fused CE path so tuning scripts can sweep the new batch-block knob instead of always using the inferred value.
+- Behavior:
+  - `block_sizes is None`: keep inferred `infer_xla_b_block_size(B, v_block_size)` behavior.
+  - explicit `block_sizes.b_block_size`: use it exactly for XLA if it divides `B` and satisfies the TPU/XLA int32 tile-word limit; otherwise raise.
+- Added regression coverage for:
+  - explicit XLA `b_block_size` reaching the custom-VJP path
+  - rejection of unsafe explicit `b_block_size * v_block_size` tiles
+
+## 2026-03-11: XLA fused CE batch tiling for issue #3530
+- Added an XLA-side `infer_xla_b_block_size(b, v_block_size)` heuristic to cap the streaming working set below the TPU/XLA int32 word-count limit.
+- Updated the XLA fused CE path to chunk over batch as well as vocab in both:
+  - forward streaming / `return_argmax`
+  - custom-VJP backward
+- Added focused tests for:
+  - large-batch `infer_xla_b_block_size` selection (`4194304 x 8192 -> 131072`)
+  - chunked custom-VJP gradients vs streaming autodiff
+  - chunked `return_argmax` forward vs reference
+- This change is local to `xla.py` / `tuned_block_sizes.py`; Pallas kernels are unchanged.
+
 ## Snapshot
 We now have a **new Pallas TPU backward kernel** for `fused_cross_entropy_loss_and_logsumexp_penalty` that uses a **parallel core grid axis** (no `core_map`) with per-core `w_grad` partials. This targets v5p megacore and uses **per-core batch splitting** plus explicit HBM↔VMEM staging.
 **Note (historical):** we previously experimented with a **split backward strategy** (separate Pallas calls for `x_grad` and `w_grad`, each rematting logits), but this path and its `BlockSizes(..., bwd_strategy="split")` hook have been removed; the current implementation only exposes block-size parameters (`b_block_size`, `h_block_size`, `v_block_size`) for the single combined backward kernel.
