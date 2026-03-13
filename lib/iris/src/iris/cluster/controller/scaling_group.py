@@ -101,7 +101,7 @@ DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
-DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(5)
+DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(1)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
 
 

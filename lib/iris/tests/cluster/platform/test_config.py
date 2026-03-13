@@ -560,7 +560,7 @@ defaults:
     scale_up_delay:
       milliseconds: 60000
     scale_down_delay:
-      milliseconds: 300000
+      milliseconds: 60000
 
 controller:
   gcp:
@@ -601,8 +601,8 @@ scale_groups:
         # Verify fast timings applied (0.5s eval, 1s scale_up)
         assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
         assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
-        # scale_down_delay stays at 5min
-        assert local_config.defaults.autoscaler.scale_down_delay.milliseconds == 300000
+        # scale_down_delay preserved from YAML (60s)
+        assert local_config.defaults.autoscaler.scale_down_delay.milliseconds == 60000
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
