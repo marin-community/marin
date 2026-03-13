@@ -445,11 +445,12 @@ class Platform(Protocol):
     def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
         """Start or discover existing controller. Returns address (host:port).
 
-        Each platform implements its own controller lifecycle:
+        Each remote platform implements its own controller lifecycle:
         - GCP: creates GCE VM, SSHes in, bootstraps container
         - Manual: SSHes to configured host, bootstraps container
         - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
-        - Local: starts in-process LocalController
+
+        Local mode uses LocalCluster directly and does not go through Platform.
         """
         ...
 
@@ -465,11 +466,12 @@ class Platform(Protocol):
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the controller.
 
-        Each platform tears down its own controller resources:
+        Each remote platform tears down its own controller resources:
         - GCP: terminates GCE VM
         - Manual: terminates bootstrap on host
         - CoreWeave: kubectl delete Deployment + Service + NodePool
-        - Local: stops in-process LocalController
+
+        Local mode uses LocalCluster.close() directly and does not go through Platform.
         """
         ...
 

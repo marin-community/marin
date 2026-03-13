@@ -7,7 +7,7 @@ import pytest
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.config import IrisConfig
-from iris.cluster.controller.local import LocalController
+from iris.cluster.local_cluster import LocalCluster
 from iris.rpc import config_pb2
 
 
@@ -28,7 +28,7 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
 
 @pytest.fixture
 def demo_client() -> IrisClient:
-    controller = LocalController(_make_demo_config())
+    controller = LocalCluster(_make_demo_config())
     address = controller.start()
     try:
         client = IrisClient.remote(
