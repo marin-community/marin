@@ -193,6 +193,8 @@ def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path):
     initial_state = DummyState(step=0, model={"weight": jnp.array([0.0], dtype=jnp.float32)})
     peer_controller.bootstrap_state(initial_state)
     local_controller.bootstrap_state(initial_state)
+    assert local_controller._diloco_state is not None  # noqa: SLF001
+    assert local_controller._diloco_state.anchor_model["weight"] is not initial_state.model["weight"]  # noqa: SLF001
 
     peer_controller._publish_state(  # noqa: SLF001
         DummyState(step=1, model={"weight": jnp.array([3.0], dtype=jnp.float32)}),
@@ -209,6 +211,10 @@ def test_diloco_sync_updates_anchor_with_outer_optimizer(tmp_path):
     )
 
     assert float(synced_info.state.model["weight"][0]) == pytest.approx(0.5)
+    assert local_controller._diloco_state is not None  # noqa: SLF001
+    assert (
+        local_controller._diloco_state.anchor_model["weight"] is not synced_info.state.model["weight"]
+    )  # noqa: SLF001
 
 
 def test_aggregate_progress_metrics_reports_logical_and_delivered_tokens():

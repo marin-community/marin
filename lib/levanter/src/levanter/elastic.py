@@ -854,7 +854,7 @@ class FileBackedPeerSyncController:
     ) -> S:
         if isinstance(self.config.sync, DiLoCoSyncConfig):
             self._update_diloco_state_from_shareable(shareable_state, state=state)
-            model = shareable_state["model"] if force_copy else self._diloco_anchor_model(state)
+            model = shareable_state["model"] if force_copy else _copy_jax_array_tree(self._diloco_anchor_model(state))
             return dataclasses.replace(state, model=model)
 
         sync_config = cast(PeerAveragingSyncConfig, self.config.sync)
@@ -892,9 +892,10 @@ class FileBackedPeerSyncController:
 
     def _ensure_diloco_state(self, state: S) -> _DiLoCoState:
         if self._diloco_state is None:
-            trainable_anchor = self._trainable_model(state.model, state)
+            detached_anchor_model = _copy_jax_array_tree(state.model)
+            trainable_anchor = self._trainable_model(detached_anchor_model, state)
             self._diloco_state = _DiLoCoState(
-                anchor_model=state.model,
+                anchor_model=detached_anchor_model,
                 outer_opt_state=self._diloco_outer_optimizer.init(trainable_anchor),
             )
         return self._diloco_state
@@ -938,7 +939,10 @@ class FileBackedPeerSyncController:
         )
         updated_trainable = optax.apply_updates(anchor_trainable, updates)
         updated_model = self._merge_trainable_model(updated_trainable, anchor_model)
-        self._diloco_state = _DiLoCoState(anchor_model=updated_model, outer_opt_state=new_outer_opt_state)
+        self._diloco_state = _DiLoCoState(
+            anchor_model=_copy_jax_array_tree(updated_model),
+            outer_opt_state=new_outer_opt_state,
+        )
 
         opt_state = state.opt_state
         if sync_config.reset_inner_optimizer_on_sync and hasattr(state, "optimizer"):
@@ -952,7 +956,7 @@ class FileBackedPeerSyncController:
             self._ensure_diloco_state(state)
             return
         self._diloco_state = _DiLoCoState(
-            anchor_model=sync_state["anchor_model"],
+            anchor_model=_copy_jax_array_tree(sync_state["anchor_model"]),
             outer_opt_state=sync_state["outer_opt_state"],
         )
 
@@ -1034,6 +1038,24 @@ def _merge_optional_tree(current: Any, incoming: Any, mixing_rate: float) -> Any
     if incoming is None:
         return current
     return _merge_tree(current, incoming, mixing_rate)
+
+
+def _copy_jax_array_tree(tree: Any) -> Any:
+    def _copy_leaf(x: Any) -> Any:
+        if not is_jax_array_like(x):
+            return x
+
+        copy_method = getattr(x, "copy", None)
+        if callable(copy_method):
+            return copy_method()
+
+        host_value = np.asarray(jax.device_get(x))
+        sharding = getattr(x, "sharding", None)
+        if sharding is not None:
+            return jax.device_put(host_value, sharding)
+        return jax.device_put(host_value)
+
+    return jtu.tree_map(_copy_leaf, tree)
 
 
 def _aggregate_progress_metrics(
