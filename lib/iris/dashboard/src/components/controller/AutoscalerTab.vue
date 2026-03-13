@@ -603,6 +603,12 @@ function idleThresholdMs(groupName: string): number {
                       <span class="text-text-muted text-[11px]">
                         {{ timestampMs(slice.createdAt) ? formatRelativeTime(timestampMs(slice.createdAt)) : '-' }}
                       </span>
+                      <!-- Per-VM task counts -->
+                      <span v-if="(slice.vms ?? []).length > 0" class="text-text-muted text-[11px]">
+                        <span v-for="(vm, vi) in (slice.vms ?? [])" :key="vm.vmId" :title="`${vm.vmId}: ${vm.runningTaskCount ?? 0} tasks`">
+                          {{ vi > 0 ? ', ' : '' }}vm{{ vi }}: {{ vm.runningTaskCount ?? 0 }}t
+                        </span>
+                      </span>
                     </div>
                   </div>
                 </td>

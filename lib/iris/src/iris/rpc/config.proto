@@ -257,6 +257,10 @@ message WorkerConfig {
   iris.time.Duration poll_interval = 40;
   iris.time.Duration heartbeat_timeout = 41;
 
+  // Iris slice_id; used by multi-VM slices (TPU) to construct worker_id
+  // from slice_id + TPU worker index so registration IDs match platform IDs.
+  string slice_id = 8;
+
   // Platform config (for image resolution — worker creates lightweight platform)
   PlatformConfig platform = 50;
 

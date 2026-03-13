@@ -1077,6 +1077,10 @@ class ControllerServiceImpl:
         for w in workers:
             worker_id_to_info[w.worker_id] = (w.worker_id, w.healthy)
 
+        # Fetch running task counts per worker for dashboard display
+        all_worker_ids = {WorkerId(w.worker_id) for w in workers}
+        running_by_worker = running_tasks_by_worker(self._db, all_worker_ids) if all_worker_ids else {}
+
         # Enrich VmInfo objects with worker information by matching vm_id to worker_id
         for group in status.groups:
             for slice_info in group.slices:
@@ -1085,6 +1089,8 @@ class ControllerServiceImpl:
                     if worker_info:
                         vm.worker_id = worker_info[0]
                         vm.worker_healthy = worker_info[1]
+                        wid = WorkerId(vm.worker_id)
+                        vm.running_task_count = len(running_by_worker.get(wid, set()))
 
         return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
