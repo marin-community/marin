@@ -150,8 +150,8 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           <InfoRow label="Address">
             <span class="font-mono">{{ worker?.address ?? '-' }}</span>
           </InfoRow>
-          <InfoRow v-if="worker?.metadata?.gceZone" label="Zone">
-            <span class="font-mono">{{ worker.metadata.gceZone }}</span>
+          <InfoRow v-if="worker?.metadata?.attributes?.zone" label="Zone">
+            <span class="font-mono">{{ worker.metadata.attributes.zone.stringValue }}</span>
           </InfoRow>
           <InfoRow v-if="worker?.metadata?.gceInstanceName" label="Instance">
             <span class="font-mono">{{ worker.metadata.gceInstanceName }}</span>
