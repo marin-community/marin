@@ -487,6 +487,12 @@ def write_summary_json(rows, fits, token_coeffs, loss_coeffs, param_coeffs, best
 
     result = {
         "model": "moe_iteration_01",
+        "description": (
+            "DeepSeek-style MoE with AF load balancing (bias_rate=0.01) + 0.001 aux loss,"
+            " AdamW, 2 leading dense layers, 1 shared expert at hidden_dim, k=4, e=64,"
+            " expert_dim=hidden_dim/2, expert_lr_mul=1.0, warmup=0.1, cooldown=0.2,"
+            " wd=0.1, router_z_loss_coef=0.001, z_loss_weight=1e-4."
+        ),
         "metric": METRIC_KEY,
         "predictions": predictions,
         "best_1e19_run": {
