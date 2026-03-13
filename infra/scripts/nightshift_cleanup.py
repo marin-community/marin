@@ -171,7 +171,7 @@ def run(args: argparse.Namespace) -> None:
             "--model=opus",
             "--print",
             "--dangerously-skip-permissions",
-            "--tools=Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(gh:*),Bash(python:*)",
+            "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "80",
             "--",
