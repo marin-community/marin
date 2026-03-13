@@ -545,6 +545,63 @@ def _run_tui(fetch_fn, start_step: int):
     curses.wrapper(main_loop)
 
 
+def _normalize_cluster_region(cluster: str) -> str:
+    """Extract the canonical region string from a --cluster argument.
+
+    Accepts region names like ``us-central2`` or ``marin-us-central2`` and
+    strips the ``marin-`` prefix if present.
+    """
+    region = cluster
+    if region.startswith("marin-"):
+        region = region[len("marin-") :]
+    return region
+
+
+def _validate_data_region(wandb_dict: dict, cluster: str) -> None:
+    """Ensure every component cache_dir lives in the same region as *cluster*.
+
+    Raises ``click.ClickException`` if any component's GCS bucket is in a
+    different region, preventing accidental cross-region egress charges.
+    """
+    from iris.marin_fs import REGION_TO_DATA_BUCKET
+
+    cluster_region = _normalize_cluster_region(cluster)
+
+    # Build reverse mapping: bucket name -> region
+    bucket_to_region: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+
+    mismatches: list[str] = []
+    for name, cache_dir in wandb_dict.get("components", {}).items():
+        if not cache_dir or not cache_dir.startswith("gs://"):
+            continue
+        # Extract bucket name from gs://bucket/path
+        bucket_name = cache_dir.split("/")[2]
+        data_region = bucket_to_region.get(bucket_name)
+        if data_region is None:
+            # Unknown bucket — can't verify, warn but allow
+            logger.warning(
+                "Cannot determine region for bucket %r (component %r); skipping region check.",
+                bucket_name,
+                name,
+            )
+            continue
+        if data_region != cluster_region:
+            mismatches.append(
+                f"  - component {name!r}: bucket {bucket_name!r} is in {data_region}, "
+                f"but cluster is in {cluster_region}"
+            )
+
+    if mismatches:
+        detail = "\n".join(mismatches)
+        raise click.ClickException(
+            f"Cross-region data access detected! The data lives in a different region "
+            f"than the target cluster ({cluster_region}).\n"
+            f"This would incur significant egress charges.\n\n"
+            f"{detail}\n\n"
+            f"Please use --cluster <region> matching your data's region."
+        )
+
+
 def _resolve_cluster_config(cluster: str) -> str:
     from marin.cluster.config import find_config_by_region
 
@@ -657,6 +714,11 @@ def main(
         click.echo(f"Fetching config from WandB run: {wandb_run}", err=True)
         wandb_config_json = json.dumps(_fetch_wandb_config(wandb_run))
         wandb_run = None
+
+    # Validate that the data's region matches the cluster before submitting,
+    # to avoid cross-region egress charges.
+    if cluster and wandb_config_json:
+        _validate_data_region(json.loads(wandb_config_json), cluster)
 
     if cluster and tui:
         _run_tui_on_cluster(cluster, wandb_config_json, step_list[0])
