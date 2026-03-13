@@ -42,7 +42,7 @@ from iris.cluster.controller.local import (
     LocalController,
     make_local_cluster_config,
 )
-from iris.cluster.constraints import Constraint, merge_constraints
+from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -683,6 +683,18 @@ class IrisClient:
                 constraints = []
             else:
                 constraints = merge_constraints(parent_constraints, constraints)
+
+            # If the parent is running in a known region and the child has no
+            # explicit region constraint, pin the child to the same region.
+            # This ensures children of reservation jobs stay co-located with
+            # the reservation's claimed workers.
+            if (
+                job_info
+                and job_info.worker_region
+                and not any(c.key == WellKnownAttribute.REGION for c in constraints or [])
+            ):
+                inherited_region = region_constraint([job_info.worker_region])
+                constraints = [*list(constraints or []), inherited_region]
 
         # Convert to wire format
         resources_proto = resources.to_proto()
