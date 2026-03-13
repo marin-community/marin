@@ -207,56 +207,59 @@ def _decommit_worker_resources(
     )
 
 
-def _cascade_terminal_job(
+def _kill_non_terminal_tasks(
     cur: Any,
-    job_id: JobName,
-    new_job_state: int,
-    now_ms: int,
+    job_id_wire: str,
     reason: str,
+    now_ms: int,
+    proto_cache: dict[str, cluster_pb2.Controller.LaunchJobRequest],
 ) -> set[JobName]:
-    """Kill remaining tasks and descendant jobs when a job reaches a terminal state."""
-    tasks_to_kill: set[JobName] = set()
-    remaining = cur.execute(
-        "SELECT t.task_id, t.current_attempt_id, t.state, a.worker_id, j.request_proto "
+    """Kill all non-terminal tasks for a single job, decommit resources, and delete endpoints."""
+    terminal_states = tuple(sorted(TERMINAL_TASK_STATES))
+    placeholders = ",".join("?" * len(terminal_states))
+    rows = cur.execute(
+        "SELECT t.task_id, t.current_attempt_id, a.worker_id, j.request_proto "
         "FROM tasks t "
         "JOIN jobs j ON j.job_id = t.job_id "
         "LEFT JOIN task_attempts a ON a.task_id = t.task_id AND a.attempt_id = t.current_attempt_id "
-        "WHERE t.job_id = ? AND t.state NOT IN (?, ?, ?, ?, ?)",
-        (
-            job_id.to_wire(),
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-        ),
+        f"WHERE t.job_id = ? AND t.state NOT IN ({placeholders})",
+        (job_id_wire, *terminal_states),
     ).fetchall()
-    for rem in remaining:
-        rem_task_id = str(rem["task_id"])
-        rem_worker = rem["worker_id"]
+    tasks_to_kill: set[JobName] = set()
+    for row in rows:
+        task_id = str(row["task_id"])
+        worker_id = row["worker_id"]
         cur.execute(
-            "UPDATE tasks SET state = ?, finished_at_ms = COALESCE(finished_at_ms, ?), " "error = ? WHERE task_id = ?",
-            (cluster_pb2.TASK_STATE_KILLED, now_ms, reason, rem_task_id),
+            "UPDATE tasks SET state = ?, finished_at_ms = COALESCE(finished_at_ms, ?), error = ? WHERE task_id = ?",
+            (cluster_pb2.TASK_STATE_KILLED, now_ms, reason, task_id),
         )
-        if int(rem["current_attempt_id"]) >= 0:
+        if int(row["current_attempt_id"]) >= 0:
             cur.execute(
                 "UPDATE task_attempts SET state = ?, "
                 "finished_at_ms = COALESCE(finished_at_ms, ?), error = ? "
                 "WHERE task_id = ? AND attempt_id = ?",
-                (
-                    cluster_pb2.TASK_STATE_KILLED,
-                    now_ms,
-                    reason,
-                    rem_task_id,
-                    int(rem["current_attempt_id"]),
-                ),
+                (cluster_pb2.TASK_STATE_KILLED, now_ms, reason, task_id, int(row["current_attempt_id"])),
             )
-        if rem_worker is not None:
-            rem_job_req = cluster_pb2.Controller.LaunchJobRequest()
-            rem_job_req.ParseFromString(rem["request_proto"])
-            _decommit_worker_resources(cur, str(rem_worker), rem_job_req.resources)
-            tasks_to_kill.add(JobName.from_wire(rem_task_id))
-        cur.execute("DELETE FROM endpoints WHERE task_id = ?", (rem_task_id,))
+        if worker_id is not None:
+            if job_id_wire not in proto_cache:
+                req = cluster_pb2.Controller.LaunchJobRequest()
+                req.ParseFromString(row["request_proto"])
+                proto_cache[job_id_wire] = req
+            _decommit_worker_resources(cur, str(worker_id), proto_cache[job_id_wire].resources)
+            tasks_to_kill.add(JobName.from_wire(task_id))
+        cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id,))
+    return tasks_to_kill
+
+
+def _cascade_terminal_job(
+    cur: Any,
+    job_id: JobName,
+    now_ms: int,
+    reason: str,
+) -> set[JobName]:
+    """Kill remaining tasks and descendant jobs when a job reaches a terminal state."""
+    proto_cache: dict[str, cluster_pb2.Controller.LaunchJobRequest] = {}
+    tasks_to_kill = _kill_non_terminal_tasks(cur, job_id.to_wire(), reason, now_ms, proto_cache)
 
     descendants = cur.execute(
         "WITH RECURSIVE subtree(job_id) AS ("
@@ -268,48 +271,7 @@ def _cascade_terminal_job(
     ).fetchall()
     for child_row in descendants:
         child_job_id = str(child_row["job_id"])
-        child_tasks = cur.execute(
-            "SELECT t.task_id, t.current_attempt_id, a.worker_id, j.request_proto "
-            "FROM tasks t "
-            "JOIN jobs j ON j.job_id = t.job_id "
-            "LEFT JOIN task_attempts a ON a.task_id = t.task_id AND a.attempt_id = t.current_attempt_id "
-            "WHERE t.job_id = ? AND t.state NOT IN (?, ?, ?, ?, ?)",
-            (
-                child_job_id,
-                cluster_pb2.TASK_STATE_SUCCEEDED,
-                cluster_pb2.TASK_STATE_FAILED,
-                cluster_pb2.TASK_STATE_KILLED,
-                cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-                cluster_pb2.TASK_STATE_WORKER_FAILED,
-            ),
-        ).fetchall()
-        for child_task in child_tasks:
-            child_task_id = str(child_task["task_id"])
-            child_worker = child_task["worker_id"]
-            cur.execute(
-                "UPDATE tasks SET state = ?, finished_at_ms = COALESCE(finished_at_ms, ?), "
-                "error = ? WHERE task_id = ?",
-                (cluster_pb2.TASK_STATE_KILLED, now_ms, "Parent job terminated", child_task_id),
-            )
-            if int(child_task["current_attempt_id"]) >= 0:
-                cur.execute(
-                    "UPDATE task_attempts SET state = ?, "
-                    "finished_at_ms = COALESCE(finished_at_ms, ?), error = ? "
-                    "WHERE task_id = ? AND attempt_id = ?",
-                    (
-                        cluster_pb2.TASK_STATE_KILLED,
-                        now_ms,
-                        "Parent job terminated",
-                        child_task_id,
-                        int(child_task["current_attempt_id"]),
-                    ),
-                )
-            if child_worker is not None:
-                child_req = cluster_pb2.Controller.LaunchJobRequest()
-                child_req.ParseFromString(child_task["request_proto"])
-                _decommit_worker_resources(cur, str(child_worker), child_req.resources)
-                tasks_to_kill.add(JobName.from_wire(child_task_id))
-            cur.execute("DELETE FROM endpoints WHERE task_id = ?", (child_task_id,))
+        tasks_to_kill.update(_kill_non_terminal_tasks(cur, child_job_id, "Parent job terminated", now_ms, proto_cache))
         cur.execute(
             "UPDATE jobs SET state = ?, error = ?, finished_at_ms = COALESCE(finished_at_ms, ?) "
             "WHERE job_id = ? AND state NOT IN (?, ?, ?, ?)",
@@ -1105,7 +1067,7 @@ class ControllerTransitions:
                             reason = "Job was terminated."
                         elif new_job_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
                             reason = "Job could not be scheduled."
-                        cascade_kills = _cascade_terminal_job(cur, task.job_id, new_job_state, now_ms, reason)
+                        cascade_kills = _cascade_terminal_job(cur, task.job_id, now_ms, reason)
                         tasks_to_kill.update(cascade_kills)
                         cascaded_jobs.add(task.job_id)
             if tasks_to_kill or cascaded_jobs:
