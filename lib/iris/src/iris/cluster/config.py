@@ -44,7 +44,7 @@ DEFAULT_CONFIG = config_pb2.DefaultsConfig(
     autoscaler=config_pb2.AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(10).to_proto(),
         scale_up_delay=Duration.from_seconds(60).to_proto(),
-        scale_down_delay=Duration.from_seconds(60).to_proto(),
+        scale_down_delay=Duration.from_seconds(600).to_proto(),
     ),
     worker=config_pb2.WorkerConfig(
         port=10001,
