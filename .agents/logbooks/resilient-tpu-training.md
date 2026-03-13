@@ -856,3 +856,24 @@
 - Next action:
   - monitor `0312k` startup and capture W&B run ids once children start
   - compare `0312k` vs `0312j` using `train/loss` around sync boundaries plus `elastic/diloco_update_norm` and validation loss
+
+### 2026-03-12 21:50 - Launched direct elastic A/B comparison (`0312l`) for Adam vs Nesterov outer loop
+- Hypothesis:
+  - a clean elastic-only A/B with identical settings and different DiLoCo outer optimizer should isolate whether Nesterov momentum outer updates reduce cyclic loss spikes relative to Adam.
+- Command:
+  - Adam arm:
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --region us-central1 --job-name resilient-1e19-0312l-adam-elastic-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare --mode elastic --benchmark-id resilient-1e19-0312l-adam-elastic --output-root gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-1e19-0312l-adam-elastic --region us-central1 --sync-every 100 --publish-every 100 --steps-per-eval 500 --max-eval-batches 1 --outer-optimizer adam --outer-learning-rate 0.02 --max-peers 1 --max-peer-staleness-steps 200 --outer-max-update-norm 10`
+  - Nesterov arm:
+    - `uv run iris --config lib/iris/examples/marin.yaml job run --cpu 1 --memory 4GB --disk 10GB --region us-central1 --job-name resilient-1e19-0312l-nesterov90-elastic-parent --no-wait -- uv run python -m marin.training.elastic_budget_compare --mode elastic --benchmark-id resilient-1e19-0312l-nesterov90-elastic --output-root gs://marin-tmp-us-central1/ttl=30d/dlwh/resilient-tpu-training/resilient-1e19-0312l-nesterov90-elastic --region us-central1 --sync-every 100 --publish-every 100 --steps-per-eval 500 --max-eval-batches 1 --outer-optimizer nesterov_sgd --outer-momentum 0.9 --outer-learning-rate 0.02 --max-peers 1 --max-peer-staleness-steps 200 --outer-max-update-norm 10`
+- Result:
+  - submitted jobs:
+    - `/dlwh/resilient-1e19-0312l-adam-elastic-parent`
+    - `/dlwh/resilient-1e19-0312l-nesterov90-elastic-parent`
+  - both parent jobs are `running`.
+  - both sets of workers `train_lm-w000..w003` are `pending` on `v5p-8` capacity in `us-central1`.
+  - no W&B run links yet (training workers not admitted).
+- Interpretation:
+  - experiment setup is correct and directly comparable; current blocker is TPU admission, not software.
+- Next action:
+  - keep monitoring `0312l` for first worker admission
+  - publish W&B links + first sync-norm/loss snapshots once training logs appear
