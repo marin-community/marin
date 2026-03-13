@@ -59,7 +59,7 @@ from iris.cluster.controller.scheduler import (
     SchedulingContext,
     WorkerSnapshot,
 )
-from iris.cluster.controller.auth_setup import ControllerAuth
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     HEARTBEAT_FAILURE_THRESHOLD,
@@ -92,7 +92,7 @@ _UNLIMITED = sys.maxsize
 _SLOW_HEARTBEAT_MS = 5000
 
 
-_HEALTH_SUMMARY_INTERVAL = 6  # every ~30s at 5s heartbeat interval
+_HEALTH_SUMMARY_INTERVAL = RateLimiter(interval_seconds=30)
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
@@ -1434,7 +1434,7 @@ class Controller:
         logger.log(level, fmt, *args)
 
         self._heartbeat_iteration += 1
-        if self._heartbeat_iteration % _HEALTH_SUMMARY_INTERVAL == 0:
+        if _HEALTH_SUMMARY_INTERVAL.should_run():
             workers = healthy_active_workers_with_attributes(self._db)
             with self._db.snapshot() as snapshot:
                 active = snapshot.count(JOBS, where=JOBS.c.state == cluster_pb2.JOB_STATE_RUNNING)

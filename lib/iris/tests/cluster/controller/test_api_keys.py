@@ -10,11 +10,12 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller.auth_setup import (
+from iris.cluster.controller.auth import (
     WORKER_USER,
     ControllerAuth,
     DbTokenVerifier,
     create_controller_auth,
+    list_api_keys,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -74,7 +75,7 @@ def test_static_preload_is_idempotent(db):
     create_controller_auth(config, db=db)
     create_controller_auth(config, db=db)  # Should not raise
 
-    keys = db.list_api_keys(user_id="alice")
+    keys = list_api_keys(db, user_id="alice")
     assert len(keys) == 1
 
 
@@ -87,14 +88,18 @@ def test_worker_token_in_api_keys(db):
     assert auth.verifier.verify(auth.worker_token) == WORKER_USER
 
 
-def test_worker_token_survives_restart(db):
+def test_worker_token_differs_after_restart(db):
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth1 = create_controller_auth(config, db=db)
     token1 = auth1.worker_token
 
     auth2 = create_controller_auth(config, db=db)
     token2 = auth2.worker_token
-    assert token1 == token2
+    assert token1 != token2
+
+    # Both tokens should still work (old not revoked)
+    assert auth2.verifier.verify(token1) == WORKER_USER
+    assert auth2.verifier.verify(token2) == WORKER_USER
 
 
 def test_admin_users_bootstrapped(db):
@@ -107,7 +112,7 @@ def test_admin_users_bootstrapped(db):
 
 
 def test_login_verifier_set_for_gcp(db):
-    config = config_pb2.AuthConfig(gcp={"audience": "test-aud"})
+    config = config_pb2.AuthConfig(gcp={"project_id": "test-project"})
     auth = create_controller_auth(config, db=db)
     assert auth.login_verifier is not None
     assert auth.provider == "gcp"
@@ -164,6 +169,35 @@ def test_login_creates_user_and_key(db):
 
     # The returned token should work with DbTokenVerifier
     assert auth.verifier.verify(response.token) == "alice@example.com"
+
+
+def test_login_is_idempotent(db):
+    """Logging in twice revokes the first login key, leaving only one active."""
+
+    class FakeVerifier:
+        def verify(self, token: str) -> str:
+            return "alice@example.com"
+
+    auth = ControllerAuth(
+        verifier=DbTokenVerifier(db),
+        provider="gcp",
+        login_verifier=FakeVerifier(),
+    )
+    service = _make_service(db, auth=auth)
+
+    resp1 = service.login(cluster_pb2.LoginRequest(identity_token="tok1"), None)
+    resp2 = service.login(cluster_pb2.LoginRequest(identity_token="tok2"), None)
+
+    # Only the second token should work
+    with pytest.raises(ValueError, match="revoked"):
+        auth.verifier.verify(resp1.token)
+    assert auth.verifier.verify(resp2.token) == "alice@example.com"
+
+    # Only 1 active login key
+    all_keys = list_api_keys(db, user_id="alice@example.com")
+    active = [k for k in all_keys if k.revoked_at is None]
+    assert len(active) == 1
+    assert active[0].key_id == resp2.key_id
 
 
 def test_login_not_available_without_login_verifier(db):
@@ -234,7 +268,7 @@ def test_revoke_key_owner_only(db):
     service = _make_service(db, auth=auth)
 
     # Get alice's key_id
-    alice_keys = db.list_api_keys(user_id="alice")
+    alice_keys = list_api_keys(db, user_id="alice")
     assert alice_keys
 
     # Bob tries to revoke alice's key
@@ -259,7 +293,7 @@ def test_admin_can_revoke_any_key(db):
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    alice_keys = db.list_api_keys(user_id="alice")
+    alice_keys = list_api_keys(db, user_id="alice")
     assert alice_keys
 
     token = _verified_user.set("bob")
@@ -274,6 +308,83 @@ def test_admin_can_revoke_any_key(db):
     # Alice's token should no longer work
     with pytest.raises(ValueError, match="revoked"):
         auth.verifier.verify("tok-a")
+
+
+# ---------------------------------------------------------------------------
+# Null-auth mode
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Service RPC: GetAuthInfo
+# ---------------------------------------------------------------------------
+
+
+def test_get_auth_info_returns_gcp_provider(db):
+    """GetAuthInfo returns provider and project_id for GCP auth."""
+    config = config_pb2.AuthConfig(gcp={"project_id": "test-project"})
+    auth = create_controller_auth(config, db=db)
+    service = _make_service(db, auth=auth)
+
+    response = service.get_auth_info(cluster_pb2.GetAuthInfoRequest(), None)
+    assert response.provider == "gcp"
+    assert response.gcp_project_id == "test-project"
+
+
+def test_get_auth_info_returns_static_provider(db):
+    """GetAuthInfo returns provider=static with no project_id."""
+    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    auth = create_controller_auth(config, db=db)
+    service = _make_service(db, auth=auth)
+
+    response = service.get_auth_info(cluster_pb2.GetAuthInfoRequest(), None)
+    assert response.provider == "static"
+    assert response.gcp_project_id == ""
+
+
+def test_get_auth_info_returns_empty_when_no_auth(db):
+    """GetAuthInfo returns empty provider when auth is disabled."""
+    config = config_pb2.AuthConfig()
+    auth = create_controller_auth(config, db=db)
+    service = _make_service(db, auth=auth)
+
+    response = service.get_auth_info(cluster_pb2.GetAuthInfoRequest(), None)
+    assert response.provider == ""
+    assert response.gcp_project_id == ""
+
+
+def test_discovery_login_flow(db):
+    """Full discovery login: GetAuthInfo → Login → returned token works.
+
+    Simulates a client that has no config file and discovers the auth
+    method from the controller before logging in.
+    """
+
+    class FakeVerifier:
+        def verify(self, token: str) -> str:
+            return "alice@example.com"
+
+    auth = ControllerAuth(
+        verifier=DbTokenVerifier(db),
+        provider="gcp",
+        login_verifier=FakeVerifier(),
+        gcp_project_id="test-project",
+    )
+    service = _make_service(db, auth=auth)
+
+    # Step 1: Client discovers auth method (unauthenticated)
+    auth_info = service.get_auth_info(cluster_pb2.GetAuthInfoRequest(), None)
+    assert auth_info.provider == "gcp"
+    assert auth_info.gcp_project_id == "test-project"
+
+    # Step 2: Client obtains an access token (mocked) and calls Login
+    response = service.login(cluster_pb2.LoginRequest(identity_token="fake-access-token"), None)
+    assert response.user_id == "alice@example.com"
+    assert response.token
+    assert response.key_id.startswith("iris_k_")
+
+    # Step 3: Returned API key works for subsequent authenticated RPCs
+    assert auth.verifier.verify(response.token) == "alice@example.com"
 
 
 # ---------------------------------------------------------------------------

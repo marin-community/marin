@@ -13,6 +13,7 @@ Provides:
 
 from __future__ import annotations
 
+import secrets
 import tempfile
 import threading
 from pathlib import Path
@@ -20,7 +21,7 @@ from typing import Protocol
 
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
-from iris.cluster.controller.auth_setup import create_controller_auth
+from iris.cluster.controller.auth import create_api_key, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.controller import (
     Controller as _InnerController,
@@ -40,7 +41,8 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff
+from iris.rpc.auth import hash_token
+from iris.time_utils import Duration, ExponentialBackoff, Timestamp
 
 
 def create_local_autoscaler(
@@ -173,6 +175,7 @@ class LocalController:
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
         self._stopped = threading.Event()
+        self._auto_login_token: str | None = None
         # Persistent across stop()/start() so checkpoints survive restart().
         self._db_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_db_")
 
@@ -223,7 +226,33 @@ class LocalController:
         )
         self._controller.restore_from_checkpoint()
         self._controller.start()
-        return self._controller.url
+
+        # Auto-login: create an API key and store it for CLI usage
+        url = self._controller.url
+        raw_token = secrets.token_urlsafe(32)
+        key_id = f"iris_k_local_{secrets.token_hex(8)}"
+        db.ensure_user("local-admin", Timestamp.now(), role="admin")
+        create_api_key(
+            db,
+            key_id=key_id,
+            key_hash=hash_token(raw_token),
+            key_prefix=raw_token[:8],
+            user_id="local-admin",
+            name="local-auto-login",
+            now=Timestamp.now(),
+        )
+        # Local import to break circular dependency: iris.cli -> iris.cluster.controller.local
+        from iris.cli.token_store import store_token
+
+        cluster_name = self._config.name or "local"
+        store_token(cluster_name, url, raw_token)
+        self._auto_login_token = raw_token
+
+        return url
+
+    @property
+    def auto_login_token(self) -> str | None:
+        return self._auto_login_token
 
     def stop(self) -> None:
         self._stopped.set()

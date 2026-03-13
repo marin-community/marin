@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from iris.cluster.controller.auth_setup import ControllerAuth, create_controller_auth
+from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.checkpoint import is_remote_path
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.controller.transitions import HEARTBEAT_FAILURE_THRESHOLD

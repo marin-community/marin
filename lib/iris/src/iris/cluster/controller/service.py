@@ -20,7 +20,13 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
-from iris.cluster.controller.auth_setup import ControllerAuth
+from iris.cluster.controller.auth import (
+    ControllerAuth,
+    create_api_key,
+    list_api_keys,
+    revoke_api_key,
+    revoke_login_keys_for_user,
+)
 from iris.rpc.auth import get_verified_user, hash_token
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
@@ -959,6 +965,9 @@ class ControllerServiceImpl:
 
         Worker registers once, then waits for heartbeats from the controller.
         """
+        caller = self._require_auth()
+        self._require_role(caller, "worker")
+
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
             return cluster_pb2.Controller.RegisterResponse(
@@ -1502,6 +1511,16 @@ class ControllerServiceImpl:
 
     # ── Auth RPCs ────────────────────────────────────────────────────────
 
+    def get_auth_info(
+        self,
+        request: cluster_pb2.GetAuthInfoRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetAuthInfoResponse:
+        return cluster_pb2.GetAuthInfoResponse(
+            provider=self._auth.provider or "",
+            gcp_project_id=self._auth.gcp_project_id or "",
+        )
+
     def login(
         self,
         request: cluster_pb2.LoginRequest,
@@ -1521,9 +1540,12 @@ class ControllerServiceImpl:
         now = Timestamp.now()
         self._db.ensure_user(username, now)
 
+        revoked = revoke_login_keys_for_user(self._db, username, now)
+
         raw_token = secrets.token_urlsafe(32)
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
-        self._db.create_api_key(
+        create_api_key(
+            self._db,
             key_id=key_id,
             key_hash=hash_token(raw_token),
             key_prefix=raw_token[:8],
@@ -1531,6 +1553,7 @@ class ControllerServiceImpl:
             name=f"login-{now.epoch_ms()}",
             now=now,
         )
+        logger.info("Login: user=%s, new_key=%s, revoked=%d old login keys", username, key_id, revoked)
         return cluster_pb2.LoginResponse(token=raw_token, key_id=key_id, user_id=username)
 
     def create_api_key(
@@ -1549,7 +1572,8 @@ class ControllerServiceImpl:
         raw_token = secrets.token_urlsafe(32)
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
         expires_at = Timestamp.from_ms(now.epoch_ms() + request.ttl_ms) if request.ttl_ms > 0 else None
-        self._db.create_api_key(
+        create_api_key(
+            self._db,
             key_id=key_id,
             key_hash=hash_token(raw_token),
             key_prefix=raw_token[:8],
@@ -1572,7 +1596,7 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
         if key.user_id != caller:
             self._require_admin(caller)
-        self._db.revoke_api_key(request.key_id, Timestamp.now())
+        revoke_api_key(self._db, request.key_id, Timestamp.now())
         return cluster_pb2.Empty()
 
     def list_api_keys(
@@ -1585,7 +1609,7 @@ class ControllerServiceImpl:
         if target_user != caller:
             self._require_admin(caller)
 
-        keys = self._db.list_api_keys(user_id=target_user if target_user else None)
+        keys = list_api_keys(self._db, user_id=target_user if target_user else None)
         key_infos = []
         for k in keys:
             key_infos.append(
@@ -1623,8 +1647,11 @@ class ControllerServiceImpl:
             raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
         return user
 
+    def _require_role(self, user_id: str, role: str) -> None:
+        actual_role = self._db.get_user_role(user_id)
+        if actual_role != role:
+            raise ConnectError(Code.PERMISSION_DENIED, f"{role} role required")
+
     def _require_admin(self, user_id: str) -> None:
         """Raise PERMISSION_DENIED if user is not an admin."""
-        role = self._db.get_user_role(user_id)
-        if role != "admin":
-            raise ConnectError(Code.PERMISSION_DENIED, "Admin access required")
+        self._require_role(user_id, "admin")

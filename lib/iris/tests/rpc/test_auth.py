@@ -14,6 +14,7 @@ from iris.rpc.auth import (
     CompositeTokenVerifier,
     StaticTokenProvider,
     StaticTokenVerifier,
+    _extract_cookie,
     get_verified_user,
 )
 
@@ -62,6 +63,36 @@ def test_auth_interceptor_passes_valid_token(interceptor):
     assert captured_user == ["alice"]
 
 
+def test_auth_interceptor_accepts_session_cookie(interceptor):
+    ctx = _make_ctx({"cookie": "iris_session=valid-token-bob"})
+    captured_user = []
+
+    def handler(req, ctx):
+        captured_user.append(get_verified_user())
+        return "ok"
+
+    result = interceptor.intercept_unary_sync(handler, "request", ctx)
+    assert result == "ok"
+    assert captured_user == ["bob"]
+
+
+def test_auth_interceptor_prefers_bearer_over_cookie(interceptor):
+    ctx = _make_ctx(
+        {
+            "authorization": "Bearer valid-token-alice",
+            "cookie": "iris_session=valid-token-bob",
+        }
+    )
+    captured_user = []
+
+    def handler(req, ctx):
+        captured_user.append(get_verified_user())
+        return "ok"
+
+    interceptor.intercept_unary_sync(handler, "request", ctx)
+    assert captured_user == ["alice"]
+
+
 def test_auth_interceptor_rejects_missing_header(interceptor):
     ctx = _make_ctx({})
     with pytest.raises(ConnectError) as exc_info:
@@ -74,6 +105,8 @@ def test_auth_interceptor_rejects_invalid_token(interceptor):
     with pytest.raises(ConnectError) as exc_info:
         interceptor.intercept_unary_sync(lambda r, c: "ok", "request", ctx)
     assert exc_info.value.code == Code.UNAUTHENTICATED
+    assert exc_info.value.message == "Authentication failed"
+    assert "Invalid token" not in exc_info.value.message
 
 
 def test_auth_interceptor_rejects_malformed_header(interceptor):
@@ -143,92 +176,117 @@ def test_different_users_get_different_identities(interceptor):
     assert users == ["alice", "bob"]
 
 
-def test_gcp_token_provider_uses_id_token():
-    """Verify GcpTokenProvider calls fetch_id_token, not credentials.token."""
-    from unittest.mock import patch
+def test_gcp_access_token_verifier_valid():
+    """GcpAccessTokenVerifier extracts email from tokeninfo."""
+    from unittest.mock import Mock, patch
 
-    from iris.rpc.auth import GcpTokenProvider
+    from iris.rpc.auth import GcpAccessTokenVerifier
 
-    provider = GcpTokenProvider(audience="https://my-audience")
-    with patch("google.oauth2.id_token.fetch_id_token", return_value="fake-id-token") as mock_fetch:
+    verifier = GcpAccessTokenVerifier()
+    mock_resp = Mock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"email": "alice@example.com"}
+
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        email = verifier.verify("fake-access-token")
+
+    assert email == "alice@example.com"
+    mock_get.assert_called_once_with(
+        "https://oauth2.googleapis.com/tokeninfo",
+        params={"access_token": "fake-access-token"},
+        timeout=10,
+    )
+
+
+def test_gcp_access_token_verifier_invalid_token():
+    from unittest.mock import Mock, patch
+
+    from iris.rpc.auth import GcpAccessTokenVerifier
+
+    verifier = GcpAccessTokenVerifier()
+    mock_resp = Mock()
+    mock_resp.status_code = 401
+
+    with patch("requests.get", return_value=mock_resp):
+        with pytest.raises(ValueError, match="Token verification failed"):
+            verifier.verify("bad-token")
+
+
+def test_gcp_access_token_verifier_no_email():
+    from unittest.mock import Mock, patch
+
+    from iris.rpc.auth import GcpAccessTokenVerifier
+
+    verifier = GcpAccessTokenVerifier()
+    mock_resp = Mock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"scope": "openid"}
+
+    with patch("requests.get", return_value=mock_resp):
+        with pytest.raises(ValueError, match="email"):
+            verifier.verify("token-without-email")
+
+
+def test_gcp_access_token_verifier_checks_project_access():
+    from unittest.mock import Mock, patch
+
+    from iris.rpc.auth import GcpAccessTokenVerifier
+
+    verifier = GcpAccessTokenVerifier(project_id="my-project")
+
+    tokeninfo_resp = Mock()
+    tokeninfo_resp.status_code = 200
+    tokeninfo_resp.json.return_value = {"email": "alice@example.com"}
+
+    project_resp = Mock()
+    project_resp.status_code = 200
+
+    with patch("requests.get", side_effect=[tokeninfo_resp, project_resp]) as mock_get:
+        email = verifier.verify("valid-token")
+
+    assert email == "alice@example.com"
+    assert mock_get.call_count == 2
+    mock_get.assert_any_call(
+        "https://cloudresourcemanager.googleapis.com/v3/projects/my-project",
+        headers={"Authorization": "Bearer valid-token"},
+        timeout=10,
+    )
+
+
+def test_gcp_access_token_verifier_rejects_no_project_access():
+    from unittest.mock import Mock, patch
+
+    from iris.rpc.auth import GcpAccessTokenVerifier
+
+    verifier = GcpAccessTokenVerifier(project_id="restricted-project")
+
+    tokeninfo_resp = Mock()
+    tokeninfo_resp.status_code = 200
+    tokeninfo_resp.json.return_value = {"email": "alice@example.com"}
+
+    project_resp = Mock()
+    project_resp.status_code = 403
+
+    with patch("requests.get", side_effect=[tokeninfo_resp, project_resp]):
+        with pytest.raises(ValueError, match="does not have access"):
+            verifier.verify("valid-token")
+
+
+def test_gcp_access_token_provider_refreshes_credentials():
+    from unittest.mock import MagicMock, patch
+
+    from iris.rpc.auth import GcpAccessTokenProvider
+
+    mock_creds = MagicMock()
+    mock_creds.token = "fresh-access-token"
+    mock_creds.expiry = None
+
+    provider = GcpAccessTokenProvider()
+    with patch("google.auth.default", return_value=(mock_creds, "project-id")):
         token = provider.get_token()
-    assert token == "fake-id-token"
-    mock_fetch.assert_called_once()
-    assert mock_fetch.call_args[0][1] == "https://my-audience"
 
-
-def test_gcp_token_provider_propagates_errors():
-    """Verify GcpTokenProvider does NOT swallow exceptions."""
-    from unittest.mock import patch
-
-    from iris.rpc.auth import GcpTokenProvider
-
-    provider = GcpTokenProvider(audience="https://my-audience")
-    with patch("google.oauth2.id_token.fetch_id_token", side_effect=Exception("metadata server unreachable")):
-        with pytest.raises(Exception, match="metadata server unreachable"):
-            provider.get_token()
-
-
-def test_cli_gcp_token_provider_sdk_success():
-    """When the SDK returns a token, gcloud CLI is never called."""
-    from unittest.mock import patch
-
-    from iris.rpc.auth import CliGcpTokenProvider
-
-    provider = CliGcpTokenProvider(audience="https://my-audience")
-    with (
-        patch("google.oauth2.id_token.fetch_id_token", return_value="sdk-token") as mock_sdk,
-        patch("subprocess.run") as mock_subprocess,
-    ):
-        token = provider.get_token()
-
-    assert token == "sdk-token"
-    mock_sdk.assert_called_once()
-    mock_subprocess.assert_not_called()
-
-
-def test_cli_gcp_token_provider_falls_back_to_gcloud():
-    """When SDK raises DefaultCredentialsError, falls back to gcloud CLI."""
-    from subprocess import CompletedProcess
-    from unittest.mock import patch
-
-    from google.auth.exceptions import DefaultCredentialsError
-
-    from iris.rpc.auth import CliGcpTokenProvider
-
-    provider = CliGcpTokenProvider(audience="https://my-audience")
-    with (
-        patch("google.oauth2.id_token.fetch_id_token", side_effect=DefaultCredentialsError("no creds")),
-        patch(
-            "subprocess.run",
-            return_value=CompletedProcess(args=[], returncode=0, stdout="gcloud-token\n", stderr=""),
-        ) as mock_subprocess,
-    ):
-        token = provider.get_token()
-
-    assert token == "gcloud-token"
-    mock_subprocess.assert_called_once()
-
-
-def test_cli_gcp_token_provider_all_fail():
-    """When both SDK and gcloud fail, raises RuntimeError."""
-    from subprocess import CompletedProcess
-    from unittest.mock import patch
-
-    from google.auth.exceptions import DefaultCredentialsError
-
-    from iris.rpc.auth import CliGcpTokenProvider
-
-    provider = CliGcpTokenProvider(audience="https://my-audience")
-    with (
-        patch("google.oauth2.id_token.fetch_id_token", side_effect=DefaultCredentialsError("no creds")),
-        patch(
-            "subprocess.run",
-            return_value=CompletedProcess(args=[], returncode=1, stdout="", stderr="gcloud error"),
-        ),
-    ):
-        with pytest.raises(RuntimeError, match="gcloud auth failed"):
-            provider.get_token()
+    assert token == "fresh-access-token"
+    mock_creds.refresh.assert_called_once()
 
 
 def test_composite_verifier_first_match():
@@ -327,12 +385,12 @@ def test_null_auth_interceptor_resets_context_on_error():
 
 def test_create_client_token_provider_gcp():
     from iris.cli.main import create_client_token_provider
-    from iris.rpc.auth import CliGcpTokenProvider
+    from iris.rpc.auth import GcpAccessTokenProvider
     from iris.rpc.config_pb2 import AuthConfig
 
-    config = AuthConfig(gcp={"audience": "https://my-controller"})
+    config = AuthConfig(gcp={"project_id": "my-project"})
     provider = create_client_token_provider(config)
-    assert isinstance(provider, CliGcpTokenProvider)
+    assert isinstance(provider, GcpAccessTokenProvider)
 
 
 def test_create_client_token_provider_none_when_no_provider():
@@ -369,7 +427,7 @@ def test_hash_token_is_sha256_hex():
 
 
 def test_db_token_verifier_valid_key(tmp_path):
-    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.auth import DbTokenVerifier, create_api_key
     from iris.cluster.controller.db import ControllerDB
     from iris.rpc.auth import hash_token
     from iris.time_utils import Timestamp
@@ -378,7 +436,8 @@ def test_db_token_verifier_valid_key(tmp_path):
     now = Timestamp.now()
     db.ensure_user("alice", now)
     raw_token = "my-secret-token"
-    db.create_api_key(
+    create_api_key(
+        db,
         key_id="k1",
         key_hash=hash_token(raw_token),
         key_prefix=raw_token[:8],
@@ -392,7 +451,7 @@ def test_db_token_verifier_valid_key(tmp_path):
 
 
 def test_db_token_verifier_invalid_key(tmp_path):
-    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.auth import DbTokenVerifier
     from iris.cluster.controller.db import ControllerDB
 
     db = ControllerDB(db_path=tmp_path / "test.sqlite3")
@@ -403,7 +462,7 @@ def test_db_token_verifier_invalid_key(tmp_path):
 
 
 def test_db_token_verifier_revoked_key(tmp_path):
-    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.auth import DbTokenVerifier, create_api_key, revoke_api_key
     from iris.cluster.controller.db import ControllerDB
     from iris.rpc.auth import hash_token
     from iris.time_utils import Timestamp
@@ -412,7 +471,8 @@ def test_db_token_verifier_revoked_key(tmp_path):
     now = Timestamp.now()
     db.ensure_user("alice", now)
     raw_token = "revoked-token"
-    db.create_api_key(
+    create_api_key(
+        db,
         key_id="k1",
         key_hash=hash_token(raw_token),
         key_prefix=raw_token[:8],
@@ -420,7 +480,7 @@ def test_db_token_verifier_revoked_key(tmp_path):
         name="test-key",
         now=now,
     )
-    db.revoke_api_key("k1", now)
+    revoke_api_key(db, "k1", now)
 
     verifier = DbTokenVerifier(db)
     with pytest.raises(ValueError, match="revoked"):
@@ -429,7 +489,7 @@ def test_db_token_verifier_revoked_key(tmp_path):
 
 
 def test_db_token_verifier_expired_key(tmp_path):
-    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.auth import DbTokenVerifier, create_api_key
     from iris.cluster.controller.db import ControllerDB
     from iris.rpc.auth import hash_token
     from iris.time_utils import Timestamp
@@ -439,7 +499,8 @@ def test_db_token_verifier_expired_key(tmp_path):
     db.ensure_user("alice", now)
     raw_token = "expired-token"
     past = Timestamp.from_ms(1000)
-    db.create_api_key(
+    create_api_key(
+        db,
         key_id="k1",
         key_hash=hash_token(raw_token),
         key_prefix=raw_token[:8],
@@ -456,7 +517,7 @@ def test_db_token_verifier_expired_key(tmp_path):
 
 
 def test_db_token_verifier_last_used_throttle(tmp_path):
-    from iris.cluster.controller.auth_setup import DbTokenVerifier
+    from iris.cluster.controller.auth import DbTokenVerifier, create_api_key, lookup_api_key_by_hash
     from iris.cluster.controller.db import ControllerDB
     from iris.rpc.auth import hash_token
     from iris.time_utils import Timestamp
@@ -465,7 +526,8 @@ def test_db_token_verifier_last_used_throttle(tmp_path):
     now = Timestamp.now()
     db.ensure_user("alice", now)
     raw_token = "throttle-test-token"
-    db.create_api_key(
+    create_api_key(
+        db,
         key_id="k1",
         key_hash=hash_token(raw_token),
         key_prefix=raw_token[:8],
@@ -478,14 +540,86 @@ def test_db_token_verifier_last_used_throttle(tmp_path):
 
     # First call should set last_used_at
     verifier.verify(raw_token)
-    key = db.lookup_api_key_by_hash(hash_token(raw_token))
+    key = lookup_api_key_by_hash(db, hash_token(raw_token))
     assert key is not None
     assert key.last_used_at is not None
     first_used = key.last_used_at.epoch_ms()
 
     # Immediate second call should NOT update (throttled)
     verifier.verify(raw_token)
-    key2 = db.lookup_api_key_by_hash(hash_token(raw_token))
+    key2 = lookup_api_key_by_hash(db, hash_token(raw_token))
     assert key2.last_used_at.epoch_ms() == first_used
 
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Streaming interceptor guards
+# ---------------------------------------------------------------------------
+
+
+def test_auth_interceptor_rejects_server_stream(interceptor):
+    with pytest.raises(ConnectError) as exc_info:
+        interceptor.intercept_server_stream_sync(None, None, None)
+    assert exc_info.value.code == Code.UNIMPLEMENTED
+
+
+def test_auth_interceptor_rejects_client_stream(interceptor):
+    with pytest.raises(ConnectError) as exc_info:
+        interceptor.intercept_client_stream_sync(None, None, None)
+    assert exc_info.value.code == Code.UNIMPLEMENTED
+
+
+def test_auth_interceptor_rejects_bidi_stream(interceptor):
+    with pytest.raises(ConnectError) as exc_info:
+        interceptor.intercept_bidi_stream_sync(None, None, None)
+    assert exc_info.value.code == Code.UNIMPLEMENTED
+
+
+# ---------------------------------------------------------------------------
+# GcpAccessTokenProvider caching
+# ---------------------------------------------------------------------------
+
+
+def test_gcp_access_token_provider_caches_token():
+    import datetime
+    from unittest.mock import MagicMock, patch
+
+    from iris.rpc.auth import GcpAccessTokenProvider
+
+    mock_creds = MagicMock()
+    mock_creds.token = "cached-token"
+    mock_creds.expiry = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(hours=1)
+
+    provider = GcpAccessTokenProvider()
+    with patch("google.auth.default", return_value=(mock_creds, "project-id")):
+        token1 = provider.get_token()
+        token2 = provider.get_token()
+
+    assert token1 == "cached-token"
+    assert token2 == "cached-token"
+    # refresh should only be called once due to caching
+    mock_creds.refresh.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _extract_cookie helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cookie_header, name, expected",
+    [
+        ("iris_session=abc123", "iris_session", "abc123"),
+        ("other=x; iris_session=abc123", "iris_session", "abc123"),
+        ("iris_session=abc123; other=y", "iris_session", "abc123"),
+        ("other=x", "iris_session", None),
+        ("", "iris_session", None),
+    ],
+)
+def test_extract_cookie(cookie_header, name, expected):
+    assert _extract_cookie(cookie_header, name) == expected
+
+
+def test_extract_cookie_empty_string():
+    assert _extract_cookie("", "iris_session") is None

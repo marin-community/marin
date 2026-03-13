@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getAuthToken, clearAuthToken } from '@/composables/useRpc'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import TabNav, { type Tab } from '@/components/layout/TabNav.vue'
 
@@ -51,25 +50,27 @@ function onAuthRequired() {
   router.push('/login')
 }
 
-function logout() {
-  clearAuthToken()
+async function logout() {
+  await fetch('/auth/logout', { method: 'POST' })
   router.push('/login')
 }
 
 onMounted(async () => {
   window.addEventListener('iris-auth-required', onAuthRequired)
 
+  let hasSession = false
   try {
     const resp = await fetch('/auth/config')
     if (resp.ok) {
       const config = await resp.json()
       authEnabled.value = config.auth_enabled ?? false
+      hasSession = config.has_session ?? false
     }
   } catch {
     // Auth config endpoint unavailable — assume no auth
   }
 
-  if (authEnabled.value && !getAuthToken() && route.path !== '/login') {
+  if (authEnabled.value && !hasSession && route.path !== '/login') {
     router.push('/login')
   }
 })

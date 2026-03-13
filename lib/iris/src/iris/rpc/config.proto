@@ -357,7 +357,7 @@ message DefaultsConfig {
 // ============================================================================
 
 message GcpAuthConfig {
-  string audience = 1;  // Expected audience for GCP ID token verification
+  string project_id = 1;  // GCP project ID — users must have access to this project to log in
 }
 
 message StaticAuthConfig {
@@ -379,6 +379,9 @@ message AuthConfig {
 
 // Full cluster configuration - single source of truth
 message IrisClusterConfig {
+  // Human-readable cluster name for token store
+  string name = 5;
+
   // Platform settings
   PlatformConfig platform = 10;
   DefaultsConfig defaults = 11;

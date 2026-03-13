@@ -95,6 +95,18 @@ class LoginResponse(_message.Message):
     user_id: str
     def __init__(self, token: _Optional[str] = ..., key_id: _Optional[str] = ..., user_id: _Optional[str] = ...) -> None: ...
 
+class GetAuthInfoRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class GetAuthInfoResponse(_message.Message):
+    __slots__ = ("provider", "gcp_project_id")
+    PROVIDER_FIELD_NUMBER: _ClassVar[int]
+    GCP_PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
+    provider: str
+    gcp_project_id: str
+    def __init__(self, provider: _Optional[str] = ..., gcp_project_id: _Optional[str] = ...) -> None: ...
+
 class CreateApiKeyRequest(_message.Message):
     __slots__ = ("user_id", "name", "ttl_ms")
     USER_ID_FIELD_NUMBER: _ClassVar[int]

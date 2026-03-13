@@ -10,34 +10,52 @@ import json
 import logging as _logging_module
 import os
 import sys
-from pathlib import Path
 
 import click
 
+from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from iris.logging import configure_logging
 from iris.rpc import config_pb2
-from iris.rpc.auth import CliGcpTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
 
 logger = _logging_module.getLogger(__name__)
 
 
-def create_client_token_provider(auth_config: config_pb2.AuthConfig) -> TokenProvider | None:
+def resolve_cluster_name(
+    config: config_pb2.IrisClusterConfig | None,
+    controller_url: str | None,
+    cli_cluster_name: str | None,
+) -> str:
+    if cli_cluster_name:
+        return cli_cluster_name
+    if config and config.name:
+        return config.name
+    if config and config.controller.WhichOneof("controller") == "local":
+        return "local"
+    if controller_url:
+        return cluster_name_from_url(controller_url)
+    return "default"
+
+
+def create_client_token_provider(
+    auth_config: config_pb2.AuthConfig, cluster_name: str = "default"
+) -> TokenProvider | None:
     """Create a TokenProvider from an AuthConfig proto for CLI usage.
 
-    Checks for a stored API key at ~/.iris/token first (from ``iris login``),
+    Checks the named-cluster token store first (from ``iris login``),
     then falls back to config-based token providers.
     """
-    token_path = Path.home() / ".iris" / "token"
-    if token_path.exists():
-        stored = token_path.read_text().strip()
-        if stored:
-            return StaticTokenProvider(stored)
+    credential = load_token(cluster_name)
+    if credential is None:
+        credential = load_any_token()
+    if credential is not None:
+        return StaticTokenProvider(credential.token)
 
     provider = auth_config.WhichOneof("provider")
     if provider is None:
         return None
     if provider == "gcp":
-        return CliGcpTokenProvider(audience=auth_config.gcp.audience)
+        return GcpAccessTokenProvider()
     elif provider == "static":
         tokens = dict(auth_config.static.tokens)
         if not tokens:
@@ -132,12 +150,21 @@ def require_controller_url(ctx: click.Context) -> str:
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")
 @click.option("--controller-url", help="Controller URL (e.g., http://localhost:10000)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file")
+@click.option("--cluster", "cluster_name", default=None, help="Cluster name for token lookup")
 @click.pass_context
-def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, config_file: str | None):
+def iris(
+    ctx,
+    verbose: bool,
+    show_traceback: bool,
+    controller_url: str | None,
+    config_file: str | None,
+    cluster_name: str | None,
+):
     """Iris cluster management."""
     ctx.ensure_object(dict)
     ctx.obj["traceback"] = show_traceback
     ctx.obj["verbose"] = verbose
+    ctx.obj["cluster_name"] = cluster_name
 
     if verbose:
         configure_logging(level=_logging_module.DEBUG)
@@ -164,8 +191,14 @@ def iris(ctx, verbose: bool, show_traceback: bool, controller_url: str | None, c
         ctx.obj["config_file"] = config_file
         _configure_client_s3(iris_config.proto)
 
+        name = resolve_cluster_name(iris_config.proto, controller_url, cluster_name)
+        ctx.obj["cluster_name"] = name
+
         if iris_config.proto.HasField("auth"):
-            ctx.obj["token_provider"] = create_client_token_provider(iris_config.proto.auth)
+            ctx.obj["token_provider"] = create_client_token_provider(iris_config.proto.auth, cluster_name=name)
+    else:
+        name = resolve_cluster_name(None, controller_url, cluster_name)
+        ctx.obj["cluster_name"] = name
 
     # Store direct controller URL; tunnel from config is established lazily
     # in require_controller_url() so commands like ``cluster start`` don't block.
@@ -179,25 +212,35 @@ def login(ctx):
     """Authenticate with the cluster and store an API key locally."""
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
-    if not config:
-        raise click.ClickException("--config is required for login")
 
-    auth_config = config.auth
-    provider = auth_config.WhichOneof("provider")
+    from iris.rpc import cluster_pb2
+    from iris.rpc.cluster_connect import ControllerServiceClientSync
+
+    if config and config.HasField("auth"):
+        provider = config.auth.WhichOneof("provider")
+    else:
+        # Discover auth method from the controller
+        client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
+        try:
+            auth_info = client.get_auth_info(cluster_pb2.GetAuthInfoRequest())
+        except Exception as e:
+            raise click.ClickException(f"Failed to discover auth method: {e}") from e
+        finally:
+            client.close()
+        provider = auth_info.provider or None
+        if not provider:
+            raise click.ClickException("Controller has no authentication configured")
 
     if provider == "gcp":
-        gcp_provider = CliGcpTokenProvider(audience=auth_config.gcp.audience)
+        gcp_provider = GcpAccessTokenProvider()
         try:
-            identity_token = gcp_provider.get_token()
+            access_token = gcp_provider.get_token()
         except Exception as e:
-            raise click.ClickException(f"Failed to get GCP identity token: {e}") from e
-
-        from iris.rpc import cluster_pb2
-        from iris.rpc.cluster_connect import ControllerServiceClientSync
+            raise click.ClickException(f"Failed to get GCP access token: {e}") from e
 
         client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
         try:
-            response = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
+            response = client.login(cluster_pb2.LoginRequest(identity_token=access_token))
         except Exception as e:
             raise click.ClickException(f"Login failed: {e}") from e
         finally:
@@ -206,21 +249,22 @@ def login(ctx):
         raw_token = response.token
         user_id = response.user_id
     elif provider == "static":
-        tokens = dict(auth_config.static.tokens)
+        if not config:
+            raise click.ClickException("Static auth requires --config (tokens are in the config file)")
+        tokens = dict(config.auth.static.tokens)
         if not tokens:
             raise click.ClickException("No static tokens configured")
         raw_token = next(iter(tokens))
         user_id = tokens[raw_token]
     else:
-        raise click.ClickException(f"Unsupported auth provider for login: {provider}")
+        raise click.ClickException(f"Unsupported auth provider: {provider}")
 
-    token_path = Path.home() / ".iris" / "token"
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(raw_token)
-    token_path.chmod(0o600)
+    cluster_name = ctx.obj.get("cluster_name", "default")
+    store_token(cluster_name, controller_url, raw_token)
 
     click.echo(f"Authenticated as {user_id}")
-    click.echo(f"Token stored in {token_path}")
+    click.echo(f"Dashboard: {controller_url}?session_token={raw_token}")
+    click.echo(f"Token stored for cluster '{cluster_name}'")
 
 
 def _make_authenticated_client(controller_url: str, token_provider: TokenProvider | None):

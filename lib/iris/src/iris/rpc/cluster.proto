@@ -36,6 +36,12 @@ message LoginResponse {
   string user_id = 3;
 }
 
+message GetAuthInfoRequest {}
+message GetAuthInfoResponse {
+  string provider = 1;        // "gcp" or "static" or "" (no auth)
+  string gcp_project_id = 2;  // set when provider == "gcp"
+}
+
 message CreateApiKeyRequest {
   string user_id = 1;
   string name = 2;
@@ -988,6 +994,7 @@ service ControllerService {
   rpc GetProcessStatus(GetProcessStatusRequest) returns (GetProcessStatusResponse);
 
   // Authentication & API key management
+  rpc GetAuthInfo(GetAuthInfoRequest) returns (GetAuthInfoResponse);
   rpc Login(LoginRequest) returns (LoginResponse);
   rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
   rpc RevokeApiKey(RevokeApiKeyRequest) returns (Empty);

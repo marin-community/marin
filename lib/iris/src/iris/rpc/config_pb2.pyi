@@ -421,10 +421,10 @@ class DefaultsConfig(_message.Message):
     def __init__(self, ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerConfig, _Mapping]] = ...) -> None: ...
 
 class GcpAuthConfig(_message.Message):
-    __slots__ = ("audience",)
-    AUDIENCE_FIELD_NUMBER: _ClassVar[int]
-    audience: str
-    def __init__(self, audience: _Optional[str] = ...) -> None: ...
+    __slots__ = ("project_id",)
+    PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
+    project_id: str
+    def __init__(self, project_id: _Optional[str] = ...) -> None: ...
 
 class StaticAuthConfig(_message.Message):
     __slots__ = ("tokens",)
@@ -450,7 +450,7 @@ class AuthConfig(_message.Message):
     def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("platform", "defaults", "storage", "controller", "scale_groups", "auth")
+    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -458,16 +458,18 @@ class IrisClusterConfig(_message.Message):
         key: str
         value: ScaleGroupConfig
         def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[ScaleGroupConfig, _Mapping]] = ...) -> None: ...
+    NAME_FIELD_NUMBER: _ClassVar[int]
     PLATFORM_FIELD_NUMBER: _ClassVar[int]
     DEFAULTS_FIELD_NUMBER: _ClassVar[int]
     STORAGE_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUPS_FIELD_NUMBER: _ClassVar[int]
     AUTH_FIELD_NUMBER: _ClassVar[int]
+    name: str
     platform: PlatformConfig
     defaults: DefaultsConfig
     storage: StorageConfig
     controller: ControllerVmConfig
     scale_groups: _containers.MessageMap[str, ScaleGroupConfig]
     auth: AuthConfig
-    def __init__(self, platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ...) -> None: ...

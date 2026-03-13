@@ -10,13 +10,29 @@ all requests pass through without authentication.
 
 import hashlib
 import logging
+import time
 from contextvars import ContextVar
+from http.cookies import SimpleCookie
 from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 logger = logging.getLogger(__name__)
+
+SESSION_COOKIE = "iris_session"
+
+
+def _extract_cookie(cookie_header: str, name: str) -> str | None:
+    """Extract a named cookie value from a raw Cookie header."""
+    if not cookie_header:
+        return None
+    try:
+        cookie = SimpleCookie(cookie_header)
+        morsel = cookie.get(name)
+        return morsel.value if morsel else None
+    except Exception:
+        return None
 
 
 def hash_token(raw_token: str) -> str:
@@ -62,24 +78,39 @@ class StaticTokenVerifier:
         return user
 
 
-class GcpTokenVerifier:
-    """Verifies GCP OAuth2 / OIDC identity tokens."""
+class GcpAccessTokenVerifier:
+    """Verifies GCP OAuth2 access tokens via Google's tokeninfo endpoint.
 
-    def __init__(self, audience: str):
-        self._audience = audience
+    Optionally checks that the user has access to a specific GCP project
+    using the Cloud Resource Manager API with the user's own token.
+    """
+
+    _TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+    _PROJECT_URL_TEMPLATE = "https://cloudresourcemanager.googleapis.com/v3/projects/{}"
+
+    def __init__(self, project_id: str | None = None):
+        self._project_id = project_id
 
     def verify(self, token: str) -> str:
-        from google.auth import exceptions as google_auth_exceptions
-        from google.auth.transport import requests as google_requests
-        from google.oauth2 import id_token
+        import requests
 
-        try:
-            info = id_token.verify_oauth2_token(token, google_requests.Request(), self._audience)
-        except (ValueError, google_auth_exceptions.GoogleAuthError) as exc:
-            raise ValueError(f"GCP token verification failed: {exc}") from exc
+        resp = requests.get(self._TOKENINFO_URL, params={"access_token": token}, timeout=10)
+        if resp.status_code != 200:
+            raise ValueError(f"Token verification failed (status {resp.status_code})")
+        info = resp.json()
         email = info.get("email")
         if not email:
             raise ValueError("Token does not contain an email claim")
+
+        if self._project_id:
+            proj_resp = requests.get(
+                self._PROJECT_URL_TEMPLATE.format(self._project_id),
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            if proj_resp.status_code != 200:
+                raise ValueError(f"User {email} does not have access to project {self._project_id}")
+
         return email
 
 
@@ -115,21 +146,37 @@ class AuthInterceptor:
     def intercept_unary_sync(self, call_next, request, ctx):
         headers = ctx.request_headers()
         auth_header = headers.get("authorization", "")
+        token = None
 
-        if not auth_header.startswith("Bearer "):
+        if auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer ") :]
+        else:
+            cookie_header = headers.get("cookie", "")
+            token = _extract_cookie(cookie_header, SESSION_COOKIE)
+
+        if not token:
             raise ConnectError(Code.UNAUTHENTICATED, "Missing or malformed Authorization header")
 
-        token = auth_header[len("Bearer ") :]
         try:
             user = self._verifier.verify(token)
         except ValueError as exc:
-            raise ConnectError(Code.UNAUTHENTICATED, f"Authentication failed: {exc}") from exc
+            logger.warning("Authentication failed: %s", exc)
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
 
         reset_token = _verified_user.set(user)
         try:
             return call_next(request, ctx)
         finally:
             _verified_user.reset(reset_token)
+
+    def intercept_server_stream_sync(self, call_next, request, ctx):
+        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
+
+    def intercept_client_stream_sync(self, call_next, request, ctx):
+        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
+
+    def intercept_bidi_stream_sync(self, call_next, request, ctx):
+        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
 
 
 class NullAuthInterceptor:
@@ -177,55 +224,37 @@ class StaticTokenProvider:
         return self._token
 
 
-class GcpTokenProvider:
-    """Acquires GCP OIDC identity tokens for server-side verification.
+class GcpAccessTokenProvider:
+    """Gets OAuth2 access tokens via google-auth SDK.
 
-    Works on GCE instances, Cloud Run, and with service account credentials.
-    For user credentials (e.g. developer laptops), use CliGcpTokenProvider instead.
+    Works for all credential types: user accounts (from gcloud auth
+    application-default login), service accounts, and GCE metadata.
+    Tokens are cached until 5 minutes before expiry.
     """
 
-    def __init__(self, audience: str):
-        self._audience = audience
+    _REFRESH_MARGIN_SECONDS = 300
+
+    def __init__(self):
+        self._creds = None
+        self._cached_token: str | None = None
+        self._expires_at: float = 0.0
 
     def get_token(self) -> str | None:
-        from google.auth.transport import requests as google_requests
-        from google.oauth2 import id_token
+        if self._cached_token is not None and time.monotonic() < self._expires_at:
+            return self._cached_token
 
-        request = google_requests.Request()
-        return id_token.fetch_id_token(request, self._audience)
+        import google.auth
+        import google.auth.transport.requests
 
+        if self._creds is None:
+            self._creds, _ = google.auth.default()
+        self._creds.refresh(google.auth.transport.requests.Request())
 
-class CliGcpTokenProvider:
-    """Acquires GCP ID tokens, falling back to gcloud CLI for user credentials.
+        self._cached_token = self._creds.token
+        now_mono = time.monotonic()
+        if self._creds.expiry is not None:
+            self._expires_at = now_mono + (self._creds.expiry.timestamp() - time.time()) - self._REFRESH_MARGIN_SECONDS
+        else:
+            self._expires_at = now_mono + self._REFRESH_MARGIN_SECONDS
 
-    On GCE/service accounts, uses the metadata server via google-auth SDK.
-    On developer workstations with user ADC credentials, falls back to
-    `gcloud auth print-identity-token` since user credentials cannot mint
-    ID tokens via the SDK.
-    """
-
-    def __init__(self, audience: str):
-        self._audience = audience
-
-    def get_token(self) -> str | None:
-        import subprocess
-
-        from google.auth import exceptions as google_auth_exceptions
-        from google.auth.transport import requests as google_requests
-        from google.oauth2 import id_token
-
-        try:
-            request = google_requests.Request()
-            return id_token.fetch_id_token(request, self._audience)
-        except (google_auth_exceptions.DefaultCredentialsError, google_auth_exceptions.GoogleAuthError):
-            pass
-
-        result = subprocess.run(
-            ["gcloud", "auth", "print-identity-token", f"--audiences={self._audience}"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"gcloud auth failed: {result.stderr.strip()}")
-        return result.stdout.strip()
+        return self._cached_token

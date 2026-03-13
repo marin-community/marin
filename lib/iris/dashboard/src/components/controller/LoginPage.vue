@@ -1,24 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { setAuthToken } from '@/composables/useRpc'
 
 const router = useRouter()
 const token = ref('')
 const error = ref<string | null>(null)
 const loading = ref(false)
-const provider = ref<string | null>(null)
-
-onMounted(async () => {
-  try {
-    const resp = await fetch('/auth/config')
-    const data = await resp.json()
-    provider.value = data.provider
-  } catch {
-    // Default to static behavior if config fetch fails
-    provider.value = 'static'
-  }
-})
 
 async function login() {
   const trimmed = token.value.trim()
@@ -28,32 +15,22 @@ async function login() {
   }
 
   error.value = null
-
-  if (provider.value === 'gcp') {
-    // GCP: exchange identity token for API key via Login RPC
-    loading.value = true
-    try {
-      const resp = await fetch('/iris.cluster.ControllerService/Login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: trimmed }),
-      })
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}))
-        throw new Error(body.message || `Login failed: ${resp.status}`)
-      }
-      const data = await resp.json()
-      setAuthToken(data.token)
-      router.push('/')
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
-    } finally {
-      loading.value = false
+  loading.value = true
+  try {
+    const resp = await fetch('/auth/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: trimmed }),
+    })
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}))
+      throw new Error(body.error || `Failed to set session (${resp.status})`)
     }
-  } else {
-    // Static: token is already an API key (preloaded into DB at startup)
-    setAuthToken(trimmed)
     router.push('/')
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    loading.value = false
   }
 }
 </script>
@@ -95,14 +72,11 @@ async function login() {
           </button>
         </form>
 
-        <p v-if="provider === 'gcp'" class="mt-6 text-xs text-text-muted leading-relaxed">
+        <p class="mt-6 text-xs text-text-muted leading-relaxed">
           Get a token with:
           <code class="font-mono bg-surface-raised px-1.5 py-0.5 rounded text-text text-xs">
-            gcloud auth print-identity-token --audiences=AUDIENCE
+            uv run iris --controller-url=CONTROLLER_URL login
           </code>
-        </p>
-        <p v-else class="mt-6 text-xs text-text-muted leading-relaxed">
-          Enter the static token from your cluster configuration.
         </p>
       </div>
     </div>

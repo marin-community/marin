@@ -658,15 +658,23 @@ def test_list_jobs_returns_all_jobs(service, job_request):
 # =============================================================================
 
 
-def test_list_workers_returns_all(service, worker_metadata):
+def test_list_workers_returns_all(service, state, worker_metadata):
     """Verify list_workers returns all registered workers."""
-    for i in range(3):
-        request = cluster_pb2.Controller.RegisterRequest(
-            address=f"host{i}:8080",
-            metadata=worker_metadata(),
-            worker_id=f"worker-{i}",
-        )
-        service.register(request, None)
+    from iris.rpc.auth import _verified_user
+
+    db = state._db
+    db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    token = _verified_user.set("system:worker")
+    try:
+        for i in range(3):
+            request = cluster_pb2.Controller.RegisterRequest(
+                address=f"host{i}:8080",
+                metadata=worker_metadata(),
+                worker_id=f"worker-{i}",
+            )
+            service.register(request, None)
+    finally:
+        _verified_user.reset(token)
 
     request = cluster_pb2.Controller.ListWorkersRequest()
     response = service.list_workers(request, None)
@@ -750,3 +758,79 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 
     job = _query_job(state, JobName.root("test-user", "cpu-job"))
     assert len(job.request.constraints) == 0
+
+
+# =============================================================================
+# Register Role-Gating Tests
+# =============================================================================
+
+
+def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+    """Non-worker user gets PERMISSION_DENIED on register()."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_user
+
+    db = state._db
+    now = Timestamp.now()
+    db.ensure_user("alice", now, role="user")
+
+    auth = ControllerAuth()
+    service = ControllerServiceImpl(
+        state,
+        db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
+        auth=auth,
+    )
+
+    token = _verified_user.set("alice")
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            service.register(
+                cluster_pb2.Controller.RegisterRequest(
+                    worker_id="w-1",
+                    address="localhost:8080",
+                    metadata=worker_metadata(),
+                ),
+                None,
+            )
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_user.reset(token)
+
+
+def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+    """Worker-role user can call register()."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_user
+
+    db = state._db
+    now = Timestamp.now()
+    db.ensure_user("system:worker", now, role="worker")
+
+    auth = ControllerAuth()
+    service = ControllerServiceImpl(
+        state,
+        db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
+        auth=auth,
+    )
+
+    token = _verified_user.set("system:worker")
+    try:
+        resp = service.register(
+            cluster_pb2.Controller.RegisterRequest(
+                worker_id="w-1",
+                address="localhost:8080",
+                metadata=worker_metadata(),
+            ),
+            None,
+        )
+        assert resp.accepted
+    finally:
+        _verified_user.reset(token)

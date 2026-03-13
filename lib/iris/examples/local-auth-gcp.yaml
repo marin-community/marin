@@ -1,7 +1,6 @@
-# Iris local configuration with GCP OIDC authentication
+# Iris local configuration with GCP OAuth2 access token authentication
 # Usage: iris --config lib/iris/examples/local-auth-gcp.yaml cluster start --local
 # Requires: gcloud auth login && gcloud auth application-default login
-# The audience should match your GCP service URL or a custom audience
 
 platform:
   local:
@@ -12,9 +11,9 @@ controller:
 
 auth:
   gcp:
-    audience: iris-controller  # Change to your actual audience
+    project_id: hai-gcp-models  # GCP project ID — users must have access to log in
   admin_users:
-    - your-email@example.com  # Replace with actual admin email
+    - russell.power@gmail.com  # Replace with actual admin email
 
 scale_groups:
   cpu:

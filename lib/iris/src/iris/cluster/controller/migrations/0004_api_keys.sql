@@ -1,8 +1,3 @@
-CREATE TABLE IF NOT EXISTS controller_kv (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS api_keys (
     key_id TEXT PRIMARY KEY,
     key_hash TEXT NOT NULL UNIQUE,

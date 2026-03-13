@@ -1089,71 +1089,12 @@ class ControllerDB:
                     (path.name, Timestamp.now().epoch_ms()),
                 )
 
-    def get_kv(self, key: str) -> str | None:
-        """Read a value from the controller_kv store."""
-        with self._lock:
-            row = self._conn.execute("SELECT value FROM controller_kv WHERE key = ?", (key,)).fetchone()
-            return row[0] if row else None
-
-    def set_kv(self, key: str, value: str) -> None:
-        """Write a value to the controller_kv store (insert or update)."""
-        with self.transaction() as cur:
-            cur.execute(
-                "INSERT INTO controller_kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
-                (key, value, value),
-            )
-
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
         self.execute(
             "INSERT OR IGNORE INTO users (user_id, created_at_ms, role) VALUES (?, ?, ?)",
             (user_id, now.epoch_ms(), role),
         )
-
-    def create_api_key(
-        self,
-        key_id: str,
-        key_hash: str,
-        key_prefix: str,
-        user_id: str,
-        name: str,
-        now: Timestamp,
-        expires_at: Timestamp | None = None,
-    ) -> None:
-        """Insert a new API key row."""
-        self.execute(
-            "INSERT INTO api_keys (key_id, key_hash, key_prefix, user_id, name, created_at_ms, expires_at_ms) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (key_id, key_hash, key_prefix, user_id, name, now.epoch_ms(), expires_at.epoch_ms() if expires_at else None),
-        )
-
-    def lookup_api_key_by_hash(self, key_hash: str) -> ApiKey | None:
-        """Find an API key by its SHA-256 hash."""
-        with self.snapshot() as q:
-            return q.one(API_KEYS, where=API_KEYS.c.key_hash == key_hash)
-
-    def touch_api_key(self, key_id: str, now: Timestamp) -> None:
-        """Update last_used_at timestamp."""
-        self.execute(
-            "UPDATE api_keys SET last_used_at_ms = ? WHERE key_id = ?",
-            (now.epoch_ms(), key_id),
-        )
-
-    def revoke_api_key(self, key_id: str, now: Timestamp) -> bool:
-        """Revoke an API key. Returns True if key existed and was revoked."""
-        with self.transaction() as cur:
-            cur.execute(
-                "UPDATE api_keys SET revoked_at_ms = ? WHERE key_id = ? AND revoked_at_ms IS NULL",
-                (now.epoch_ms(), key_id),
-            )
-            return cur._cursor.rowcount > 0
-
-    def list_api_keys(self, user_id: str | None = None) -> list[ApiKey]:
-        """List API keys, optionally filtered by user."""
-        with self.snapshot() as q:
-            if user_id:
-                return q.select(API_KEYS, where=API_KEYS.c.user_id == user_id)
-            return q.select(API_KEYS)
 
     def set_user_role(self, user_id: str, role: str) -> None:
         """Update the role for an existing user."""

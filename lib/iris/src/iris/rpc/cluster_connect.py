@@ -76,6 +76,9 @@ class ControllerService(Protocol):
     async def get_process_status(self, request: cluster__pb2.GetProcessStatusRequest, ctx: RequestContext) -> cluster__pb2.GetProcessStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def get_auth_info(self, request: cluster__pb2.GetAuthInfoRequest, ctx: RequestContext) -> cluster__pb2.GetAuthInfoResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def login(self, request: cluster__pb2.LoginRequest, ctx: RequestContext) -> cluster__pb2.LoginResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -296,6 +299,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_process_status,
+                ),
+                "/iris.cluster.ControllerService/GetAuthInfo": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetAuthInfo",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetAuthInfoRequest,
+                        output=cluster__pb2.GetAuthInfoResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_auth_info,
                 ),
                 "/iris.cluster.ControllerService/Login": Endpoint.unary(
                     method=MethodInfo(
@@ -759,6 +772,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_auth_info(
+        self,
+        request: cluster__pb2.GetAuthInfoRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetAuthInfoResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetAuthInfo",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetAuthInfoRequest,
+                output=cluster__pb2.GetAuthInfoResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def login(
         self,
         request: cluster__pb2.LoginRequest,
@@ -1153,6 +1186,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_process_status(self, request: cluster__pb2.GetProcessStatusRequest, ctx: RequestContext) -> cluster__pb2.GetProcessStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_auth_info(self, request: cluster__pb2.GetAuthInfoRequest, ctx: RequestContext) -> cluster__pb2.GetAuthInfoResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def login(self, request: cluster__pb2.LoginRequest, ctx: RequestContext) -> cluster__pb2.LoginResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def create_api_key(self, request: cluster__pb2.CreateApiKeyRequest, ctx: RequestContext) -> cluster__pb2.CreateApiKeyResponse:
@@ -1368,6 +1403,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_process_status,
+                ),
+                "/iris.cluster.ControllerService/GetAuthInfo": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetAuthInfo",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.GetAuthInfoRequest,
+                        output=cluster__pb2.GetAuthInfoResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_auth_info,
                 ),
                 "/iris.cluster.ControllerService/Login": EndpointSync.unary(
                     method=MethodInfo(
@@ -1825,6 +1870,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.GetProcessStatusRequest,
                 output=cluster__pb2.GetProcessStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_auth_info(
+        self,
+        request: cluster__pb2.GetAuthInfoRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.GetAuthInfoResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetAuthInfo",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.GetAuthInfoRequest,
+                output=cluster__pb2.GetAuthInfoResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
