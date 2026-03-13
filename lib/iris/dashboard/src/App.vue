@@ -41,7 +41,7 @@ const activeTab = computed(() => {
 
 // Detail pages hide the tab nav to show breadcrumb navigation instead
 const isDetailPage = computed(() => {
-  return route.path.includes('/job/') || route.path.includes('/worker/')
+  return route.path.includes('/job/') || route.path.includes('/worker/') || route.path.startsWith('/system/')
 })
 
 const isLoginPage = computed(() => route.path === '/login')

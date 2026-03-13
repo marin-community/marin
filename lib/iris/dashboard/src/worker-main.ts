@@ -14,6 +14,12 @@ const router = createRouter({
       component: () => import('./components/worker/WorkerStatusPage.vue'),
     },
     {
+      path: '/task/:taskId/threads',
+      component: () => import('./components/controller/ThreadDump.vue'),
+      props: true,
+      meta: { rpc: 'worker' },
+    },
+    {
       path: '/task/:taskId',
       component: () => import('./components/worker/WorkerTaskDetail.vue'),
       props: true,

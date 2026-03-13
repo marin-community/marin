@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName, statusColors } from '@/types/status'
@@ -16,6 +16,8 @@ import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+
+const router = useRouter()
 
 const props = defineProps<{
   jobId: string
@@ -166,7 +168,15 @@ function buildProfileType(profilerType: string, format: string | null): Record<s
   return { threads: {} }
 }
 
+function openThreadDump(taskId: string) {
+  router.push(`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(taskId)}/threads`)
+}
+
 async function handleProfile(taskId: string, profilerType: string, format: string | null) {
+  if (profilerType === 'threads') {
+    openThreadDump(taskId)
+    return
+  }
   profilingTaskId.value = taskId
   try {
     const body = {
@@ -181,23 +191,14 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
     }
     if (resp.profileData) {
       const decoded = atob(resp.profileData)
-      if (profilerType === 'threads') {
-        const w = window.open('', '_blank')
-        if (w) {
-          w.document.open()
-          w.document.write(`<html><head><title>Thread Dump – ${taskId}</title></head><body><pre>${decoded.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></body></html>`)
-          w.document.close()
-        }
-      } else {
-        const blob = new Blob([decoded], { type: 'application/octet-stream' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
-        a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.out`
-        a.click()
-        URL.revokeObjectURL(url)
-      }
+      const blob = new Blob([decoded], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
+      a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.out`
+      a.click()
+      URL.revokeObjectURL(url)
     }
   } catch (e) {
     alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
