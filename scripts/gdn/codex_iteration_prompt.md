@@ -49,16 +49,20 @@ Current diagnosis to optimize against:
   - the next serious systems bet is a fixed 4-layer block with bespoke backward and explicit sharding,
   - the immediate mainline budget is `dispatch_shard_shell_delta_ms`,
   - kernel-local train-path wins are secondary unless they reduce the new hybrid-specific shell delta and the full step.
+- Coverage status:
+  - `S3` is already completed and validated on the current xprof-enabled harness.
+  - Do **not** spend another mainline iteration on `S3` unless the iteration itself changes xprof plumbing, matched-pair attribution logic, or artifact extraction.
+  - The next required optimization slots are `A3` first, then `P3`.
 
 Required behavior for this iteration:
 1. Read the latest log entries and identify the current validated baseline.
 2. Generate a shortlist of 3 candidates with upside and risk.
 3. Pick exactly one coverage slot:
-   - `S3` hybrid-specific generic shell delta attribution,
    - `A3` AD-boundary prototype only (hold forward structure fixed, move the manual backward boundary outward),
    - `P3` first fixed-4-layer block prototype with manual VJP + explicit sharding contract,
+   - `S3` hybrid-specific generic shell delta attribution only if you changed xprof / attribution plumbing in this iteration,
    - `U` bounded CE side-arm only if CE is again implicated,
-   - `diagnostic` only if you can explain why `S3/A3/P3/U` are lower information.
+   - `diagnostic` only if you can explain why `A3/P3/U` are lower information.
 4. Classify the change as exactly one of:
    - `decoder shell attribution`
    - `whole-layer boundary`
@@ -91,8 +95,10 @@ Required behavior for this iteration:
 
 Coverage slots:
 
-### S3) Hybrid-specific generic shell delta attribution (highest priority)
+### S3) Hybrid-specific generic shell delta attribution (diagnostic-only)
 - No kernel changes are required.
+- Use this slot only when the iteration changes xprof tooling, attribution extraction, or matched-pair comparison logic.
+- Do not spend another mainline iteration here just to reconfirm the same shell ranking.
 - Refresh hybrid vs attention-only comparison under the same:
   - TPU family,
   - CE settings,
@@ -127,14 +133,17 @@ Coverage slots:
   - `xprof_idle_attributed_ms`
 
 ### A3) AD-boundary prototype only
+- Highest-priority optimization slot now that `S3` is established.
 - Hold the forward structure fixed.
 - Move the manual/custom VJP boundary outward so generic reverse-mode/JVP shell stops wrapping each hybrid region.
 - Target:
   - `ad_wrapper_shell_delta_ms`
   - `xprof_idle_attributed_ms`
+  - `interaction_remainder_ms`
 - Do not combine this with unrelated forward regrouping or kernel-local math work.
 
 ### P3) First fixed-4-layer block prototype
+- Use after one real `A3` attempt, or earlier only if you can justify why `A3` is blocked.
 - One serious systems prototype only.
 - Optimize the fixed `3 GDN + 1 attention` block as a unit.
 - Own all three of:
@@ -153,7 +162,7 @@ Coverage slots:
   - with no shell-delta or interaction-remainder regression.
 
 ### Diagnostic only
-- Use only if you can justify why `S3/A3/P3/U` would be lower information.
+- Use only if you can justify why `A3/P3/U` would be lower information.
 - Same-boundary GDN shell/tape/kernel work belongs here now unless it directly attacks the hybrid-specific shell delta or the interaction remainder.
 
 Deprioritized unless explicitly justified:

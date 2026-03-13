@@ -224,6 +224,18 @@ Updated systems direction:
 - Precede or pair that with an AD-boundary prototype that moves the manual backward/custom-VJP boundary outward while holding the forward structure fixed.
 - A larger forward wrapper without bespoke backward/sharding is not enough; Iteration 90 already showed that such work just re-emits cost under `HackableDecoderBlock/*`.
 
+Current mainline sequencing:
+
+1. `S3` is complete for the current xprof-enabled harness and is now diagnostic-only.
+2. Next required optimization slot is `A3`:
+   - move the manual backward/custom-VJP boundary outward,
+   - target `ad_wrapper_shell_delta_ms`, `xprof_idle_attributed_ms`, and `interaction_remainder_ms`.
+3. Next required systems slot after that is `P3`:
+   - fixed `3 GDN + 1 attention` block,
+   - bespoke backward,
+   - explicit sharding contract,
+   - success defined against `dispatch_shard_shell_delta_ms`, `ad_wrapper_shell_delta_ms`, and full-step time.
+
 ## ejkernel / EasyDeL takeaways (March 2026)
 
 Local reference repos:
