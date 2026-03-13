@@ -39,10 +39,9 @@ from iris.cluster.platform.base import find_free_port
 from iris.cluster.platform.local import LocalPlatform
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc import config_pb2
 from iris.rpc.auth import hash_token
-from iris.time_utils import Duration, ExponentialBackoff, Timestamp
+from iris.time_utils import Duration, Timestamp
 
 
 def create_local_autoscaler(
@@ -321,4 +320,3 @@ def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
     base_config.scale_groups["local-cpu"].CopyFrom(sg)
 
     return make_local_config(base_config)
-

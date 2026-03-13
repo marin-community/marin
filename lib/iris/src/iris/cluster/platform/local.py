@@ -53,7 +53,6 @@ from iris.cluster.platform.base import (
     generate_slice_suffix,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.controller.controller import Controller
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration, Timestamp
@@ -350,7 +349,7 @@ class LocalPlatform:
         self._worker_attributes_by_group = worker_attributes_by_group or {}
         self._gpu_count_by_group = gpu_count_by_group or {}
         self._storage_prefix = storage_prefix
-        self._local_controller: Controller | None = None
+        self._local_controller: LocalController | None = None  # noqa: F821 — circular import with controller/local.py
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
