@@ -43,7 +43,7 @@ from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
-# `docs/recipes/change_grug.md`.
+# `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    train_batch_pspec: P = field(default_factory=lambda: P(("data",)))
+    train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
@@ -65,7 +65,7 @@ class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
     eval_batch_size: int = 512
-    eval_batch_pspec: P = field(default_factory=lambda: P(("data",)))
+    eval_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
@@ -115,7 +115,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("data",)),
+    batch_pspec: P = P(("data", "expert")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
@@ -185,6 +185,7 @@ def _compute_flops(
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
+        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
         num_layers=model_config.num_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
@@ -463,7 +464,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
-                batch = next(iterator)
+                with jax.profiler.TraceAnnotation("load_batch"):
+                    batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
                 # grad_watch runs only on its configured interval.
@@ -476,17 +478,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 jax.block_until_ready(metrics["train/loss"])
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
-                state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
-                last_loss = metrics["train/loss"]
-                last_step_duration = duration
-                levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
-                levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
-                if router_metrics:
-                    levanter.tracker.log(router_metrics, step=step)
+                with jax.profiler.TraceAnnotation("callbacks"):
+                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+                    last_loss = metrics["train/loss"]
+                    last_step_duration = duration
+                    levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                    levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                    router_metrics = {key: value for key, value in metrics.items() if key.startswith("train/router/")}
+                    if router_metrics:
+                        levanter.tracker.log(router_metrics, step=step)
+                    if "train/cross_entropy_loss" in metrics:
+                        levanter.tracker.log(
+                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
+                            step=step,
+                        )
 
-                if watch_stats is not None:
-                    levanter.tracker.log(watch_stats, step=step)
+                    if watch_stats is not None:
+                        levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree={"train_state": state}, step=int(state.step))

@@ -60,6 +60,7 @@ from iris.cluster.platform.base import (
     StandaloneWorkerHandle,
     WorkerStatus,
     find_free_port,
+    generate_slice_suffix,
 )
 from iris.rpc import config_pb2
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
@@ -84,6 +85,14 @@ _KUBECTL_TIMEOUT = 1800.0
 _S3_SECRET_NAME = "iris-s3-credentials"
 _CONTROLLER_CPU_REQUEST = "2"
 _CONTROLLER_MEMORY_REQUEST = "4Gi"
+
+# CoreWeave GPU nodes may carry this taint; all pods that target GPU nodes must
+# tolerate it or they will be evicted / remain Pending.
+_CW_INTERRUPTABLE_TOLERATION: dict = {
+    "key": "qos.coreweave.cloud/interruptable",
+    "operator": "Exists",
+    "effect": "NoExecute",
+}
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
 # bucket name is a subdomain (https://<bucket>.cwobject.com). Path-style
@@ -421,7 +430,7 @@ class CoreweavePlatform:
 
     def _uses_s3_storage(self, config: config_pb2.IrisClusterConfig) -> bool:
         """Check if any storage URI uses S3."""
-        return config.storage.bundle_prefix.startswith("s3://") or config.storage.log_prefix.startswith("s3://")
+        return config.storage.remote_state_dir.startswith("s3://")
 
     # -- S3 Credentials -------------------------------------------------------
 
@@ -629,7 +638,7 @@ class CoreweavePlatform:
         # the scale-group label to just sg_name. The nodeSelector must match the
         # NodePool's nodeLabels, which use the bare scale-group name.
         scale_group_name = config.name_prefix
-        slice_id = f"{self._label_prefix}-{scale_group_name}-{Timestamp.now().epoch_ms()}"
+        slice_id = f"{self._label_prefix}-{scale_group_name}-{generate_slice_suffix()}"
         labels = self._resource_labels(scale_group_name, slice_id)
 
         if config.labels:
@@ -703,6 +712,7 @@ class CoreweavePlatform:
         labels = dict(handle.labels)
 
         env_vars = [
+            {"name": "IRIS_WORKER_ID", "value": pod_name},
             {"name": "IRIS_WORKER_NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
             {"name": "IRIS_POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
             {"name": "IRIS_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
@@ -832,6 +842,7 @@ class CoreweavePlatform:
                 "nodeSelector": {
                     self._iris_labels.iris_scale_group: handle.scale_group,
                 },
+                "tolerations": [_CW_INTERRUPTABLE_TOLERATION],
                 "containers": [container_spec],
                 "volumes": [
                     {"name": "worker-config", "configMap": {"name": wc_cm_name}},
@@ -1074,7 +1085,6 @@ class CoreweavePlatform:
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
-            bundle_prefix=config.storage.bundle_prefix,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             s3_env_vars=s3_env,
         )
@@ -1163,6 +1173,7 @@ class CoreweavePlatform:
         deadline = Deadline.from_seconds(_DEPLOYMENT_READY_TIMEOUT)
         last_status_log = 0.0
         status_log_interval = 30.0  # log progress every 30s
+        prev_pod_state: tuple[str, str] | None = None  # (phase, node)
 
         while not self._shutdown_event.is_set():
             if deadline.expired():
@@ -1187,7 +1198,18 @@ class CoreweavePlatform:
                     )
 
                 # Check Pods owned by this Deployment for fatal errors
-                self._check_controller_pods_health()
+                pods = self._check_controller_pods_health()
+
+                # Log pod phase/node on transitions only — distinguishes
+                # node-provisioning vs image-pull vs readiness-probe time.
+                if pods:
+                    pod = pods[0]
+                    phase = pod.get("status", {}).get("phase", "Unknown")
+                    node = pod.get("spec", {}).get("nodeName") or "<none>"
+                    pod_state = (phase, node)
+                    if pod_state != prev_pod_state:
+                        logger.info("Controller pod: phase=%s node=%s", phase, node)
+                        prev_pod_state = pod_state
 
             self._shutdown_event.wait(self._poll_interval)
         raise PlatformError("Platform shutting down while waiting for controller Deployment")
@@ -1232,7 +1254,7 @@ class CoreweavePlatform:
             if prev_logs:
                 logger.warning("Post-mortem %s previous logs:\n%s", name, prev_logs)
 
-    def _check_controller_pods_health(self) -> None:
+    def _check_controller_pods_health(self) -> list[dict]:
         """Check controller Pods for fatal conditions and fail fast.
 
         Detects three categories of unrecoverable failure:
@@ -1276,6 +1298,7 @@ class CoreweavePlatform:
                         logger.info("Controller Pod %s not ready: %s: %s", pod_name, cond_reason, cond_message)
 
         self._check_controller_pod_events()
+        return pods
 
     # Known-fatal event reasons that will never self-resolve
     _FATAL_EVENT_REASONS = frozenset(
@@ -1348,7 +1371,6 @@ def _build_controller_deployment(
     namespace: str,
     image: str,
     port: int,
-    bundle_prefix: str,
     node_selector: dict[str, str],
     s3_env_vars: list[dict],
 ) -> dict:
@@ -1375,13 +1397,7 @@ def _build_controller_deployment(
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "nodeSelector": node_selector,
-                    "tolerations": [
-                        {
-                            "key": "qos.coreweave.cloud/interruptable",
-                            "operator": "Exists",
-                            "effect": "NoExecute",
-                        },
-                    ],
+                    "tolerations": [_CW_INTERRUPTABLE_TOLERATION],
                     "containers": [
                         {
                             "name": "iris-controller",
@@ -1395,13 +1411,13 @@ def _build_controller_deployment(
                                 "--host=0.0.0.0",
                                 f"--port={port}",
                                 "--config=/etc/iris/config.json",
-                                f"--bundle-prefix={bundle_prefix}",
                             ],
                             "ports": [{"containerPort": port}],
                             "env": s3_env_vars,
                             "resources": controller_resources,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
+                                {"name": "local-state", "mountPath": "/var/cache/iris/controller"},
                             ],
                             "readinessProbe": {
                                 "httpGet": {"path": "/health", "port": port},
@@ -1417,6 +1433,7 @@ def _build_controller_deployment(
                     ],
                     "volumes": [
                         {"name": "config", "configMap": {"name": "iris-cluster-config"}},
+                        {"name": "local-state", "emptyDir": {}},
                     ],
                 },
             },
@@ -1435,7 +1452,7 @@ def _coreweave_tunnel(
     service_name: str,
     remote_port: int,
     local_port: int | None = None,
-    timeout: float = 30.0,
+    timeout: float = 90.0,
 ) -> Iterator[str]:
     """kubectl port-forward to a K8s Service, yielding the local URL.
 
@@ -1447,9 +1464,22 @@ def _coreweave_tunnel(
     if local_port is None:
         local_port = find_free_port()
 
-    deadline = Deadline.from_seconds(timeout)
-    backoff = ExponentialBackoff(initial=1.0, maximum=10.0, factor=2.0)
     proc: subprocess.Popen | None = None
+
+    def _stop() -> None:
+        nonlocal proc
+        if proc is None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        proc = None
+
+    deadline = Deadline.from_seconds(timeout)
+    backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
 
     while not deadline.expired():
         # (Re-)launch kubectl port-forward when needed.
@@ -1478,18 +1508,20 @@ def _coreweave_tunnel(
         except OSError:
             time.sleep(0.5)
     else:
-        if proc is not None:
-            proc.terminate()
-            proc.wait()
+        _stop()
+        # Capture konnectivity-agent state — it lives in kube-system and is
+        # invisible to normal pod-scoped queries. Without this, diagnosing
+        # the tunnel race requires manual kubectl before events TTL (~1h).
+        try:
+            result = kubectl.run(["get", "pods", "-n", "kube-system", "-o", "wide"], timeout=10)
+            if result.returncode == 0:
+                logger.warning("kube-system pods at tunnel failure:\n%s", result.stdout.strip())
+        except subprocess.TimeoutExpired:
+            pass
         raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
+    logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
     try:
-        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
         yield f"http://127.0.0.1:{local_port}"
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+        _stop()

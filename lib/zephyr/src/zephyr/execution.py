@@ -165,11 +165,16 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
     exec_dir = f"{prefix}/{execution_id}"
     fs = url_to_fs(exec_dir)[0]
 
+    # TODO: use log_time util when possible
+    t_0 = time.monotonic()
     if fs.exists(exec_dir):
         try:
             fs.rm(exec_dir, recursive=True)
         except Exception as e:
             logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
+        finally:
+            elapsed = time.monotonic() - t_0
+            logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
 
 
 class WorkerState(enum.Enum):
@@ -277,6 +282,7 @@ class ZephyrCoordinator:
         self._shutdown: bool = False
         self._is_last_stage: bool = False
         self._initialized: bool = False
+        self._pipeline_running: bool = False
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -503,6 +509,17 @@ class ZephyrCoordinator:
         with self._lock:
             return self._fatal_error
 
+    def abort(self, reason: str) -> None:
+        """Set a fatal error that causes the current stage to fail immediately.
+
+        Called by the external worker watchdog when the worker job terminates
+        permanently (e.g. all retries exhausted after OOM).
+        """
+        with self._lock:
+            if self._fatal_error is None:
+                logger.error("Coordinator aborted: %s", reason)
+                self._fatal_error = reason
+
     def _start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue."""
         with self._lock:
@@ -582,53 +599,61 @@ class ZephyrCoordinator:
     ) -> list:
         """Run complete pipeline, blocking until done. Returns flattened results."""
         with self._lock:
+            if self._pipeline_running:
+                self._fatal_error = "run_pipeline called while another pipeline is already running"
+                raise RuntimeError(self._fatal_error)
+            self._pipeline_running = True
             self._execution_id = execution_id
 
-        shards = _build_source_shards(plan.source_items)
-        if not shards:
-            return []
+        try:
+            shards = _build_source_shards(plan.source_items)
+            if not shards:
+                return []
 
-        # Identify the last stage that dispatches work to workers (non-RESHARD).
-        # On that stage, idle workers receive SHUTDOWN once all tasks are
-        # in-flight, so they exit eagerly instead of polling until
-        # coordinator.shutdown().
-        last_worker_stage_idx = max(
-            (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
-            default=-1,
-        )
+            # Identify the last stage that dispatches work to workers (non-RESHARD).
+            # On that stage, idle workers receive SHUTDOWN once all tasks are
+            # in-flight, so they exit eagerly instead of polling until
+            # coordinator.shutdown().
+            last_worker_stage_idx = max(
+                (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
+                default=-1,
+            )
 
-        for stage_idx, stage in enumerate(plan.stages):
-            stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
+            for stage_idx, stage in enumerate(plan.stages):
+                stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
-            if stage.stage_type == StageType.RESHARD:
-                shards = _reshard_refs(shards, stage.output_shards or len(shards))
-                continue
+                if stage.stage_type == StageType.RESHARD:
+                    shards = _reshard_refs(shards, stage.output_shards or len(shards))
+                    continue
 
-            # Compute aux data for joins
-            aux_per_shard = self._compute_join_aux(stage.operations, shards, hints, stage_idx)
+                # Compute aux data for joins
+                aux_per_shard = self._compute_join_aux(stage.operations, shards, hints, stage_idx)
 
-            # Build and submit tasks
-            tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
-            logger.info("Starting stage %s with %d tasks", stage_label, len(tasks))
-            self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
+                # Build and submit tasks
+                tasks = _compute_tasks_from_shards(shards, stage, hints, aux_per_shard, stage_name=stage_label)
+                logger.info("Starting stage %s with %d tasks", stage_label, len(tasks))
+                self._start_stage(stage_label, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
 
-            # Wait for stage completion
-            self._wait_for_stage()
+                # Wait for stage completion
+                self._wait_for_stage()
 
-            # Collect and regroup results for next stage
-            result_refs = self._collect_results()
-            shards = _regroup_result_refs(result_refs, len(shards), output_shard_count=stage.output_shards)
+                # Collect and regroup results for next stage
+                result_refs = self._collect_results()
+                shards = _regroup_result_refs(result_refs, len(shards), output_shard_count=stage.output_shards)
 
-        # Flatten final results
-        flat_result = []
-        for shard in shards:
-            for chunk in shard.chunks:
-                flat_result.extend(list(chunk))
+            # Flatten final results
+            flat_result = []
+            for shard in shards:
+                for chunk in shard.chunks:
+                    flat_result.extend(list(chunk))
 
-        # Signal workers to shut down now that all stages are complete.
-        self.shutdown()
+            # Signal workers to shut down now that all stages are complete.
+            self.shutdown()
 
-        return flat_result
+            return flat_result
+        finally:
+            with self._lock:
+                self._pipeline_running = False
 
     def _compute_join_aux(
         self,
@@ -1117,6 +1142,9 @@ class ZephyrContext:
         # NOTE: pipeline ID incremented on clean completion only
         self._pipeline_id += 1
         last_exception: Exception | None = None
+        # Backoff between retries to avoid hammering an overloaded controller.
+        # Starts at 2s, caps at 60s. Resets on successful pipeline startup.
+        backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
         for attempt in range(self.max_execution_retries + 1):
             execution_id = _generate_execution_id()
             logger.info(
@@ -1128,13 +1156,28 @@ class ZephyrContext:
                 self._create_coordinator(attempt)
                 self._create_workers(plan.num_shards, attempt)
 
-                # Run pipeline on coordinator (blocking call).
-                # run_pipeline() calls coordinator.shutdown() at the end,
-                # which causes workers to receive SHUTDOWN on their next
-                # pull_task() call.
-                results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
+                # Actor creation succeeded — reset backoff so that a later
+                # mid-pipeline failure doesn't start with a long delay.
+                backoff.reset()
 
-                return results
+                # Start watchdog that aborts the coordinator if the worker
+                # job terminates permanently (e.g. all retries exhausted
+                # after OOM). Without this, the coordinator would wait up to
+                # no_workers_timeout (6h default) before giving up.
+                watchdog_stop = threading.Event()
+                watchdog_thread = self._start_worker_watchdog(watchdog_stop)
+
+                try:
+                    # Run pipeline on coordinator (blocking call).
+                    # run_pipeline() calls coordinator.shutdown() at the end,
+                    # which causes workers to receive SHUTDOWN on their next
+                    # pull_task() call.
+                    results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
+
+                    return results
+                finally:
+                    watchdog_stop.set()
+                    watchdog_thread.join(timeout=15.0)
 
             except _NON_RETRYABLE_ERRORS:
                 raise
@@ -1144,12 +1187,15 @@ class ZephyrContext:
                 if attempt >= self.max_execution_retries:
                     raise
 
+                delay = backoff.next_interval()
                 logger.warning(
-                    "Pipeline attempt %d failed (%d retries left), retrying: %s",
+                    "Pipeline attempt %d failed (%d retries left), retrying in %.1fs: %s",
                     attempt,
                     self.max_execution_retries - attempt,
+                    delay,
                     e,
                 )
+                time.sleep(delay)
 
             finally:
                 # Tear down coordinator and workers for this pipeline
@@ -1159,6 +1205,40 @@ class ZephyrContext:
 
         # Should be unreachable, but just in case
         raise last_exception  # type: ignore[misc]
+
+    def _start_worker_watchdog(self, stop_event: threading.Event) -> threading.Thread:
+        """Start a daemon thread that aborts the coordinator when the worker job dies.
+
+        Polls worker_group.is_done() every 10s. When the worker job has
+        permanently terminated (retries exhausted), calls coordinator.abort()
+        which sets _fatal_error, causing _wait_for_stage() to raise
+        ZephyrWorkerError on the next iteration.
+        """
+        poll_interval = 10.0
+
+        def _watchdog():
+            while not stop_event.is_set():
+                stop_event.wait(poll_interval)
+                if stop_event.is_set():
+                    return
+                if self._worker_group is None:
+                    continue
+                try:
+                    if self._worker_group.is_done():
+                        reason = (
+                            "Worker job terminated permanently (all retries exhausted). "
+                            "Workers likely crashed (OOM or other fatal error)."
+                        )
+                        logger.error("Worker watchdog: %s", reason)
+                        if self._coordinator is not None:
+                            self._coordinator.abort.remote(reason)
+                        return
+                except Exception:
+                    logger.debug("Worker watchdog: failed to check worker status", exc_info=True)
+
+        thread = threading.Thread(target=_watchdog, daemon=True, name="zephyr-worker-watchdog")
+        thread.start()
+        return thread
 
     def _create_coordinator(self, attempt: int = 0) -> None:
         """Create a fresh coordinator actor."""
@@ -1191,6 +1271,7 @@ class ZephyrContext:
         over-provisioning when there are fewer shards than the cap.
         """
         if num_shards == 0:
+            logger.warning("No shards to process, skipping worker creation")
             return
 
         assert self.max_workers is not None  # set by __post_init__

@@ -47,7 +47,7 @@ Marin experiments are defined as a set of steps that can depend on each other an
 like a Makefile.
 
 As a brief example of how you can use Marin, here is a complete script for training a tiny model on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
-You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorial/train_tiny_model_cpu.py) for more details.
+You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_cpu.py) for more details.
 
 <!--marin-example-start-->
 
@@ -113,6 +113,6 @@ With slight modifications, you can extend this to train a [larger model on a lar
 a [mixture of datasets](docs/tutorials/train-an-lm.md#mixture-of-sources), even scaling to very large TPU pods
 (or multislice TPU, and, soon, multi-node GPUs!).
 
-## Agent-Friendly Recipes
+## Agent Skills
 
-- New: See `docs/recipes/add_dataset.md` for a step-by-step guide to adding new datasets, designed for both humans and coding agents.
+- See `.agents/skills/` (also `.claude/skills/`) for loadable agent skills. For example, `.agents/skills/add-dataset/` has a step-by-step guide to adding new datasets.

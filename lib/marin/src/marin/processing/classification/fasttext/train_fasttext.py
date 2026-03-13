@@ -283,8 +283,6 @@ def train_model(
     Returns:
         None: No return value.
     """
-    logger = logging.getLogger("ray")
-
     logger.info(f"Training fastText model for experiment {output_path}")
     datetime_start = datetime.utcnow()
 

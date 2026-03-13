@@ -619,6 +619,50 @@ def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp
     assert result == "SHUTDOWN"
 
 
+def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
+    """Calling run_pipeline while another is already running raises RuntimeError."""
+    import threading
+
+    from unittest.mock import MagicMock
+
+    from zephyr.execution import ZephyrCoordinator
+    from zephyr.plan import ExecutionHint, compute_plan
+
+    coord = ZephyrCoordinator()
+    coord.initialize(str(tmp_path / "chunks"), MagicMock())
+
+    gate = threading.Event()
+    ds = Dataset.from_list([42]).map(lambda x: gate.wait(timeout=5) or x)
+    plan = compute_plan(ds)
+    hints = ExecutionHint()
+
+    # First call blocks because the map waits on `gate` (no workers to run it
+    # anyway). We patch _wait_for_stage to signal when it's entered.
+    first_entered = threading.Event()
+    original_wait = coord._wait_for_stage
+
+    def blocking_wait():
+        first_entered.set()
+        time.sleep(0.5)
+        coord._fatal_error = "test: forced exit"
+        try:
+            original_wait()
+        except Exception:
+            pass
+
+    coord._wait_for_stage = blocking_wait
+
+    t = threading.Thread(target=lambda: coord.run_pipeline(plan, "exec-1", hints), daemon=True)
+    t.start()
+    first_entered.wait(timeout=5.0)
+
+    # Second call should fail immediately
+    with pytest.raises(RuntimeError, match="already running"):
+        coord.run_pipeline(plan, "exec-2", hints)
+
+    t.join(timeout=10.0)
+
+
 def test_execute_retries_on_coordinator_death(tmp_path):
     """When the coordinator dies mid-execution, execute() retries with a fresh
     coordinator and worker pool and eventually succeeds.

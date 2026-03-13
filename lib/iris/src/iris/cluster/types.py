@@ -16,13 +16,13 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
 
+from iris.cluster.constraints import Constraint
 from iris.rpc import cluster_pb2
 
 
@@ -198,41 +198,80 @@ class JobName:
         return cls.from_string(s)
 
 
-class DeviceType(Enum):
-    """Device type for demand routing."""
+@dataclass(frozen=True, slots=True)
+class TaskAttempt:
+    """A task identity combining a task-level JobName with an optional attempt qualifier.
 
-    CPU = "cpu"
-    GPU = "gpu"
-    TPU = "tpu"
+    Canonical wire format: /user/job/0:attempt_id
+    When attempt_id is None, the wire format omits the suffix: /user/job/0
 
+    The task_id must be a task-level JobName (last component numeric).
+    attempt_id is optional — when absent, semantics are per-operation but
+    typically "use the latest active attempt" is implied.
 
-def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
-    """Extract device type as enum from DeviceConfig."""
-    if device.HasField("gpu"):
-        return DeviceType.GPU
-    if device.HasField("tpu"):
-        return DeviceType.TPU
-    return DeviceType.CPU
+    Examples:
+        TaskAttempt.from_wire("/alice/job/0")     -> TaskAttempt(task_id=/alice/job/0, attempt_id=None)
+        TaskAttempt.from_wire("/alice/job/0:3")   -> TaskAttempt(task_id=/alice/job/0, attempt_id=3)
+    """
 
+    task_id: JobName
+    attempt_id: int | None = None
 
-def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
-    """Extract device type from DeviceConfig."""
-    if device.HasField("cpu"):
-        return "cpu"
-    if device.HasField("gpu"):
-        return "gpu"
-    if device.HasField("tpu"):
-        return "tpu"
-    return "cpu"
+    @classmethod
+    def from_wire(cls, s: str) -> "TaskAttempt":
+        """Parse a wire-format string like '/user/job/0' or '/user/job/0:3'."""
+        if not s:
+            raise ValueError("TaskAttempt wire format must not be empty")
+        colon = s.rfind(":")
+        if colon >= 0:
+            task_part = s[:colon]
+            attempt_str = s[colon + 1 :]
+            try:
+                attempt_id = int(attempt_str)
+            except ValueError as exc:
+                raise ValueError(f"Invalid attempt ID in TaskAttempt '{s}': '{attempt_str}' is not an integer") from exc
+            return cls(task_id=JobName.from_wire(task_part), attempt_id=attempt_id)
+        return cls(task_id=JobName.from_wire(s))
 
+    def to_wire(self) -> str:
+        """Serialize to wire format: '/user/job/0' or '/user/job/0:3'."""
+        base = self.task_id.to_wire()
+        if self.attempt_id is not None:
+            return f"{base}:{self.attempt_id}"
+        return base
 
-def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
-    """Extract device variant (e.g., GPU model) from DeviceConfig."""
-    if device.HasField("gpu"):
-        return device.gpu.variant if device.gpu.variant else None
-    if device.HasField("tpu"):
-        return device.tpu.variant if device.tpu.variant else None
-    return None
+    def require_attempt(self) -> int:
+        """Return attempt_id or raise if absent."""
+        if self.attempt_id is None:
+            raise ValueError(f"TaskAttempt has no attempt_id: {self}")
+        return self.attempt_id
+
+    @property
+    def job_id(self) -> JobName:
+        """Get the parent job name (task_id without the task index)."""
+        parent = self.task_id.parent
+        if parent is None:
+            raise ValueError(f"TaskAttempt task_id has no parent job: {self.task_id}")
+        return parent
+
+    @property
+    def task_index(self) -> int:
+        """Get the task index from the task_id."""
+        return self.task_id.require_task()[1]
+
+    def with_attempt(self, attempt_id: int) -> "TaskAttempt":
+        """Return a new TaskAttempt with the given attempt_id."""
+        return TaskAttempt(task_id=self.task_id, attempt_id=attempt_id)
+
+    def without_attempt(self) -> "TaskAttempt":
+        """Return a new TaskAttempt with attempt_id=None."""
+        return TaskAttempt(task_id=self.task_id)
+
+    def __str__(self) -> str:
+        return self.to_wire()
+
+    def __repr__(self) -> str:
+        return f"TaskAttempt({self.to_wire()!r})"
 
 
 def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
@@ -254,15 +293,10 @@ EndpointId = NewType("EndpointId", str)
 
 
 @dataclass(frozen=True)
-class VmWorkerStatus:
-    """Worker status keyed by VM address for autoscaler.
+class WorkerStatus:
+    """Worker status keyed by worker_id for autoscaler idle tracking."""
 
-    The VM address is the worker's identity. This enables the autoscaler
-    to look up worker status directly by VM address without needing
-    to correlate separate worker_id to VM.
-    """
-
-    vm_address: str
+    worker_id: str
     running_task_ids: frozenset[str]
 
     @property
@@ -270,131 +304,7 @@ class VmWorkerStatus:
         return len(self.running_task_ids) == 0
 
 
-# Map of VM address -> worker status, used by autoscaler for idle tracking
-VmWorkerStatusMap = dict[str, VmWorkerStatus]
-
-
-@dataclass(frozen=True)
-class AttributeValue:
-    """Typed attribute value for worker attributes and constraint matching.
-
-    Used for coscheduling and constraint-based worker filtering.
-    Values can be strings, integers, or floats.
-    """
-
-    value: str | int | float
-
-    def to_proto(self) -> cluster_pb2.AttributeValue:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.AttributeValue()
-        if isinstance(self.value, str):
-            proto.string_value = self.value
-        elif isinstance(self.value, int):
-            proto.int_value = self.value
-        elif isinstance(self.value, float):
-            proto.float_value = self.value
-        return proto
-
-    @staticmethod
-    def from_proto(proto: cluster_pb2.AttributeValue) -> "AttributeValue":
-        """Convert from protobuf representation."""
-        if proto.HasField("string_value"):
-            return AttributeValue(proto.string_value)
-        elif proto.HasField("int_value"):
-            return AttributeValue(proto.int_value)
-        elif proto.HasField("float_value"):
-            return AttributeValue(proto.float_value)
-        # Default to empty string if no value set
-        return AttributeValue("")
-
-
-class ConstraintOp(IntEnum):
-    """Constraint operators for worker attribute matching.
-
-    Used to define constraints that filter which workers can run a job.
-    Each operator compares a worker attribute against a constraint value.
-
-    Example:
-        >>> # Match workers where region equals "us-central1"
-        >>> Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
-        >>> # Match workers with memory > 32GB
-        >>> Constraint(key="memory_gb", op=ConstraintOp.GT, value=32)
-        >>> # Match workers that have the "gpu" attribute set
-        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
-    """
-
-    EQ = 0
-    NE = 1
-    EXISTS = 2
-    NOT_EXISTS = 3
-    GT = 4
-    GE = 5
-    LT = 6
-    LE = 7
-    IN = 8
-
-    def to_proto(self) -> cluster_pb2.ConstraintOp:
-        """Convert to protobuf ConstraintOp enum value."""
-        mapping = {
-            ConstraintOp.EQ: cluster_pb2.CONSTRAINT_OP_EQ,
-            ConstraintOp.NE: cluster_pb2.CONSTRAINT_OP_NE,
-            ConstraintOp.EXISTS: cluster_pb2.CONSTRAINT_OP_EXISTS,
-            ConstraintOp.NOT_EXISTS: cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
-            ConstraintOp.GT: cluster_pb2.CONSTRAINT_OP_GT,
-            ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
-            ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
-            ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
-            ConstraintOp.IN: cluster_pb2.CONSTRAINT_OP_IN,
-        }
-        return mapping[self]
-
-
-@dataclass(frozen=True)
-class Constraint:
-    """Worker constraint for job scheduling.
-
-    Constraints filter which workers are eligible to run a job based on
-    worker attributes. Workers must satisfy all constraints to be considered.
-
-    Example:
-        >>> # Require a specific TPU pod
-        >>> Constraint(key="tpu-name", op=ConstraintOp.EQ, value="my-tpu-pod")
-        >>> # Require workers in a specific zone
-        >>> Constraint(key="zone", op=ConstraintOp.EQ, value="us-central1-a")
-        >>> # Require workers with at least 64GB memory
-        >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
-        >>> # Require workers that have a GPU
-        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
-        >>> # Require workers in one of several regions
-        >>> Constraint(key="region", op=ConstraintOp.IN, values=("us-central1", "us-central2"))
-    """
-
-    key: str
-    op: ConstraintOp
-    value: str | int | float | None = None
-    values: tuple[str | int | float, ...] | None = None
-
-    def to_proto(self) -> cluster_pb2.Constraint:
-        """Convert to protobuf representation."""
-        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
-        if self.value is not None:
-            proto.value.CopyFrom(AttributeValue(self.value).to_proto())
-        if self.values is not None:
-            for v in self.values:
-                proto.values.append(AttributeValue(v).to_proto())
-        return proto
-
-    @staticmethod
-    def from_proto(proto: cluster_pb2.Constraint) -> "Constraint":
-        """Convert from protobuf representation."""
-        op = ConstraintOp(proto.op)
-        value: str | int | float | None = None
-        if proto.HasField("value"):
-            value = AttributeValue.from_proto(proto.value).value
-        values: tuple[str | int | float, ...] | None = None
-        if proto.values:
-            values = tuple(AttributeValue.from_proto(v).value for v in proto.values)
-        return Constraint(key=proto.key, op=op, value=value, values=values)
+WorkerStatusMap = dict[str, WorkerStatus]
 
 
 @dataclass(frozen=True)
@@ -555,12 +465,29 @@ import sys
 import traceback
 import logging
 
+# Reinitialize logging with the unified Iris format.
+# Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
+# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from iris.logging
+# because CALLABLE_RUNNER executes inside an isolated task container that may not
+# have the iris package installed (e.g. user-provided Docker images).
+_LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
+
+class _LevelPrefixFormatter(logging.Formatter):
+    def format(self, record):
+        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        return super().format(record)
+
+_root = logging.getLogger()
+_root.handlers.clear()
+_handler = logging.StreamHandler(sys.stderr)
+_handler.setFormatter(_LevelPrefixFormatter(
+    fmt="%(levelprefix)s%(asctime)s %(name)s %(message)s",
+    datefmt="%Y%m%d %H:%M:%S",
+))
+_root.addHandler(_handler)
+_root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
-)
 
 workdir = os.environ["IRIS_WORKDIR"]
 
@@ -644,205 +571,6 @@ class Namespace(str):
             ValueError: If job_id is empty
         """
         return cls(job_id.namespace)
-
-
-PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
-REGION_ATTRIBUTE_KEY = "region"
-ZONE_ATTRIBUTE_KEY = "zone"
-
-
-def preemptible_constraint(preemptible: bool = True) -> Constraint:
-    """Constraint requiring workers to be preemptible (or not)."""
-    return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
-
-
-def zone_constraint(zone: str) -> Constraint:
-    """Constraint requiring workers to be in a given zone."""
-    if not zone:
-        raise ValueError("zone must be non-empty")
-    return Constraint(key=ZONE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=zone)
-
-
-def region_constraint(regions: list[str]) -> Constraint:
-    """Constraint requiring workers to be in one of the given regions.
-
-    Emits an EQ constraint for a single region or an IN constraint for multiple
-    regions.
-
-    Args:
-        regions: Non-empty list of region strings. Must be a list, not a bare string.
-
-    Raises:
-        TypeError: If regions is a string (common mistake — pass [region] instead).
-        ValueError: If regions is empty or contains empty strings.
-    """
-    if isinstance(regions, str):
-        raise TypeError("region_constraint() requires a list of strings, not a bare string. Use [region] instead.")
-    if not regions:
-        raise ValueError("regions must be non-empty")
-    for r in regions:
-        if not r:
-            raise ValueError("region must be non-empty")
-    if len(regions) == 1:
-        return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=regions[0])
-    return Constraint(key=REGION_ATTRIBUTE_KEY, op=ConstraintOp.IN, values=tuple(regions))
-
-
-@dataclass(frozen=True)
-class NormalizedConstraints:
-    """Normalized canonical placement constraints derived from proto constraints."""
-
-    preemptible: bool | None
-    required_regions: frozenset[str] | None
-    required_zones: frozenset[str] | None
-
-
-def preemptible_preference_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
-    """Extract preemptible preference from constraints.
-
-    Returns:
-        True if explicitly required preemptible workers, False if explicitly
-        requiring non-preemptible workers, or None if unspecified.
-
-    Raises:
-        ValueError: If multiple conflicting preemptible constraints are present
-            or an invalid non-boolean value is used.
-    """
-    values: set[bool] = set()
-    for constraint in constraints:
-        if constraint.key != PREEMPTIBLE_ATTRIBUTE_KEY:
-            continue
-        if constraint.op != cluster_pb2.CONSTRAINT_OP_EQ:
-            raise ValueError("preemptible constraint must use EQ")
-        if not constraint.value.HasField("string_value"):
-            raise ValueError("preemptible constraint requires string value")
-        raw = constraint.value.string_value.strip().lower()
-        if raw == "true":
-            values.add(True)
-        elif raw == "false":
-            values.add(False)
-        else:
-            raise ValueError("preemptible constraint must be 'true' or 'false'")
-
-    if len(values) > 1:
-        raise ValueError("conflicting preemptible constraints")
-    return next(iter(values)) if values else None
-
-
-def required_regions_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> frozenset[str] | None:
-    """Extract required regions from constraints.
-
-    Returns:
-        Set of required regions when specified, otherwise None.
-
-    Raises:
-        ValueError: If region constraints use invalid operators/values or contain
-            conflicting EQ values.
-    """
-    regions: set[str] = set()
-    has_in = False
-    for constraint in constraints:
-        if constraint.key != REGION_ATTRIBUTE_KEY:
-            continue
-        if constraint.op == cluster_pb2.CONSTRAINT_OP_IN:
-            if not constraint.values:
-                raise ValueError("IN region constraint requires at least one value")
-            for av in constraint.values:
-                if not av.HasField("string_value"):
-                    raise ValueError("region constraint requires string value")
-                region = av.string_value.strip()
-                if not region:
-                    raise ValueError("region constraint must be non-empty")
-                regions.add(region)
-            has_in = True
-        elif constraint.op == cluster_pb2.CONSTRAINT_OP_EQ:
-            if not constraint.value.HasField("string_value"):
-                raise ValueError("region constraint requires string value")
-            region = constraint.value.string_value.strip()
-            if not region:
-                raise ValueError("region constraint must be non-empty")
-            regions.add(region)
-        else:
-            raise ValueError(f"region constraint must use EQ or IN, got {constraint.op}")
-
-    if not has_in and len(regions) > 1:
-        raise ValueError("conflicting region constraints")
-    return frozenset(regions) if regions else None
-
-
-def required_zones_from_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> frozenset[str] | None:
-    """Extract required zones from constraints.
-
-    Returns:
-        Set of required zones when specified, otherwise None.
-
-    Raises:
-        ValueError: If zone constraints use invalid operators/values or contain
-            conflicting EQ values.
-    """
-    zones: set[str] = set()
-    has_in = False
-    for constraint in constraints:
-        if constraint.key != ZONE_ATTRIBUTE_KEY:
-            continue
-        if constraint.op == cluster_pb2.CONSTRAINT_OP_IN:
-            if not constraint.values:
-                raise ValueError("IN zone constraint requires at least one value")
-            for av in constraint.values:
-                if not av.HasField("string_value"):
-                    raise ValueError("zone constraint requires string value")
-                zone = av.string_value.strip()
-                if not zone:
-                    raise ValueError("zone constraint must be non-empty")
-                zones.add(zone)
-            has_in = True
-        elif constraint.op == cluster_pb2.CONSTRAINT_OP_EQ:
-            if not constraint.value.HasField("string_value"):
-                raise ValueError("zone constraint requires string value")
-            zone = constraint.value.string_value.strip()
-            if not zone:
-                raise ValueError("zone constraint must be non-empty")
-            zones.add(zone)
-        else:
-            raise ValueError(f"zone constraint must use EQ or IN, got {constraint.op}")
-
-    if not has_in and len(zones) > 1:
-        raise ValueError("conflicting zone constraints")
-    return frozenset(zones) if zones else None
-
-
-def normalize_constraints(constraints: Sequence[cluster_pb2.Constraint]) -> NormalizedConstraints:
-    """Normalize canonical placement constraints from protobuf constraints."""
-    return NormalizedConstraints(
-        preemptible=preemptible_preference_from_constraints(constraints),
-        required_regions=required_regions_from_constraints(constraints),
-        required_zones=required_zones_from_constraints(constraints),
-    )
-
-
-def merge_constraints(parent: Sequence[Constraint], child: Sequence[Constraint]) -> list[Constraint]:
-    """Merge parent and child constraints with canonical-key override semantics."""
-
-    merged_by_key: dict[str, list[Constraint]] = {}
-    for constraint in parent:
-        merged_by_key.setdefault(constraint.key, []).append(constraint)
-
-    for key in (REGION_ATTRIBUTE_KEY, PREEMPTIBLE_ATTRIBUTE_KEY):
-        child_for_key = [constraint for constraint in child if constraint.key == key]
-        if child_for_key:
-            merged_by_key[key] = child_for_key
-
-    for constraint in child:
-        if constraint.key in (REGION_ATTRIBUTE_KEY, PREEMPTIBLE_ATTRIBUTE_KEY):
-            continue
-        existing = merged_by_key.setdefault(constraint.key, [])
-        if constraint not in existing:
-            existing.append(constraint)
-
-    result: list[Constraint] = []
-    for constraints_for_key in merged_by_key.values():
-        result.extend(constraints_for_key)
-    return result
 
 
 def is_job_finished(state: int) -> bool:
@@ -944,39 +672,34 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-def validate_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: int) -> None:
-    """Validate that replicas match the TPU topology's vm_count.
+def adjust_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: int) -> int:
+    """Adjust replicas for multi-host TPU topologies.
 
     Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
-    per VM. This function checks that ``replicas`` is a positive multiple of
-    the topology's ``vm_count`` so that every VM in every slice has exactly
-    one task. A mismatch (e.g. replicas=1 for a v6e-32) would cause JAX
-    distributed initialization to time out waiting for missing workers.
+    per VM. When ``replicas`` is 1 (the default), this auto-scales to
+    ``vm_count`` so callers don't need to know the topology. For explicitly
+    set replicas (>1) that don't align, raises ``ValueError``.
 
-    Args:
-        device: DeviceConfig from the resource spec. ``None`` or non-TPU
-            devices are silently accepted.
-        replicas: Number of replicas requested for the job.
-
-    Raises:
-        ValueError: If the TPU topology is known and ``replicas`` is not a
-            positive multiple of ``vm_count``.
+    Returns:
+        The (possibly adjusted) replica count.
     """
     if device is None or not device.HasField("tpu"):
-        return
+        return replicas
 
     variant = device.tpu.variant
     if not variant:
-        return
+        return replicas
 
     try:
         topo = get_tpu_topology(variant)
     except ValueError:
-        # Unknown topology — nothing to validate.
-        return
+        return replicas
 
     if topo.vm_count <= 1:
-        return
+        return replicas
+
+    if replicas == 1:
+        return topo.vm_count
 
     if replicas % topo.vm_count != 0:
         raise ValueError(
@@ -985,6 +708,8 @@ def validate_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: i
             f"For a single slice, use replicas={topo.vm_count}. "
             f"For N slices, use replicas=N*{topo.vm_count}."
         )
+
+    return replicas
 
 
 class Entrypoint:

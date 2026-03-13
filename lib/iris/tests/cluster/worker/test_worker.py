@@ -6,6 +6,7 @@
 import socket
 import time
 import zipfile
+import hashlib
 from unittest.mock import Mock
 
 import pytest
@@ -13,7 +14,7 @@ from connectrpc.request import RequestContext
 
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint, JobName
-from iris.cluster.worker.bundle_cache import BundleCache
+from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
     ContainerErrorKind,
@@ -85,14 +86,11 @@ def test_concurrent_allocations(allocator):
 
 
 @pytest.fixture
-def mock_bundle_cache(tmp_path):
-    """Create mock BundleCache with a real temp directory."""
-    bundle_dir = tmp_path / "bundle"
-    bundle_dir.mkdir()
-    (bundle_dir / "test_file.py").write_text("print('hello')")
-
-    cache = Mock(spec=BundleCache)
-    cache.get_bundle = Mock(return_value=bundle_dir)
+def mock_bundle_store(tmp_path):
+    """Create mock BundleStore with a real temp directory."""
+    cache = Mock(spec=BundleStore)
+    cache.extract_bundle_to = Mock()
+    cache.write_workdir_files = Mock()
     return cache
 
 
@@ -153,6 +151,7 @@ def mock_runtime():
     # Create a mock handle that will be returned by create_container
     mock_handle = create_mock_container_handle()
     runtime.create_container = Mock(return_value=mock_handle)
+    runtime.stage_bundle = Mock()
 
     runtime.list_iris_containers = Mock(return_value=[])
     runtime.remove_all_iris_containers = Mock(return_value=0)
@@ -161,7 +160,7 @@ def mock_runtime():
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_runtime, tmp_path):
+def worker(mock_bundle_store, mock_runtime, tmp_path):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
@@ -169,11 +168,10 @@ def worker(mock_bundle_cache, mock_runtime, tmp_path):
         poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     return Worker(
         config,
-        bundle_provider=mock_bundle_cache,
+        bundle_store=mock_bundle_store,
         container_runtime=mock_runtime,
     )
 
@@ -228,7 +226,7 @@ def create_run_task_request(
         attempt_id=attempt_id,
         entrypoint=entrypoint_proto,
         environment=env_config,
-        bundle_gcs_path="gs://bucket/bundle.zip",
+        bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         resources=resources,
         ports=ports or [],
     )
@@ -248,6 +246,20 @@ def test_task_lifecycle_phases(worker):
     final_task = worker.get_task(task_id)
     assert final_task.status == cluster_pb2.TASK_STATE_SUCCEEDED
     assert final_task.exit_code == 0
+
+
+def test_runtime_stage_bundle_receives_workdir_files(worker, mock_runtime):
+    request = create_run_task_request()
+    request.entrypoint.workdir_files["extra.txt"] = b"extra"
+    task_id = worker.submit_task(request)
+
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.stage_bundle.called
+    kwargs = mock_runtime.stage_bundle.call_args.kwargs
+    assert kwargs["bundle_id"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert kwargs["workdir_files"]["extra.txt"] == b"extra"
 
 
 def test_task_with_ports(worker):
@@ -375,9 +387,9 @@ def test_docker_create_user_error_still_maps_to_failed(worker, mock_runtime):
     assert "Build failed" in (final_task.error or "")
 
 
-def test_task_exception_handling(worker, mock_runtime):
+def test_task_exception_handling(worker):
     """Test task handles exceptions during execution."""
-    mock_runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
+    worker._runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
@@ -578,12 +590,6 @@ def test_kill_nonexistent_task(worker):
     assert result is False
 
 
-def test_get_logs_nonexistent_task(worker):
-    """Test getting logs for nonexistent task returns empty list."""
-    logs = worker.get_logs(JobName.root("test-user", "nonexistent-task").task(0).to_wire())
-    assert logs == []
-
-
 def test_port_env_vars_set(worker, mock_runtime):
     """Test that IRIS_PORT_* environment variables are set for requested ports."""
     request = create_run_task_request(ports=["web", "api", "metrics"])
@@ -608,11 +614,11 @@ def test_port_env_vars_set(worker, mock_runtime):
     assert len(ports) == 3
 
 
-def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
+def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     """Job-level env vars win over default_task_env, which wins over iris system vars.
 
     The merge order in _create_container is:
-      1. iris system vars (IRIS_JOB_ID, etc.)
+      1. iris system vars (IRIS_TASK_ID, etc.)
       2. default_task_env (worker-level defaults, overrides iris vars)
       3. job-level env_vars (from the request, wins over everything user-visible)
 
@@ -624,10 +630,9 @@ def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
         poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
         default_task_env={"SHARED_KEY": "default_value", "DEFAULT_ONLY": "from_default"},
     )
-    w = Worker(config, bundle_provider=mock_bundle_cache, container_runtime=mock_runtime)
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
     # Build a request whose env_vars override SHARED_KEY but leave DEFAULT_ONLY untouched.
     def _fn():
@@ -641,7 +646,7 @@ def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
         environment=cluster_pb2.EnvironmentConfig(
             env_vars={"SHARED_KEY": "job_value", "JOB_ONLY": "from_job"},
         ),
-        bundle_gcs_path="gs://bucket/bundle.zip",
+        bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
     )
 
@@ -659,12 +664,12 @@ def test_env_merge_precedence(mock_bundle_cache, mock_runtime, tmp_path):
     # Job-only key propagates.
     assert env["JOB_ONLY"] == "from_job"
     # Iris system vars are always injected.
-    assert "IRIS_JOB_ID" in env
+    assert "IRIS_TASK_ID" in env
 
 
-def test_task_failure_error_appears_in_logs(worker, mock_runtime):
+def test_task_failure_error_appears_in_logs(worker):
     """Test that task failure errors appear in logs."""
-    mock_runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
+    worker._runtime.stage_bundle = Mock(side_effect=Exception("Bundle download failed"))
 
     request = create_run_task_request()
     task_id = worker.submit_task(request)
@@ -676,13 +681,8 @@ def test_task_failure_error_appears_in_logs(worker, mock_runtime):
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
     assert "Bundle download failed" in final_task.error
 
-    logs = worker.get_logs(task_id)
-    error_logs = [log for log in logs if log.source == "error"]
-    assert len(error_logs) >= 1
-    assert any("Bundle download failed" in log.data for log in error_logs)
 
-
-def test_port_binding_failure(mock_bundle_cache, tmp_path):
+def test_port_binding_failure(mock_bundle_store, tmp_path):
     """Test that task fails when port binding fails.
 
     With --network=host, port binding happens in the application, not Docker.
@@ -702,11 +702,10 @@ def test_port_binding_failure(mock_bundle_cache, tmp_path):
         poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        log_prefix=f"file://{(tmp_path / 'cache' / 'iris-logs').as_posix()}",
     )
     worker = Worker(
         config,
-        bundle_provider=mock_bundle_cache,
+        bundle_store=mock_bundle_store,
         container_runtime=runtime,
     )
 
@@ -750,7 +749,8 @@ dependencies = []
             if f.is_file():
                 zf.write(f, f.relative_to(bundle_dir))
 
-    return f"file://{zip_path}"
+    bundle_bytes = zip_path.read_bytes()
+    return hashlib.sha256(bundle_bytes).hexdigest(), zip_path
 
 
 def create_integration_entrypoint():
@@ -763,7 +763,7 @@ def create_integration_entrypoint():
     return Entrypoint.from_callable(test_fn)
 
 
-def create_integration_run_task_request(bundle_path: str, task_id: str):
+def create_integration_run_task_request(bundle_id: str, task_id: str):
     """Create a RunTaskRequest for integration testing."""
     entrypoint = create_integration_entrypoint()
 
@@ -771,7 +771,7 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         task_id=task_id,
         num_tasks=1,
         entrypoint=entrypoint.to_proto(),
-        bundle_gcs_path=bundle_path,
+        bundle_id=bundle_id,
         environment=cluster_pb2.EnvironmentConfig(),
         resources=cluster_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
     )
@@ -787,7 +787,7 @@ def cache_dir(tmp_path):
 
 @pytest.fixture
 def test_bundle(tmp_path):
-    """Create a test bundle and return file:// path."""
+    """Create a test bundle and return (bundle_id, zip_path)."""
     return create_test_bundle(tmp_path)
 
 
@@ -801,7 +801,6 @@ def real_worker(cache_dir):
         port_range=(40000, 40100),
         poll_interval=Duration.from_seconds(0.5),  # Faster polling for tests
         default_task_image="iris-task:latest",
-        log_prefix=f"file://{(cache_dir / 'iris-logs').as_posix()}",
     )
     worker = Worker(config, container_runtime=runtime)
     yield worker
@@ -819,10 +818,15 @@ class TestWorkerIntegration:
     """Integration tests for Worker with real components."""
 
     @pytest.mark.docker
-    def test_submit_task_lifecycle(self, real_worker, test_bundle):
+    def test_submit_task_lifecycle(self, real_worker, test_bundle, cache_dir):
         """Test full task lifecycle from submission to completion."""
+        bundle_id, bundle_zip_path = test_bundle
+        bundle_store_zip = cache_dir / "bundles" / f"{bundle_id}.zip"
+        bundle_store_zip.parent.mkdir(parents=True, exist_ok=True)
+        bundle_store_zip.write_bytes(bundle_zip_path.read_bytes())
+
         expected_task_id = JobName.root("test-user", "integration-test").task(0).to_wire()
-        request = create_integration_run_task_request(test_bundle, expected_task_id)
+        request = create_integration_run_task_request(bundle_id, expected_task_id)
 
         task_id = real_worker.submit_task(request)
         assert task_id == expected_task_id
@@ -858,23 +862,3 @@ class TestWorkerServiceIntegration:
 
         assert response.healthy
         assert response.uptime.milliseconds >= 0
-
-    @pytest.mark.docker
-    def test_fetch_logs_tail(self, real_worker, real_service, test_bundle):
-        """Test FetchLogs with negative start_line for tailing."""
-        ctx = Mock(spec=RequestContext)
-
-        task_id = JobName.root("test-user", "logs-test").task(0).to_wire()
-        request = create_integration_run_task_request(test_bundle, task_id)
-        real_worker.submit_task(request)
-
-        time.sleep(2)
-
-        log_request = cluster_pb2.Worker.FetchTaskLogsRequest(
-            task_id=task_id,
-            filter=cluster_pb2.Worker.FetchLogsFilter(start_line=-10),
-        )
-
-        response = real_service.fetch_task_logs(log_request, ctx)
-        assert response.logs is not None
-        assert len(response.logs) >= 0

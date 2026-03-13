@@ -98,15 +98,15 @@ to setup the required keys for accessing the Marin Ray clusters.
    ```bash
    ray dashboard infra/marin-$REGION.yaml
    ```
-2. We have made a thin wrapper on top of `ray submit` called [ray-run](https://github.com/marin-community/tree/main/marin/run/ray_run.py) which can be used to easily specify the additional pip requirements and environment variables (Apart from those specified in the Dockerfile or cluster config). Ray run ensures following stuff:
+2. We have made a thin wrapper on top of `ray submit` called [ray-run](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/run/ray_run.py) which can be used to easily specify additional dependency extras/packages and environment variables (apart from those specified in the Dockerfile or cluster config). Ray run ensures the following:
    - All the dependencies in pyproject.toml are installed
-   - Some of the necessary environment variables are set from file [vars.py](https://github.com/marin-community/tree/main/marin/run/vars.py)
+   - Some necessary environment defaults are set directly in `ray_run.py`
    - `src` directories of submodules are added to `PYTHONPATH`.
 
 
-You can use `--env_vars` and `--pip_deps` to specify additional environment variables and pip dependencies. For example, to run a job with additional pip dependencies `jax==0.4.35 and async-lru, along with the environment variable WANDB_API_KEY, you can use:
+You can use `--env_vars` and `--extra` to specify additional environment variables and dependency extras/packages. For example, to run a job with an additional package (`async-lru`) and the environment variable `WANDB_API_KEY`, you can use:
 ```bash
-python marin/run/ray_run.py --env_vars WANDB_API_KEY ${WANDB_API_KEY}  --pip_deps jax==0.4.35,async-lru --  python experiments/tutorials/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py --env_vars WANDB_API_KEY ${WANDB_API_KEY} --extra async-lru -- python experiments/tutorials/hello_world.py
 ```
 
 ## Managing the Cluster
@@ -121,7 +121,7 @@ You can specify a path to either a config file or a region to operate on e.g. `e
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml start-cluster
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml stop-cluster
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml restart-cluster
-uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml get-status
+uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml list-workers
 
 # List and update configurations
 uv run scripts/ray/cluster.py list-configs
@@ -131,19 +131,14 @@ uv run scripts/ray/cluster.py update-configs
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml ssh-head
 uv run scripts/ray/cluster.py ssh-tpu 10.130.1.40
 
-# Maintenance operations
-uv run scripts/ray/cluster.py clean-tpu-processes --dry-run
-uv run scripts/ray/cluster.py clean-tpu-processes --tpu-type v4-8
-uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml clean-preempted-tpus
-
 # Job operations
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml list-jobs
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml submit-job "python experiments/tutorials/hello_world.py"
+uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml wait-job <JOB_ID> --show-logs
 
 # Monitoring and logs
-uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml monitor-cluster --wandb
 uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml show-logs --tail 100
-uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml open-dashboard
+uv run scripts/ray/cluster.py --config infra/marin-$REGION.yaml dashboard
 ```
 
 ### Legacy Commands (still supported)
