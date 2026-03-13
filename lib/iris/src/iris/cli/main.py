@@ -114,11 +114,11 @@ def require_controller_url(ctx: click.Context) -> str:
         ctx.obj["platform"] = platform
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.controller.local import LocalController
+            from iris.cluster.local_cluster import LocalCluster
 
-            controller = LocalController(iris_config.proto)
-            controller_address = controller.start()
-            ctx.call_on_close(controller.stop)
+            cluster = LocalCluster(iris_config.proto)
+            controller_address = cluster.start()
+            ctx.call_on_close(cluster.close)
         else:
             controller_address = iris_config.controller_address()
             if not controller_address:
