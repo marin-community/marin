@@ -39,7 +39,7 @@ New file: `lib/iris/src/iris/runtime/jax_init.py`. Single public function:
 
 ```python
 def initialize_jax(
-    port: int = 0,
+    port: int = 8476,
     endpoint_name: str = "jax_coordinator",
     poll_timeout: float = 300.0,
     poll_interval: float = 2.0,
@@ -49,10 +49,10 @@ def initialize_jax(
 **Task 0 flow:**
 1. Read `JobInfo` via `get_job_info()` (`job_info.py:81`).
 2. If `num_tasks == 1`: call `jax.distributed.initialize()` with defaults and return.
-3. Bind coordinator port: use `IRIS_PORT_jax` if allocated (from `job_info.ports`), else the provided `port` arg (0 = OS-assigned).
+3. Bind coordinator port: use `IRIS_PORT_jax` if allocated (from `job_info.ports`), else the provided `port` arg. An explicit port is required — JAX's gRPC coordinator binds internally and does not expose the actual bound port, so port 0 (OS-assigned) would register `host:0`, which is unusable.
 4. Build coordinator address: `f"{job_info.advertise_host}:{bound_port}"`.
 5. Create `IrisContext` via `iris_ctx()` (`client.py:1025`) — this gives access to the `NamespacedEndpointRegistry`.
-6. Register endpoint: `ctx.endpoint_registry.register(endpoint_name, coordinator_address)`.
+6. Register endpoint: `ctx.registry.register(endpoint_name, coordinator_address)`.
 7. Call `jax.distributed.initialize(coordinator_address, num_tasks, 0)`.
 8. Register `atexit` handler to unregister the endpoint.
 
@@ -64,7 +64,7 @@ def initialize_jax(
 
 ```python
 def initialize_jax(
-    port: int = 0,
+    port: int = 8476,
     endpoint_name: str = "jax_coordinator",
     poll_timeout: float = 300.0,
     poll_interval: float = 2.0,
@@ -80,8 +80,8 @@ def initialize_jax(
     if task_index == 0:
         bound_port = job_info.ports.get("jax", port)
         address = f"{job_info.advertise_host}:{bound_port}"
-        endpoint_id = ctx.endpoint_registry.register(endpoint_name, address)
-        atexit.register(ctx.endpoint_registry.unregister, endpoint_id)
+        endpoint_id = ctx.registry.register(endpoint_name, address)
+        atexit.register(ctx.registry.unregister, endpoint_id)
         coordinator = address
     else:
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
@@ -119,7 +119,7 @@ Add a multi-VM scale group to `examples/coreweave.yaml`:
         instance_type: gd-8xh100ib-i128
 ```
 
-Jobs targeting this group submit with `replicas=2` and `coscheduling=CoschedulingConfig(group_by="pool")`. The existing coscheduling scheduler (`scheduler.py:648`) groups workers by the `pool` attribute and assigns all replicas to workers in the same group. The autoscaler feasibility check (`service.py:637-643`) validates that `num_vms` matches `replicas`.
+Jobs targeting this group submit with `replicas=2` and `coscheduling=CoschedulingConfig(group_by="pool")`. The existing coscheduling scheduler (`scheduler.py:648`) groups workers by the `pool` attribute and assigns all replicas to workers in the same group. The autoscaler feasibility check (`autoscaler.py:1406`) validates that `replicas` is an exact multiple of `num_vms` (e.g., a group with `num_vms: 2` can serve 2, 4, 6, ... replicas).
 
 ### Endpoint lifecycle on restart
 
@@ -134,16 +134,22 @@ No new code needed. The existing mechanisms handle restarts:
 
 1. **Create `iris.runtime.jax_init`** — `lib/iris/src/iris/runtime/__init__.py` + `jax_init.py` with `initialize_jax()` and `_poll_for_coordinator()`. No proto changes needed.
 2. **Add multi-VM scale group** to `examples/coreweave.yaml` — `h100-16x` with `num_vms: 2` and corresponding `slice_template`.
-3. **Wire named port** — Add `"jax"` to the default `ports` list for multi-replica GPU jobs, so `IRIS_PORT_JAX` is available. This is a user-side concern (passed in `LaunchJobRequest.ports`), not a framework change.
-4. **Integration test** — Use the in-process controller test harness to submit a 2-replica job where task 0 registers a coordinator endpoint and task 1 resolves it. Verify both tasks see the same address. Simulate task 0 restart and verify re-convergence. No real GPUs needed — mock `jax.distributed.initialize`.
-5. **Levanter callsite** — In user-level training scripts (not in Levanter itself), replace `DistributedConfig(...).initialize()` with `initialize_jax()` when `IRIS_CONTROLLER_ADDRESS` is set. This respects the dependency direction (`iris` does not import `levanter`; user code imports both).
+3. **Lift `num_vms > 1` restriction in `CoreweavePlatform.create_slice()`** — This is the hardest step. `coreweave.py:627-631` currently raises `ValueError` for `num_vms > 1`, and `coreweave.md:436-437` documents this as a known limitation. The changes needed:
+   - Remove the `num_vms > 1` guard in `create_slice()`.
+   - Create N worker Pods per slice (one per VM), each with the correct `task_index` offset.
+   - Wait for all N Pods to reach Ready state before transitioning the slice to READY.
+   - Wire the N Pods into a single `CoreweaveSliceHandle` that tracks all Pod names/IPs and tears them all down on release.
+   - Handle partial failures: if Pod k/N fails to start, clean up Pods 0..k-1 and report slice FAILED.
+4. **Wire named port** — Add `"jax"` to the default `ports` list for multi-replica GPU jobs, so `IRIS_PORT_JAX` is available. This is a user-side concern (passed in `LaunchJobRequest.ports`), not a framework change.
+5. **Integration test** — Use the in-process controller test harness to submit a 2-replica job where task 0 registers a coordinator endpoint and task 1 resolves it. Verify both tasks see the same address. Simulate task 0 restart and verify re-convergence. No real GPUs needed — mock `jax.distributed.initialize`.
+6. **Levanter callsite** — In user-level training scripts (not in Levanter itself), replace `DistributedConfig(...).initialize()` with `initialize_jax()` when `IRIS_CONTROLLER_ADDRESS` is set. This respects the dependency direction (`iris` does not import `levanter`; user code imports both).
 
 ## Notes
 
 - `initialize_jax()` imports `jax` at call time, not module level. Iris does not depend on JAX — this is a runtime utility that tasks opt into.
 - The `NamespacedResolver` (`client.py:430-465`) uses `list_endpoints(prefix=name, exact=True)`, which filters out endpoints from terminal jobs automatically (`db.py:934-937`). No risk of resolving a stale endpoint from a previous job run with the same name.
 - `hostNetwork: true` on CoreWeave (`coreweave.md:65`) means `advertise_host` is the node's real IP, routable across the VPC. No NAT traversal needed.
-- Port 0 (OS-assigned) works because task 0 registers the actual bound port. Pre-allocating via `IRIS_PORT_JAX` is preferable for firewall predictability but not required.
+- An explicit coordinator port is required (default: 8476). JAX's gRPC coordinator binds internally and does not expose the actual bound port, so port 0 (OS-assigned) would result in registering `host:0`. Either allocate via `IRIS_PORT_JAX` or pass a fixed port to `initialize_jax()`.
 
 ## Future Work
 
