@@ -435,7 +435,7 @@ class IrisActorGroup:
 
     def is_done(self) -> bool:
         """Return True if the Iris worker job has permanently terminated."""
-        from iris.cluster.types import is_job_finished
+        return is_job_finished(job_status.state)
 
         client = self._get_client()
         job_status = client.status(self._job_id)
