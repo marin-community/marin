@@ -683,8 +683,8 @@ class ControllerConfig:
     """If set, take a periodic best-effort snapshot this often.
     Runs in the autoscaler loop thread; does not pause scheduling."""
 
-    local_state_dir: Path | None = None
-    """Local directory for controller DB, logs, bundle cache. When None, uses a temp dir."""
+    local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
+    """Local directory for controller DB, logs, bundle cache."""
 
     auth_verifier: TokenVerifier | None = None
     """When set, all RPC calls require a valid bearer token verified by this verifier."""
@@ -746,19 +746,12 @@ class Controller:
         self._config = config
         self.stub_factory = worker_stub_factory
 
+        config.local_state_dir.mkdir(parents=True, exist_ok=True)
         if db is not None:
             self._db = db
-            log_db_path = db.db_path.parent / "logs.sqlite3"
-        elif config.local_state_dir is not None:
-            db_path = config.local_state_dir / "controller.sqlite3"
-            self._db = ControllerDB(db_path=db_path)
-            log_db_path = config.local_state_dir / "logs.sqlite3"
         else:
-            tmp = Path(tempfile.mkdtemp(prefix="iris_controller_state_"))
-            db_path = tmp / "controller.sqlite3"
-            self._db = ControllerDB(db_path=db_path)
-            log_db_path = tmp / "logs.sqlite3"
-        self._log_store = LogStore(db_path=log_db_path)
+            self._db = ControllerDB(db_path=config.local_state_dir / "controller.sqlite3")
+        self._log_store = LogStore(db_path=config.local_state_dir / "logs.sqlite3")
         self._transitions = ControllerTransitions(
             db=self._db,
             log_store=self._log_store,
@@ -766,8 +759,7 @@ class Controller:
         )
         self._scheduler = Scheduler()
 
-        bundle_db_path = self._db.db_path.parent / "bundles.sqlite3"
-        self._bundle_store = BundleStore(db_path=bundle_db_path)
+        self._bundle_store = BundleStore(db_path=config.local_state_dir / "bundles.sqlite3")
 
         self._service = ControllerServiceImpl(
             self._transitions,

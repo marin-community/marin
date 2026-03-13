@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
+HOURLY_CHECKPOINT_SECONDS = 3600.0
 
 
 @click.group()
@@ -145,10 +146,8 @@ def serve(
     if base_worker_config is not None:
         base_worker_config.storage_prefix = remote_state_dir
 
-    # Default to hourly checkpointing
-    _HOURLY_CHECKPOINT_SECONDS = 3600.0
     if checkpoint_interval is None:
-        checkpoint_interval = _HOURLY_CHECKPOINT_SECONDS
+        checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
         logger.info("Defaulting to hourly checkpointing")
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)

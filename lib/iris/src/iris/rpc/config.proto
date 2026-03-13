@@ -286,11 +286,10 @@ message SshConfig {
 // ============================================================================
 
 message StorageConfig {
-  reserved 1;  // was: bundle_prefix (replaced by remote_state_dir)
-  string local_state_dir = 2;      // Local directory for controller DB, logs, bundle cache.
+  string local_state_dir = 1;      // Local directory for controller DB, logs, bundle cache.
                                     // Must be on a volume that survives container restarts.
                                     // Default: /var/cache/iris/controller
-  string remote_state_dir = 3;     // Remote URI for controller checkpoints and worker profiles
+  string remote_state_dir = 2;     // Remote URI for controller checkpoints and worker profiles
                                     // (e.g. gs://bucket/iris/state). Required for production.
 }
 
