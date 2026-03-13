@@ -79,7 +79,7 @@ const columns: Column[] = [
 
         <template #cell-zone="{ row }">
           <span class="text-xs font-mono">
-            {{ (row as WorkerHealthStatus).metadata?.gceZone ?? '-' }}
+            {{ (row as WorkerHealthStatus).metadata?.attributes?.zone?.stringValue ?? '-' }}
           </span>
         </template>
 
