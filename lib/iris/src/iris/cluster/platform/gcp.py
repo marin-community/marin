@@ -919,6 +919,7 @@ class GcpPlatform:
         startup_script: str | None = None
         if worker_config:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
+            worker_config.slice_id = slice_id
             startup_script = build_worker_bootstrap_script(worker_config)
 
         cmd = [
