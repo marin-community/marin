@@ -985,8 +985,18 @@ def test_dashboard_login_flow():
         controller.close()
 
 
+def _login_for_jwt(url: str, identity_token: str) -> str:
+    """Exchange a raw identity token for a JWT via the Login RPC."""
+    client = ControllerServiceClientSync(address=url, timeout_ms=10000)
+    try:
+        resp = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
+        return resp.token
+    finally:
+        client.close()
+
+
 def test_static_auth_rpc_access():
-    """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid token."""
+    """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
     from iris.cluster.controller.local import LocalController
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
@@ -1011,8 +1021,9 @@ def test_static_auth_rpc_access():
             wrong_client.list_workers(list_req)
         wrong_client.close()
 
-        # Valid token: should succeed
-        valid_injector = AuthTokenInjector(StaticTokenProvider(_AUTH_TOKEN))
+        # Exchange static token for JWT, then use JWT
+        jwt_token = _login_for_jwt(url, _AUTH_TOKEN)
+        valid_injector = AuthTokenInjector(StaticTokenProvider(jwt_token))
         valid_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[valid_injector])
         response = valid_client.list_workers(list_req)
         assert response is not None
@@ -1041,8 +1052,12 @@ def test_static_auth_job_ownership():
     url = controller.start()
 
     try:
+        # Exchange static tokens for JWTs via Login RPC
+        jwt_a = _login_for_jwt(url, _TOKEN_A)
+        jwt_b = _login_for_jwt(url, _TOKEN_B)
+
         # User A submits a job (stays PENDING since no workers)
-        injector_a = AuthTokenInjector(StaticTokenProvider(_TOKEN_A))
+        injector_a = AuthTokenInjector(StaticTokenProvider(jwt_a))
         client_a = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_a])
 
         entrypoint = Entrypoint.from_callable(TestJobs.quick)
@@ -1055,7 +1070,7 @@ def test_static_auth_job_ownership():
         job_id = resp.job_id
 
         # User B tries to terminate user A's job — should fail
-        injector_b = AuthTokenInjector(StaticTokenProvider(_TOKEN_B))
+        injector_b = AuthTokenInjector(StaticTokenProvider(jwt_b))
         client_b = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_b])
         with pytest.raises(ConnectError, match="cannot modify"):
             client_b.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))

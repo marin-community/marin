@@ -17,10 +17,30 @@ async function login() {
   error.value = null
   loading.value = true
   try {
+    // Try exchanging the token for a JWT via Login RPC.
+    // This handles raw identity tokens (static config tokens, GCP access tokens).
+    // If the token is already a JWT, Login will fail and we use it directly.
+    let sessionToken = trimmed
+    try {
+      const loginResp = await fetch('/iris.cluster.ControllerService/Login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identity_token: trimmed }),
+      })
+      if (loginResp.ok) {
+        const loginData = await loginResp.json()
+        if (loginData.token) {
+          sessionToken = loginData.token
+        }
+      }
+    } catch {
+      // Login RPC unavailable or failed — use token as-is (may be a JWT already)
+    }
+
     const resp = await fetch('/auth/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: trimmed }),
+      body: JSON.stringify({ token: sessionToken }),
     })
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}))

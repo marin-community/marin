@@ -14,19 +14,19 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import (
     WORKER_USER,
     ControllerAuth,
-    DbTokenVerifier,
+    JwtTokenManager,
     create_api_key,
     create_controller_auth,
     list_api_keys,
 )
-from iris.rpc.auth import hash_token
+from iris.rpc.auth import VerifiedIdentity, hash_token
 from iris.time_utils import Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import LogStore
 from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.auth import _verified_user
+from iris.rpc.auth import _verified_identity
 
 
 @pytest.fixture
@@ -69,9 +69,18 @@ def test_static_preload_inserts_keys(db):
     assert auth.verifier is not None
     assert auth.provider == "static"
 
-    # Both tokens should be verifiable
-    assert auth.verifier.verify("tok-a") == "alice"
-    assert auth.verifier.verify("tok-b") == "bob"
+    # Static tokens are now only usable via Login RPC (exchanged for JWTs).
+    # The login_verifier (StaticTokenVerifier) can authenticate raw static tokens.
+    alice_identity = auth.login_verifier.verify("tok-a")
+    assert alice_identity.user_id == "alice"
+
+    bob_identity = auth.login_verifier.verify("tok-b")
+    assert bob_identity.user_id == "bob"
+
+    # The JWT verifier (JwtTokenManager) verifies worker token correctly.
+    assert auth.worker_token is not None
+    identity = auth.verifier.verify(auth.worker_token)
+    assert identity.user_id == WORKER_USER
 
 
 def test_static_preload_is_idempotent(db):
@@ -87,9 +96,10 @@ def test_worker_token_in_api_keys(db):
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
 
-    # Worker token should be verifiable
+    # Worker token is a JWT — verify it resolves to WORKER_USER
     assert auth.worker_token is not None
-    assert auth.verifier.verify(auth.worker_token) == WORKER_USER
+    identity = auth.verifier.verify(auth.worker_token)
+    assert identity.user_id == WORKER_USER
 
 
 def test_worker_token_differs_after_restart(db):
@@ -101,9 +111,12 @@ def test_worker_token_differs_after_restart(db):
     token2 = auth2.worker_token
     assert token1 != token2
 
-    # Both tokens should still work (old not revoked)
-    assert auth2.verifier.verify(token1) == WORKER_USER
-    assert auth2.verifier.verify(token2) == WORKER_USER
+    # Both tokens should still work (old not revoked) — using auth2's verifier
+    # (same signing key, loaded revocations from DB)
+    identity1 = auth2.verifier.verify(token1)
+    identity2 = auth2.verifier.verify(token2)
+    assert identity1.user_id == WORKER_USER
+    assert identity2.user_id == WORKER_USER
 
 
 def test_admin_users_bootstrapped(db):
@@ -122,10 +135,12 @@ def test_login_verifier_set_for_gcp(db):
     assert auth.provider == "gcp"
 
 
-def test_login_verifier_none_for_static(db):
+def test_login_verifier_set_for_static(db):
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
-    assert auth.login_verifier is None
+    # Static auth now also sets login_verifier (StaticTokenVerifier)
+    assert auth.login_verifier is not None
+    assert auth.provider == "static"
 
 
 # ---------------------------------------------------------------------------
@@ -137,13 +152,15 @@ def test_login_rejects_system_prefix(db):
     """Login RPC rejects usernames starting with system:."""
 
     class SystemVerifier:
-        def verify(self, token: str) -> str:
-            return "system:hacker"
+        def verify(self, token: str) -> VerifiedIdentity:
+            return VerifiedIdentity(user_id="system:hacker", role="user")
 
+    jwt_mgr = JwtTokenManager("test-signing-key")
     auth = ControllerAuth(
-        verifier=DbTokenVerifier(db),
+        verifier=jwt_mgr,
         provider="gcp",
         login_verifier=SystemVerifier(),
+        jwt_manager=jwt_mgr,
     )
     service = _make_service(db, auth=auth)
 
@@ -153,16 +170,18 @@ def test_login_rejects_system_prefix(db):
 
 
 def test_login_creates_user_and_key(db):
-    """Login RPC creates a user and returns a working API key."""
+    """Login RPC creates a user and returns a working JWT."""
 
     class FakeVerifier:
-        def verify(self, token: str) -> str:
-            return "alice@example.com"
+        def verify(self, token: str) -> VerifiedIdentity:
+            return VerifiedIdentity(user_id="alice@example.com", role="user")
 
+    jwt_mgr = JwtTokenManager("test-signing-key")
     auth = ControllerAuth(
-        verifier=DbTokenVerifier(db),
+        verifier=jwt_mgr,
         provider="gcp",
         login_verifier=FakeVerifier(),
+        jwt_manager=jwt_mgr,
     )
     service = _make_service(db, auth=auth)
 
@@ -171,31 +190,35 @@ def test_login_creates_user_and_key(db):
     assert response.token
     assert response.key_id.startswith("iris_k_")
 
-    # The returned token should work with DbTokenVerifier
-    assert auth.verifier.verify(response.token) == "alice@example.com"
+    # The returned JWT should verify correctly
+    identity = auth.verifier.verify(response.token)
+    assert identity.user_id == "alice@example.com"
 
 
 def test_login_is_idempotent(db):
     """Logging in twice revokes the first login key, leaving only one active."""
 
     class FakeVerifier:
-        def verify(self, token: str) -> str:
-            return "alice@example.com"
+        def verify(self, token: str) -> VerifiedIdentity:
+            return VerifiedIdentity(user_id="alice@example.com", role="user")
 
+    jwt_mgr = JwtTokenManager("test-signing-key")
     auth = ControllerAuth(
-        verifier=DbTokenVerifier(db),
+        verifier=jwt_mgr,
         provider="gcp",
         login_verifier=FakeVerifier(),
+        jwt_manager=jwt_mgr,
     )
     service = _make_service(db, auth=auth)
 
     resp1 = service.login(cluster_pb2.LoginRequest(identity_token="tok1"), None)
     resp2 = service.login(cluster_pb2.LoginRequest(identity_token="tok2"), None)
 
-    # Only the second token should work
+    # First token should be revoked (JTI added to revocation set)
     with pytest.raises(ValueError, match="revoked"):
         auth.verifier.verify(resp1.token)
-    assert auth.verifier.verify(resp2.token) == "alice@example.com"
+    identity = auth.verifier.verify(resp2.token)
+    assert identity.user_id == "alice@example.com"
 
     # Only 1 active login key
     all_keys = list_api_keys(db, user_id="alice@example.com")
@@ -206,7 +229,8 @@ def test_login_is_idempotent(db):
 
 def test_login_not_available_without_login_verifier(db):
     """Login RPC returns UNIMPLEMENTED when no login_verifier is configured."""
-    auth = ControllerAuth(verifier=DbTokenVerifier(db), provider="static")
+    jwt_mgr = JwtTokenManager("test-signing-key")
+    auth = ControllerAuth(verifier=jwt_mgr, provider="static", jwt_manager=jwt_mgr)
     service = _make_service(db, auth=auth)
 
     with pytest.raises(ConnectError) as exc_info:
@@ -220,26 +244,27 @@ def test_login_not_available_without_login_verifier(db):
 
 
 def test_create_api_key_returns_raw_token(db):
-    """CreateApiKey returns a working raw token."""
+    """CreateApiKey returns a working JWT token."""
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    token = _verified_user.set("alice")
+    token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         response = service.create_api_key(
             cluster_pb2.CreateApiKeyRequest(name="my-key"),
             None,
         )
     finally:
-        _verified_user.reset(token)
+        _verified_identity.reset(token)
 
     assert response.token
     assert response.key_id.startswith("iris_k_")
     assert response.key_prefix == response.token[:8]
 
-    # Token should work
-    assert auth.verifier.verify(response.token) == "alice"
+    # JWT token should verify correctly
+    identity = auth.verifier.verify(response.token)
+    assert identity.user_id == "alice"
 
 
 def test_list_api_keys_never_exposes_hash(db):
@@ -248,14 +273,14 @@ def test_list_api_keys_never_exposes_hash(db):
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    token = _verified_user.set("alice")
+    token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         response = service.list_api_keys(
             cluster_pb2.ListApiKeysRequest(user_id="alice"),
             None,
         )
     finally:
-        _verified_user.reset(token)
+        _verified_identity.reset(token)
 
     assert len(response.keys) > 0
     for key_info in response.keys:
@@ -276,7 +301,7 @@ def test_revoke_key_owner_only(db):
     assert alice_keys
 
     # Bob tries to revoke alice's key
-    token = _verified_user.set("bob")
+    token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
     try:
         with pytest.raises(ConnectError) as exc_info:
             service.revoke_api_key(
@@ -285,7 +310,7 @@ def test_revoke_key_owner_only(db):
             )
         assert exc_info.value.code == Code.PERMISSION_DENIED
     finally:
-        _verified_user.reset(token)
+        _verified_identity.reset(token)
 
 
 def test_admin_can_revoke_any_key(db):
@@ -299,24 +324,21 @@ def test_admin_can_revoke_any_key(db):
 
     alice_keys = list_api_keys(db, user_id="alice")
     assert alice_keys
+    alice_key_id = alice_keys[0].key_id
 
-    token = _verified_user.set("bob")
+    token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="admin"))
     try:
         service.revoke_api_key(
-            cluster_pb2.RevokeApiKeyRequest(key_id=alice_keys[0].key_id),
+            cluster_pb2.RevokeApiKeyRequest(key_id=alice_key_id),
             None,
         )
     finally:
-        _verified_user.reset(token)
+        _verified_identity.reset(token)
 
-    # Alice's token should no longer work
+    # Alice's key should be in the revocation set — verify via a fresh JWT for alice
+    alice_jwt = auth.jwt_manager.create_token("alice", "user", alice_key_id)
     with pytest.raises(ValueError, match="revoked"):
-        auth.verifier.verify("tok-a")
-
-
-# ---------------------------------------------------------------------------
-# Null-auth mode
-# ---------------------------------------------------------------------------
+        auth.verifier.verify(alice_jwt)
 
 
 # ---------------------------------------------------------------------------
@@ -365,14 +387,16 @@ def test_discovery_login_flow(db):
     """
 
     class FakeVerifier:
-        def verify(self, token: str) -> str:
-            return "alice@example.com"
+        def verify(self, token: str) -> VerifiedIdentity:
+            return VerifiedIdentity(user_id="alice@example.com", role="user")
 
+    jwt_mgr = JwtTokenManager("test-signing-key")
     auth = ControllerAuth(
-        verifier=DbTokenVerifier(db),
+        verifier=jwt_mgr,
         provider="gcp",
         login_verifier=FakeVerifier(),
         gcp_project_id="test-project",
+        jwt_manager=jwt_mgr,
     )
     service = _make_service(db, auth=auth)
 
@@ -387,8 +411,9 @@ def test_discovery_login_flow(db):
     assert response.token
     assert response.key_id.startswith("iris_k_")
 
-    # Step 3: Returned API key works for subsequent authenticated RPCs
-    assert auth.verifier.verify(response.token) == "alice@example.com"
+    # Step 3: Returned JWT works for subsequent authenticated RPCs
+    identity = auth.verifier.verify(response.token)
+    assert identity.user_id == "alice@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +433,7 @@ def test_null_auth_creates_anonymous_admin_and_worker_token(db):
 
 
 def test_null_auth_rpcs_work_with_anonymous_token(db):
-    """Auth RPCs work in null-auth mode via DbTokenVerifier."""
+    """Auth RPCs work in null-auth mode via JwtTokenManager."""
     config = config_pb2.AuthConfig()
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
@@ -425,8 +450,11 @@ def test_null_auth_rpcs_work_with_anonymous_token(db):
         now=Timestamp.now(),
     )
 
-    verified_user = auth.verifier.verify(anonymous_token)
-    reset = _verified_user.set(verified_user)
+    # In null-auth mode the verifier is JwtTokenManager, so create a proper JWT
+    key_id = f"iris_k_test_{secrets.token_hex(4)}"
+    jwt_token = auth.jwt_manager.create_token("anonymous", "admin", key_id)
+    verified = auth.verifier.verify(jwt_token)
+    reset = _verified_identity.set(verified)
     try:
         keys_resp = service.list_api_keys(cluster_pb2.ListApiKeysRequest(), None)
         assert keys_resp is not None
@@ -438,7 +466,7 @@ def test_null_auth_rpcs_work_with_anonymous_token(db):
         assert create_resp.token
         assert create_resp.key_id.startswith("iris_k_")
     finally:
-        _verified_user.reset(reset)
+        _verified_identity.reset(reset)
 
 
 def test_null_auth_get_current_user(db):
@@ -447,23 +475,14 @@ def test_null_auth_get_current_user(db):
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    # Create an API key for "anonymous" to simulate authenticated access
-    anonymous_token = secrets.token_urlsafe(32)
-    create_api_key(
-        db,
-        key_id=f"iris_k_test_{secrets.token_hex(4)}",
-        key_hash=hash_token(anonymous_token),
-        key_prefix=anonymous_token[:8],
-        user_id="anonymous",
-        name="test-null-auth-user",
-        now=Timestamp.now(),
-    )
-
-    verified_user = auth.verifier.verify(anonymous_token)
-    reset = _verified_user.set(verified_user)
+    # Create a JWT for anonymous/admin
+    key_id = f"iris_k_test_{secrets.token_hex(4)}"
+    jwt_token = auth.jwt_manager.create_token("anonymous", "admin", key_id)
+    verified = auth.verifier.verify(jwt_token)
+    reset = _verified_identity.set(verified)
     try:
         resp = service.get_current_user(cluster_pb2.GetCurrentUserRequest(), None)
         assert resp.user_id == "anonymous"
         assert resp.role == "admin"
     finally:
-        _verified_user.reset(reset)
+        _verified_identity.reset(reset)

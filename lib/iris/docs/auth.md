@@ -12,21 +12,25 @@ Authentication is configured via the `auth` block in `IrisClusterConfig`. Three 
 
 | Mode | Config | Behavior |
 |------|--------|----------|
-| **Null-auth** | No `auth` block | All requests pass as `anonymous` (admin). Workers still get an internal bearer token. |
-| **Static** | `auth.static.tokens: {token: username}` | Pre-shared tokens mapped to usernames. Good for local dev and testing. |
-| **GCP** | `auth.gcp.project_id: <id>` | Users log in with a GCP OAuth2 access token. The controller verifies it against Google's tokeninfo endpoint and checks project access via Cloud Resource Manager. |
+| **Null-auth** | No `auth` block | All requests pass as `anonymous` (admin). Workers still get a JWT. |
+| **Static** | `auth.static.tokens: {token: username}` | Pre-shared tokens exchanged for JWTs via Login RPC. Good for local dev and testing. |
+| **GCP** | `auth.gcp.project_id: <id>` | Users log in with a GCP OAuth2 access token, exchanged for a JWT via Login RPC. |
 
 ### Token lifecycle
 
-All auth modes converge on the same runtime path: **API keys stored in SQLite**.
+All tokens are **JWTs signed with HMAC-SHA256**. The signing key is persisted in the `controller_secrets` table so tokens survive controller restarts.
+
+JWT claims: `sub` (user_id), `role`, `jti` (key_id), `iat`, `exp`.
 
 1. On controller start, `create_controller_auth()` reads the config proto and:
-   - Creates a `system:worker` user with a fresh bearer token (all modes, including null-auth).
-   - For static auth: preloads config tokens into the `api_keys` table.
-   - For GCP auth: instantiates a `GcpAccessTokenVerifier` as the *login verifier*.
-2. On `Login` RPC (GCP mode): the controller verifies the GCP access token, creates/ensures the user, revokes old login keys, mints a new API key, and returns it.
-3. All subsequent RPCs are authenticated by hashing the bearer token (SHA-256) and looking it up in `api_keys`. Expired and revoked keys are rejected.
-4. `last_used_at` is throttled to one DB write per 60s per key.
+   - Loads (or creates) the persistent JWT signing key from `controller_secrets`.
+   - Creates a `system:worker` user with a fresh worker JWT (all modes, including null-auth).
+   - For static auth: preloads config tokens into `api_keys` for audit; sets up `StaticTokenVerifier` as the login verifier.
+   - For GCP auth: instantiates a `GcpAccessTokenVerifier` as the login verifier.
+   - Loads revoked key_ids into an in-memory revocation set.
+2. On `Login` RPC: the controller verifies the identity token (GCP access token or raw static token), creates/ensures the user, revokes old login keys, mints a new JWT, and returns it.
+3. All subsequent RPCs are authenticated by **verifying the JWT signature** and checking the in-memory revocation set. No database hit on the hot path.
+4. The `api_keys` table is retained for audit, key management RPCs, and revocation tracking.
 
 ### Interceptor chain
 
@@ -36,13 +40,13 @@ Request → SelectiveAuthInterceptor → Service handler
             ├─ Login, GetAuthInfo  →  skip auth (unauthenticated RPCs)
             └─ everything else     →  AuthInterceptor.verify()
                                         │
-                                        ├─ Authorization: Bearer <token>
-                                        └─ Cookie: iris_session=<token>
+                                        ├─ Authorization: Bearer <JWT>
+                                        └─ Cookie: iris_session=<JWT>
 ```
 
-In null-auth mode, `NullAuthInterceptor` replaces `AuthInterceptor`: tokens are verified if present (workers), but missing tokens fall through as `anonymous`.
+In null-auth mode, `NullAuthInterceptor` replaces `AuthInterceptor`: JWTs are verified if present (workers), but missing tokens fall through as `anonymous` admin.
 
-The verified user identity is stored in a `ContextVar` (`_verified_user`) and read by service code via `get_verified_user()`.
+The verified identity (user_id + role) is stored in a `ContextVar` (`_verified_identity`) and read by service code via `get_verified_identity()`. Role checks read directly from the JWT claims — no database lookup.
 
 ### Authorization model
 
@@ -61,17 +65,18 @@ In null-auth mode, job ownership enforcement is skipped entirely.
 
 ### Client-side auth
 
-- **CLI**: `iris login` exchanges a GCP access token (or picks the first static token) for an API key, stored in `~/.iris/tokens.json` keyed by cluster name.
-- **Workers**: receive `auth_token` via `WorkerConfig` proto. The autoscaler passes it through from controller config.
+- **CLI**: `iris login` exchanges an identity token (GCP access token or raw static token) for a JWT via the Login RPC, stored in `~/.iris/tokens.json` keyed by cluster name.
+- **Workers**: receive `auth_token` (a JWT) via `WorkerConfig` proto. The autoscaler passes it through from controller config.
 - **Dashboard**: session cookie (`iris_session`) set via `/auth/session` POST or `?session_token=` query param redirect. The frontend shows a login page when `/auth/config` reports `auth_enabled: true` and no valid session exists.
 
-### Schema (migration 0004)
+### Schema
 
 ```sql
+-- migration 0004
 CREATE TABLE api_keys (
     key_id TEXT PRIMARY KEY,
-    key_hash TEXT NOT NULL UNIQUE,   -- SHA-256 of raw token
-    key_prefix TEXT NOT NULL,        -- first 8 chars for display
+    key_hash TEXT NOT NULL UNIQUE,   -- "jwt:<key_id>" for JWT tokens
+    key_prefix TEXT NOT NULL,
     user_id TEXT NOT NULL REFERENCES users(user_id),
     name TEXT NOT NULL,
     created_at_ms INTEGER NOT NULL,
@@ -82,19 +87,27 @@ CREATE TABLE api_keys (
 
 ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'
     CHECK (role IN ('admin', 'user', 'worker'));
+
+-- migration 0006
+CREATE TABLE controller_secrets (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
 ```
 
-### New RPCs
+### RPCs
 
 Added to `ControllerService`:
 
 - `GetAuthInfo` — unauthenticated; returns provider name and GCP project ID.
-- `Login` — unauthenticated; exchanges an identity token for an API key.
-- `CreateApiKey` / `RevokeApiKey` / `ListApiKeys` — API key management.
-- `GetCurrentUser` — returns the authenticated user's identity and role.
+- `Login` — unauthenticated; exchanges an identity token for a JWT.
+- `CreateApiKey` / `RevokeApiKey` / `ListApiKeys` — API key management (returns JWTs).
+- `GetCurrentUser` — returns the authenticated user's identity and role (from JWT claims).
 
 ### Known limitations
 
 - **Bundle downloads** are unauthenticated. Bundle IDs are SHA-256 hashes (256 bits of entropy) acting as capability URLs. Workers and K8s init-containers fetch bundles via stdlib `urlopen` which doesn't support auth headers.
-- **No token refresh**: API keys don't auto-refresh. Login keys from GCP auth are one-shot; re-run `iris login` to get a new one.
+- **No token refresh**: JWTs have a 30-day TTL by default. Re-run `iris login` to get a new one.
 - **Single-role model**: a user has exactly one role. No per-job or per-resource ACLs.
+- **Revocation is in-memory**: revoked JTIs are loaded from the DB at startup and updated on revocation RPCs. A controller restart reloads the full revocation set.

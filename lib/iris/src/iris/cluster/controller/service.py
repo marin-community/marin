@@ -27,7 +27,7 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.rpc.auth import get_verified_user, hash_token
+from iris.rpc.auth import VerifiedIdentity, get_verified_identity, get_verified_user
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
@@ -968,8 +968,7 @@ class ControllerServiceImpl:
         Worker registers once, then waits for heartbeats from the controller.
         """
         if self._auth.provider is not None:
-            caller = self._require_auth()
-            self._require_role(caller, "worker")
+            self._require_role("worker")
 
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
@@ -1531,61 +1530,80 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.LoginResponse:
         if not self._auth.login_verifier:
             raise ConnectError(Code.UNIMPLEMENTED, "Login not available (no identity provider configured)")
+        if not self._auth.jwt_manager:
+            raise ConnectError(Code.INTERNAL, "JWT manager not configured")
 
         try:
-            username = self._auth.login_verifier.verify(request.identity_token)
+            login_identity = self._auth.login_verifier.verify(request.identity_token)
         except ValueError as exc:
             raise ConnectError(Code.UNAUTHENTICATED, f"Identity verification failed: {exc}") from exc
 
+        username = login_identity.user_id
         if username.startswith("system:"):
             raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
 
         now = Timestamp.now()
         self._db.ensure_user(username, now)
+        role = self._db.get_user_role(username)
 
-        revoked = revoke_login_keys_for_user(self._db, username, now)
+        # Revoke old login keys and propagate to in-memory revocation set
+        revoked_ids = revoke_login_keys_for_user(self._db, username, now)
+        for jti in revoked_ids:
+            self._auth.jwt_manager.revoke(jti)
 
-        raw_token = secrets.token_urlsafe(32)
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
         create_api_key(
             self._db,
             key_id=key_id,
-            key_hash=hash_token(raw_token),
-            key_prefix=raw_token[:8],
+            key_hash=f"jwt:{key_id}",
+            key_prefix="jwt",
             user_id=username,
             name=f"login-{now.epoch_ms()}",
             now=now,
         )
-        logger.info("Login: user=%s, new_key=%s, revoked=%d old login keys", username, key_id, revoked)
-        return cluster_pb2.LoginResponse(token=raw_token, key_id=key_id, user_id=username)
+
+        jwt_token = self._auth.jwt_manager.create_token(username, role, key_id)
+        logger.info(
+            "Login: user=%s, role=%s, new_key=%s, revoked=%d old login keys", username, role, key_id, len(revoked_ids)
+        )
+        return cluster_pb2.LoginResponse(token=jwt_token, key_id=key_id, user_id=username)
 
     def create_api_key(
         self,
         request: cluster_pb2.CreateApiKeyRequest,
         ctx: Any,
     ) -> cluster_pb2.CreateApiKeyResponse:
+        if not self._auth.jwt_manager:
+            raise ConnectError(Code.INTERNAL, "JWT manager not configured")
+
         caller = self._require_auth()
         target_user = request.user_id or caller
         if target_user != caller:
-            self._require_admin(caller)
+            self._require_admin()
 
         now = Timestamp.now()
         self._db.ensure_user(target_user, now)
+        role = self._db.get_user_role(target_user)
 
-        raw_token = secrets.token_urlsafe(32)
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        from iris.cluster.controller.auth import DEFAULT_JWT_TTL_SECONDS
+
+        ttl = request.ttl_ms // 1000 if request.ttl_ms > 0 else DEFAULT_JWT_TTL_SECONDS
         expires_at = Timestamp.from_ms(now.epoch_ms() + request.ttl_ms) if request.ttl_ms > 0 else None
+
         create_api_key(
             self._db,
             key_id=key_id,
-            key_hash=hash_token(raw_token),
-            key_prefix=raw_token[:8],
+            key_hash=f"jwt:{key_id}",
+            key_prefix="jwt",
             user_id=target_user,
             name=request.name or f"key-{now.epoch_ms()}",
             now=now,
             expires_at=expires_at,
         )
-        return cluster_pb2.CreateApiKeyResponse(key_id=key_id, token=raw_token, key_prefix=raw_token[:8])
+
+        jwt_token = self._auth.jwt_manager.create_token(target_user, role, key_id, ttl_seconds=ttl)
+        return cluster_pb2.CreateApiKeyResponse(key_id=key_id, token=jwt_token, key_prefix=jwt_token[:8])
 
     def revoke_api_key(
         self,
@@ -1598,8 +1616,10 @@ class ControllerServiceImpl:
         if key is None:
             raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
         if key.user_id != caller:
-            self._require_admin(caller)
+            self._require_admin()
         revoke_api_key(self._db, request.key_id, Timestamp.now())
+        if self._auth.jwt_manager:
+            self._auth.jwt_manager.revoke(request.key_id)
         return cluster_pb2.Empty()
 
     def list_api_keys(
@@ -1610,7 +1630,7 @@ class ControllerServiceImpl:
         caller = self._require_auth()
         target_user = request.user_id or caller
         if target_user != caller:
-            self._require_admin(caller)
+            self._require_admin()
 
         keys = list_api_keys(self._db, user_id=target_user if target_user else None)
         key_infos = []
@@ -1634,27 +1654,35 @@ class ControllerServiceImpl:
         request: cluster_pb2.GetCurrentUserRequest,
         ctx: Any,
     ) -> cluster_pb2.GetCurrentUserResponse:
-        user_id = get_verified_user()
-        if user_id is None:
-            user_id = "anonymous"
-        role = self._db.get_user_role(user_id)
+        identity = get_verified_identity()
+        if identity is None:
+            return cluster_pb2.GetCurrentUserResponse(user_id="anonymous", role="")
         return cluster_pb2.GetCurrentUserResponse(
-            user_id=user_id,
-            role=role or "",
+            user_id=identity.user_id,
+            role=identity.role,
         )
 
     def _require_auth(self) -> str:
         """Get the verified user or raise UNAUTHENTICATED."""
-        user = get_verified_user()
-        if user is None:
+        identity = get_verified_identity()
+        if identity is None:
             raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
-        return user
+        return identity.user_id
 
-    def _require_role(self, user_id: str, role: str) -> None:
-        actual_role = self._db.get_user_role(user_id)
-        if actual_role != role:
+    def _require_identity(self) -> VerifiedIdentity:
+        """Get the verified identity or raise UNAUTHENTICATED."""
+        identity = get_verified_identity()
+        if identity is None:
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
+        return identity
+
+    def _require_role(self, role: str) -> VerifiedIdentity:
+        """Get the verified identity and assert it has the required role."""
+        identity = self._require_identity()
+        if identity.role != role:
             raise ConnectError(Code.PERMISSION_DENIED, f"{role} role required")
+        return identity
 
-    def _require_admin(self, user_id: str) -> None:
+    def _require_admin(self) -> VerifiedIdentity:
         """Raise PERMISSION_DENIED if user is not an admin."""
-        self._require_role(user_id, "admin")
+        return self._require_role("admin")

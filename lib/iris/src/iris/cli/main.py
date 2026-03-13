@@ -216,7 +216,7 @@ def iris(
 @iris.command()
 @click.pass_context
 def login(ctx):
-    """Authenticate with the cluster and store an API key locally."""
+    """Authenticate with the cluster and store a JWT locally."""
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
 
@@ -226,7 +226,6 @@ def login(ctx):
     if config and config.HasField("auth"):
         provider = config.auth.WhichOneof("provider")
     else:
-        # Discover auth method from the controller
         client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
         try:
             auth_info = client.get_auth_info(cluster_pb2.GetAuthInfoRequest())
@@ -241,36 +240,33 @@ def login(ctx):
     if provider == "gcp":
         gcp_provider = GcpAccessTokenProvider()
         try:
-            access_token = gcp_provider.get_token()
+            identity_token = gcp_provider.get_token()
         except Exception as e:
             raise click.ClickException(f"Failed to get GCP access token: {e}") from e
-
-        client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-        try:
-            response = client.login(cluster_pb2.LoginRequest(identity_token=access_token))
-        except Exception as e:
-            raise click.ClickException(f"Login failed: {e}") from e
-        finally:
-            client.close()
-
-        raw_token = response.token
-        user_id = response.user_id
     elif provider == "static":
         if not config:
             raise click.ClickException("Static auth requires --config (tokens are in the config file)")
         tokens = dict(config.auth.static.tokens)
         if not tokens:
             raise click.ClickException("No static tokens configured")
-        raw_token = next(iter(tokens))
-        user_id = tokens[raw_token]
+        identity_token = next(iter(tokens))
     else:
         raise click.ClickException(f"Unsupported auth provider: {provider}")
 
-    cluster_name = ctx.obj.get("cluster_name", "default")
-    store_token(cluster_name, controller_url, raw_token)
+    # All providers converge: exchange identity_token for JWT via Login RPC
+    client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
+    try:
+        response = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
+    except Exception as e:
+        raise click.ClickException(f"Login failed: {e}") from e
+    finally:
+        client.close()
 
-    click.echo(f"Authenticated as {user_id}")
-    click.echo(f"Dashboard: {controller_url}?session_token={raw_token}")
+    cluster_name = ctx.obj.get("cluster_name", "default")
+    store_token(cluster_name, controller_url, response.token)
+
+    click.echo(f"Authenticated as {response.user_id}")
+    click.echo(f"Dashboard: {controller_url}?session_token={response.token}")
     click.echo(f"Token stored for cluster '{cluster_name}'")
 
 
