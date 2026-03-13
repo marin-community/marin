@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Remove unnecessary columns while streaming data from huggingface."""
@@ -96,6 +96,6 @@ def prune_hf_dataset(cfg: DatasetConfig):
     )
 
     logger.info("Executing pipeline")
-    with ZephyrContext(name="hf-remove-columns") as ctx:
-        ctx.execute(pipeline)
+    ctx = ZephyrContext(name="hf-remove-columns")
+    ctx.execute(pipeline)
     logger.info("Successfully processed all subsets")

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Readers for common input formats.
@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import fsspec
+from iris.marin_fs import open_url, url_to_fs
 import msgspec
 import numpy as np
 import pyarrow as pa
@@ -24,6 +25,11 @@ import pyarrow as pa
 from zephyr.expr import Expr
 
 logger = logging.getLogger(__name__)
+
+# 16 MB read blocks with background prefetch for S3/remote reads.
+_READ_BLOCK_SIZE = 16_000_000
+_READ_CACHE_TYPE = "background"
+_READ_MAX_BLOCKS = 2
 
 
 @dataclass
@@ -77,13 +83,18 @@ def open_file(file_path: str, mode: str = "rb"):
     elif file_path.endswith(".xz"):
         compression = "xz"
 
-    with fsspec.open(
-        file_path,
+    # Use url_to_fs + fs.open so that block_size/cache_type reach the file
+    # opener (AbstractBufferedFile) rather than the filesystem constructor.
+    # fsspec.open() routes all **kwargs to the FS constructor, where S3's
+    # AioSession rejects unknown kwargs like block_size.
+    fs, resolved_path = url_to_fs(file_path)
+    with fs.open(
+        resolved_path,
         mode,
+        block_size=_READ_BLOCK_SIZE,
+        cache_type=_READ_CACHE_TYPE,
+        cache_options={"maxblocks": _READ_MAX_BLOCKS},
         compression=compression,
-        block_size=16_000_000,
-        cache_type="background",
-        maxblocks=2,
     ) as f:
         yield f
 
@@ -250,6 +261,10 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     vf = vortex.open(spec.path)
     dataset = vf.to_dataset()
 
+    # Empty vortex files have no schema, so column projection would fail
+    if dataset.count_rows() == 0:
+        return
+
     if spec.row_start is not None and spec.row_end is not None:
         indices = np.arange(spec.row_start, spec.row_end, dtype=np.uint64)
         indices = pa.array(indices)
@@ -344,7 +359,7 @@ def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterato
         >>> output_files = list(ctx.execute(ds))
     """
     spec = _as_spec(source)
-    with fsspec.open(spec.path, "rb") as f:
+    with open_url(spec.path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for member_name in zf.namelist():
                 if not member_name.endswith("/") and fnmatch.fnmatch(member_name, pattern):

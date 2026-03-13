@@ -1,8 +1,9 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # Test configuration for iris
 
+import atexit
 import logging
 import os
 import subprocess
@@ -13,7 +14,6 @@ import traceback
 import warnings
 
 import pytest
-from iris.cluster.types import DEFAULT_BASE_IMAGE
 from iris.test_util import SentinelFile
 from iris.time_utils import Deadline, Duration
 
@@ -38,20 +38,15 @@ def pytest_collection_modifyitems(config, items):
     """Skip docker-marked tests if the task image isn't available."""
     global _task_image_available
     if _task_image_available is None:
-        _task_image_available = _docker_image_exists(DEFAULT_BASE_IMAGE)
+        _task_image_available = _docker_image_exists("iris-task:latest")
 
     if _task_image_available:
         return
 
-    skip = pytest.mark.skip(reason=f"Docker image {DEFAULT_BASE_IMAGE} not built")
+    skip = pytest.mark.skip(reason="Docker image iris-task:latest not built")
     for item in items:
         if "docker" in item.keywords:
             item.add_marker(skip)
-
-
-# httpx logs every HTTP request at INFO level, which floods test output
-# during polling loops (status checks, log fetching).
-logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @pytest.fixture(autouse=True, scope="function")
@@ -130,25 +125,36 @@ def _thread_cleanup():
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Hook to debug pytest exit status - dump any non-daemon threads still alive.
+    """Dump any non-daemon threads still alive at session end.
 
-    Uses os._exit() to force-terminate if orphaned non-daemon threads would
-    otherwise prevent process exit.
+    Groups threads by stack trace so identical stacks are shown once with all
+    thread names listed, rather than repeating the same trace for each thread.
+
+    Registers an atexit handler so the force-exit happens only after pytest has
+    finished printing the FAILURES section and test summary.
     """
     alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
-    if alive:
-        tty = os.fdopen(os.dup(2), "w")
-        tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
-        frames = sys._current_frames()
-        for t in alive:
-            tty.write(f"\n  Thread: {t.name} (daemon={t.daemon}, ident={t.ident})\n")
-            frame = frames.get(t.ident)
-            if frame:
-                for line in traceback.format_stack(frame):
-                    tty.write(f"    {line.rstrip()}\n")
-        tty.flush()
-        tty.close()
-        # Force exit to prevent orphaned non-daemon threads from blocking
-        # Only force-exit on failure to avoid skipping atexit handlers on clean runs
-        if exitstatus != 0:
-            os._exit(exitstatus)
+    if not alive:
+        return
+
+    tty = os.fdopen(os.dup(2), "w")
+    tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
+    frames = sys._current_frames()
+
+    # Group threads by stack trace so duplicate stacks are shown only once.
+    groups: dict[str, list[str]] = {}
+    for t in alive:
+        frame = frames.get(t.ident)
+        stack_key = "".join(traceback.format_stack(frame)) if frame else "<no stack>"
+        groups.setdefault(stack_key, []).append(t.name)
+
+    for stack, names in groups.items():
+        tty.write(f"\n  Threads: {', '.join(names)}\n")
+        for line in stack.splitlines():
+            tty.write(f"    {line}\n")
+
+    tty.flush()
+    tty.close()
+
+    if exitstatus != 0:
+        atexit.register(os._exit, exitstatus)

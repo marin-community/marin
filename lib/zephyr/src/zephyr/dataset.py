@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Core Dataset API with lazy evaluation."""
@@ -9,10 +9,11 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
 from braceexpand import braceexpand
+from iris.marin_fs import url_to_fs
 
 from zephyr.expr import Expr
 
@@ -148,9 +149,6 @@ class WriteOp:
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
-    batch_size: int = 1000  # For parquet
-    tokenizer_name: str | None = None  # For levanter_cache
-    format: object | None = None  # For levanter_cache (LmDatasetFormatBase)
     skip_existing: bool = False  # Skip writing if output file already exists
 
     def __repr__(self):
@@ -217,6 +215,7 @@ class GroupByOp:
     key_fn: Callable  # Function from item -> hashable key
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
     num_output_shards: int | None = None  # None = auto-detect from current shard count
+    sort_fn: Callable | None = None  # Optional secondary sort within each group
 
     def __repr__(self):
         return f"GroupByOp(key={_get_fn_name(self.key_fn)})"
@@ -274,6 +273,8 @@ LogicalOp = (
 
 T = TypeVar("T")
 R = TypeVar("R")
+# NOTE/TODO: this could be bound to `Hashable` or similar constraint
+K = TypeVar("K")
 
 
 class Dataset(Generic[T]):
@@ -346,7 +347,7 @@ class Dataset(Generic[T]):
         # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
         pattern = re.sub(r"(?<!:)//+", "/", pattern)
 
-        fs, _ = fsspec.core.url_to_fs(pattern)
+        fs, _ = url_to_fs(pattern)
         protocol = fsspec.core.split_protocol(pattern)[0]
 
         files = []
@@ -654,7 +655,6 @@ class Dataset(Generic[T]):
         self,
         output_pattern: str | Callable[[int, int], str],
         schema: object | None = None,
-        batch_size: int = 1000,
         skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Parquet files.
@@ -665,7 +665,6 @@ class Dataset(Generic[T]):
             output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.parquet")
                            or a callable that takes (shard_idx, total_shards) and returns the output path
             schema: PyArrow schema (optional, will be inferred if not provided)
-            batch_size: Number of records to batch before writing (default: 1000)
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
         return Dataset(
@@ -676,7 +675,6 @@ class Dataset(Generic[T]):
                     _normalize_output_pattern(output_pattern),
                     writer_type="parquet",
                     schema=schema,
-                    batch_size=batch_size,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -685,6 +683,7 @@ class Dataset(Generic[T]):
     def write_vortex(
         self,
         output_pattern: str | Callable[[int, int], str],
+        schema: object | None = None,
         skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Vortex files."""
@@ -695,6 +694,7 @@ class Dataset(Generic[T]):
                 WriteOp(
                     _normalize_output_pattern(output_pattern),
                     writer_type="vortex",
+                    schema=schema,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -726,19 +726,44 @@ class Dataset(Generic[T]):
             ],
         )
 
+    @overload
     def group_by(
         self,
-        key: Callable[[T], object],
-        reducer: Callable[[object, Iterator[T]], R],
+        key: Callable[[T], K],
+        *,
+        reducer: Callable[[K, Iterator[T]], Iterator[R]],
+        sort_by: Callable[[T], Any] | None = None,
+        num_output_shards: int | None = None,
+    ) -> Dataset[R]: ...
+
+    @overload
+    def group_by(
+        self,
+        key: Callable[[T], K],
+        *,
+        reducer: Callable[[K, Iterator[T]], R],
+        sort_by: Callable[[T], Any] | None = None,
+        num_output_shards: int | None = None,
+    ) -> Dataset[R]: ...
+
+    def group_by(
+        self,
+        key: Callable[[T], K],
+        *,
+        reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
+        sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
 
-        The reducer receives (key, iterator_of_items) and returns a single result.
+        The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
+        results for that group.
 
         Args:
             key: Function extracting grouping key from item (must be hashable)
             reducer: Function from (key, Iterator[items]) -> result
+            sort_by: Optional function extracting a sort key from each item. When provided,
+                items within each group are delivered to the reducer sorted by this key.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
 
         Returns:
@@ -755,8 +780,18 @@ class Dataset(Generic[T]):
             ... )
             >>> ctx.execute(ds)
             [{"cat": "A", "count": 2}, {"cat": "B", "count": 1}]
+
+            >>> # Items within each group sorted by timestamp
+            >>> ds = (Dataset
+            ...     .from_list([{"user": "A", "ts": 3}, {"user": "A", "ts": 1}])
+            ...     .group_by(
+            ...         key=lambda x: x["user"],
+            ...         reducer=lambda key, items: {"user": key, "events": list(items)},
+            ...         sort_by=lambda x: x["ts"],
+            ...     )
+            ... )
         """
-        return Dataset(self.source, [*self.operations, GroupByOp(key, reducer, num_output_shards)])
+        return Dataset(self.source, [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by)])
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
         """Deduplicate items by key.

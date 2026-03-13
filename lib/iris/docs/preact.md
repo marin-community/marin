@@ -20,12 +20,11 @@ lib/iris/src/iris/cluster/static/
 ├── controller/
 │   ├── app.js               (main app: tab routing via hash, data fetching, refresh)
 │   ├── jobs-tab.js          (jobs table with progress bars, sorting, pagination)
-│   ├── workers-tab.js       (workers table with health indicators)
+│   ├── fleet-tab.js         (unified VM + worker table with health indicators)
 │   ├── endpoints-tab.js     (endpoints table)
-│   ├── vms-tab.js           (VMs table flattened from scale groups, pagination)
 │   ├── autoscaler-tab.js    (status, scale groups, actions log, logs)
 │   ├── job-detail.js        (job info cards, task logs viewer, tasks table)
-│   └── vm-detail.js         (VM info cards, bootstrap logs)
+│   └── worker-detail.js    (unified worker detail: identity, health, logs)
 ├── worker/
 │   ├── app.js               (stats bar + task table via workerRpc)
 │   └── task-detail.js       (task status, resources, build info, logs tabs)
@@ -53,4 +52,4 @@ Data flows via Connect RPC — both controller and worker JS call their respecti
 
 - `pytest lib/iris/tests/cluster/controller/test_dashboard.py` — controller API + page tests
 - `pytest lib/iris/tests/cluster/worker/test_dashboard.py` — worker RPC + page tests
-- `uv run lib/iris/scripts/screenshot-dashboard.py --output-dir /tmp/screenshots` — visual validation
+- `IRIS_SCREENSHOT_DIR=/tmp/screenshots uv run pytest lib/iris/tests/e2e/test_dashboard.py -o "addopts="` — visual validation

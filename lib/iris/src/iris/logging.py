@@ -1,19 +1,108 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
 import sys
+import time
 from collections import deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
 
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-LOG_DATEFMT = "%Y%m%d %H%M%S"
+LOG_FORMAT = "%(levelprefix)s%(asctime)s %(thread)s %(name)s %(message)s"
+LOG_DATEFMT = "%Y%m%d %H:%M:%S"
+
+# Map log level names to single-character prefixes for compact log output.
+# E.g., INFO -> "I", ERROR -> "E", WARNING -> "W".
+_LEVEL_PREFIX = {
+    "DEBUG": "D",
+    "INFO": "I",
+    "WARNING": "W",
+    "ERROR": "E",
+    "CRITICAL": "C",
+}
+
+# Reverse map: single-letter prefix -> canonical level name.
+_PREFIX_TO_LEVEL = {v: k for k, v in _LEVEL_PREFIX.items()}
+
+# Canonical level names, derived from _LEVEL_PREFIX keys.
+LOG_LEVEL_NAMES = tuple(_LEVEL_PREFIX.keys())
+
+
+def parse_log_level(line: str) -> str | None:
+    """Best-effort parse a log level from a log line.
+
+    Recognizes the single-letter prefix format produced by LevelPrefixFormatter:
+        "I20260102 12:34:56 ..."  ->  "INFO"
+        "E20260102 12:44:05 ..."  ->  "ERROR"
+
+    Returns the canonical level name (e.g. "INFO") or None.
+    """
+    if not line or len(line) < 2:
+        return None
+
+    # Single-letter prefix format: "I20260102 12:34:56 ..."
+    if line[0] in _PREFIX_TO_LEVEL and line[1:2].isdigit():
+        return _PREFIX_TO_LEVEL[line[0]]
+
+    return None
+
+
+def str_to_log_level(level_name: str) -> int:
+    """Convert a canonical level name (e.g. "INFO") to the LogLevel proto enum value.
+
+    Returns LOG_LEVEL_UNKNOWN (0) for unrecognized names.
+    Uses lazy import to avoid pulling in protobuf at module load time.
+    """
+    from iris.rpc import logging_pb2
+
+    _STR_TO_ENUM = {
+        "DEBUG": logging_pb2.LOG_LEVEL_DEBUG,
+        "INFO": logging_pb2.LOG_LEVEL_INFO,
+        "WARNING": logging_pb2.LOG_LEVEL_WARNING,
+        "ERROR": logging_pb2.LOG_LEVEL_ERROR,
+        "CRITICAL": logging_pb2.LOG_LEVEL_CRITICAL,
+    }
+    return (
+        _STR_TO_ENUM.get(level_name.upper(), logging_pb2.LOG_LEVEL_UNKNOWN)
+        if level_name
+        else logging_pb2.LOG_LEVEL_UNKNOWN
+    )
+
+
+def log_level_to_str(level: int) -> str:
+    """Convert a LogLevel proto enum value to canonical level name.
+
+    Returns "" for LOG_LEVEL_UNKNOWN (0).
+    """
+    from iris.rpc import logging_pb2
+
+    _ENUM_TO_STR = {
+        logging_pb2.LOG_LEVEL_DEBUG: "DEBUG",
+        logging_pb2.LOG_LEVEL_INFO: "INFO",
+        logging_pb2.LOG_LEVEL_WARNING: "WARNING",
+        logging_pb2.LOG_LEVEL_ERROR: "ERROR",
+        logging_pb2.LOG_LEVEL_CRITICAL: "CRITICAL",
+    }
+    return _ENUM_TO_STR.get(level, "")
+
+
+class LevelPrefixFormatter(logging.Formatter):
+    """Formatter that prepends a single-letter level prefix (I/W/E/D/C).
+
+    Produces lines like: I20260306 12:44:05 iris.worker starting up
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.levelprefix = _LEVEL_PREFIX.get(record.levelname, "?")
+        return super().format(record)
 
 
 @dataclass(frozen=True)
 class BufferedLogRecord:
+    seq: int
     timestamp: float
     level: str
     logger_name: str
@@ -23,6 +112,7 @@ class BufferedLogRecord:
 class LogBuffer(Protocol):
     def append(self, record: BufferedLogRecord) -> None: ...
     def query(self, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
+    def query_since(self, last_seq: int, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]: ...
 
 
 class LogRingBuffer:
@@ -31,6 +121,12 @@ class LogRingBuffer:
     def __init__(self, maxlen: int = 5000):
         self._buffer: deque[BufferedLogRecord] = deque(maxlen=maxlen)
         self._lock = Lock()
+        self._seq = 0
+
+    def next_seq(self) -> int:
+        with self._lock:
+            self._seq += 1
+            return self._seq
 
     def append(self, record: BufferedLogRecord) -> None:
         with self._lock:
@@ -43,6 +139,14 @@ class LogRingBuffer:
             items = [r for r in items if r.logger_name.startswith(prefix)]
         return items[-limit:]
 
+    def query_since(self, last_seq: int, *, prefix: str | None = None, limit: int = 200) -> list[BufferedLogRecord]:
+        with self._lock:
+            items = list(self._buffer)
+        if prefix:
+            items = [r for r in items if r.logger_name.startswith(prefix)]
+        newer = [r for r in items if r.seq > last_seq]
+        return newer[-limit:]
+
 
 class RingBufferHandler(logging.Handler):
     def __init__(self, buffer: LogRingBuffer):
@@ -52,12 +156,26 @@ class RingBufferHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         self._buffer.append(
             BufferedLogRecord(
+                seq=self._buffer.next_seq(),
                 timestamp=record.created,
                 level=record.levelname,
                 logger_name=record.name,
                 message=self.format(record),
             )
         )
+
+
+@contextmanager
+def slow_log(log: logging.Logger, operation: str, threshold_ms: int = 100) -> Iterator[None]:
+    """Log a WARNING if the enclosed block takes longer than threshold_ms.
+
+    Silent when the operation completes within budget.
+    """
+    start = time.monotonic()
+    yield
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    if elapsed_ms >= threshold_ms:
+        log.warning("Slow %s: %dms (threshold: %dms)", operation, elapsed_ms, threshold_ms)
 
 
 _global_buffer = LogRingBuffer()
@@ -70,7 +188,7 @@ def get_global_buffer() -> LogRingBuffer:
 _configured = False
 
 
-def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
+def configure_logging(level: int = logging.DEBUG) -> LogRingBuffer:
     """Configure iris logging: stderr handler + ring buffer. Idempotent."""
     global _configured
     if _configured:
@@ -86,7 +204,7 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     root.setLevel(level)
     root.handlers.clear()
 
-    formatter = logging.Formatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
+    formatter = LevelPrefixFormatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
 
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(level)
@@ -98,7 +216,6 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     ring_handler.setFormatter(formatter)
     root.addHandler(ring_handler)
 
-    # Suppress noisy HTTP client logging (httpx and httpcore)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 

@@ -1,11 +1,11 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Hugging Face Dataset Schema Inspection Tool
 
 For usage instructions and examples, see:
-https://github.com/marin-community/marin/blob/main/docs/recipes/add_dataset.md
+https://github.com/marin-community/marin/blob/main/.agents/skills/add-dataset/SKILL.md
 """
 
 import argparse

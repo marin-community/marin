@@ -69,6 +69,9 @@ docker:
 
 
 initialization_commands:
+  # https://github.com/marin-community/marin/issues/3066
+  - sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+  - sudo sysctl -w net.ipv4.tcp_tw_reuse=1
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   - yes | gcloud auth configure-docker europe-west4-docker.pkg.dev
   # always run this because ray doesn't run with sudo
@@ -151,7 +154,7 @@ available_node_types:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 4
+      TPU: 8
 
   tpu_slice_v5e_16:
     max_workers: 1024

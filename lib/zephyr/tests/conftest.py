@@ -1,8 +1,10 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Pytest fixtures for zephyr tests."""
+import tempfile
 
+import atexit
 import logging
 import os
 import sys
@@ -30,19 +32,18 @@ from zephyr.execution import ZephyrContext
 ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
 
 # Use Iris demo config as base
-IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "demo.yaml"
+IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "test.yaml"
 
 
 @pytest.fixture(scope="session")
 def iris_cluster():
     """Start local Iris cluster for testing - reused across all tests."""
-    from iris.cluster.manager import ClusterManager
+    from iris.cluster.manager import connect_cluster
     from iris.cluster.config import load_config, make_local_config
 
     config = load_config(IRIS_CONFIG)
     config = make_local_config(config)
-    manager = ClusterManager(config)
-    with manager.connect() as url:
+    with connect_cluster(config) as url:
         yield url
 
 
@@ -84,7 +85,7 @@ def fray_client(request):
         client = FrayIrisClient.from_iris_client(iris_client)
 
         # Set up IrisContext so actor handles can resolve
-        ctx = IrisContext(job_id=JobName.root("test"), client=iris_client)
+        ctx = IrisContext(job_id=JobName.root("test-user", "test"), client=iris_client)
         with iris_ctx_scope(ctx):
             yield client
         client.shutdown(wait=True)
@@ -95,6 +96,18 @@ def fray_client(request):
         client.shutdown(wait=True)
     else:
         raise ValueError(f"Unknown backend: {request.param}")
+
+
+@pytest.fixture
+def actor_context():
+    """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
+    from unittest.mock import MagicMock
+
+    from fray.v2.actor import ActorContext, _reset_current_actor, _set_current_actor
+
+    token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
+    yield
+    _reset_current_actor(token)
 
 
 @pytest.fixture
@@ -111,14 +124,14 @@ def zephyr_ctx(fray_client, tmp_path_factory):
     """
     tmp_path = tmp_path_factory.mktemp("zephyr")
     chunk_prefix = str(tmp_path / "chunks")
-    with ZephyrContext(
+    ctx = ZephyrContext(
         client=fray_client,
-        num_workers=2,
+        max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=chunk_prefix,
         name="test-ctx",
-    ) as ctx:
-        yield ctx
+    )
+    yield ctx
 
 
 class CallCounter:
@@ -142,6 +155,19 @@ class CallCounter:
         self.map_count += 1
         self.processed_ids.append(x["id"])
         return {**x, "processed": True}
+
+
+@pytest.fixture(autouse=True)
+def _configure_marin_prefix():
+    """Set MARIN_PREFIX to a temp directory for tests that rely on it."""
+    if "MARIN_PREFIX" in os.environ:
+        yield
+        return
+
+    with tempfile.TemporaryDirectory(prefix="marin_prefix") as temp_dir:
+        os.environ["MARIN_PREFIX"] = temp_dir
+        yield
+        del os.environ["MARIN_PREFIX"]
 
 
 @pytest.fixture(autouse=True)
@@ -189,4 +215,4 @@ def pytest_sessionfinish(session, exitstatus):
         tty.flush()
         tty.close()
         if exitstatus != 0:
-            os._exit(exitstatus)
+            atexit.register(os._exit, exitstatus)

@@ -12,7 +12,7 @@ This document serves as the central reference for operational observability rega
 
 ## Fleet Status (Ground Truth)
 
-The CLI commands below provide the most accurate view of TPU state. Dashboard metrics may lag or underreport.
+The CLI commands below provide the most accurate view of TPU state. For exact current counts, prefer zonal `tpu-vm list`; use Cloud Asset Inventory for cross-zone aggregation (slight lag). Dashboard metrics may lag or underreport.
 
 ### Quick Fleet Summary
 Get a quick summary of READY TPUs across all zones:
@@ -213,7 +213,7 @@ gcloud asset search-all-resources \
 | `tpu_node_terminations` | ✅ Accurate | Log-based, tracks TPU node termination events (macro health signal). |
 | `tpu_preemptions` | ✅ Accurate (low-level) | Log-based, counts `compute.instances.preempted` events. Useful for spikes, but often multiple events per TPU VM node. |
 
-**For accurate fleet counts, use CLI commands above.**
+**For accurate fleet counts: use zonal `tpu-vm list` for exact current state, or Cloud Asset Inventory for cross-zone snapshots.**
 
 ## TPU Nodes vs Workers vs Cores
 
@@ -238,6 +238,10 @@ Understanding the difference between nodes and cores is critical for interpretin
 | `tpu_preemptions` | Per GCE instance | One event = one underlying worker instance preempted; can be many-per-TPU-node. |
 
 This matters for macro dashboards: avoid normalizing by `duty_cycle` “node counts” unless you explicitly want “per duty_cycle worker”.
+
+Do not compare `location`-grouped monitoring series directly to zone-level node counts without normalizing labels.
+
+Fleet size over time = periodic count of READY TPU nodes; not `duty_cycle` series count; not quota usage.
 
 ## How to Read the Dashboard
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,8 +17,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
-import fsspec
 from fray.cluster import ResourceConfig
+from iris.marin_fs import open_url
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -34,7 +34,7 @@ from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def _num_accelerator_chips(resources: ResourceConfig) -> int:
@@ -89,10 +89,11 @@ class SpeedrunConfig:
         # runtimeenv is not serializable
         train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
         resources_dict = asdict_excluding(self.train_config.resources, exclude={"runtime_env"})
+        model_config_dict = asdict_excluding(self.model_config, exclude={"loss_fn", "model_cls_fn"})
         return {
             "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
-            "model_config": _make_serializable(dataclasses.asdict(self.model_config)),
+            "model_config": _make_serializable(model_config_dict),
             "train_config": _make_serializable(train_config_dict),
             "tokenized_dataset": str(self.tokenized_dataset),
             "resources": _make_serializable(resources_dict),
@@ -330,7 +331,7 @@ def speedrun_results(config: SpeedrunResultsConfig):
     logger.info(f"Speedrun info and results: {run_info}")
 
     output_data = {"runs": [{"run_info": run_info}]}
-    with fsspec.open(config.output_path, "w") as f:
+    with open_url(config.output_path, "w") as f:
         json.dump(output_data, f, indent=2, sort_keys=True)
     logger.info(f"Speedrun info and results written to {config.output_path}")
 

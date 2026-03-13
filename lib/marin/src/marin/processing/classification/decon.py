@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -16,12 +16,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum, auto
-import typing
+import dupekit
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 import draccus
-import fsspec
 import msgspec
+from iris.marin_fs import url_to_fs
 import wandb
 
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
@@ -29,11 +29,9 @@ from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
-
-if typing.TYPE_CHECKING:
-    from dupekit import Bloom
 
 
 class DeconMode(StrEnum):
@@ -185,11 +183,10 @@ def build_filter(
     """
     Build a bloom filter from input dataset.
     """
-    from dupekit import Bloom
 
     def build_shard_bloom(records: Iterator[dict]) -> Iterator[bytes]:
         """Build bloom filter from a shard of records and yield serialized bytes."""
-        bf = Bloom(config.estimated_doc_count, config.false_positive_rate)
+        bf = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
 
         for record in records:
             text = record.get(config.text_field, "")
@@ -202,41 +199,43 @@ def build_filter(
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     def _merge_bloom(bloom_files: Iterator[str]):
-        merged_bloom = Bloom(config.estimated_doc_count, config.false_positive_rate)
+        merged_bloom = dupekit.Bloom(config.estimated_doc_count, config.false_positive_rate)
         for bloom_file_path in bloom_files:
-            fs, path = fsspec.url_to_fs(bloom_file_path)
+            fs, path = url_to_fs(bloom_file_path)
             with fs.open(path, "rb") as f:
                 bloom_bytes = f.read()
-            shard_bloom = Bloom.load_bytes(bloom_bytes)
+            shard_bloom = dupekit.Bloom.load_bytes(bloom_bytes)
             merged_bloom.update(shard_bloom)
         yield merged_bloom.save_bytes()
 
-    with ZephyrContext(name="decon-build") as ctx:
-        # Build bloom filters for all shards in parallel
-        shard_blooms_data = ctx.execute(
-            Dataset.from_iterable(all_files)
-            .reshard(num_shards=config.processes)
-            .load_file()
-            .select(config.text_field)
-            .map_shard(build_shard_bloom)
-            .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True),
-        )
+    ctx = ZephyrContext(name="decon-build")
+    # Build bloom filters for all shards in parallel
+    shard_blooms_data = ctx.execute(
+        Dataset.from_iterable(all_files)
+        .reshard(num_shards=config.processes)
+        .load_file()
+        .select(config.text_field)
+        .map_shard(build_shard_bloom)
+        .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True),
+    )
 
-        if len(shard_blooms_data) == 1:
-            return shard_blooms_data[0]
+    if len(shard_blooms_data) == 1:
+        return shard_blooms_data[0]
 
-        logger.info(f"Merging {len(shard_blooms_data)} shard bloom filters...")
-        merged_bloom = ctx.execute(
-            Dataset.from_iterable(shard_blooms_data)
-            .reshard(num_shards=1)
-            .map_shard(_merge_bloom)
-            .write_binary(bloom_path, skip_existing=True),
-        )
+    logger.info(f"Merging {len(shard_blooms_data)} shard bloom filters...")
+    merged_bloom = ctx.execute(
+        Dataset.from_iterable(shard_blooms_data)
+        .reshard(num_shards=1)
+        .map_shard(_merge_bloom)
+        .write_binary(bloom_path, skip_existing=True),
+    )
 
     return merged_bloom[0]
 
 
-def calculate_paragraph_overlap(paragraph: str, bloom_filter: "Bloom", ngram_config: NGramConfig | None) -> float:
+def calculate_paragraph_overlap(
+    paragraph: str, bloom_filter: "dupekit.Bloom", ngram_config: NGramConfig | None
+) -> float:
     """
     Calculate overlap score for a paragraph against a bloom filter.
     """
@@ -263,7 +262,6 @@ def mark_duplicates_bloom(
     """
     Apply bloom filter to input data, marking duplicate spans.
     """
-    from dupekit import Bloom
 
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
@@ -272,10 +270,10 @@ def mark_duplicates_bloom(
     def process_shard_with_bloom(records: Iterator[dict]) -> Iterator[dict]:
         """Load bloom filter once per shard and mark duplicates."""
         # Load bloom filter from storage
-        fs, path = fsspec.url_to_fs(bloom_path)
+        fs, path = url_to_fs(bloom_path)
         with fs.open(path, "rb") as f:
             bloom_bytes = f.read()
-        bf = Bloom.load_bytes(bloom_bytes)
+        bf = dupekit.Bloom.load_bytes(bloom_bytes)
 
         # Process each record
         for record in records:
@@ -300,20 +298,24 @@ def mark_duplicates_bloom(
             }
 
     # Use write_jsonl with callable output pattern
-    with ZephyrContext(name="decon-mark") as zephyr_ctx:
-        result = list(
-            zephyr_ctx.execute(
-                Dataset.from_iterable(all_files)
-                .flat_map(load_file)
-                .map_shard(process_shard_with_bloom)
-                .write_jsonl(
-                    output_pattern=lambda shard_idx, total: rebase_file_path(
-                        base_path, all_files[shard_idx], output_path, old_extension=_get_extension(all_files[shard_idx])
-                    ),
-                    skip_existing=True,
+    zephyr_ctx = ZephyrContext(name="decon-mark")
+    result = list(
+        zephyr_ctx.execute(
+            Dataset.from_iterable(all_files)
+            .flat_map(load_file)
+            .map_shard(process_shard_with_bloom)
+            .write_jsonl(
+                output_pattern=lambda shard_idx, total: rebase_file_path(
+                    base_path,
+                    all_files[shard_idx],
+                    output_path,
+                    new_extension=_get_extension(all_files[shard_idx]),
+                    old_extension=_get_extension(all_files[shard_idx]),
                 ),
-            )
+                skip_existing=True,
+            ),
         )
+    )
     return result
 
 
@@ -404,7 +406,8 @@ def decontaminate(config: DeconConfig):
 
 @draccus.wrap()
 def main(config: DeconConfig):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
 
     result = decontaminate(config)
     print(f"Decontamination completed: {result}")

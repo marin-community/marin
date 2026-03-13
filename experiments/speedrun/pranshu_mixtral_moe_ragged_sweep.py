@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Sweep configs for ragged-dot Mixtral MoE runs based on the original 300M setup."""
@@ -14,7 +14,7 @@ from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(name="Pranshu Chaturvedi", affiliation="Stanford University", url="https://stanford.edu/~pranshu")
-LOGGER = logging.getLogger("ray")
+LOGGER = logging.getLogger(__name__)
 
 VOCAB_SIZE = 32_000
 SEQ_LEN = 1024

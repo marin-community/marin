@@ -1,4 +1,4 @@
-# Copyright 2025 The Levanter Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Fused linear softmax cross-entropy for grug.
@@ -15,6 +15,35 @@ from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
+
+
+def _batch_axis_spec(x: jax.Array):
+    x_type = jax.typeof(x)
+    sharding = getattr(x_type, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None and len(spec) > 0:
+        return spec[0]
+    sharding = getattr(x, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None and len(spec) > 0:
+        return spec[0]
+    return ("data",)
+
+
+def _axis_names_from_spec(axis_spec) -> tuple[str, ...]:
+    if axis_spec is None:
+        return ()
+    if isinstance(axis_spec, tuple):
+        return tuple(str(name) for name in axis_spec)
+    return (str(axis_spec),)
+
+
+def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
+    if len(axis_names) == 0:
+        return x
+    if len(axis_names) == 1:
+        return jax.lax.psum(x, axis_names[0])
+    return jax.lax.psum(x, axis_names)
 
 
 @named_call
@@ -60,6 +89,8 @@ def fused_linear_softmax_cross_entropy_loss(
         raise ValueError(f"Unknown reduction: {reduction}")
 
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
+    batch_axis_spec = _batch_axis_spec(hidden)
+    batch_axis_names = _axis_names_from_spec(batch_axis_spec)
 
     def _loss_shard(
         shard_hidden: jax.Array,
@@ -67,12 +98,9 @@ def fused_linear_softmax_cross_entropy_loss(
         shard_labels: jax.Array,
         shard_weight: jax.Array,
     ) -> jax.Array:
-        print(f"hid sharding: {jax.typeof(shard_hidden)}")
         flat_hidden = shard_hidden.reshape((-1, hidden_dim))
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
         flat_weight = shard_weight.reshape((-1,))
-        print(f"flat sharding: {jax.typeof(flat_hidden)}")
-        print(flat_hidden.shape, flat_labels.shape, flat_weight.shape)
 
         loss = fused_cross_entropy_loss_and_logsumexp_penalty(
             flat_hidden,
@@ -93,16 +121,16 @@ def fused_linear_softmax_cross_entropy_loss(
 
         local_sum = jnp.sum(loss)
         local_denom = jnp.sum(flat_weight)
-        total_sum = jax.lax.psum(local_sum, "data")
+        total_sum = _psum_over_axes(local_sum, batch_axis_names)
         if reduction_mode == "sum":
             return total_sum
-        total_denom = jax.lax.psum(local_denom, "data")
+        total_denom = _psum_over_axes(local_denom, batch_axis_names)
         return jnp.where(total_denom != 0, total_sum / total_denom, jnp.zeros_like(total_denom))
 
-    out_specs = P(("data",)) if reduction_mode is None else P()
+    out_specs = P(batch_axis_spec) if reduction_mode is None else P()
     return jax.shard_map(
         _loss_shard,
-        in_specs=(P(("data",)), P(None, None), P(("data",)), P(("data",))),
+        in_specs=(P(batch_axis_spec), P(None, None), P(batch_axis_spec), P(batch_axis_spec)),
         out_specs=out_specs,
         check_vma=False,
     )(hidden, lm_head, labels, weight_array)

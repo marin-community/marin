@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # ruff: noqa
@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import sys
 import shlex
 import subprocess
 import time
@@ -28,6 +29,7 @@ from ray.job_submission import JobSubmissionClient
 from marin.cluster.config import find_config_by_region
 from fray.v1.cluster.ray import DashboardConfig, ray_dashboard
 from fray.v1.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +195,12 @@ async def submit_and_track_job(
     # Stream logs asynchronously
     async for lines in client.tail_job_logs(submission_id):
         print(lines, end="")
+
+    # Check terminal status — tail_job_logs returns when the job finishes
+    # but does not raise on failure.
+    status = client.get_job_status(submission_id)
+    if status != "SUCCEEDED":
+        raise RuntimeError(f"Ray job {submission_id} ended with status: {status}")
 
 
 def main():
@@ -389,6 +397,7 @@ def main():
             asyncio.run(run_job())
     except Exception:
         logger.error("Failed to run job", exc_info=True)
+        sys.exit(1)
     finally:
         if args.auto_stop:
             logger.info(f"Auto-stopping job {submission_id}...")
@@ -403,5 +412,6 @@ def main():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    configure_logging(level=logging.INFO)
     main()
