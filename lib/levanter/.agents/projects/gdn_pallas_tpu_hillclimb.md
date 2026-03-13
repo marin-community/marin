@@ -10319,3 +10319,247 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Keep the next mainline slot in `P3`, but only if the mixed `3 GDN + 1 attention` block first removes the closed-over const arrays that currently block `custom_partitioning` on the exact block body.
   - Another `custom_partitioning` wrapper around the current block body is likely to hit the same `assert not len(consts)` failure until those constants are externalized or the boundary is pushed below the constful attention/GDN wrapper construction.
   - Keep CE fixed at `pallas_tpu` + `pallas`; this iteration did not re-implicate CE.
+
+### Iteration 103 - Coverage Slot P3 / fixed-`3/4` decoder-block `custom_partitioning` const-externalization retry (validated, rejected, reverted)
+
+- Why this iteration existed:
+  - `P3` remained the required next mainline slot after `S3` completed and `A3` was validated and rejected.
+  - Iteration 102 already showed that the exact fixed `3 GDN + 1 attention` block was the right remaining systems target, but the first `custom_partitioning` prototype died before step 1 because the real mixed block still carried closed-over const arrays.
+  - This retry aimed to externalize the known rotary and GDN scalar constants, force the block structure into the explicit static/custom-partitioning contract, and retest the same mixed-block shell as the mainline `P3` path instead of falling back to a weaker `A3` family.
+
+- Codex loop iteration: `9 / 10`
+- Date: `2026-03-13T17:14:37Z`
+- Starting commit: `e2b36167a6aebcab30079b3c39986852560f6437`
+- Commit: `final validated result commit descended from e2b36167a6aebcab30079b3c39986852560f6437`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion from `.agents/logs/gdn_codex_loop/perf_state.json`:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Latest validated current-head `S3`/xprof baseline from Iteration 93:
+    - hybrid `throughput/mfu=6.036753`
+    - hybrid `throughput/tokens_per_second=195287.805612`
+    - hybrid `throughput/duration=0.167793375 s`
+    - hybrid `step_duration=167.793375 ms`
+    - control `throughput/duration=0.057256827 s`
+    - `train_path_budget_ms=42.682894`
+    - `decoder_layer_shell_budget_ms=20.388593`
+    - `hybrid_generic_shell_delta_budget_ms=20.103367`
+    - `dispatch_shard_shell_delta_ms=9.771419`
+    - `ad_wrapper_shell_delta_ms=6.178290`
+    - `interaction_remainder_ms=47.750288`
+    - `xprof_dispatch_shard_shell_delta_ms=31.572807`
+    - `xprof_ad_wrapper_shell_delta_ms=11.057602`
+    - `xprof_idle_attributed_ms=38.362912`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot P3 (selected):** retry the exact full `3 GDN + 1 attention` block `custom_partitioning` forward shell, but externalize the known rotary/GDN constants, mark the block structure as an explicit static arg, and synthesize default `pos_ids` as an explicit operand (`highest remaining direct upside on dispatch/shard while staying on the required mixed-block slot`, `high compile/integration risk`, `materially stronger than another outward decoder-layer AD retry`).
+  2. **Coverage slot P3 (lower block cut):** push the block boundary below more attention/GDN wrapper setup before retrying `custom_partitioning` (`possible upside if the remaining const source sits above the leaf kernels`, `larger code motion and less likely to finish unattended in one pass`).
+  3. **Coverage slot A3-diagnostic:** try another outward layer-local manual-VJP/sharding boundary (`lower implementation cost`, `lower information than the required block-level `P3` slot because the `A3` family is already rejected on this head`).
+
+- Selected slot rationale:
+  - `P3` was still mandatory next coverage.
+  - Fresh evidence still pointed at the mixed `3/4` block shell rather than CE or attribution tooling.
+  - The smallest materially stronger move was to keep the same `custom_partitioning` block shell, but remove the specific const sources already isolated from the previous rejected prototype.
+
+- Change class: `whole-layer boundary`
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - Why CE stayed fixed:
+    - This was not a CE side-arm.
+    - Fresh control attribution kept CE-attributed `while` in the single-digit-ms range and did not re-implicate CE as the mainline explanation for the hybrid-vs-attention gap.
+
+- Expected effect on `step_duration_ms`:
+  - decrease if the cleaned `custom_partitioning` block actually lowered as one mixed-block shell and removed hybrid-only dispatch/shard overhead from the critical path.
+- Expected effect on `dispatch_shard_shell_delta_ms`:
+  - material decrease; this remained the immediate shell budget.
+- Expected effect on `ad_wrapper_shell_delta_ms`:
+  - flat to decrease if the bespoke block pullback prevented generic wrapper rebuild outside the new boundary.
+- Expected effect on `hybrid_generic_shell_delta_budget_ms`:
+  - decrease if the block custom call truly owned the fixed `3/4` region instead of letting hybrid-only shell reappear above it.
+- Expected effect on `interaction_remainder_ms`:
+  - decrease if the shorter shell path reduced waiting/serialization on the real step.
+- Expected effect on `xprof_idle_attributed_ms`:
+  - decrease if the same waiting/serialization loss fell with the shell.
+- Reject if `step_duration_ms` does not improve? **Yes.**
+  - This remained a mainline `P3` prototype, not a diagnostic-only run.
+- Reject if `dispatch_shard_shell_delta_ms` stays flat / grows? **Yes.**
+  - `dispatch/shard` remained the primary canonical shell budget.
+- Reject if `ad_wrapper_shell_delta_ms` grows? **Yes.**
+  - The block boundary only matters if it does not recreate more wrapper shell elsewhere.
+- Reject if `interaction_remainder_ms` grows? **Yes.**
+  - The optimization target remained the full-step critical path, not renamed buckets or hidden overlap.
+- Reject if `xprof_idle_attributed_ms` stays flat / grows when an XPlane pair is available? **Yes.**
+  - More `IDLE` would still mean shell tax was surfacing as waiting/serialization.
+- Reject if `hybrid_generic_shell_delta_budget_ms` stays flat/up? **Yes.**
+  - This `P3` retry only earns promotion if the canonical hybrid-only shell delta falls with the step.
+
+- Change summary:
+  - Temporary candidate implementation in `experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py`:
+    - threaded explicit rotary inverse-frequency operands and GDN scalar operands through the fixed `3/4` decoder block candidate,
+    - retried the block `custom_partitioning` shell with `block_static` passed via `static_argnums`,
+    - synthesized default `pos_ids` as an explicit operand on the custom-boundary path when the caller passed `None`.
+  - Temporary supporting plumbing in:
+    - `lib/levanter/src/levanter/layers/rotary.py`
+    - `lib/levanter/src/levanter/layers/attention.py`
+    - `lib/levanter/src/levanter/layers/gated_deltanet.py`
+    - `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
+  - Retained tree after validation:
+    - no source changes were kept,
+    - the temporary `P3` prototype and benchmark flag were fully reverted after validation because the candidate never reached a completed TPU training step.
+
+- Correctness checks:
+  - Local syntax/import smoke on the temporary candidate:
+    - `uv run python -m py_compile experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py lib/levanter/src/levanter/layers/attention.py lib/levanter/src/levanter/layers/gated_deltanet.py lib/levanter/src/levanter/layers/rotary.py experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
+    - result: passed
+  - Local exact mixed-block custom-partitioning trace smoke on the temporary candidate:
+    - `uv run python - <<'PY' ... jax.make_jaxpr(_decoder_block_forward_custom_partitioned_impl, static_argnums=(0,))(...) ... PY`
+    - result: passed with `0` outer `constvars` on the direct block helper after externalizing the known rotary/GDN operands.
+  - Local exact block call smoke on the temporary candidate:
+    - `uv run python - <<'PY' ... eqx.filter_make_jaxpr(lambda b, x: b(x, AttentionMask.causal(), key=..., pos_ids=None))(block, x) ... PY`
+    - result: passed without reproducing the internal `custom_partitioning` assertion locally.
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - final passing result: `88 passed, 2 skipped in 236.12s (0:03:56)`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - `P3` hybrid candidate, initial const-externalized attempt:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_p3_i09_cpartconst --profile-env GDN_PROFILE_CUSTOM_PARTITIONED_DECODER_BLOCK_BOUNDARY_PROTOTYPE=true --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_p3_i09_cpartconst_gdn3of4_130m_ch128_seg16_20steps-31b9c2`
+    - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_p3_i09_cpartconst_gdn3of4_130m_ch128_seg16_20steps-31b9c2`
+    - failure mode:
+      - the run failed before step 1 while tracing `train_step` for JAXPR capture,
+      - the failing path ran through `HackableDecoderBlock.__call__ -> _decoder_block_custom_partitioned_boundary_fwd -> _decoder_block_forward_custom_partitioned_impl -> custom_partitioning.__call__`,
+      - JAX raised `AssertionError` from `jax/_src/custom_partitioning.py:534` (`assert not len(consts)`),
+      - no completed training-step summary, profiler artifact, or matched XPlane pair was produced.
+  - `P3` hybrid candidate, `block_static` static-arg retry:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_p3_i09_cpartstatic --profile-env GDN_PROFILE_CUSTOM_PARTITIONED_DECODER_BLOCK_BOUNDARY_PROTOTYPE=true --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_p3_i09_cpartstatic_gdn3of4_130m_ch128_seg16_20steps-58a6f8`
+    - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_p3_i09_cpartstatic_gdn3of4_130m_ch128_seg16_20steps-58a6f8`
+    - failure mode:
+      - the run again failed before step 1 at the same `custom_partitioning` constant assertion during `train_step` tracing,
+      - no completed training-step summary, profiler artifact, or matched XPlane pair was produced.
+  - `P3` hybrid candidate, explicit `pos_ids` retry:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_p3_i09_cpartposids --profile-env GDN_PROFILE_CUSTOM_PARTITIONED_DECODER_BLOCK_BOUNDARY_PROTOTYPE=true --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_p3_i09_cpartposids_gdn3of4_130m_ch128_seg16_20steps-d635fb`
+    - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_p3_i09_cpartposids_gdn3of4_130m_ch128_seg16_20steps-d635fb`
+    - failure mode:
+      - the run again failed before step 1 at the same `custom_partitioning` constant assertion during `train_step` tracing,
+      - no completed training-step summary, profiler artifact, or matched XPlane pair was produced.
+    - interpretation:
+      - three progressively stronger const-cleanup retries still failed at the same internal `custom_partitioning` check,
+      - this is a compile/tracing failure of the `P3` prototype itself, not a usable performance result.
+  - Fresh attention-only control:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_p3_i09_attnctrl --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_p3_i09_attnctrl_attnonly_130m_ch128_seg16_20steps-15e4ab`
+    - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_p3_i09_attnctrl_attnonly_130m_ch128_seg16_20steps-15e4ab`
+    - normalized summary: `scratch/gdn_p3_i09/attn_summary_200.json`
+    - control-only attribution artifact:
+      - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_p3_i09/attn_summary_200.json --step-duration-ms 57.802939001703635 --upper-bound-step-ms 57.860499 --gdn-layer-fraction 0.0 --gdn-layers-per-block 0 --gdn-block-size 4 --output scratch/gdn_p3_i09/attn_attribution.json`
+      - artifact: `scratch/gdn_p3_i09/attn_attribution.json`
+  - Throughput metrics use the required history-window median over steps `10-18` (`9` points).
+
+- Fresh attention-only control metrics (same-source control run):
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - `step_duration_ms: 57.802939`
+  - `forward_closed_call_ms: 0.000000`
+  - `backward_closed_call_ms: 0.000000`
+  - `train_path_budget_ms: 8.559758`
+  - `decoder_layer_shell_budget_ms: 14.213208`
+  - `while: 8.558593`
+  - `conditional: 0.001165`
+  - `CE-attributed while: 8.558593`
+  - `throughput/mfu: 21.107326`
+  - `throughput/tokens_per_second: 566891.590046`
+  - `throughput/duration: 0.057802939 s`
+  - `upper_bound_gap_ms: -0.057560`
+  - `remainder_topk: splash attention fwd residuals pallas_call 5.146325 ms; splash attention dkv pallas_call 3.616558 ms; CE forward pallas_call 2.703035 ms; splash attention dq pallas_call 2.657605 ms; vmap()/dot_general 2.269776 ms`
+
+- Measured metrics (Iteration 93 carried current-head `S3` baseline -> `P3` candidate):
+  - `CE backend selected: pallas_tpu -> pallas_tpu`
+  - `CE bwd mode: pallas -> pallas`
+  - `gdn_layer_fraction: 0.833333 -> 0.833333` (intended candidate configuration; no completed trace)
+  - `Forward closed-call: 20.663477 ms -> n/a`
+  - `Backward closed-call: 13.128558 ms -> n/a`
+  - `while: 8.889455 ms -> n/a`
+  - `conditional: 0.001404 ms -> n/a`
+  - `CE-attributed while: 8.889455 ms -> n/a`
+  - `Kernel budget: 33.792035 ms -> n/a`
+  - `Control budget: 8.890858 ms -> n/a`
+  - `Train-path budget: 42.682894 ms -> n/a`
+  - `Decoder-layer shell budget: 20.388593 ms -> n/a`
+  - `Hybrid generic shell delta budget: 20.103367 ms -> n/a`
+  - `Dispatch/shard shell delta budget: 9.771419 ms -> n/a`
+  - `AD/wrapper shell delta budget: 6.178290 ms -> n/a`
+  - `Layout shell delta budget: 2.177870 ms -> n/a`
+  - `Residual/add shell delta budget: 2.322353 ms -> n/a`
+  - `Step duration: 167.793375 ms -> n/a`
+  - `Remainder budget: 125.110481 ms -> n/a`
+  - `Interaction remainder: 47.750288 ms -> n/a`
+  - `Upper-bound gap: 110.536548 ms -> n/a`
+  - `Gap explained by train-path: 38.61% -> n/a`
+  - `Gap explained by decoder-layer shell: 18.45% -> n/a`
+  - `Gap explained by hybrid generic shell delta: 18.29% -> n/a`
+  - `hybrid_generic_shell_delta_topk: n/a` (candidate never produced a completed summary trace)
+  - `decoder_layer_shell_topk: n/a` (candidate never produced a completed summary trace)
+  - `remainder_topk: n/a` (candidate never produced a completed summary trace)
+  - `throughput/mfu: 6.036753 -> n/a`
+  - `throughput/tokens_per_second: 195287.805612 -> n/a`
+  - `throughput/duration: 0.167793375 s -> n/a`
+  - `xprof_dispatch_shard_shell_delta_ms: 31.572807 -> n/a` (no matched XPlane pair)
+  - `xprof_ad_wrapper_shell_delta_ms: 11.057602 -> n/a` (no matched XPlane pair)
+  - `xprof_layout_shell_delta_ms: 2.583071 -> n/a` (no matched XPlane pair)
+  - `xprof_residual_add_shell_delta_ms: 2.536807 -> n/a` (no matched XPlane pair)
+  - `xprof_idle_attributed_ms: 38.362912 -> n/a` (no matched XPlane pair)
+
+- Interpretation:
+  - This `P3` attempt is **not** a speedup:
+    - the hybrid prototype never reached a completed TPU training step,
+    - it therefore never produced `step_duration_ms`, canonical shell-delta budgets, or matched XPlane data on the candidate path.
+  - The failure mode stayed pinned to the intended lower-level boundary even after the known const cleanup:
+    - explicit rotary inverse-frequency operands did not unblock the TPU trace,
+    - explicit GDN scalar operands did not unblock the TPU trace,
+    - `block_static` as an explicit static/custom-partitioning contract did not unblock the TPU trace,
+    - explicit synthesized default `pos_ids` still did not unblock the TPU trace.
+  - The important new fact from this retry is not a speed win, but a tighter rejection:
+    - the direct/local exact block helper no longer reproduced the old obvious constvars,
+    - yet the real sharded trainer path still failed at the same `custom_partitioning` constant assertion before step 1,
+    - that means the remaining const source is specific to the actual train-step tracing environment, not the simplified local helper alone.
+  - The fresh control run still completed and stayed slightly below the fixed governance ceiling:
+    - fresh control `step_duration_ms=57.802939`
+    - fixed attention-only upper bound `57.860499 ms`
+    - control `upper_bound_gap_ms=-0.057560`
+  - CE stayed bounded in the fresh control:
+    - `CE-attributed while=8.558593 ms`
+    - nothing in this iteration re-implicated CE as the mainline explanation for the hybrid-vs-attention gap.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + final accepted result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `88 passed, 2 skipped in 236.12s (0:03:56)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `step_duration_ms: n/a` (candidate compile failed before step 1)
+    - `dispatch_shard_shell_delta_ms: n/a`
+    - `ad_wrapper_shell_delta_ms: n/a`
+    - `hybrid_generic_shell_delta_budget_ms: n/a`
+    - `interaction_remainder_ms: n/a`
+    - `xprof_idle_attributed_ms: n/a`
+  - Governance:
+    - CE stayed fixed at `pallas_tpu` + `pallas`.
+    - Rejected as a speedup candidate because the hybrid prototype never reached a completed TPU training step.
+    - Rejected as a speedup candidate because it never produced the required shell-delta measurements on the candidate path.
+    - Rejected as a speedup candidate because three stronger const-cleanup retries still did not lower the intended `custom_partitioning` mixed-block shell through the real sharded train-step trace.
+    - This is **not** evidence for `A3-diagnostic`, `S3-diagnostic`, or a CE side-arm; it is a direct rejected `P3` systems attempt that failed before candidate perf measurement.
+
+- Assessment: **validated, rejected, and reverted**. This ninth `P3` block-level prototype is also not deployable on the fixed `3/4` TPU benchmark. Externalizing the known rotary/GDN constants, forcing `block_static` into the explicit static/custom-partitioning contract, and making default `pos_ids` explicit were all reasonable next moves for the same mixed-block shell, but the real train-step trace still failed at `jax/_src/custom_partitioning.py:534` before step 1 and produced no candidate shell-budget evidence. The final tree therefore stays on the pre-existing executable baseline, and this iteration is recorded as a log-only validated result with TPU correctness plus one completed same-source attention-only control profile.
+- Next bold hypothesis:
+  - Keep the next mainline slot in `P3`, but only if the real sharded train-step path first surfaces the remaining `custom_partitioning` const source directly instead of relying on simplified local block helpers.
+  - Another nominal `custom_partitioning` retry on the same mixed block is likely to hit the same `assert not len(consts)` failure until the actual trainer-path const source is externalized or the boundary is pushed below it.
+  - Keep CE fixed at `pallas_tpu` + `pallas`; this iteration again did not re-implicate CE.
