@@ -27,7 +27,7 @@ Usage (Ray Cluster with Daytona):
 Environment variables:
     - ENV_TYPE: "local" | "daytona" | "e2b" | "modal" (default: "daytona")
     - HARBOR_MAX_INSTANCES: number of tasks to run (default: all 89)
-    - HARBOR_N_CONCURRENT: number of parallel trials (default: 25)
+    - HARBOR_N_CONCURRENT: number of parallel trials (default: 100)
     - HARBOR_AGENT_KWARGS_JSON: JSON dict forwarded to Harbor AgentConfig.kwargs
 """
 
@@ -79,7 +79,7 @@ MODEL_NAME = "nemotron-terminal-8b"
 MODEL_PATH = "gs://marin-us-central1/models/nvidia--Nemotron-Terminal-8B--main/"
 
 HARBOR_MAX_INSTANCES = _optional_int_from_env("HARBOR_MAX_INSTANCES", default=None)
-HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=25) or 1
+HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=100) or 1
 HARBOR_AGENT_KWARGS = _optional_json_dict_from_env("HARBOR_AGENT_KWARGS_JSON")
 
 # Sampling parameters from the model's generation_config.json to match the paper.
