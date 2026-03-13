@@ -267,6 +267,10 @@ message WorkerConfig {
   // Storage prefix for task artifacts (profiles). Injected by the controller
   // from the resolved bundle_prefix. Empty disables profile upload.
   string storage_prefix = 60;
+
+  // Bearer token for worker→controller authentication.
+  // Set by the controller when auth is enabled; empty when auth is disabled.
+  string auth_token = 70;
 }
 
 // SSH configuration for manual hosts
@@ -349,11 +353,35 @@ message DefaultsConfig {
 }
 
 // ============================================================================
+// AUTHENTICATION CONFIGURATION
+// ============================================================================
+
+message GcpAuthConfig {
+  string project_id = 1;  // GCP project ID — users must have access to this project to log in
+}
+
+message StaticAuthConfig {
+  // Map of token string → username. Useful for local dev and testing.
+  map<string, string> tokens = 1;
+}
+
+message AuthConfig {
+  oneof provider {
+    GcpAuthConfig gcp = 1;
+    StaticAuthConfig static = 2;
+  }
+  repeated string admin_users = 3;
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
 // Full cluster configuration - single source of truth
 message IrisClusterConfig {
+  // Human-readable cluster name for token store
+  string name = 5;
+
   // Platform settings
   PlatformConfig platform = 10;
   DefaultsConfig defaults = 11;
@@ -364,4 +392,7 @@ message IrisClusterConfig {
 
   // Scale groups (name -> config)
   map<string, ScaleGroupConfig> scale_groups = 50;
+
+  // Authentication (optional — when absent, no auth is required)
+  AuthConfig auth = 60;
 }

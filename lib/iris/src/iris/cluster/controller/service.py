@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import secrets
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -19,9 +20,18 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.controller.auth import (
+    ControllerAuth,
+    create_api_key,
+    list_api_keys,
+    revoke_api_key,
+    revoke_login_keys_for_user,
+)
+from iris.rpc.auth import get_verified_user, hash_token
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
+    API_KEYS,
     ATTEMPTS,
     ENDPOINTS,
     JOBS,
@@ -502,6 +512,7 @@ class ControllerServiceImpl:
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_store: LogStore,
+        auth: ControllerAuth | None = None,
     ):
         self._transitions = transitions
         self._db = db
@@ -509,6 +520,7 @@ class ControllerServiceImpl:
         self._bundle_store = bundle_store
         self._log_store = log_store
         self._timer = Timer()
+        self._auth = auth or ControllerAuth()
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -522,6 +534,22 @@ class ControllerServiceImpl:
         if not status.HasField("last_routing_decision"):
             return {}
         return build_job_pending_hints(status.last_routing_decision)
+
+    def _authorize_job_owner(self, job_id: JobName) -> None:
+        """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
+
+        Skipped when no auth provider is configured (null-auth mode).
+        """
+        if not self._auth.provider:
+            return
+        verified_user = get_verified_user()
+        if verified_user is None:
+            return
+        if job_id.user != verified_user:
+            raise ConnectError(
+                Code.PERMISSION_DENIED,
+                f"User '{verified_user}' cannot modify job {job_id} owned by '{job_id.user}'",
+            )
 
     def launch_job(
         self,
@@ -537,6 +565,17 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
 
         job_id = JobName.from_wire(request.name)
+
+        # When an auth provider is configured, override the user segment with
+        # the verified identity to prevent impersonation. Only override for
+        # root-level submissions; child jobs inherit the parent's user.
+        verified_user = get_verified_user()
+        if self._auth.provider and verified_user is not None and job_id.is_root:
+            job_id = JobName.root(verified_user, job_id.name)
+
+        # For non-root jobs, verify the caller owns the parent hierarchy
+        if self._auth.provider and verified_user is not None and not job_id.is_root:
+            self._authorize_job_owner(job_id)
 
         # Reject submissions if the parent job has already terminated
         if job_id.parent:
@@ -685,11 +724,13 @@ class ControllerServiceImpl:
         Cascade termination is performed depth-first: all children are
         terminated before the parent. All tasks within each job are killed.
         """
-        job = _read_job(self._db, JobName.from_wire(request.job_id))
+        job_id = JobName.from_wire(request.job_id)
+        job = _read_job(self._db, job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        self._terminate_job_tree(JobName.from_wire(request.job_id))
+        self._authorize_job_owner(job_id)
+        self._terminate_job_tree(job_id)
         return cluster_pb2.Empty()
 
     def _terminate_job_tree(self, job_id: JobName) -> None:
@@ -926,6 +967,10 @@ class ControllerServiceImpl:
 
         Worker registers once, then waits for heartbeats from the controller.
         """
+        if self._auth.provider is not None:
+            caller = self._require_auth()
+            self._require_role(caller, "worker")
+
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
             return cluster_pb2.Controller.RegisterResponse(
@@ -1466,3 +1511,150 @@ class ControllerServiceImpl:
             target="/system/process",
         )
         return stub.get_process_status(forwarded, timeout_ms=10000)
+
+    # ── Auth RPCs ────────────────────────────────────────────────────────
+
+    def get_auth_info(
+        self,
+        request: cluster_pb2.GetAuthInfoRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetAuthInfoResponse:
+        return cluster_pb2.GetAuthInfoResponse(
+            provider=self._auth.provider or "",
+            gcp_project_id=self._auth.gcp_project_id or "",
+        )
+
+    def login(
+        self,
+        request: cluster_pb2.LoginRequest,
+        ctx: Any,
+    ) -> cluster_pb2.LoginResponse:
+        if not self._auth.login_verifier:
+            raise ConnectError(Code.UNIMPLEMENTED, "Login not available (no identity provider configured)")
+
+        try:
+            username = self._auth.login_verifier.verify(request.identity_token)
+        except ValueError as exc:
+            raise ConnectError(Code.UNAUTHENTICATED, f"Identity verification failed: {exc}") from exc
+
+        if username.startswith("system:"):
+            raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
+
+        now = Timestamp.now()
+        self._db.ensure_user(username, now)
+
+        revoked = revoke_login_keys_for_user(self._db, username, now)
+
+        raw_token = secrets.token_urlsafe(32)
+        key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        create_api_key(
+            self._db,
+            key_id=key_id,
+            key_hash=hash_token(raw_token),
+            key_prefix=raw_token[:8],
+            user_id=username,
+            name=f"login-{now.epoch_ms()}",
+            now=now,
+        )
+        logger.info("Login: user=%s, new_key=%s, revoked=%d old login keys", username, key_id, revoked)
+        return cluster_pb2.LoginResponse(token=raw_token, key_id=key_id, user_id=username)
+
+    def create_api_key(
+        self,
+        request: cluster_pb2.CreateApiKeyRequest,
+        ctx: Any,
+    ) -> cluster_pb2.CreateApiKeyResponse:
+        caller = self._require_auth()
+        target_user = request.user_id or caller
+        if target_user != caller:
+            self._require_admin(caller)
+
+        now = Timestamp.now()
+        self._db.ensure_user(target_user, now)
+
+        raw_token = secrets.token_urlsafe(32)
+        key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        expires_at = Timestamp.from_ms(now.epoch_ms() + request.ttl_ms) if request.ttl_ms > 0 else None
+        create_api_key(
+            self._db,
+            key_id=key_id,
+            key_hash=hash_token(raw_token),
+            key_prefix=raw_token[:8],
+            user_id=target_user,
+            name=request.name or f"key-{now.epoch_ms()}",
+            now=now,
+            expires_at=expires_at,
+        )
+        return cluster_pb2.CreateApiKeyResponse(key_id=key_id, token=raw_token, key_prefix=raw_token[:8])
+
+    def revoke_api_key(
+        self,
+        request: cluster_pb2.RevokeApiKeyRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Empty:
+        caller = self._require_auth()
+        with self._db.snapshot() as q:
+            key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
+        if key is None:
+            raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
+        if key.user_id != caller:
+            self._require_admin(caller)
+        revoke_api_key(self._db, request.key_id, Timestamp.now())
+        return cluster_pb2.Empty()
+
+    def list_api_keys(
+        self,
+        request: cluster_pb2.ListApiKeysRequest,
+        ctx: Any,
+    ) -> cluster_pb2.ListApiKeysResponse:
+        caller = self._require_auth()
+        target_user = request.user_id or caller
+        if target_user != caller:
+            self._require_admin(caller)
+
+        keys = list_api_keys(self._db, user_id=target_user if target_user else None)
+        key_infos = []
+        for k in keys:
+            key_infos.append(
+                cluster_pb2.ApiKeyInfo(
+                    key_id=k.key_id,
+                    key_prefix=k.key_prefix,
+                    user_id=k.user_id,
+                    name=k.name,
+                    created_at_ms=k.created_at.epoch_ms(),
+                    last_used_at_ms=k.last_used_at.epoch_ms() if k.last_used_at else 0,
+                    expires_at_ms=k.expires_at.epoch_ms() if k.expires_at else 0,
+                    revoked=k.revoked_at is not None,
+                )
+            )
+        return cluster_pb2.ListApiKeysResponse(keys=key_infos)
+
+    def get_current_user(
+        self,
+        request: cluster_pb2.GetCurrentUserRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetCurrentUserResponse:
+        user_id = get_verified_user()
+        if user_id is None:
+            user_id = "anonymous"
+        role = self._db.get_user_role(user_id)
+        return cluster_pb2.GetCurrentUserResponse(
+            user_id=user_id,
+            role=role or "",
+        )
+
+    def _require_auth(self) -> str:
+        """Get the verified user or raise UNAUTHENTICATED."""
+        user = get_verified_user()
+        if user is None:
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
+        return user
+
+    def _require_role(self, user_id: str, role: str) -> None:
+        actual_role = self._db.get_user_role(user_id)
+        if actual_role != role:
+            raise ConnectError(Code.PERMISSION_DENIED, f"{role} role required")
+
+    def _require_admin(self, user_id: str) -> None:
+        """Raise PERMISSION_DENIED if user is not an admin."""
+        self._require_role(user_id, "admin")

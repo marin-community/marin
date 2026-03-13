@@ -49,10 +49,23 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 @pytest.fixture(scope="session", autouse=True)
 def _build_dashboard():
-    """Build the Vue dashboard once per test session so dashboard tests can render."""
-    from iris.cli.build import _ensure_dashboard_dist
+    """Build the Vue dashboard once per test session so dashboard tests can render.
 
-    _ensure_dashboard_dist()
+    Uses fcntl to serialize across pytest-xdist workers so concurrent
+    ``npm ci`` / ``npm run build`` invocations don't corrupt each other.
+    """
+    import fcntl
+    import tempfile
+
+    lock_path = Path(tempfile.gettempdir()) / "iris-dashboard-build.lock"
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            from iris.cli.build import _ensure_dashboard_dist
+
+            _ensure_dashboard_dist()
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 def pytest_addoption(parser):
