@@ -10,7 +10,7 @@ import sys
 import tempfile
 import threading
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import sleep
@@ -809,6 +809,12 @@ class Controller:
             max_workers=config.max_dispatch_parallelism,
             prefix="dispatch",
         )
+        # Thread pool for parallel profile capture, owned by the ThreadContainer
+        # so it is joined during shutdown (avoids racing closed stubs/DB).
+        self._profile_executor = self._threads.spawn_executor(
+            max_workers=config.profile_concurrency,
+            prefix="profile",
+        )
 
         self._autoscaler: Autoscaler | None = autoscaler
 
@@ -1018,13 +1024,15 @@ class Controller:
             except Exception:
                 logger.exception("Profile loop iteration failed")
 
+    _RUNNING_ONLY: frozenset[int] = frozenset({cluster_pb2.TASK_STATE_RUNNING})
+
     def _profile_all_running_tasks(self) -> None:
         """Capture a CPU profile for every running task and store in the DB."""
         workers = healthy_active_workers_with_attributes(self._db)
         if not workers:
             return
         workers_by_id = {w.worker_id: w for w in workers}
-        tasks_by_worker = running_tasks_by_worker(self._db, set(workers_by_id.keys()))
+        tasks_by_worker = running_tasks_by_worker(self._db, set(workers_by_id.keys()), task_states=self._RUNNING_ONLY)
 
         profile_targets: list[tuple[JobName, Worker]] = []
         for worker_id, task_ids in tasks_by_worker.items():
@@ -1035,13 +1043,14 @@ class Controller:
         if not profile_targets:
             return
 
-        concurrency = min(self._config.profile_concurrency, len(profile_targets))
-        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="profile") as pool:
-            futures = [pool.submit(self._capture_one_profile, task_id, worker) for task_id, worker in profile_targets]
-            for future in as_completed(futures):
-                future.result()
+        futures = [
+            self._profile_executor.submit(self._capture_one_profile, task_id, worker)
+            for task_id, worker in profile_targets
+        ]
+        for future in as_completed(futures):
+            future.result()
 
-        logger.info("Profile round: captured profiles for %d tasks", len(profile_targets))
+        logger.info("Profile round: attempted profiles for %d tasks", len(profile_targets))
 
     def _capture_one_profile(self, task_id: JobName, worker: Worker) -> None:
         """Capture a single task profile via RPC and store it in the DB."""

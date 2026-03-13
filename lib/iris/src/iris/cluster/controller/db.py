@@ -1191,20 +1191,25 @@ class ControllerDB:
 # ---------------------------------------------------------------------------
 
 
-def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-    """Return the set of currently-running task IDs for each worker.
+def running_tasks_by_worker(
+    db: ControllerDB,
+    worker_ids: set[WorkerId],
+    task_states: frozenset[int] = ACTIVE_TASK_STATES,
+) -> dict[WorkerId, set[JobName]]:
+    """Return the set of task IDs in the given states for each worker.
 
     Derived from tasks JOIN task_attempts rather than a materialized view.
     """
     if not worker_ids:
         return {}
-    placeholders = ",".join("?" for _ in worker_ids)
+    worker_placeholders = ",".join("?" for _ in worker_ids)
+    state_placeholders = ",".join("?" for _ in task_states)
     with db.snapshot() as q:
         rows = q.raw(
             f"SELECT a.worker_id, t.task_id FROM tasks t "
             f"JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
-            f"WHERE a.worker_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
-            (*[str(wid) for wid in worker_ids], *ACTIVE_TASK_STATES),
+            f"WHERE a.worker_id IN ({worker_placeholders}) AND t.state IN ({state_placeholders})",
+            (*[str(wid) for wid in worker_ids], *task_states),
             decoders={"worker_id": _decode_worker_id, "task_id": _decode_job_name},
         )
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
