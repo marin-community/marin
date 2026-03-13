@@ -509,6 +509,17 @@ class ZephyrCoordinator:
         with self._lock:
             return self._fatal_error
 
+    def abort(self, reason: str) -> None:
+        """Set a fatal error that causes the current stage to fail immediately.
+
+        Called by the external worker watchdog when the worker job terminates
+        permanently (e.g. all retries exhausted after OOM).
+        """
+        with self._lock:
+            if self._fatal_error is None:
+                logger.error("Coordinator aborted: %s", reason)
+                self._fatal_error = reason
+
     def _start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue."""
         with self._lock:
@@ -1149,13 +1160,24 @@ class ZephyrContext:
                 # mid-pipeline failure doesn't start with a long delay.
                 backoff.reset()
 
-                # Run pipeline on coordinator (blocking call).
-                # run_pipeline() calls coordinator.shutdown() at the end,
-                # which causes workers to receive SHUTDOWN on their next
-                # pull_task() call.
-                results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
+                # Start watchdog that aborts the coordinator if the worker
+                # job terminates permanently (e.g. all retries exhausted
+                # after OOM). Without this, the coordinator would wait up to
+                # no_workers_timeout (6h default) before giving up.
+                watchdog_stop = threading.Event()
+                watchdog_thread = self._start_worker_watchdog(watchdog_stop)
 
-                return results
+                try:
+                    # Run pipeline on coordinator (blocking call).
+                    # run_pipeline() calls coordinator.shutdown() at the end,
+                    # which causes workers to receive SHUTDOWN on their next
+                    # pull_task() call.
+                    results = self._coordinator.run_pipeline.remote(plan, execution_id, hints).result()
+
+                    return results
+                finally:
+                    watchdog_stop.set()
+                    watchdog_thread.join(timeout=15.0)
 
             except _NON_RETRYABLE_ERRORS:
                 raise
@@ -1183,6 +1205,40 @@ class ZephyrContext:
 
         # Should be unreachable, but just in case
         raise last_exception  # type: ignore[misc]
+
+    def _start_worker_watchdog(self, stop_event: threading.Event) -> threading.Thread:
+        """Start a daemon thread that aborts the coordinator when the worker job dies.
+
+        Polls worker_group.is_done() every 10s. When the worker job has
+        permanently terminated (retries exhausted), calls coordinator.abort()
+        which sets _fatal_error, causing _wait_for_stage() to raise
+        ZephyrWorkerError on the next iteration.
+        """
+        poll_interval = 10.0
+
+        def _watchdog():
+            while not stop_event.is_set():
+                stop_event.wait(poll_interval)
+                if stop_event.is_set():
+                    return
+                if self._worker_group is None:
+                    continue
+                try:
+                    if self._worker_group.is_done():
+                        reason = (
+                            "Worker job terminated permanently (all retries exhausted). "
+                            "Workers likely crashed (OOM or other fatal error)."
+                        )
+                        logger.error("Worker watchdog: %s", reason)
+                        if self._coordinator is not None:
+                            self._coordinator.abort.remote(reason)
+                        return
+                except Exception:
+                    logger.debug("Worker watchdog: failed to check worker status", exc_info=True)
+
+        thread = threading.Thread(target=_watchdog, daemon=True, name="zephyr-worker-watchdog")
+        thread.start()
+        return thread
 
     def _create_coordinator(self, attempt: int = 0) -> None:
         """Create a fresh coordinator actor."""

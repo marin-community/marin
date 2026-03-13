@@ -433,6 +433,14 @@ class IrisActorGroup:
 
             time.sleep(sleep_secs)
 
+    def is_done(self) -> bool:
+        """Return True if the Iris worker job has permanently terminated."""
+        from iris.cluster.types import is_job_finished
+
+        client = self._get_client()
+        job_status = client.status(self._job_id)
+        return is_job_finished(job_status.state)
+
     def shutdown(self) -> None:
         """Terminate the actor job."""
         client = self._get_client()
