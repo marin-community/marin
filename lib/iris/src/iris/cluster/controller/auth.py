@@ -142,16 +142,25 @@ def _get_or_create_signing_key(db: ControllerDB) -> str:
         return rows[0].value
 
 
+# Minimum interval between last_used_at writes for the same key (seconds).
+_TOUCH_INTERVAL_SECONDS = 300  # 5 minutes
+
+
 class JwtTokenManager:
     """Creates and verifies HMAC-SHA256 JWT tokens.
 
     Verification is a pure crypto operation followed by an in-memory
-    revocation check — no DB hit on the hot path.
+    revocation check — no DB hit on the hot path. An optional DB reference
+    enables sampled last_used_at write-back (at most once per key per
+    ``_TOUCH_INTERVAL_SECONDS``).
     """
 
-    def __init__(self, signing_key: str):
+    def __init__(self, signing_key: str, db: ControllerDB | None = None):
         self._signing_key = signing_key
         self._revoked_jtis: set[str] = set()
+        self._db = db
+        # Tracks the last wall-clock time we wrote last_used_at per jti.
+        self._last_touched: dict[str, float] = {}
 
     def create_token(
         self,
@@ -171,7 +180,11 @@ class JwtTokenManager:
         return jwt.encode(payload, self._signing_key, algorithm="HS256")
 
     def verify(self, token: str) -> VerifiedIdentity:
-        """Verify JWT signature and claims, check revocation."""
+        """Verify JWT signature and claims, check revocation.
+
+        On success, updates ``last_used_at`` in the DB at most once per key
+        per ``_TOUCH_INTERVAL_SECONDS`` to avoid hot-path DB writes.
+        """
         try:
             payload = jwt.decode(token, self._signing_key, algorithms=["HS256"])
         except jwt.ExpiredSignatureError as exc:
@@ -183,10 +196,26 @@ class JwtTokenManager:
         if jti in self._revoked_jtis:
             raise ValueError("Token has been revoked")
 
+        self._maybe_touch(jti)
+
         return VerifiedIdentity(
             user_id=payload["sub"],
             role=payload.get("role", "user"),
         )
+
+    def _maybe_touch(self, jti: str) -> None:
+        """Write last_used_at to DB if enough time has elapsed since the last write."""
+        if not self._db or not jti:
+            return
+        now = time.time()
+        last = self._last_touched.get(jti, 0.0)
+        if now - last < _TOUCH_INTERVAL_SECONDS:
+            return
+        self._last_touched[jti] = now
+        try:
+            touch_api_key(self._db, jti, Timestamp.from_seconds(now))
+        except Exception:
+            logger.debug("Failed to update last_used_at for key %s", jti, exc_info=True)
 
     def revoke(self, jti: str) -> None:
         """Add a JTI to the in-memory revocation set."""
@@ -244,7 +273,7 @@ def create_controller_auth(
             db.set_user_role("anonymous", "admin")
 
             signing_key = _get_or_create_signing_key(db)
-            jwt_mgr = JwtTokenManager(signing_key)
+            jwt_mgr = JwtTokenManager(signing_key, db=db)
             jwt_mgr.load_revocations(db)
 
             worker_token = _create_worker_jwt(db, jwt_mgr, now)
@@ -261,7 +290,7 @@ def create_controller_auth(
 
     if db:
         signing_key = _get_or_create_signing_key(db)
-        jwt_mgr = JwtTokenManager(signing_key)
+        jwt_mgr = JwtTokenManager(signing_key, db=db)
         jwt_mgr.load_revocations(db)
 
         if provider == "static":

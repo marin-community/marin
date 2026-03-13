@@ -21,6 +21,7 @@ from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller.auth import (
+    DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
     create_api_key,
     list_api_keys,
@@ -1553,6 +1554,7 @@ class ControllerServiceImpl:
             self._auth.jwt_manager.revoke(jti)
 
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        expires_at = Timestamp.from_ms(now.epoch_ms() + DEFAULT_JWT_TTL_SECONDS * 1000)
         create_api_key(
             self._db,
             key_id=key_id,
@@ -1561,6 +1563,7 @@ class ControllerServiceImpl:
             user_id=username,
             name=f"login-{now.epoch_ms()}",
             now=now,
+            expires_at=expires_at,
         )
 
         jwt_token = self._auth.jwt_manager.create_token(username, role, key_id)
@@ -1587,10 +1590,9 @@ class ControllerServiceImpl:
         role = self._db.get_user_role(target_user)
 
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
-        from iris.cluster.controller.auth import DEFAULT_JWT_TTL_SECONDS
-
         ttl = request.ttl_ms // 1000 if request.ttl_ms > 0 else DEFAULT_JWT_TTL_SECONDS
-        expires_at = Timestamp.from_ms(now.epoch_ms() + request.ttl_ms) if request.ttl_ms > 0 else None
+        # Always persist the actual JWT expiry so the DB and token agree.
+        expires_at = Timestamp.from_ms(now.epoch_ms() + ttl * 1000)
 
         create_api_key(
             self._db,
