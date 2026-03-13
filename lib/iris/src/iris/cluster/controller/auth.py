@@ -137,6 +137,8 @@ def _get_or_create_signing_key(db: ControllerDB) -> str:
             ("jwt_signing_key",),
             decoders={"value": str},
         )
+        if not rows:
+            raise RuntimeError("Failed to read or create JWT signing key")
         return rows[0].value
 
 
@@ -191,10 +193,18 @@ class JwtTokenManager:
         self._revoked_jtis.add(jti)
 
     def load_revocations(self, db: ControllerDB) -> None:
-        """Load all revoked key_ids from api_keys into the revocation set."""
+        """Load revoked key_ids from api_keys into the revocation set.
+
+        Only loads keys that haven't expired yet — expired JWTs are rejected
+        by signature verification anyway, so their JTIs don't need tracking.
+        """
+        now_ms = int(time.time() * 1000)
         with db.snapshot() as q:
             rows = q.raw(
-                "SELECT key_id FROM api_keys WHERE revoked_at_ms IS NOT NULL",
+                "SELECT key_id FROM api_keys"
+                " WHERE revoked_at_ms IS NOT NULL"
+                " AND (expires_at_ms IS NULL OR expires_at_ms > ?)",
+                (now_ms,),
                 decoders={"key_id": str},
             )
             self._revoked_jtis = {row.key_id for row in rows}

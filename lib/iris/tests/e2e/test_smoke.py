@@ -1072,7 +1072,7 @@ def test_static_auth_job_ownership():
         # User B tries to terminate user A's job — should fail
         injector_b = AuthTokenInjector(StaticTokenProvider(jwt_b))
         client_b = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_b])
-        with pytest.raises(ConnectError, match="cannot modify"):
+        with pytest.raises(ConnectError, match="cannot access resources owned by"):
             client_b.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
 
         # User A can terminate their own job

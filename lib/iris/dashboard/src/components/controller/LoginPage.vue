@@ -17,9 +17,9 @@ async function login() {
   error.value = null
   loading.value = true
   try {
-    // Try exchanging the token for a JWT via Login RPC.
-    // This handles raw identity tokens (static config tokens, GCP access tokens).
-    // If the token is already a JWT, Login will fail and we use it directly.
+    // Exchange the token for a JWT via Login RPC.
+    // Handles raw identity tokens (static config tokens, GCP access tokens).
+    // If Login is unimplemented, the token is already a JWT — use it directly.
     let sessionToken = trimmed
     try {
       const loginResp = await fetch('/iris.cluster.ControllerService/Login', {
@@ -32,9 +32,22 @@ async function login() {
         if (loginData.token) {
           sessionToken = loginData.token
         }
+      } else {
+        // Surface auth failures (e.g. invalid token). Only fall through for
+        // "unimplemented" (Login not configured) — token may already be a JWT.
+        const errData = await loginResp.json().catch(() => ({}))
+        const code = errData.code || ''
+        if (code !== 'unimplemented') {
+          throw new Error(errData.message || `Login failed (${loginResp.status})`)
+        }
       }
-    } catch {
-      // Login RPC unavailable or failed — use token as-is (may be a JWT already)
+    } catch (loginErr) {
+      // Network errors (Login RPC unreachable) — try token as-is
+      if (loginErr instanceof TypeError) {
+        // fetch network error — ignore and try token directly
+      } else {
+        throw loginErr
+      }
     }
 
     const resp = await fetch('/auth/session', {

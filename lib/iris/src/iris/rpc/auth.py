@@ -17,6 +17,7 @@ import logging
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
+from enum import StrEnum
 from http.cookies import SimpleCookie
 from typing import Protocol
 
@@ -75,6 +76,60 @@ def get_verified_user() -> str | None:
     """Return just the user_id for the current RPC, or None."""
     identity = _verified_identity.get()
     return identity.user_id if identity is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Centralized authorization — policy is defined here, not scattered in service
+# ---------------------------------------------------------------------------
+
+
+class AuthzAction(StrEnum):
+    """Actions requiring authorization. Add new actions here; policy is in POLICY."""
+
+    REGISTER_WORKER = "register_worker"
+    MANAGE_OTHER_KEYS = "manage_other_keys"
+
+
+# Action → frozenset of roles allowed. Admin is implicitly always allowed.
+POLICY: dict[AuthzAction, frozenset[str]] = {
+    AuthzAction.REGISTER_WORKER: frozenset({"worker"}),
+    AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
+}
+
+
+def require_identity() -> VerifiedIdentity:
+    """Get the verified identity for the current RPC or raise UNAUTHENTICATED."""
+    identity = _verified_identity.get()
+    if identity is None:
+        raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
+    return identity
+
+
+def authorize(action: AuthzAction) -> VerifiedIdentity:
+    """Require the current caller has permission for the given action.
+
+    Admin role is always authorized. Other roles are checked against POLICY.
+    """
+    identity = require_identity()
+    if identity.role == "admin":
+        return identity
+    allowed = POLICY.get(action, frozenset())
+    if identity.role not in allowed:
+        raise ConnectError(Code.PERMISSION_DENIED, f"{action} not allowed for role {identity.role}")
+    return identity
+
+
+def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:
+    """Require the caller owns the resource or is admin."""
+    identity = require_identity()
+    if identity.role == "admin":
+        return identity
+    if identity.user_id != resource_owner:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"User '{identity.user_id}' cannot access resources owned by '{resource_owner}'",
+        )
+    return identity
 
 
 class TokenVerifier(Protocol):

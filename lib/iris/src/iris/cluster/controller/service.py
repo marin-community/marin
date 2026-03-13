@@ -27,7 +27,14 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.rpc.auth import VerifiedIdentity, get_verified_identity, get_verified_user
+from iris.rpc.auth import (
+    AuthzAction,
+    authorize,
+    authorize_resource_owner,
+    get_verified_identity,
+    get_verified_user,
+    require_identity,
+)
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
@@ -542,14 +549,7 @@ class ControllerServiceImpl:
         """
         if not self._auth.provider:
             return
-        verified_user = get_verified_user()
-        if verified_user is None:
-            return
-        if job_id.user != verified_user:
-            raise ConnectError(
-                Code.PERMISSION_DENIED,
-                f"User '{verified_user}' cannot modify job {job_id} owned by '{job_id.user}'",
-            )
+        authorize_resource_owner(job_id.user)
 
     def launch_job(
         self,
@@ -968,7 +968,7 @@ class ControllerServiceImpl:
         Worker registers once, then waits for heartbeats from the controller.
         """
         if self._auth.provider is not None:
-            self._require_role("worker")
+            authorize(AuthzAction.REGISTER_WORKER)
 
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
@@ -1536,7 +1536,8 @@ class ControllerServiceImpl:
         try:
             login_identity = self._auth.login_verifier.verify(request.identity_token)
         except ValueError as exc:
-            raise ConnectError(Code.UNAUTHENTICATED, f"Identity verification failed: {exc}") from exc
+            logger.info("Login verification failed: %s", exc)
+            raise ConnectError(Code.UNAUTHENTICATED, "Identity verification failed") from exc
 
         username = login_identity.user_id
         if username.startswith("system:"):
@@ -1576,10 +1577,10 @@ class ControllerServiceImpl:
         if not self._auth.jwt_manager:
             raise ConnectError(Code.INTERNAL, "JWT manager not configured")
 
-        caller = self._require_auth()
-        target_user = request.user_id or caller
-        if target_user != caller:
-            self._require_admin()
+        identity = require_identity()
+        target_user = request.user_id or identity.user_id
+        if target_user != identity.user_id:
+            authorize(AuthzAction.MANAGE_OTHER_KEYS)
 
         now = Timestamp.now()
         self._db.ensure_user(target_user, now)
@@ -1603,20 +1604,21 @@ class ControllerServiceImpl:
         )
 
         jwt_token = self._auth.jwt_manager.create_token(target_user, role, key_id, ttl_seconds=ttl)
-        return cluster_pb2.CreateApiKeyResponse(key_id=key_id, token=jwt_token, key_prefix=jwt_token[:8])
+        # Use key_id prefix (not JWT prefix — all HS256 JWTs share the same header)
+        return cluster_pb2.CreateApiKeyResponse(key_id=key_id, token=jwt_token, key_prefix=key_id[:8])
 
     def revoke_api_key(
         self,
         request: cluster_pb2.RevokeApiKeyRequest,
         ctx: Any,
     ) -> cluster_pb2.Empty:
-        caller = self._require_auth()
+        identity = require_identity()
         with self._db.snapshot() as q:
             key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
         if key is None:
             raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
-        if key.user_id != caller:
-            self._require_admin()
+        if key.user_id != identity.user_id:
+            authorize(AuthzAction.MANAGE_OTHER_KEYS)
         revoke_api_key(self._db, request.key_id, Timestamp.now())
         if self._auth.jwt_manager:
             self._auth.jwt_manager.revoke(request.key_id)
@@ -1627,10 +1629,10 @@ class ControllerServiceImpl:
         request: cluster_pb2.ListApiKeysRequest,
         ctx: Any,
     ) -> cluster_pb2.ListApiKeysResponse:
-        caller = self._require_auth()
-        target_user = request.user_id or caller
-        if target_user != caller:
-            self._require_admin()
+        identity = require_identity()
+        target_user = request.user_id or identity.user_id
+        if target_user != identity.user_id:
+            authorize(AuthzAction.MANAGE_OTHER_KEYS)
 
         keys = list_api_keys(self._db, user_id=target_user if target_user else None)
         key_infos = []
@@ -1661,28 +1663,3 @@ class ControllerServiceImpl:
             user_id=identity.user_id,
             role=identity.role,
         )
-
-    def _require_auth(self) -> str:
-        """Get the verified user or raise UNAUTHENTICATED."""
-        identity = get_verified_identity()
-        if identity is None:
-            raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
-        return identity.user_id
-
-    def _require_identity(self) -> VerifiedIdentity:
-        """Get the verified identity or raise UNAUTHENTICATED."""
-        identity = get_verified_identity()
-        if identity is None:
-            raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
-        return identity
-
-    def _require_role(self, role: str) -> VerifiedIdentity:
-        """Get the verified identity and assert it has the required role."""
-        identity = self._require_identity()
-        if identity.role != role:
-            raise ConnectError(Code.PERMISSION_DENIED, f"{role} role required")
-        return identity
-
-    def _require_admin(self) -> VerifiedIdentity:
-        """Raise PERMISSION_DENIED if user is not an admin."""
-        return self._require_role("admin")

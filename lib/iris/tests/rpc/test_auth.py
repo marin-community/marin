@@ -638,3 +638,117 @@ def test_extract_cookie(cookie_header, name, expected):
 
 def test_extract_cookie_empty_string():
     assert _extract_cookie("", "iris_session") is None
+
+
+# ---------------------------------------------------------------------------
+# Centralized authorization (authorize / authorize_resource_owner)
+# ---------------------------------------------------------------------------
+
+
+def test_authorize_admin_always_passes():
+    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
+    try:
+        # Admin should pass any action, even REGISTER_WORKER
+        identity = authorize(AuthzAction.REGISTER_WORKER)
+        assert identity.user_id == "admin-user"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_worker_can_register():
+    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
+    try:
+        identity = authorize(AuthzAction.REGISTER_WORKER)
+        assert identity.role == "worker"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_user_cannot_register_worker():
+    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            authorize(AuthzAction.REGISTER_WORKER)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_raises_unauthenticated_when_no_identity():
+    from iris.rpc.auth import AuthzAction, authorize
+
+    # No identity set — should raise UNAUTHENTICATED
+    with pytest.raises(ConnectError) as exc_info:
+        authorize(AuthzAction.REGISTER_WORKER)
+    assert exc_info.value.code == Code.UNAUTHENTICATED
+
+
+def test_authorize_manage_other_keys_admin_only():
+    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            authorize(AuthzAction.MANAGE_OTHER_KEYS)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_resource_owner_same_user():
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        identity = authorize_resource_owner("alice")
+        assert identity.user_id == "alice"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_resource_owner_different_user_denied():
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            authorize_resource_owner("alice")
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_resource_owner_admin_can_access_any():
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
+    try:
+        identity = authorize_resource_owner("alice")
+        assert identity.user_id == "admin-user"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_require_identity_returns_identity():
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity, require_identity
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        identity = require_identity()
+        assert identity.user_id == "alice"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_require_identity_raises_unauthenticated():
+    from iris.rpc.auth import require_identity
+
+    with pytest.raises(ConnectError) as exc_info:
+        require_identity()
+    assert exc_info.value.code == Code.UNAUTHENTICATED

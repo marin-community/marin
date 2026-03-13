@@ -260,7 +260,7 @@ def test_create_api_key_returns_raw_token(db):
 
     assert response.token
     assert response.key_id.startswith("iris_k_")
-    assert response.key_prefix == response.token[:8]
+    assert response.key_prefix == response.key_id[:8]
 
     # JWT token should verify correctly
     identity = auth.verifier.verify(response.token)
