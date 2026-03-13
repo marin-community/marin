@@ -463,7 +463,6 @@ class Worker:
             num_tasks=request.num_tasks,
             request=request,
             cache_dir=self._cache_dir,
-            storage_prefix=self._config.storage_prefix,
         )
 
         attempt = TaskAttempt(
