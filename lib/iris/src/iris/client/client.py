@@ -37,10 +37,10 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
+from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.cluster.controller.local import (
     LocalController,
     make_local_cluster_config,
-    wait_for_worker_registration,
 )
 from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import (
@@ -526,7 +526,6 @@ class IrisClient:
         config_proto = make_local_cluster_config(cfg.max_workers)
         controller = LocalController(config_proto)
         address = controller.start()
-        wait_for_worker_registration(address)
         cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
         return cls(cluster, controller=controller)
 
@@ -538,6 +537,7 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
+        token_provider: TokenProvider | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for RPC-based cluster execution.
 
@@ -549,6 +549,7 @@ class IrisClient:
             bundle_id: Workspace bundle identifier for sub-job inheritance.
                 When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
+            token_provider: When set, attaches bearer tokens to all outgoing RPCs.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -559,11 +560,16 @@ class IrisClient:
             bundle_blob = creator.create_bundle()
             logger.info(f"Workspace bundle size: {len(bundle_blob) / 1024 / 1024:.1f} MB")
 
+        interceptors = []
+        if token_provider is not None:
+            interceptors.append(AuthTokenInjector(token_provider))
+
         cluster = RemoteClusterClient(
             controller_address=controller_address,
             bundle_id=bundle_id,
             bundle_blob=bundle_blob,
             timeout_ms=timeout_ms,
+            interceptors=interceptors,
         )
         return cls(cluster)
 

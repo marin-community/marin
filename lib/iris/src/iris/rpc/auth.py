@@ -1,0 +1,284 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Authentication interceptor for Iris Connect RPC services.
+
+Provides bearer token verification on the server side and token injection
+on the client side. Authentication is optional: when no verifier is configured,
+all requests pass through without authentication.
+"""
+
+import hashlib
+import logging
+import time
+from contextvars import ContextVar
+from http.cookies import SimpleCookie
+from typing import Protocol
+
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+
+logger = logging.getLogger(__name__)
+
+SESSION_COOKIE = "iris_session"
+
+
+def _extract_cookie(cookie_header: str, name: str) -> str | None:
+    """Extract a named cookie value from a raw Cookie header."""
+    if not cookie_header:
+        return None
+    try:
+        cookie = SimpleCookie(cookie_header)
+        morsel = cookie.get(name)
+        return morsel.value if morsel else None
+    except Exception:
+        return None
+
+
+def hash_token(raw_token: str) -> str:
+    """SHA-256 hex digest of a raw API key. Used for storage and lookup."""
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+# Thread-local storage for the verified user identity within an RPC handler.
+# Set by AuthInterceptor before calling the handler, read by service code.
+_verified_user: ContextVar[str | None] = ContextVar("verified_user", default=None)
+
+
+def get_verified_user() -> str | None:
+    """Return the verified user for the current RPC, or None if auth is disabled."""
+    return _verified_user.get()
+
+
+class TokenVerifier(Protocol):
+    """Verifies a bearer token and returns the authenticated username."""
+
+    def verify(self, token: str) -> str:
+        """Verify the token and return the username (e.g. email).
+
+        Raises:
+            ValueError: If the token is invalid or expired.
+        """
+        ...
+
+
+class StaticTokenVerifier:
+    """Maps fixed tokens to usernames. Useful for testing and worker auth."""
+
+    def __init__(self, tokens: dict[str, str]):
+        """Args:
+        tokens: Mapping of token string to username.
+        """
+        self._tokens = tokens
+
+    def verify(self, token: str) -> str:
+        user = self._tokens.get(token)
+        if user is None:
+            raise ValueError("Invalid token")
+        return user
+
+
+class GcpAccessTokenVerifier:
+    """Verifies GCP OAuth2 access tokens via Google's tokeninfo endpoint.
+
+    Optionally checks that the user has access to a specific GCP project
+    using the Cloud Resource Manager API with the user's own token.
+    """
+
+    _TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+    _PROJECT_URL_TEMPLATE = "https://cloudresourcemanager.googleapis.com/v3/projects/{}"
+
+    def __init__(self, project_id: str | None = None):
+        self._project_id = project_id
+
+    def verify(self, token: str) -> str:
+        import requests
+
+        resp = requests.get(self._TOKENINFO_URL, params={"access_token": token}, timeout=10)
+        if resp.status_code != 200:
+            raise ValueError(f"Token verification failed (status {resp.status_code})")
+        info = resp.json()
+        email = info.get("email")
+        if not email:
+            raise ValueError("Token does not contain an email claim")
+
+        if self._project_id:
+            proj_resp = requests.get(
+                self._PROJECT_URL_TEMPLATE.format(self._project_id),
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            if proj_resp.status_code != 200:
+                raise ValueError(f"User {email} does not have access to project {self._project_id}")
+
+        return email
+
+
+class CompositeTokenVerifier:
+    """Tries multiple verifiers in order, returning the first successful result."""
+
+    def __init__(self, verifiers: list[TokenVerifier]):
+        if not verifiers:
+            raise ValueError("CompositeTokenVerifier requires at least one verifier")
+        self._verifiers = verifiers
+
+    def verify(self, token: str) -> str:
+        errors = []
+        for verifier in self._verifiers:
+            try:
+                return verifier.verify(token)
+            except ValueError as exc:
+                errors.append(str(exc))
+        raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
+
+
+class AuthInterceptor:
+    """Server-side Connect RPC interceptor that enforces bearer token auth.
+
+    Reads the Authorization header, verifies the token via the configured
+    verifier, and stores the verified user in a ContextVar for the service
+    layer to read via get_verified_user().
+    """
+
+    def __init__(self, verifier: TokenVerifier):
+        self._verifier = verifier
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        headers = ctx.request_headers()
+        auth_header = headers.get("authorization", "")
+        token = None
+
+        if auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer ") :]
+        else:
+            cookie_header = headers.get("cookie", "")
+            token = _extract_cookie(cookie_header, SESSION_COOKIE)
+
+        if not token:
+            raise ConnectError(Code.UNAUTHENTICATED, "Missing or malformed Authorization header")
+
+        try:
+            user = self._verifier.verify(token)
+        except ValueError as exc:
+            logger.warning("Authentication failed: %s", exc)
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
+
+        reset_token = _verified_user.set(user)
+        try:
+            return call_next(request, ctx)
+        finally:
+            _verified_user.reset(reset_token)
+
+    def intercept_server_stream_sync(self, call_next, request, ctx):
+        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
+
+    def intercept_client_stream_sync(self, call_next, request, ctx):
+        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
+
+    def intercept_bidi_stream_sync(self, call_next, request, ctx):
+        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
+
+
+class NullAuthInterceptor:
+    """Interceptor for null-auth mode.
+
+    When a verifier is provided, tokens are verified if present (e.g. worker
+    tokens) but unauthenticated requests fall through as the anonymous user.
+    Without a verifier, all requests are treated as anonymous.
+    """
+
+    def __init__(self, user: str = "anonymous", verifier: TokenVerifier | None = None):
+        self._user = user
+        self._verifier = verifier
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        user = self._user
+
+        if self._verifier is not None:
+            headers = ctx.request_headers()
+            auth_header = headers.get("authorization", "")
+            token = None
+            if auth_header.startswith("Bearer "):
+                token = auth_header[len("Bearer ") :]
+            else:
+                cookie_header = headers.get("cookie", "")
+                token = _extract_cookie(cookie_header, SESSION_COOKIE)
+
+            if token:
+                try:
+                    user = self._verifier.verify(token)
+                except ValueError:
+                    pass
+
+        reset_token = _verified_user.set(user)
+        try:
+            return call_next(request, ctx)
+        finally:
+            _verified_user.reset(reset_token)
+
+
+class AuthTokenInjector:
+    """Client-side Connect RPC interceptor that attaches a bearer token to requests."""
+
+    def __init__(self, token_provider: "TokenProvider"):
+        self._provider = token_provider
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        token = self._provider.get_token()
+        if token:
+            ctx.request_headers()["authorization"] = f"Bearer {token}"
+        return call_next(request, ctx)
+
+
+class TokenProvider(Protocol):
+    """Provides a bearer token for outgoing requests."""
+
+    def get_token(self) -> str | None:
+        """Return a token string, or None to skip auth."""
+        ...
+
+
+class StaticTokenProvider:
+    """Returns a fixed token. Useful for testing and worker auth."""
+
+    def __init__(self, token: str):
+        self._token = token
+
+    def get_token(self) -> str | None:
+        return self._token
+
+
+class GcpAccessTokenProvider:
+    """Gets OAuth2 access tokens via google-auth SDK.
+
+    Works for all credential types: user accounts (from gcloud auth
+    application-default login), service accounts, and GCE metadata.
+    Tokens are cached until 5 minutes before expiry.
+    """
+
+    _REFRESH_MARGIN_SECONDS = 300
+
+    def __init__(self):
+        self._creds = None
+        self._cached_token: str | None = None
+        self._expires_at: float = 0.0
+
+    def get_token(self) -> str | None:
+        if self._cached_token is not None and time.monotonic() < self._expires_at:
+            return self._cached_token
+
+        import google.auth
+        import google.auth.transport.requests
+
+        if self._creds is None:
+            self._creds, _ = google.auth.default()
+        self._creds.refresh(google.auth.transport.requests.Request())
+
+        self._cached_token = self._creds.token
+        now_mono = time.monotonic()
+        if self._creds.expiry is not None:
+            self._expires_at = now_mono + (self._creds.expiry.timestamp() - time.time()) - self._REFRESH_MARGIN_SECONDS
+        else:
+            self._expires_at = now_mono + self._REFRESH_MARGIN_SECONDS
+
+        return self._cached_token

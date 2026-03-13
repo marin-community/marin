@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useWorkerRpc, workerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -14,6 +15,7 @@ import Sparkline from '@/components/shared/Sparkline.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 
+const router = useRouter()
 const MAX_HISTORY_SAMPLES = 60
 
 const props = defineProps<{
@@ -91,8 +93,49 @@ const ports = computed<[string, number][]>(() => {
   return Object.entries(p)
 })
 
-// Profiling — calls the worker's ProfileTask RPC via Connect; use getter so target stays current on route change
 const { profiling, profile: handleProfile } = useProfileAction(workerRpcCall, () => props.taskId)
+
+function buildProfileType(profilerType: string): Record<string, unknown> {
+  if (profilerType === 'cpu') return { cpu: { format: 'SPEEDSCOPE' } }
+  if (profilerType === 'memory') return { memory: { format: 'FLAMEGRAPH' } }
+  return { threads: {} }
+}
+
+async function handleProfile(profilerType: string) {
+  if (profilerType === 'threads') {
+    router.push(`/task/${encodeURIComponent(props.taskId)}/threads`)
+    return
+  }
+  profiling.value = true
+  try {
+    const { workerRpcCall } = await import('@/composables/useRpc')
+    const body = {
+      target: props.taskId,
+      durationSeconds: 10,
+      profileType: buildProfileType(profilerType),
+    }
+    const resp = await workerRpcCall<{ profileData?: string; error?: string }>('ProfileTask', body)
+    if (resp.error) {
+      alert(`${profilerType.toUpperCase()} profile failed: ${resp.error}`)
+      return
+    }
+    if (resp.profileData) {
+      const decoded = atob(resp.profileData)
+      const blob = new Blob([decoded], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
+      a.download = `${ts}_profile-${props.taskId.replace(/\//g, '_')}.out`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  } catch (e) {
+    alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
+  } finally {
+    profiling.value = false
+  }
+}
 
 const { active: autoRefreshActive, start: startRefresh, stop: stopRefresh } = useAutoRefresh(
   fetchTask,

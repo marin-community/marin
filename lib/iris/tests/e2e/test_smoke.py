@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from connectrpc.errors import ConnectError
 from iris.cli.cluster import _build_cluster_images, _pin_latest_images
 from iris.client.client import IrisClient
 from iris.cluster.config import IrisConfig, load_config, make_local_config
@@ -24,6 +25,7 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.manager import connect_cluster
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.types import (
+    Entrypoint,
     ReservationEntry,
     ResourceSpec,
     gpu_device,
@@ -564,6 +566,30 @@ def test_reservation_gates_scheduling(smoke_cluster):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+def test_cancel_job_releases_resources(smoke_cluster):
+    """Cancelling a running job decommits worker resources so new jobs can schedule.
+
+    Submits a resource-heavy job, cancels it, then verifies a second job with
+    the same resource requirements succeeds — proving the worker's committed
+    resources were fully released by cancel_job().
+
+    Regression test for #3553.
+    """
+    heavy_cpu = 7000  # close to the 8000m worker capacity
+
+    job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
+    smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+
+    smoke_cluster.kill(job)
+    killed_status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    assert killed_status.state == cluster_pb2.JOB_STATE_KILLED
+
+    # If resources weren't released, this job would stay PENDING forever.
+    followup = smoke_cluster.submit(TestJobs.quick, "smoke-cancel-followup", cpu=heavy_cpu)
+    followup_status = smoke_cluster.wait(followup, timeout=smoke_cluster.job_timeout)
+    assert followup_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
 # ============================================================================
 # Log level verification
 # ============================================================================
@@ -795,6 +821,7 @@ def test_gpu_worker_metadata(tmp_path):
     works in local mode — it doesn't run against real GPU/TPU clusters.
     """
     config = _make_controller_only_config()
+
     with connect_cluster(config) as url:
         original_run = subprocess.run
         with patch(
@@ -857,3 +884,186 @@ def test_gpu_worker_metadata(tmp_path):
             finally:
                 worker.stop()
                 threads.stop(timeout=Duration.from_seconds(5.0))
+
+
+# ============================================================================
+# Dashboard authentication flow (standalone cluster with auth enabled)
+# ============================================================================
+
+_AUTH_TOKEN = "e2e-test-token"
+_AUTH_USER = "test-user"
+
+
+def test_dashboard_login_flow():
+    """Dashboard shows login page when auth is enabled, allows token login, and supports logout.
+
+    Creates a standalone local cluster with static auth via config. Exercises the
+    full browser auth flow: redirect to login, paste token, verify RPC data loads,
+    then logout back to the login page.
+    """
+    from iris.cluster.controller.local import LocalController
+
+    try:
+        import playwright.sync_api as pw
+    except ImportError:
+        pytest.skip("playwright not installed")
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    controller = LocalController(config)
+    url = controller.start()
+
+    # Run Playwright in a separate thread to avoid conflict with the asyncio
+    # event loop that AnyIO worker threads may have installed.
+    errors: list[Exception] = []
+
+    def _run_browser_flow():
+        try:
+            with pw.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+
+                # Navigate to dashboard root — auth guard should redirect to login
+                page.goto(f"{url}/")
+                page.wait_for_load_state("domcontentloaded")
+                wait_for_dashboard_ready(page)
+
+                page.wait_for_function(
+                    "() => window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+
+                # Login page should show the token textarea and login button
+                assert_visible(page, "text=Iris Dashboard")
+                assert_visible(page, "text=bearer token")
+                assert_visible(page, "button:has-text('Login')")
+
+                # Enter the token and submit
+                page.fill("textarea#token", _AUTH_TOKEN)
+                page.click("button:has-text('Login')")
+
+                # After login, should redirect to jobs tab (root hash)
+                page.wait_for_function(
+                    "() => !window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+                wait_for_dashboard_ready(page)
+
+                # Verify the dashboard loaded — the Jobs tab heading or
+                # an empty "No jobs" state should be visible
+                page.wait_for_function(
+                    "() => document.body.textContent.includes('Jobs') || "
+                    "document.body.textContent.includes('No jobs')",
+                    timeout=10000,
+                )
+
+                # Logout should redirect back to login
+                page.click("button:has-text('Logout')")
+                page.wait_for_function(
+                    "() => window.location.hash.includes('/login')",
+                    timeout=10000,
+                )
+                assert_visible(page, "text=bearer token")
+
+                page.close()
+                browser.close()
+        except Exception as exc:
+            errors.append(exc)
+
+    import threading
+
+    t = threading.Thread(target=_run_browser_flow)
+    t.start()
+    t.join(timeout=60)
+
+    try:
+        if errors:
+            raise errors[0]
+        if t.is_alive():
+            raise TimeoutError("Browser flow did not complete within 60s")
+    finally:
+        controller.close()
+
+
+def test_static_auth_rpc_access():
+    """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid token."""
+    from iris.cluster.controller.local import LocalController
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    controller = LocalController(config)
+    url = controller.start()
+
+    try:
+        list_req = cluster_pb2.Controller.ListWorkersRequest()
+
+        # Unauthenticated: should be rejected with 401
+        unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
+        with pytest.raises(ConnectError, match=r"(?i)authorization"):
+            unauth_client.list_workers(list_req)
+        unauth_client.close()
+
+        # Wrong token: should be rejected
+        wrong_injector = AuthTokenInjector(StaticTokenProvider("wrong-token"))
+        wrong_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[wrong_injector])
+        with pytest.raises(ConnectError, match=r"(?i)authenticat"):
+            wrong_client.list_workers(list_req)
+        wrong_client.close()
+
+        # Valid token: should succeed
+        valid_injector = AuthTokenInjector(StaticTokenProvider(_AUTH_TOKEN))
+        valid_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[valid_injector])
+        response = valid_client.list_workers(list_req)
+        assert response is not None
+        valid_client.close()
+    finally:
+        controller.close()
+
+
+def test_static_auth_job_ownership():
+    """Job ownership: user A cannot terminate user B's job.
+
+    Submits a job as user-a via the RPC layer (no workers needed; job stays
+    PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
+    it, while user-a can terminate their own job.
+    """
+    from iris.cluster.controller.local import LocalController
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+
+    _TOKEN_A = "token-user-a"
+    _TOKEN_B = "token-user-b"
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_TOKEN_A] = "user-a"
+    config.auth.static.tokens[_TOKEN_B] = "user-b"
+    controller = LocalController(config)
+    url = controller.start()
+
+    try:
+        # User A submits a job (stays PENDING since no workers)
+        injector_a = AuthTokenInjector(StaticTokenProvider(_TOKEN_A))
+        client_a = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_a])
+
+        entrypoint = Entrypoint.from_callable(TestJobs.quick)
+        launch_req = cluster_pb2.Controller.LaunchJobRequest(
+            name="/user-a/auth-owned-job",
+            entrypoint=entrypoint.to_proto(),
+            resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+        )
+        resp = client_a.launch_job(launch_req)
+        job_id = resp.job_id
+
+        # User B tries to terminate user A's job — should fail
+        injector_b = AuthTokenInjector(StaticTokenProvider(_TOKEN_B))
+        client_b = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_b])
+        with pytest.raises(ConnectError, match="cannot modify"):
+            client_b.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
+
+        # User A can terminate their own job
+        client_a.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id=job_id))
+
+        client_a.close()
+        client_b.close()
+    finally:
+        controller.close()

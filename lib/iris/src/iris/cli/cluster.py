@@ -254,6 +254,15 @@ def cluster_start(ctx, local: bool, bundle_prefix: str | None):
     try:
         address = platform.start_controller(config)
         click.echo(f"Controller started at {address}")
+        if is_local:
+            from iris.cluster.platform.local import LocalPlatform
+
+            assert isinstance(platform, LocalPlatform)
+            token = platform.auto_login_token
+            if token:
+                click.echo(f"Dashboard: {address}?session_token={token}")
+            else:
+                click.echo(f"Dashboard: {address}")
         click.echo("\nController is running with integrated autoscaler.")
         if is_local:
             click.echo("Press Ctrl+C to stop.")
