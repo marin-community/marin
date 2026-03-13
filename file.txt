@@ -1,487 +1,471 @@
-ncheatable_eval/wikipedia_english.cache_dir": "DEP[53]", "train_config.data.components.uncheatable_eval/github_python.source.cache_dir": "DEP[54]", "train_config.data.components.uncheatable_eval/github_python.source.validation_urls.[0]": "DEP[55]/github_python_*.jsonl.gz", "train_config.data.components.uncheatable_eval/github_python.cache_dir": "DEP[56]", "train_config.data.components.uncheatable_eval/github_cpp.source.cache_dir": "DEP[57]", "train_config.data.components.uncheatable_eval/github_cpp.source.validation_urls.[0]": "DEP[58]/github_cpp_*.jsonl.gz", "train_config.data.components.uncheatable_eval/github_cpp.cache_dir": "DEP[59]", "train_config.data.components.uncheatable_eval/bbc_news.source.cache_dir": "DEP[60]", "train_config.data.components.uncheatable_eval/bbc_news.source.validation_urls.[0]": "DEP[61]/bbc_news_*.jsonl.gz", "train_config.data.components.uncheatable_eval/bbc_news.cache_dir": "DEP[62]", "train_config.data.components.uncheatable_eval/arxiv_physics.source.cache_dir": "DEP[63]", "train_config.data.components.uncheatable_eval/arxiv_physics.source.validation_urls.[0]": "DEP[64]/arxiv_physics_*.jsonl.gz", "train_config.data.components.uncheatable_eval/arxiv_physics.cache_dir": "DEP[65]", "train_config.data.components.uncheatable_eval/arxiv_computer_science.source.cache_dir": "DEP[66]", "train_config.data.components.uncheatable_eval/arxiv_computer_science.source.validation_urls.[0]": "DEP[67]/arxiv_computer_science_*.jsonl.gz", "train_config.data.components.uncheatable_eval/arxiv_computer_science.cache_dir": "DEP[68]", "train_config.data.components.uncheatable_eval/ao3_english.source.cache_dir": "DEP[69]", "train_config.data.components.uncheatable_eval/ao3_english.source.validation_urls.[0]": "DEP[70]/ao3_english_*.jsonl.gz", "train_config.data.components.uncheatable_eval/ao3_english.cache_dir": "DEP[71]"}
-2026-03-12 17:52:06,893 INFO executor.py:839 --   DEP[0] = gs://marin-eu-west4/tokenized/nemotron_cc/hq_actual-5af4cc
-2026-03-12 17:52:06,893 INFO executor.py:839 --   DEP[1] = gs://marin-eu-west4/raw/nemotro-cc-eeb783
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[2] = gs://marin-eu-west4/tokenized/nemotron_cc/hq_actual-5af4cc
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[3] = gs://marin-eu-west4/tokenized/paloma/4chan-496ad5
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[4] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[5] = gs://marin-eu-west4/tokenized/paloma/4chan-496ad5
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[6] = gs://marin-eu-west4/tokenized/paloma/c4_100_domains-2b6db7
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[7] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[8] = gs://marin-eu-west4/tokenized/paloma/c4_100_domains-2b6db7
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[9] = gs://marin-eu-west4/tokenized/paloma/c4_en-cf1f79
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[10] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[11] = gs://marin-eu-west4/tokenized/paloma/c4_en-cf1f79
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[12] = gs://marin-eu-west4/tokenized/paloma/dolma-v1_5-d3bed7
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[13] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[14] = gs://marin-eu-west4/tokenized/paloma/dolma-v1_5-d3bed7
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[15] = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[16] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[17] = gs://marin-eu-west4/tokenized/paloma/dolma_100_programing_languages-369132
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[18] = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[19] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[20] = gs://marin-eu-west4/tokenized/paloma/dolma_100_subreddits-f25f70
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[21] = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[22] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[23] = gs://marin-eu-west4/tokenized/paloma/falcon-refinedweb-75d43b
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[24] = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[25] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[26] = gs://marin-eu-west4/tokenized/paloma/gab-ccaced
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[27] = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[28] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[29] = gs://marin-eu-west4/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[30] = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[31] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[32] = gs://marin-eu-west4/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[33] = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[34] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[35] = gs://marin-eu-west4/tokenized/paloma/manosphere_meta_sep-a07891
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[36] = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[37] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[38] = gs://marin-eu-west4/tokenized/paloma/mc4-ea36a2
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[39] = gs://marin-eu-west4/tokenized/paloma/ptb-628036
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[40] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[41] = gs://marin-eu-west4/tokenized/paloma/ptb-628036
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[42] = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[43] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[44] = gs://marin-eu-west4/tokenized/paloma/redpajama-9d4ddd
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[45] = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[46] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[47] = gs://marin-eu-west4/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[48] = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[49] = gs://marin-eu-west4/raw/paloma-fc6827
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[50] = gs://marin-eu-west4/tokenized/paloma/wikitext_103-1f5636
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[51] = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[52] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[53] = gs://marin-eu-west4/tokenized/uncheatable_eval/wikipedia_english-ba27aa
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[54] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[55] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[56] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_python-00e7de
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[57] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[58] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[59] = gs://marin-eu-west4/tokenized/uncheatable_eval/github_cpp-d0da6b
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[60] = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[61] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[62] = gs://marin-eu-west4/tokenized/uncheatable_eval/bbc_news-2ff739
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[63] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[64] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[65] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_physics-713363
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[66] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[67] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[68] = gs://marin-eu-west4/tokenized/uncheatable_eval/arxiv_computer_science-9760a5
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[69] = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[70] = gs://marin-eu-west4/raw/uncheatable-eval/latest-364401
-2026-03-12 17:52:06,894 INFO executor.py:839 --   DEP[71] = gs://marin-eu-west4/tokenized/uncheatable_eval/ao3_english-55e735
-2026-03-12 17:52:06,938 INFO executor.py:1173 -- [ray-marin-eu-west4-head-5259ea37-compute-128704565245760] Status checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0: <function run_levanter_train_lm at 0x750dcbd82980>: None
-2026-03-12 17:52:06,938 INFO executor.py:1194 -- [ray-marin-eu-west4-head-5259ea37-compute-128704565245760] Attempting to acquire lock for checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0: <function run_levanter_train_lm at 0x750dcbd82980>
-2026-03-12 17:52:07,209 INFO executor.py:1197 -- [ray-marin-eu-west4-head-5259ea37-compute-128704565245760] Acquired lock for checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0: <function run_levanter_train_lm at 0x750dcbd82980>
-2026-03-12 17:52:07,399 - INFO - Submitting job: run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0
-2026-03-12 17:52:07,399 - INFO - Building environment with [], extras [] for job: run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0
-2026-03-12 17:52:07,400 INFO worker.py:1680 -- Using address 10.164.0.2:6379 set in the environment variable RAY_ADDRESS
-2026-03-12 17:52:07,405 INFO worker.py:1821 -- Connecting to existing Ray cluster at address: 10.164.0.2:6379...
-2026-03-12 17:52:07,416 INFO worker.py:1998 -- Connected to Ray cluster. View the dashboard at http://10.164.0.2:8265 
-(autoscaler +26s) Tip: use `ray status` to view detailed cluster status. To disable these messages, set RAY_SCHEDULER_EVENTS=0.
-(autoscaler +26s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +26s) Resized to 15960 CPUs, 544 TPUs.
-(autoscaler +26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +46s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +46s) Removing 9 nodes of type tpu_slice_v5e_64 (idle).
-(autoscaler +46s) Removing 48 nodes of type tpu_slice_v5e_256 (idle).
-(autoscaler +46s) Resized to 9120 CPUs, 316 TPUs.
-(autoscaler +46s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1m18s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1m18s) Resized to 9120 CPUs, 316 TPUs.
-(autoscaler +1m18s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(run_levanter_train_lm pid=7821, ip=10.164.0.103) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_lm pid=7821, ip=10.164.0.103) Resolved 535 packages in 5ms
-(autoscaler +1m32s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1m32s) Resized to 9120 CPUs, 316 TPUs.
-(autoscaler +1m32s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +2m7s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +2m7s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +2m7s) Resized to 9480 CPUs, 328 TPUs.
-(autoscaler +2m7s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +2m22s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +2m22s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +2m22s) Resized to 9600 CPUs, 332 TPUs.
-(autoscaler +2m22s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +2m47s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +2m47s) Resized to 9600 CPUs, 332 TPUs.
-(autoscaler +2m47s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +3m2s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +3m2s) Resized to 9600 CPUs, 332 TPUs.
-(autoscaler +3m2s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +3m43s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +3m43s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +3m43s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +3m43s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +4m9s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +4m9s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +4m9s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +4m23s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +4m23s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +4m23s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +5m41s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +5m41s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +5m41s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +6m16s) Adding 5 node(s) of type tpu_slice_v5e_64.
-(autoscaler +6m16s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +6m16s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +6m16s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +7m53s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +7m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +7m53s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +7m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +8m37s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +8m37s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +8m37s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +8m37s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +8m37s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +9m43s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +9m43s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +9m43s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +9m43s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +10m29s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +10m29s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +10m29s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +10m29s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +11m11s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +11m11s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +11m11s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +11m11s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +12m14s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +12m14s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +12m14s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +12m44s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +12m44s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +12m44s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +13m15s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +13m15s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +13m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +13m51s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +13m51s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +13m51s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +14m26s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +14m26s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +14m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +15m29s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +15m29s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +15m29s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +16m0s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +16m0s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +16m0s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +16m0s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +16m29s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +16m29s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +16m29s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +18m3s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +18m3s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +18m3s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +18m3s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +18m3s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +18m47s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +18m47s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +18m47s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +18m47s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +19m49s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +19m49s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +19m49s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +19m49s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +20m23s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +20m23s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +20m23s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +20m23s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +21m8s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +21m8s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +21m8s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +21m44s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +21m44s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +21m44s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +22m22s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +22m22s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +22m22s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +22m22s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +23m16s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +23m16s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +23m16s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +23m46s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +23m46s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +23m46s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +24m16s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +24m16s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +24m16s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +24m43s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +24m43s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +24m43s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +25m17s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +25m17s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +25m17s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +25m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +26m11s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +26m11s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +26m11s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +26m42s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +26m42s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +26m42s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +27m40s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +27m40s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +27m40s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +28m5s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +28m5s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +28m5s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +28m5s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +28m43s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +28m43s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +28m43s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +28m43s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +29m46s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +29m46s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +29m46s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +30m48s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +30m48s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +30m48s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +30m48s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +32m40s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +32m40s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +32m40s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +32m40s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +32m40s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +36m21s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +36m21s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +36m21s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +36m21s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +38m5s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +38m5s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +38m5s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +38m5s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +39m58s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +39m58s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +39m58s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +39m58s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +41m1s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +41m1s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +41m1s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +41m1s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +41m1s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +42m27s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +42m27s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +42m27s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +42m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.1.9) [2026-03-12 18:34:39,665 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +43m26s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +43m26s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +43m26s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +43m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.1.9) [2026-03-12 18:35:38,346 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
-(raylet, ip=10.164.1.9) [2026-03-12 18:35:50,814 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(raylet, ip=10.164.1.9) [2026-03-12 18:35:53,098 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(raylet, ip=10.164.1.9) [2026-03-12 18:35:59,141 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
-(autoscaler +44m43s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +44m43s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +44m43s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +45m24s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +45m24s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +45m24s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +45m24s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +45m24s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +46m32s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +46m32s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +46m32s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +47m36s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +47m36s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +47m36s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +47m36s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +47m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +48m15s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +48m15s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +48m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +48m53s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +48m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +48m53s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +48m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +49m27s) Adding 2 node(s) of type tpu_slice_v5e_8.
-(autoscaler +49m27s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +49m27s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +51m52s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +51m52s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +51m52s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +53m33s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +53m33s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +53m33s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +54m53s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +54m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +54m53s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +54m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +55m53s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +55m53s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +55m53s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +55m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +57m1s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +57m1s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +57m1s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +57m1s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +57m1s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.1.29) [2026-03-12 18:50:21,732 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +58m44s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +58m44s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +58m44s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h56s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h56s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h56s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h56s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.1.29) [2026-03-12 18:50:21,732 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +1h1m58s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h1m58s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h1m58s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h1m58s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h3m49s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h3m49s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h3m49s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h3m49s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h4m28s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h4m28s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h4m28s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h4m28s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h5m2s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h5m2s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h5m2s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h6m26s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h6m26s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h6m26s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h6m56s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h6m56s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h6m56s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h6m56s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h7m26s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h7m26s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h7m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h8m52s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h8m52s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h8m52s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h10m46s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h10m46s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h10m46s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h10m46s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h10m46s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h12m27s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h12m27s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h12m27s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h12m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h13m7s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h13m7s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h13m7s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h13m7s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h13m7s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h13m51s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h13m51s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h13m51s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h13m51s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h15m0s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h15m0s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h15m0s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h15m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h15m35s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h15m35s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h15m35s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h17m27s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h17m27s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h17m27s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h17m27s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h17m27s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h17m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h19m20s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h19m20s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h19m20s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h19m20s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h21m17s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h21m17s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h21m17s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h21m17s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h21m17s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h22m26s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h22m26s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h22m26s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h22m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h24m14s) Adding 2 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h24m14s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h24m14s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h25m17s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h25m17s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h25m17s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h25m17s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h25m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h27m3s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h27m3s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h27m3s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h28m18s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h28m18s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h28m18s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h28m18s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h28m18s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h29m8s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h29m8s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h29m8s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h29m8s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h30m30s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h30m30s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h30m30s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h30m30s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h31m14s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h31m14s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h31m14s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h31m14s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h31m14s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h33m1s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h33m1s) Resized to 9720 CPUs, 336 TPUs.
-(autoscaler +1h33m1s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet) Task run_levanter_train_lm failed. There are 2 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.0.103, node ID: 41d3e53905b6300f3b77e975b206366dfbedc0f65d5e32107d8e2389. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=41d3e53905b6300f3b77e975b206366dfbedc0f65d5e32107d8e2389`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.0.103`.
-(raylet) The node with node id: 4de0a14ddf91236abb5c8460fc69be06ac68a78e4b256f485219dba3 and address: 10.164.0.110 and node name: 10.164.0.110 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+(SliceActor pid=3074, ip=10.164.2.191)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(SliceActor pid=3074, ip=10.164.2.191)     return fn(*args, **kwargs)
+(SliceActor pid=3074, ip=10.164.2.191)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
+(SliceActor pid=3074, ip=10.164.2.191)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(SliceActor pid=3074, ip=10.164.2.191)     return func(*args, **kwargs)
+(SliceActor pid=3074, ip=10.164.2.191)            ^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3074, ip=10.164.2.191)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(SliceActor pid=3074, ip=10.164.2.191)     values, debugger_breakpoint = worker.get_objects(
+(SliceActor pid=3074, ip=10.164.2.191)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
+(SliceActor pid=3074, ip=10.164.2.191)     raise value
+(SliceActor pid=3074, ip=10.164.2.191) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
+(raylet, ip=10.164.2.190) [2026-03-12 21:03:41,189 E 6893 6893] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 44x across cluster]
+(autoscaler +18m6s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +18m6s) Resized to 20640 CPUs, 696 TPUs.
+(autoscaler +18m6s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*1, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.2.112) [2026-03-12 21:04:35,074 E 6895 6895] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 9x across cluster]
+(raylet, ip=10.164.2.116) [2026-03-12 21:04:41,831 E 6903 6903] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 9x across cluster]
+(raylet, ip=10.164.2.112) [2026-03-12 21:04:47,135 E 6895 6895] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(autoscaler +19m53s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +19m53s) Resized to 20640 CPUs, 696 TPUs.
+(autoscaler +19m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*1, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.2.211) E0312 21:01:54.143209106    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-12T21:01:54.142816426-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-12T21:01:54.142807496-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-12T21:01:54.142779556-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-12T21:01:54.142760066-07:00"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-12T21:01:54.142804616-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-12T21:01:54.142799266-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.2.211) [2026-03-12 21:01:54,220 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.2.211) *** StackTrace Information ***
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x564052852eca] ray::operator<<()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x5640528554e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x564051d97ce9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x564051d1403c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x564051b5701e] std::make_unique<>()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x564051b860df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x564051b88c29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x564051f56aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x564051f691b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x564051f80e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5640521515db] EventTracker::RecordExecution()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x564052148ffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x56405281e6cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x564052820c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x564052821182] boost::asio::io_context::run()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x564051b1b3d7] main
+(raylet, ip=10.164.2.211) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f86f0f53d90]
+(raylet, ip=10.164.2.211) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f86f0f53e40] __libc_start_main
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x564051b3d4f7]
+(raylet, ip=10.164.2.211) 
+(raylet, ip=10.164.2.201) [2026-03-12 21:04:51,903 E 6895 6895] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x564052147c5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.2.103) [2026-03-12 21:06:35,353 E 3881 3881] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 70x across cluster]
+(autoscaler +20m56s) Adding 2 node(s) of type tpu_slice_v5e_128.
+(autoscaler +20m56s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +20m56s) Resized to 20520 CPUs, 692 TPUs.
+(autoscaler +20m56s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*1, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.2.209) [2026-03-12 21:07:30,620 E 3882 3882] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 28x across cluster]
+(raylet, ip=10.164.2.209) [2026-03-12 21:07:38,656 E 3882 3882] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(autoscaler +22m15s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +22m15s) Resized to 20400 CPUs, 688 TPUs.
+(autoscaler +22m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +23m1s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +23m1s) Resized to 20400 CPUs, 688 TPUs.
+(autoscaler +23m1s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +23m30s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +23m30s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +23m30s) Resized to 20400 CPUs, 688 TPUs.
+(autoscaler +23m30s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.2.210) [2026-03-12 21:03:12,798 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 13x across cluster]
+(raylet, ip=10.164.2.211) E0312 21:01:54.143209106    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-12T21:01:54.142816426-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-12T21:01:54.142807496-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-12T21:01:54.142779556-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-12T21:01:54.142760066-07:00"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-12T21:01:54.142804616-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-12T21:01:54.142799266-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
+(raylet, ip=10.164.2.211) [2026-03-12 21:01:54,220 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
+(raylet, ip=10.164.2.211) *** StackTrace Information ***
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x564052852eca] ray::operator<<()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x5640528554e9] ray::RayLog::~RayLog()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x564051d97ce9] ray::rpc::GrpcServer::Run()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x564051d1403c] ray::ObjectManager::ObjectManager()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x564051b5701e] std::make_unique<>()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x564051b860df] main::{lambda()#5}::operator()()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x564051b88c29] std::_Function_handler<>::_M_invoke()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x564051f56aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x564051f691b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x564051f80e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5640521515db] EventTracker::RecordExecution()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x564052148ffb] boost::asio::detail::executor_op<>::do_complete()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x56405281e6cb] boost::asio::detail::scheduler::do_run_one()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x564052820c79] boost::asio::detail::scheduler::run()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x564052821182] boost::asio::io_context::run()
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x564051b1b3d7] main
+(raylet, ip=10.164.2.211) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f86f0f53d90]
+(raylet, ip=10.164.2.211) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f86f0f53e40] __libc_start_main
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x564051b3d4f7]
+(raylet, ip=10.164.2.211) 
+(raylet, ip=10.164.2.211) [2026-03-12 21:11:08,720 E 5010 5010] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 77x across cluster]
+(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x564052147c5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
+(raylet, ip=10.164.2.204) [2026-03-12 21:11:14,216 E 6698 6698] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 13x across cluster]
+(autoscaler +25m25s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +25m25s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +25m25s) Resized to 20400 CPUs, 688 TPUs.
+(autoscaler +25m25s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.2.211) [2026-03-12 21:12:01,273 E 5010 5010] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.2.206) [2026-03-12 21:12:09,389 E 6696 6696] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(raylet, ip=10.164.2.206) [2026-03-12 21:12:18,543 E 6696 6696] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.2.206) [2026-03-12 21:12:23,956 E 6696 6696] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.2.103) [2026-03-12 21:12:28,777 E 6697 6697] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.2.103) [2026-03-12 21:12:35,667 E 6697 6697] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.2.204) [2026-03-12 21:12:41,394 E 6698 6698] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.2.207) [2026-03-12 21:12:50,329 E 6695 6695] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.2.203) [2026-03-12 21:12:55,862 E 6698 6698] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(autoscaler +27m0s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +27m0s) Adding 2 node(s) of type tpu_slice_v5e_128.
+(autoscaler +27m0s) Resized to 20160 CPUs, 680 TPUs.
+(autoscaler +27m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.2.208) [2026-03-12 21:13:01,726 E 6700 6700] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(raylet, ip=10.164.2.203) [2026-03-12 21:13:06,544 E 6698 6698] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.2.213) [2026-03-12 21:13:12,330 E 6703 6703] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
+(raylet, ip=10.164.2.213) [2026-03-12 21:13:18,030 E 6703 6703] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(raylet, ip=10.164.2.213) [2026-03-12 21:13:22,927 E 6703 6703] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.2.210) [2026-03-12 21:13:28,583 E 6704 6704] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.2.96) [2026-03-12 21:13:35,534 E 6860 6860] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
+(raylet, ip=10.164.2.212) [2026-03-12 21:13:42,641 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.2.212) [2026-03-12 21:13:47,535 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.2.212) [2026-03-12 21:13:53,119 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.2.212) [2026-03-12 21:14:06,249 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
+(raylet, ip=10.164.2.212) [2026-03-12 21:14:11,613 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.2.212) [2026-03-12 21:14:15,598 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +29m7s) Adding 3 node(s) of type tpu_slice_v5e_256.
+(autoscaler +29m7s) Resized to 20160 CPUs, 680 TPUs.
+(autoscaler +29m7s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +31m26s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +31m26s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +31m26s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +31m26s) Resized to 20160 CPUs, 680 TPUs.
+(autoscaler +31m26s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +32m7s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +32m7s) Adding 3 node(s) of type tpu_slice_v5e_256.
+(autoscaler +32m7s) Removing 68 nodes of type tpu_slice_v5e_128 (idle).
+(autoscaler +32m7s) Removing 42 nodes of type tpu_slice_v5e_256 (idle).
+(autoscaler +32m7s) Resized to 6960 CPUs, 240 TPUs.
+(autoscaler +32m7s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet) The node with node id: 450b188709a11ed341140a889eea55e80a12e84bf9797578917bb29a and address: 10.164.0.16 and node name: 10.164.0.16 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
         (2) raylet has lagging heartbeats due to slow network or busy workload.
-(run_levanter_train_lm pid=9911, ip=10.164.15.198) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_lm pid=9911, ip=10.164.15.198) Resolved 535 packages in 5ms
-(autoscaler +1h35m17s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h35m17s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h35m17s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h35m17s) Removing 22 nodes of type tpu_slice_v5e_128 (idle).
-(autoscaler +1h35m17s) Resized to 9840 CPUs, 340 TPUs.
-(autoscaler +1h35m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet) The node with node id: 8ce54264e547d218c1549b0640f5ab6dadbdaebb314e904f737585a7 and address: 10.164.0.94 and node name: 10.164.0.94 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 23x across cluster]
-(raylet) The node with node id: 6c9693ab85d1cb45e343503a1166fb812664140b9b8eb525fed3e3e6 and address: 10.164.0.26 and node name: 10.164.0.26 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 46x across cluster]
-(autoscaler +1h37m19s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet) Task run_levanter_train_lm failed. There are 1 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.15.198, node ID: 611f43378a2aeee4659a42a967af6f8a42f8641a14e70a4ab677019f. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=611f43378a2aeee4659a42a967af6f8a42f8641a14e70a4ab677019f`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.15.198`.
-(raylet) The node with node id: fcbcdd27ec8d09b4220392c1e0a610ea20d5611cc4f925f2d09788bb and address: 10.164.0.39 and node name: 10.164.0.39 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 11x across cluster]
-(raylet) The node with node id: fd1ac7fa3824407bab33f116b0cdee46b45f505a83cee252810dd102 and address: 10.164.15.206 and node name: 10.164.15.206 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a         (1) raylet crashes unexpectedly (OOM, etc.) 
+(autoscaler +34m39s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +34m39s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +34m39s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +34m39s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +35m36s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +35m36s) Resized to 7320 CPUs, 252 TPUs.
+(autoscaler +35m36s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.2.142) [2026-03-12 21:22:17,612 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.2.142) [2026-03-12 21:22:19,626 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +37m25s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +37m25s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +37m25s) Resized to 7320 CPUs, 252 TPUs.
+(autoscaler +37m25s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.2.142) [2026-03-12 21:22:21,640 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
+(raylet, ip=10.164.2.142) [2026-03-12 21:23:45,468 E 2831 2831] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(raylet, ip=10.164.2.142) [2026-03-12 21:23:51,703 E 2831 2831] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +40m28s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +40m28s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +40m28s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +40m28s) Resized to 7320 CPUs, 252 TPUs.
+(autoscaler +40m28s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +42m19s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +42m19s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +42m19s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +42m19s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +42m19s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +47m3s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +47m3s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +47m3s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +47m3s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +47m51s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +47m51s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +47m51s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +47m51s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +47m51s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +49m40s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +49m40s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +49m40s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +49m40s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +50m44s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +50m44s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +50m44s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +51m24s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +51m24s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +51m24s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +52m8s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +52m8s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +52m8s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.1.246) [2026-03-12 21:38:43,750 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +53m9s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +53m9s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +53m9s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet, ip=10.164.1.246) [2026-03-12 21:39:43,416 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(autoscaler +54m13s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +54m13s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +54m13s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +54m13s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +55m50s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +55m50s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +55m50s) Resized to 7200 CPUs, 248 TPUs.
+(autoscaler +55m50s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +56m35s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +56m35s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +56m35s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +56m35s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +57m0s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +57m0s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +57m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +57m37s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +57m37s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +57m37s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +58m6s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +58m6s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +58m6s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +58m6s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +58m47s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +58m47s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +58m47s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +59m20s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +59m20s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +59m20s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +59m46s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +59m46s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +59m46s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h31s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h31s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h31s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +1h31s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h1m5s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h1m5s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +1h1m5s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h1m49s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h1m49s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h1m49s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +1h1m49s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h2m45s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h2m45s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h2m45s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +1h2m45s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h3m59s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h3m59s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +1h3m59s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h5m0s) Adding 2 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h5m0s) Resized to 7440 CPUs, 256 TPUs.
+(autoscaler +1h5m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h5m43s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h5m43s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h5m43s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h5m43s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h5m43s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h6m37s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h6m37s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h6m37s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h7m27s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h7m27s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h7m27s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h7m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h8m52s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h8m52s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h8m52s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h9m33s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h9m33s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h9m33s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h9m33s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h9m33s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h10m36s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h10m36s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h10m36s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h10m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h11m5s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h11m5s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h11m5s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h11m5s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h11m36s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h11m36s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h11m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h12m27s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h12m27s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h12m27s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h12m48s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h12m48s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h12m48s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h13m9s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h13m9s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h13m9s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h13m40s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h13m40s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h13m40s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h14m11s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h14m11s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h14m11s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h14m51s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h14m51s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h14m51s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h14m51s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h15m20s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h15m20s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h15m20s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h15m50s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h15m50s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h15m50s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h16m53s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h16m53s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h16m53s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h16m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h17m22s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h17m22s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h17m22s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h17m50s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h17m50s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h17m50s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h19m17s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h19m17s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h19m17s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h19m17s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h20m0s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h20m0s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h20m0s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h20m0s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h20m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h20m44s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h20m44s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h20m44s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h20m44s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h22m18s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h22m18s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h22m18s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h22m18s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h22m18s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h23m17s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h23m17s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h23m17s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h23m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h23m41s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h23m41s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h23m41s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h24m11s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h24m11s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h24m11s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h24m11s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h24m38s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h24m38s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h24m38s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h25m45s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h25m45s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h25m45s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h26m15s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h26m15s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h26m15s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h26m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h26m43s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h26m43s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h26m43s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h27m21s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h27m21s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h27m21s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h27m48s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h27m48s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h27m48s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h28m19s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h28m19s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h28m19s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h29m2s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h29m2s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h29m2s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h29m2s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h29m39s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h29m39s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h29m39s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h30m10s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h30m10s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h30m10s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h30m36s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h30m36s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h30m36s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h31m3s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h31m3s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h31m3s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h32m17s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h32m17s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h32m17s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h32m49s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h32m49s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h32m49s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h32m49s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h33m36s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h33m36s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h33m36s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h33m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h34m53s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h34m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h34m53s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h34m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h35m35s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h35m35s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h35m35s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h35m35s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h35m35s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h36m53s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h36m53s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h36m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h37m50s) Adding 4 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h37m50s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h37m50s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h38m53s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h38m53s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h38m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h39m27s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h39m27s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h39m27s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h39m56s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h39m56s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h39m56s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h39m56s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h40m26s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h40m26s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h40m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h41m30s) Adding 1 node(s) of type tpu_slice_v5e_8.
+(autoscaler +1h41m30s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h41m30s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h41m30s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h42m29s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h42m29s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h42m29s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h42m29s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h42m53s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h42m53s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h42m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h43m24s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h43m24s) Adding 3 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h43m24s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h43m24s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h44m12s) Adding 1 node(s) of type tpu_slice_v5e_128.
+(autoscaler +1h44m12s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h44m12s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(autoscaler +1h44m46s) Adding 1 node(s) of type tpu_worker.
+(autoscaler +1h44m46s) Adding 1 node(s) of type tpu_slice_v5e_32.
+(autoscaler +1h44m46s) Resized to 7560 CPUs, 260 TPUs.
+(autoscaler +1h44m46s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet) The node with node id: 2041a11e1e9414bbfc118ea3a4fbe7d41cb9cf15cdf7a9aa81f5b91b and address: 10.164.0.64 and node name: 10.164.0.64 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
         (2) raylet has lagging heartbeats due to slow network or busy workload.
-(raylet) The node with node id: 14641e31700fd8ac7b9c388704865560ac910e84c552ac9bea26b147 and address: 10.164.15.192 and node name: 10.164.15.192 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a         (1) raylet crashes unexpectedly (OOM, etc.) 
+(raylet) The node with node id: 7e49199dce7705d0869bc654ccb16e6c782f9f6c99eab6cbd2f722ea and address: 10.164.2.33 and node name: 10.164.2.33 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 50x across cluster]
+(raylet) The node with node id: 14ac2fd939470d7a1993531b6311e2e8bb5901e389d875b890e4b580 and address: 10.164.0.30 and node name: 10.164.0.30 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 12x across cluster]
+(autoscaler +1h47m7s) Adding 2 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h47m7s) Resized to 13680 CPUs, 464 TPUs.
+(autoscaler +1h47m7s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
+(raylet) The node with node id: a4b75c3bd6f4520cb81462d87e7152dc4982d60c31bc42b5c1a62bf6 and address: 10.164.1.234 and node name: 10.164.1.234 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
         (2) raylet has lagging heartbeats due to slow network or busy workload.
-(run_levanter_train_lm pid=9084, ip=10.164.2.172) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_lm pid=9084, ip=10.164.2.172) Resolved 535 packages in 5ms
-(autoscaler +1h39m20s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-188d6ace-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet) The node with node id: 87f3de76c36951a0d12c64bb21bf5cf7c4a342a01d95033b38d8532b and address: 10.164.2.42 and node name: 10.164.2.42 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 11x across cluster]
-(raylet) The node with node id: a81ad58d937f5eca254ff04c62101959ef5e80f3ed6013dcc5641d92 and address: 10.164.15.225 and node name: 10.164.15.225 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a         (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 8x across cluster]
-(autoscaler +1h41m22s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h41m22s) Resized to 8280 CPUs, 288 TPUs.
-(autoscaler +1h41m22s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-ecd23afb-tpu': 1.0}*8, {'ray-marin-eu-west4-worker-9d083d30-tpu': 1.0}*5, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7. Add suitable node types to this cluster to resolve this issue.
-(raylet) The node with node id: 2608094485557c2e0753b4f67983071d9c64b034923b3821c27a9770 and address: 10.164.15.221 and node name: 10.164.15.221 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a         (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 10x across cluster]
-(raylet) The node with node id: e6fea9a5a3d59fac0497e844174fd651d99ec10b87851cb80b4401d1 and address: 10.164.1.217 and node name: 10.164.1.217 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+(raylet) The node with node id: 446620b3a8f42c6e71cf6574fcbe322ca5b8c213763d1f633ef24153 and address: 10.164.2.2 and node name: 10.164.2.2 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
         (2) raylet has lagging heartbeats due to slow network or busy workload.
-(raylet) Task run_levanter_train_lm failed. There are 0 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.172, node ID: 6f8db1619860c8e0ee9c330234bb32507d22a262339c4ad2d383799c. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=6f8db1619860c8e0ee9c330234bb32507d22a262339c4ad2d383799c`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.172`.
-(raylet) The node with node id: 523b36907f0df7af9a4f2b0134ba2c02ded12a66f424e712e0004a72 and address: 10.164.2.163 and node name: 10.164.2.163 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+(raylet) Task run_levanter_train_lm failed. There are 0 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.123, node ID: d6fab874f9df8e78453a32ae54dbdcaad0f25c6c4dec16c162e3d14e. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=d6fab874f9df8e78453a32ae54dbdcaad0f25c6c4dec16c162e3d14e`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.123`.
+(raylet) The node with node id: 703b1312911ff48e192838bdd4f835e8c1277fe7a702d50d343395b1 and address: 10.164.1.231 and node name: 10.164.1.231 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 14x across cluster]
+(run_levanter_train_lm pid=10021, ip=10.164.2.112) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
+(run_levanter_train_lm pid=10021, ip=10.164.2.112) Resolved 535 packages in 5ms
+(raylet) The node with node id: d6fab874f9df8e78453a32ae54dbdcaad0f25c6c4dec16c162e3d14e and address: 10.164.2.123 and node name: 10.164.2.123 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
         (2) raylet has lagging heartbeats due to slow network or busy workload.
-(autoscaler +1h43m23s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h43m23s) Resized to 6360 CPUs, 224 TPUs.
-(autoscaler +1h43m23s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-9b5fdb1c-tpu': 1.0}*7. Add suitable node types to this cluster to resolve this issue.
-(run_levanter_train_lm pid=4508, ip=10.164.1.29) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_lm pid=4508, ip=10.164.1.29) Resolved 535 packages in 5ms
-(autoscaler +1h45m24s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1. Add suitable node types to this cluster to resolve this issue.
-2026-03-12 19:37:56,169 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed:
+(raylet) The node with node id: 960b35e450dbef3ef5142b8fb1cf79c5a57c1f4e094dd7929c117c1c and address: 10.164.2.129 and node name: 10.164.2.129 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload.
+(autoscaler +1h49m9s) Adding 1 node(s) of type tpu_slice_v5e_256.
+(autoscaler +1h49m9s) Resized to 9600 CPUs, 328 TPUs.
+(autoscaler +1h49m9s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7. Add suitable node types to this cluster to resolve this issue.
+(raylet) The node with node id: 1cd86821fe0470d3723877c88df4e7a06c9a5ae0640213469ba12f8d and address: 10.164.0.208 and node name: 10.164.0.208 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 15x across cluster]
+(autoscaler +1h55m43s) Adding 1 node(s) of type tpu_slice_v5e_64.
+(autoscaler +1h55m43s) Resized to 7800 CPUs, 268 TPUs.
+(autoscaler +1h55m43s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7. Add suitable node types to this cluster to resolve this issue.
+2026-03-12 22:44:51,444 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed:
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
     ray.get(self._ref)
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
     return fn(*args, **kwargs)
@@ -494,11 +478,11 @@ Traceback (most recent call last):
                                   ^^^^^^^^^^^^^^^^^^^
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
     raise value
-ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.1.29, node ID: ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.1.29`.
-2026-03-12 19:37:56,170 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd to finish for step checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0
-2026-03-12 19:37:56,170 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed:
+ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.112, node ID: 32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.112`.
+2026-03-12 22:44:51,447 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 to finish for step checkpoints/unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0
+2026-03-12 22:44:51,447 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed:
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
     ray.get(self._ref, timeout=timeout)
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
     return fn(*args, **kwargs)
@@ -511,10 +495,10 @@ Traceback (most recent call last):
                                   ^^^^^^^^^^^^^^^^^^^
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
     raise value
-ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.1.29, node ID: ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.1.29`.
-2026-03-12 19:37:56,171 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed:
+ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.112, node ID: 32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.112`.
+2026-03-12 22:44:51,447 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed:
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
     ray.get(self._ref)
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
     return fn(*args, **kwargs)
@@ -527,36 +511,36 @@ Traceback (most recent call last):
                                   ^^^^^^^^^^^^^^^^^^^
   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
     raise value
-ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.1.29, node ID: ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=ef3620320f3aef27fd61dcc2c780ede94d37c9b12b56bae5e90ec215`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.1.29`.
-2026-03-12 19:37:56,528 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0 failed
+ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.112, node ID: 32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.112`.
+2026-03-12 22:44:51,790 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0 failed
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
     runner.wait()
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 192, in wait
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 192, in wait
     raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
     runner.wait()
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 192, in wait
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 192, in wait
     raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-ba7d4fbd failed
+RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed
 
 The above exception was the direct cause of the following exception:
 
 Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/experiments/unified/unified_pretrain_demo_eu.py", line 855, in <module>
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/experiments/unified/unified_pretrain_demo_eu.py", line 855, in <module>
     executor_main(
   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
     response = fn(cfg, *args, **kwargs)
                ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
     executor.run(
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 747, in run
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 747, in run
     self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_7e6fd361b3b7d98a/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
+  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
     raise RuntimeError(message) from failure_exceptions[0]
-RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0']
-(raylet) The node with node id: 6f8db1619860c8e0ee9c330234bb32507d22a262339c4ad2d383799c and address: 10.164.2.172 and node name: 10.164.2.172 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 8x across cluster]
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-64  -e EXP_NAME unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0 -e TEXT_STEPS 5000 -e UND_STEPS  5000 -e GEN_STEPS 0  -e W_VISUAL 0.5  -e MUON_LR 0.008 -e ADAM_LR 0.0024   -e LR_SCHEDULE   linear  -- python experiments/unified/unified_pretrain_demo_eu.py
+RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0']
+(raylet) The node with node id: 1149fd0303c113aaee63dc073657d9c41834d701639f20fbf86ed8e2 and address: 10.164.2.96 and node name: 10.164.2.96 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
+        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 20x across cluster]
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-32  -e EXP_NAME unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0 -e TEXT_STEPS 5000 -e UND_STEPS  0 -e GEN_STEPS 0  -e W_VISUAL 0.5  -e MUON_LR 0.008 -e ADAM_LR 0.0024   -e LR_SCHEDULE   linear  -- python experiments/unified/unified_pretrain_demo_eu.py
