@@ -1414,6 +1414,7 @@ def _build_controller_deployment(
                             "resources": controller_resources,
                             "volumeMounts": [
                                 {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
+                                {"name": "local-state", "mountPath": "/var/cache/iris/controller"},
                             ],
                             "readinessProbe": {
                                 "httpGet": {"path": "/health", "port": port},
@@ -1429,6 +1430,7 @@ def _build_controller_deployment(
                     ],
                     "volumes": [
                         {"name": "config", "configMap": {"name": "iris-cluster-config"}},
+                        {"name": "local-state", "emptyDir": {}},
                     ],
                 },
             },

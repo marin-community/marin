@@ -138,6 +138,12 @@ def serve(
             db=db,
         )
         logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+
+        # Restore autoscaler state (tracked slices/workers/backoff) from the DB
+        # so restarted controllers don't lose cloud resource tracking and
+        # scale up duplicates.
+        autoscaler.restore_from_db(db)
+        logger.info("Autoscaler state restored from DB")
     except Exception as e:
         logger.exception("Failed to create autoscaler from config")
         raise click.ClickException(f"Failed to create autoscaler: {e}") from e
