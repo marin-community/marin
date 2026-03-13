@@ -41,7 +41,6 @@ from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.cluster.controller.local import (
     LocalController,
     make_local_cluster_config,
-    wait_for_worker_registration,
 )
 from iris.cluster.constraints import Constraint, merge_constraints
 from iris.cluster.types import (
@@ -527,7 +526,6 @@ class IrisClient:
         config_proto = make_local_cluster_config(cfg.max_workers)
         controller = LocalController(config_proto)
         address = controller.start()
-        wait_for_worker_registration(address)
         cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
         return cls(cluster, controller=controller)
 

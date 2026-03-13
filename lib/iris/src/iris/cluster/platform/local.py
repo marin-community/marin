@@ -53,6 +53,7 @@ from iris.cluster.platform.base import (
     generate_slice_suffix,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.controller.controller import Controller
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.time_utils import Duration, Timestamp
@@ -349,7 +350,7 @@ class LocalPlatform:
         self._worker_attributes_by_group = worker_attributes_by_group or {}
         self._gpu_count_by_group = gpu_count_by_group or {}
         self._storage_prefix = storage_prefix
-        self._local_controller: object | None = None
+        self._local_controller: Controller | None = None
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
@@ -581,6 +582,12 @@ class LocalPlatform:
         port = controller_config.local.port or 10000
         return f"localhost:{port}"
 
+    @property
+    def auto_login_token(self) -> str | None:
+        if self._local_controller is None:
+            return None
+        return self._local_controller.auto_login_token
+
     def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
         """Start an in-process LocalController. Returns address (host:port).
 
@@ -595,18 +602,12 @@ class LocalPlatform:
         return address
 
     def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
-        from iris.cluster.controller.local import LocalController
-
         assert self._local_controller is not None, "restart_controller called before start_controller"
-        assert isinstance(self._local_controller, LocalController)
         return self._local_controller.restart()
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         """Stop the in-process LocalController and release all resources."""
-        from iris.cluster.controller.local import LocalController
-
         if self._local_controller is not None:
-            assert isinstance(self._local_controller, LocalController)
             self._local_controller.close()
             self._local_controller = None
 
@@ -620,10 +621,7 @@ class LocalPlatform:
 
     def wait_for_controller(self) -> None:
         """Block until the local controller is stopped."""
-        from iris.cluster.controller.local import LocalController
-
         if self._local_controller is not None:
-            assert isinstance(self._local_controller, LocalController)
             self._local_controller.wait()
 
     @property

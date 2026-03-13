@@ -322,26 +322,3 @@ def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
 
     return make_local_config(base_config)
 
-
-def wait_for_worker_registration(controller_address: str, timeout: float = 10.0) -> None:
-    """Poll the controller until at least one worker has registered.
-
-    Args:
-        controller_address: Address of the controller to poll.
-        timeout: Maximum time to wait in seconds.
-
-    Raises:
-        TimeoutError: If no worker registers within the timeout.
-    """
-    temp_client = ControllerServiceClientSync(
-        address=controller_address,
-        timeout_ms=30000,
-    )
-    try:
-        ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
-            lambda: bool(temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()).workers),
-            timeout=Duration.from_seconds(timeout),
-            error_message="Worker failed to register with controller",
-        )
-    finally:
-        temp_client.close()
