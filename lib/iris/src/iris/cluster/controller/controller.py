@@ -51,7 +51,6 @@ from iris.cluster.controller.db import (
     _tasks_with_attempts,
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
-    tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.scheduler import (
@@ -1249,7 +1248,7 @@ class Controller:
         # Atomic replacement — safe for concurrent reads under the GIL.
         self._scheduling_diagnostics = diagnostics
 
-    def get_cached_scheduling_diagnostic(self, job_wire_id: str) -> str | None:
+    def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None:
         """Return cached scheduling diagnostic for a job, or None if unavailable."""
         return self._scheduling_diagnostics.get(job_wire_id)
 
@@ -1284,21 +1283,6 @@ class Controller:
         return self._scheduler.create_scheduling_context(
             workers,
             building_counts=building_counts,
-        )
-
-    def get_job_scheduling_diagnostics(self, job: Job, context: SchedulingContext) -> str:
-        """Get detailed diagnostics for why a job cannot be scheduled."""
-        req = job_requirements_from_job(job)
-        schedulable_task_id = next(
-            (t.task_id for t in _schedulable_tasks(self._db) if t.job_id == job.job_id),
-            None,
-        )
-        num_tasks = len(tasks_for_job_with_attempts(self._db, job.job_id))
-        return self._scheduler.get_job_scheduling_diagnostics(
-            req,
-            context,
-            schedulable_task_id,
-            num_tasks=num_tasks,
         )
 
     def kill_tasks_on_workers(self, task_ids: set[JobName]) -> None:

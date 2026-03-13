@@ -448,9 +448,7 @@ class ControllerProtocol(Protocol):
 
     def create_scheduling_context(self, workers: list[Worker]) -> SchedulingContext: ...
 
-    def get_job_scheduling_diagnostics(self, job: Job, context: SchedulingContext) -> str: ...
-
-    def get_cached_scheduling_diagnostic(self, job_wire_id: str) -> str | None: ...
+    def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
     def begin_checkpoint(self) -> tuple[str, Any]: ...
 
@@ -644,7 +642,7 @@ class ControllerServiceImpl:
         # (populated each scheduling cycle by the controller).
         pending_reason = ""
         if job.state == cluster_pb2.JOB_STATE_PENDING:
-            sched_reason = self._controller.get_cached_scheduling_diagnostic(job.job_id.to_wire())
+            sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
             hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire())
             if hint is not None:
@@ -762,7 +760,7 @@ class ControllerServiceImpl:
 
             pending_reason = j.error or ""
             if j.state == cluster_pb2.JOB_STATE_PENDING:
-                sched_reason = self._controller.get_cached_scheduling_diagnostic(j.job_id.to_wire())
+                sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
                 pending_reason = sched_reason or "Pending scheduler feedback"
                 hint = autoscaler_pending_hints.get(j.job_id.to_wire())
                 if hint is not None:
