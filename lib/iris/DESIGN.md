@@ -54,11 +54,11 @@ def initialize_jax(
 5. Create `IrisContext` via `iris_ctx()` (`client.py:1025`) — this gives access to the `NamespacedEndpointRegistry`.
 6. Register endpoint: `ctx.registry.register(endpoint_name, coordinator_address)`.
 7. Call `jax.distributed.initialize(coordinator_address, num_tasks, 0)`.
-8. Register `atexit` handler to unregister the endpoint.
+8. Register `atexit` handler to unregister the endpoint. This is best-effort cleanup — if the process crashes, the cascade delete on task cleanup (see "Endpoint lifecycle on restart") handles removal.
 
 **Task 1..N-1 flow:**
 1. Same `get_job_info()` / `iris_ctx()` setup.
-2. Poll `ctx.resolver.resolve(endpoint_name)` with exponential backoff until an endpoint appears or `poll_timeout` expires.
+2. Poll `ctx.resolver.resolve(endpoint_name)` using `ExponentialBackoff(initial=poll_interval)` from `iris.time_utils` until an endpoint appears or `poll_timeout` expires. The `poll_interval` parameter sets the initial backoff delay; subsequent retries grow exponentially per `ExponentialBackoff` semantics.
 3. Extract `coordinator_address` from `ResolveResult.endpoints[0]`.
 4. Call `jax.distributed.initialize(coordinator_address, num_tasks, task_index)`.
 
@@ -89,7 +89,7 @@ def initialize_jax(
     jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
 ```
 
-The `_poll_for_coordinator` helper uses `ExponentialBackoff` from `iris.time_utils` (per Iris conventions) to retry `resolver.resolve()` until an endpoint appears.
+The `_poll_for_coordinator` helper uses `ExponentialBackoff(initial=poll_interval)` from `iris.time_utils` to retry `resolver.resolve()` until an endpoint appears or `poll_timeout` is exceeded, raising `TimeoutError` on expiry.
 
 ### CoreWeave config changes
 
@@ -136,19 +136,64 @@ No new code needed. The existing mechanisms handle restarts:
 2. **Add multi-VM scale group** to `examples/coreweave.yaml` — `h100-16x` with `num_vms: 2` and corresponding `slice_template`.
 3. **Lift `num_vms > 1` restriction in `CoreweavePlatform.create_slice()`** — This is the hardest step. `coreweave.py:627-631` currently raises `ValueError` for `num_vms > 1`, and `coreweave.md:436-437` documents this as a known limitation. The changes needed:
    - Remove the `num_vms > 1` guard in `create_slice()`.
-   - Create N worker Pods per slice (one per VM), each with the correct `task_index` offset.
+   - Create N worker Pods per slice (one per VM), each with a distinct pod name and unique `IRIS_WORKER_ID`.
    - Wait for all N Pods to reach Ready state before transitioning the slice to READY.
    - Wire the N Pods into a single `CoreweaveSliceHandle` that tracks all Pod names/IPs and tears them all down on release.
    - Handle partial failures: if Pod k/N fails to start, clean up Pods 0..k-1 and report slice FAILED.
-4. **Wire named port** — Add `"jax"` to the default `ports` list for multi-replica GPU jobs, so `IRIS_PORT_JAX` is available. This is a user-side concern (passed in `LaunchJobRequest.ports`), not a framework change.
-5. **Integration test** — Use the in-process controller test harness to submit a 2-replica job where task 0 registers a coordinator endpoint and task 1 resolves it. Verify both tasks see the same address. Simulate task 0 restart and verify re-convergence. No real GPUs needed — mock `jax.distributed.initialize`.
-6. **Levanter callsite** — In user-level training scripts (not in Levanter itself), replace `DistributedConfig(...).initialize()` with `initialize_jax()` when `IRIS_CONTROLLER_ADDRESS` is set. This respects the dependency direction (`iris` does not import `levanter`; user code imports both).
+
+   #### Multi-VM Pod lifecycle
+
+   **Naming convention.** Each Pod in a multi-VM slice is named `iris-worker-{slice_id}-vm{i}` where `i` ranges from `0` to `num_vms - 1`. The existing single-VM naming (`iris-worker-{slice_id}`) is equivalent to the `vm0` case. Update `_worker_pod_name` to accept a `vm_index` parameter:
+
+   ```python
+   def _worker_pod_name(slice_id: str, vm_index: int = 0) -> str:
+       return f"iris-worker-{slice_id}-vm{vm_index}"
+   ```
+
+   **ConfigMap sharing.** All Pods in a slice share a single ConfigMap (`iris-worker-{slice_id}-wc`). The ConfigMap contains the `WorkerConfig` proto which is identical for all VMs in the slice. `_worker_config_cm_name` is unchanged.
+
+   **Pod creation.** `_monitor_slice` calls `_create_worker_pod` N times in a loop, once per `vm_index`. Each Pod receives the same ConfigMap mount but a distinct pod name. The Pod's `IRIS_WORKER_ID` env var is set to its pod name (`iris-worker-{slice_id}-vm{i}`), which uniquely identifies it to the controller. Task assignment is handled by the scheduler — the VM's position within the slice (`vm_index`) is not exposed as a task index.
+
+   **Handle tracking.** `CoreweaveSliceHandle` gains a `_pod_names: list[str]` field, populated during creation as each Pod is created. This replaces the implicit single-name derivation via `_worker_pod_name(self._slice_id)`.
+
+   **`terminate()` changes:**
+
+   ```python
+   def terminate(self) -> None:
+       cm_name = _worker_config_cm_name(self._slice_id)
+       for pod_name in self._pod_names:
+           logger.info("Deleting worker Pod: %s", pod_name)
+           self._kubectl.delete("pod", pod_name, force=True)
+       self._kubectl.delete("configmap", cm_name)
+       with self._lock:
+           self._state = CloudSliceState.DELETING
+   ```
+
+   **Partial-failure cleanup in `_monitor_slice`:**
+
+   ```python
+   except Exception as e:
+       logger.error("Slice %s monitoring failed: %s", handle.slice_id, e)
+       try:
+           for pod_name in handle._pod_names:
+               self._kubectl.delete("pod", pod_name, force=True)
+           self._kubectl.delete("configmap", _worker_config_cm_name(handle.slice_id))
+       except Exception as cleanup_err:
+           logger.warning("Cleanup after failure also failed for slice %s: %s",
+                          handle.slice_id, cleanup_err)
+       handle._set_state(CloudSliceState.FAILED, error_message=str(e))
+   ```
+
+   **Readiness.** `_monitor_slice` waits for all N Pods to reach Ready state (sequential `_wait_for_pod_ready` per pod). Only after all N succeed does the slice transition to READY, with one `CoreweaveWorkerHandle` per Pod.
+4. **Document named port usage** — No framework code changes needed. Users pass `ports=["jax"]` in their `LaunchJobRequest` when submitting multi-replica GPU jobs; Iris allocates `IRIS_PORT_JAX` automatically via the existing port allocation mechanism. Add a usage example to `docs/coreweave.md` showing the `ports` field in a multi-VM job submission.
+5. **Integration test** — Use the E2E test harness in `tests/e2e/conftest.py` (the `IrisTestCluster` fixture, which boots a local cluster via `connect_cluster()` + `make_local_config()`) to submit a 2-replica coscheduled job where task 0 registers a coordinator endpoint and task 1 resolves it. Verify both tasks see the same address. Simulate task 0 restart and verify re-convergence. Mock `jax.distributed.initialize` with `unittest.mock.patch("jax.distributed.initialize")` — no real GPUs needed.
+6. **Levanter callsite** *(out of scope for this implementation; documented for future reference)* — In user-level training scripts (not in Levanter itself), replace `DistributedConfig(...).initialize()` with `initialize_jax()` when `IRIS_CONTROLLER_ADDRESS` is set. This respects the dependency direction (`iris` does not import `levanter`; user code imports both). This step is tracked separately and not part of the initial PR.
 
 ## Notes
 
 - `initialize_jax()` imports `jax` at call time, not module level. Iris does not depend on JAX — this is a runtime utility that tasks opt into.
 - The `NamespacedResolver` (`client.py:430-465`) uses `list_endpoints(prefix=name, exact=True)`, which filters out endpoints from terminal jobs automatically (`db.py:934-937`). No risk of resolving a stale endpoint from a previous job run with the same name.
-- `hostNetwork: true` on CoreWeave (`coreweave.md:65`) means `advertise_host` is the node's real IP, routable across the VPC. No NAT traversal needed.
+- `hostNetwork: true` on CoreWeave (`coreweave.md:65`) means `advertise_host` is the node's real IP, routable across the VPC. No NAT traversal needed. It also provides implicit anti-affinity: two `hostNetwork: true` Pods binding the same port cannot schedule on the same node, so the scheduler naturally spreads multi-VM Pods across distinct nodes without an explicit `podAntiAffinity` rule.
 - An explicit coordinator port is required (default: 8476). JAX's gRPC coordinator binds internally and does not expose the actual bound port, so port 0 (OS-assigned) would result in registering `host:0`. Either allocate via `IRIS_PORT_JAX` or pass a fixed port to `initialize_jax()`.
 
 ## Future Work
