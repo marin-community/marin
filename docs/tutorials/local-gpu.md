@@ -78,16 +78,18 @@ such as `s3://` or `gs://`.
 
 Let's take a look at the script.
 Whereas the [CPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_cpu.py)
-requests `resources=CpuOnlyConfig(num_cpus=1)`,
+requests `resources=ResourceConfig.with_cpu()`,
 the [GPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_gpu.py)
-requests `resources=GpuConfig(gpu_count=1)`:
+requests `resources=ResourceConfig.with_gpu(...)`:
 
 ```python
+from fray.cluster import ResourceConfig
+
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
-    resources=GpuConfig(gpu_count=1),
-    train_batch_size=128,
-    num_train_steps=1000,
+    resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G"),
+    train_batch_size=256,
+    num_train_steps=100,
     learning_rate=6e-4,
     weight_decay=0.1,
 )
