@@ -7,6 +7,7 @@ Queue implemented using a FastAPI server and HTTP requests.
 
 import logging
 import pickle
+import socket
 import threading
 import time
 from typing import Any
@@ -115,8 +116,6 @@ class HttpQueueServer:
         Returns the actual IP address using default route.
         """
         if self.host == "0.0.0.0":
-            import socket
-
             # Get the IP address that clients should use by checking default route
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
