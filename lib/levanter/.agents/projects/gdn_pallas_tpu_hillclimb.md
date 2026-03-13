@@ -9869,3 +9869,226 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Keep the next mainline slot in `P3`, but only if the block owns a materially stronger primitive/sharding boundary than any design that still leaves `HackableDecoderBlock/*/(while|cond)/*/shard_map/pallas_call` visible to the compiler.
   - The next viable `P3` attempt likely has to lower the fixed mixed `3/4` block into one explicit sharded primitive or other boundary below block-local control flow; another Python-level custom backward or scan/switch shell is likely to reproduce this same shell re-emission failure mode.
   - Keep CE fixed at `pallas_tpu` + `pallas`; this iteration did not re-implicate CE.
+
+### Iteration 100 - Coverage Slot P3 / fixed-`3/4` decoder-block explicit `shard_map` shell prototype (validated, rejected, reverted)
+
+- Coverage slot: `P3`
+- Change class: `whole-layer boundary`
+- Why this is mainline-worthy now:
+  - `P3` remained the required next slot after `S3` completed and `A3` was validated and rejected.
+  - Iteration 99 rejected another Python-level block wrapper that still left block-scoped shell visible under `HackableDecoderBlock/*/(while|cond)/*/shard_map/pallas_call`.
+  - The strongest remaining low-surface `P3` branch on this head was to make the fixed `3 GDN + 1 attention` block own one explicit `shard_map` shell together with one block-local backward/layout contract, and test whether that stronger sharding boundary actually cuts the mainline `dispatch/shard` shell tax.
+
+- Codex loop iteration: `6 / 10`
+- Date: `2026-03-13T14:10:13Z`
+- Starting commit: `96c591fbba65d3deabaf7a49f03e63063c68146b`
+- Commit: `final validated result commit descended from 96c591fbba65d3deabaf7a49f03e63063c68146b`
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion from `.agents/logs/gdn_codex_loop/perf_state.json`:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Latest validated current-head `S3`/xprof baseline from Iteration 93:
+    - hybrid `throughput/mfu=6.036753`
+    - hybrid `throughput/tokens_per_second=195287.805612`
+    - hybrid `throughput/duration=0.167793375 s`
+    - hybrid `step_duration=167.793375 ms`
+    - control `throughput/duration=0.057256827 s`
+    - `train_path_budget_ms=42.682894`
+    - `decoder_layer_shell_budget_ms=20.388593`
+    - `hybrid_generic_shell_delta_budget_ms=20.103367`
+    - `dispatch_shard_shell_delta_ms=9.771419`
+    - `ad_wrapper_shell_delta_ms=6.178290`
+    - `interaction_remainder_ms=47.750288`
+    - `xprof_dispatch_shard_shell_delta_ms=31.572807`
+    - `xprof_ad_wrapper_shell_delta_ms=11.057602`
+    - `xprof_idle_attributed_ms=38.362912`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot P3 (selected):** wrap the whole fixed `3 GDN + 1 attention` block in one explicit `shard_map`, keep one bespoke block-local custom-VJP boundary, and pin the block carry/output layout to the incoming sharding (`highest direct upside on dispatch/shard`, `high compile/integration risk`, `directly tests the strongest explicit sharding/layout contract still open on this head`).
+  2. **Coverage slot P3 (nested visible shell):** keep the block-local custom VJP but replace the outer `shard_map` idea with a lighter nested named-jit/layout-only contract (`lower compile risk`, `lower information because prior weaker wrappers already re-emitted shell above the boundary`).
+  3. **Coverage slot A3-diagnostic:** retry a materially different layer-level AD boundary (`lower implementation cost`, `lower information than the required block-level `P3` slot because the layer-local boundary family is already rejected on this head`).
+
+- Selected slot rationale:
+  - `P3` was still mandatory next coverage.
+  - A materially stronger explicit sharding/layout shell around the fixed mixed block was now higher information than another layer-level AD retry because the current failure mode is still `dispatch/shard` first and block-scoped shell re-emission second.
+  - This was the smallest remaining `P3` prototype that tried to move the sharding contract outward rather than only changing the internal backward implementation.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - Why CE stayed fixed:
+    - This was not a CE side-arm.
+    - Fresh attribution still kept CE bounded; no new evidence moved the mainline diagnosis away from hybrid-only shell tax.
+
+- Expected effect on `step_duration_ms`:
+  - decrease if one explicit outer block shell removes enough sharding/wrapper rebuild from the mixed region to shorten the real critical path.
+- Expected effect on `dispatch_shard_shell_delta_ms`:
+  - material decrease; this remained the immediate shell budget.
+- Expected effect on `ad_wrapper_shell_delta_ms`:
+  - decrease or stay flat if the block-local backward stops generic wrapper shell from rebuilding above the new `shard_map`.
+- Expected effect on `hybrid_generic_shell_delta_budget_ms`:
+  - decrease if the new block shell owns the mixed `3/4` region instead of re-emitting hybrid-only shell outside it.
+- Expected effect on `interaction_remainder_ms`:
+  - decrease if a shorter shell path reduces waiting/serialization on the critical path.
+- Expected effect on `xprof_idle_attributed_ms`:
+  - decrease if the same waiting/serialization loss falls with the shell.
+- Reject if `step_duration_ms` does not improve? **Yes.**
+  - This was a mainline `P3` prototype, not a diagnostic-only run.
+- Reject if `dispatch_shard_shell_delta_ms` stays flat / grows? **Yes.**
+  - `dispatch/shard` remained the mainline budget.
+- Reject if `ad_wrapper_shell_delta_ms` grows? **Yes.**
+  - A stronger block boundary only matters if it does not recreate more wrapper shell elsewhere.
+- Reject if `interaction_remainder_ms` grows? **Yes.**
+  - The goal remained end-to-end critical-path reduction rather than hiding cost in unclassified overlap.
+- Reject if `xprof_idle_attributed_ms` stays flat / grows when an XPlane pair is available? **Yes.**
+  - More `IDLE` would mean the shell tax is still manifesting as waiting/serialization.
+- Reject if `hybrid_generic_shell_delta_budget_ms` stays flat / grows? **Yes.**
+  - `P3` only earns promotion if the canonical hybrid-only shell delta falls with the step.
+
+- Change summary:
+  - Temporary candidate implementation in `experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py`:
+    - added an opt-in fixed-`3/4` decoder-block prototype that wrapped the block in one explicit `hax_shard_map`,
+    - added a block-local `filter_custom_vjp` boundary around that shell,
+    - pinned the block output layout to the input sharding, and temporarily suppressed nested Haliax logical-axis remapping inside the explicit shell.
+  - Temporary benchmark plumbing in `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`:
+    - threaded the prototype through `GDN_PROFILE_SHARDED_DECODER_BLOCK_BOUNDARY_PROTOTYPE=true` so it could be profiled without changing the default benchmark path.
+  - Retained tree state after validation:
+    - no source changes were kept,
+    - the explicit block-`shard_map` prototype and benchmark flag were fully reverted after the hybrid run failed during TPU tracing and never produced a completed train-step profile.
+
+- Correctness checks:
+  - Local syntax/import smoke on the temporary candidate:
+    - `uv run python -m py_compile experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
+    - result: passed
+  - Local hybrid model-init smoke on the temporary candidate:
+    - `uv run python - <<'PY' ... HackableTransformer.init(dataclasses.replace(_size_presets()['130m'], gdn_use_sharded_decoder_block_boundary_prototype=True), key=jr.PRNGKey(0)) ... PY`
+    - result: `BlockSeq 2 HackableDecoderBlock`
+  - Required remote TPU wrapper parity slice:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both`
+    - final passing result: `88 passed, 2 skipped in 230.17s (0:03:50)`
+
+- Profile runs (CE fixed to `pallas_tpu` + `pallas`):
+  - `P3` hybrid candidate:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_p3_i06_blockshmap --profile-env GDN_PROFILE_SHARDED_DECODER_BLOCK_BOUNDARY_PROTOTYPE=true --profile-env WANDB_DISABLE_CODE=true --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_p3_i06_blockshmap_gdn3of4_130m_ch128_seg16_20steps-305459`
+    - failure mode:
+      - the run failed before step 1 during TPU tracing of `train_step`,
+      - the explicit outer manual shell pushed manual sharding into the attention rotary path and hit `AssertionError` from `jax/_src/op_shardings.py` (`assert not hlo_sharding.is_manual()`),
+      - the stack ran through `levanter/layers/rotary.py` via `hax.arange(...)`,
+      - no completed training-step summary, profiler artifact, or matched XPlane pair was produced.
+    - interpretation:
+      - this was a compile/tracing failure of the `P3` prototype itself, not a usable performance result.
+  - Attention-only control on the same source head:
+    - first dev TPU attempt:
+      - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name calvinxu-gdn --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_p3_i06_attnctrl --profile-env WANDB_DISABLE_CODE=true --no-sync`
+      - failure: JAX distributed service port bind on `[::]:8476`, followed by a segfault before the training run stabilized.
+    - second dev TPU retry:
+      - same command with `--run-name-prefix gdn_p3_i06_attnctrl_retry`
+      - failure: same port-bind + segfault failure.
+    - Ray fallback control:
+      - `uv run python scripts/gdn/gdnctl.py ray-profile --cluster us-east5-a --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_p3_i06_attnctrl_ray`
+      - Ray job: `ray-run-calvinxu-bash-20260313-140016`
+      - run: `https://wandb.ai/marin-community/marin/runs/gdn_p3_i06_attnctrl_ray_attnonly_130m_ch128_seg16_20ste-669094`
+      - output path: `gs://marin-us-east5/checkpoints/speedrun/gdn_p3_i06_attnctrl_ray_attnonly_130m_ch128_seg16_20ste_cf50effa`
+      - local download: `scratch/gdn_p3_i06/downloads/attn`
+      - normalized summary: `scratch/gdn_p3_i06/attn_summary.json`
+      - control-only attribution artifact:
+        - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_p3_i06/attn_summary.json --step-duration-ms 58.48154699924635 --upper-bound-step-ms 57.860499 --gdn-layer-fraction 0.0 --gdn-layers-per-block 0 --gdn-block-size 4 --output scratch/gdn_p3_i06/attn_attribution.json`
+        - artifact: `scratch/gdn_p3_i06/attn_attribution.json`
+      - throughput metrics use the required history-window median over steps `10-18` (`9` points).
+
+- Fresh attention-only control metrics (same-source control run, not the hybrid candidate):
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - `step_duration_ms: 58.481547`
+  - `forward_closed_call_ms: 0.000000`
+  - `backward_closed_call_ms: 0.000000`
+  - `train_path_budget_ms: 8.582816`
+  - `decoder_layer_shell_budget_ms: 14.212798`
+  - `while: 8.581635`
+  - `conditional: 0.001181`
+  - `CE-attributed while: 8.581635`
+  - `throughput/mfu: 20.862401`
+  - `throughput/tokens_per_second: 560313.495134`
+  - `throughput/duration: 0.058481547 s`
+  - `upper_bound_gap_ms: 0.621048`
+  - `remainder_topk: splash attention fwd residuals pallas_call 5.147825 ms; splash attention dkv pallas_call 3.615670 ms; CE forward pallas_call 2.703129 ms; splash attention dq pallas_call 2.656269 ms; vmap()/dot_general 2.275880 ms`
+
+- Measured metrics (Iteration 93 carried current-head `S3` baseline -> `P3` candidate):
+  - `CE backend selected: pallas_tpu -> pallas_tpu`
+  - `CE bwd mode: pallas -> pallas`
+  - `gdn_layer_fraction: 0.833333 -> 0.833333` (intended candidate configuration; no completed trace)
+  - `step_duration_ms: 167.793375 -> n/a` (candidate compile failed before step 1)
+  - `forward_closed_call_ms: 20.663477 -> n/a`
+  - `backward_closed_call_ms: 13.128558 -> n/a`
+  - `train_path_budget_ms: 42.682894 -> n/a`
+  - `decoder_layer_shell_budget_ms: 20.388593 -> n/a`
+  - `hybrid_generic_shell_delta_budget_ms: 20.103367 -> n/a`
+  - `dispatch_shard_shell_delta_ms: 9.771419 -> n/a`
+  - `ad_wrapper_shell_delta_ms: 6.178290 -> n/a`
+  - `layout_shell_delta_ms: 2.177870 -> n/a`
+  - `residual_add_shell_delta_ms: 2.322353 -> n/a`
+  - `interaction_remainder_ms: 47.750288 -> n/a`
+  - `upper_bound_gap_ms: 109.932876 -> n/a`
+  - `gap_explained_by_train_path: 38.83% -> n/a`
+  - `gap_explained_by_decoder_layer_shell: 18.55% -> n/a`
+  - `gap_explained_by_hybrid_generic_shell_delta: 18.29% -> n/a`
+  - `hybrid_generic_shell_delta_topk: n/a` (candidate never produced a completed summary trace)
+  - `remainder_topk: n/a` (candidate never produced a completed summary trace)
+  - `throughput/mfu: 6.036753 -> n/a`
+  - `throughput/tokens_per_second: 195287.805612 -> n/a`
+  - `throughput/duration: 0.167793375 s -> n/a`
+  - `xprof_dispatch_shard_shell_delta_ms: 31.572807 -> n/a` (no matched XPlane pair)
+  - `xprof_ad_wrapper_shell_delta_ms: 11.057602 -> n/a` (no matched XPlane pair)
+  - `xprof_layout_shell_delta_ms: 2.583071 -> n/a` (no matched XPlane pair)
+  - `xprof_residual_add_shell_delta_ms: 2.536807 -> n/a` (no matched XPlane pair)
+  - `xprof_idle_attributed_ms: 38.362912 -> n/a` (no matched XPlane pair)
+
+- Interpretation:
+  - This `P3` attempt failed before it produced any candidate steady-state train-step evidence.
+  - That failure is itself disqualifying for mainline promotion:
+    - the hybrid prototype did not improve `step_duration_ms`,
+    - it did not improve `dispatch_shard_shell_delta_ms`,
+    - it did not improve `ad_wrapper_shell_delta_ms`,
+    - and it did not produce a matched XPlane pair to show lower `xprof_idle_attributed_ms`.
+  - The failure mode is also directionally wrong for the intended boundary:
+    - the explicit outer manual shell leaked manual sharding into attention rotary setup,
+    - TPU tracing failed in the rotary path before the model ever reached stable training steps,
+    - this means the prototype did not successfully own the full forward/backward/sharding/layout contract for the mixed block.
+  - The fresh control run still completed and stayed near the fixed governance ceiling:
+    - fresh control `step_duration_ms=58.481547`
+    - fixed attention-only upper bound `57.860499 ms`
+    - control `upper_bound_gap_ms=0.621048`
+  - CE stayed bounded in the fresh control:
+    - `CE-attributed while=8.581635 ms`
+    - nothing in this iteration re-implicated CE as the mainline explanation for the hybrid-vs-attention gap.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + final accepted result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name calvinxu-gdn --tests both` -> `88 passed, 2 skipped in 230.17s (0:03:50)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `step_duration_ms: n/a` (candidate compile failed before step 1)
+    - `dispatch_shard_shell_delta_ms: n/a`
+    - `ad_wrapper_shell_delta_ms: n/a`
+    - `hybrid_generic_shell_delta_budget_ms: n/a`
+    - `interaction_remainder_ms: n/a`
+    - `xprof_idle_attributed_ms: n/a`
+  - Governance:
+    - CE stayed fixed at `pallas_tpu` + `pallas`.
+    - Rejected as a speedup candidate because the hybrid prototype never reached a completed TPU training step.
+    - Rejected as a speedup candidate because it never produced the required shell-delta measurements on the candidate path.
+    - Rejected as a speedup candidate because the explicit block `shard_map` did not actually own the mixed-block sharding/layout contract cleanly enough to compile through attention rotary setup.
+    - This is **not** evidence for `A3-diagnostic`, `S3-diagnostic`, or a CE side-arm; it is a direct rejected `P3` systems attempt that failed before candidate perf measurement.
+
+- Assessment: **validated, rejected, and reverted**. This sixth `P3` block-level prototype is also not deployable on the fixed `3/4` TPU benchmark. An explicit outer block `shard_map` shell looked like the strongest remaining path to cut `dispatch/shard`, but in practice it leaked manual sharding into attention rotary tracing, failed before step 1, and produced no candidate shell-budget evidence. The final tree therefore stays on the pre-existing executable baseline, and this iteration is recorded as a log-only validated result with TPU correctness plus one completed same-source attention-only control profile.
+- Next bold hypothesis:
+  - Keep the next mainline slot in `P3`, but only if the block owns a materially stronger primitive/sharding boundary that does not let manual mesh state leak into rotary/attention setup.
+  - Another outer Python-visible `shard_map` shell is unlikely to be enough by itself; the next viable `P3` attempt likely needs a lower-level mixed-block primitive or other boundary below the current NamedArray attention/GDN structure.
+  - Keep CE fixed at `pallas_tpu` + `pallas`; this iteration did not re-implicate CE.
