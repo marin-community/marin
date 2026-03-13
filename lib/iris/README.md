@@ -215,10 +215,10 @@ Jobs can include a `bundle_blob` containing workspace files. The controller stor
 
 ```yaml
 storage:
-  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
+  remote_state_dir: gs://my-bucket/iris/state  # remote storage for checkpoints and worker profiles
 ```
 
-The controller will **fail at startup** if `storage.bundle_prefix` is not configured.
+The controller will **fail at startup** if `storage.remote_state_dir` is not configured.
 
 ### Multi-Region Bundle Storage
 
@@ -344,7 +344,7 @@ defaults:
     controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
 
 storage:
-  bundle_prefix: gs://my-bucket/iris/bundles  # shared storage for distributed workers
+  remote_state_dir: gs://my-bucket/iris/state  # remote storage for checkpoints and worker profiles
 
 controller:
   image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest

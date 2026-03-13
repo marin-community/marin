@@ -136,8 +136,8 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
     if label_prefix:
         config.platform.label_prefix = label_prefix
         # Isolate snapshot storage so this run doesn't restore stale state
-        # from previous runs that shared the default bundle_prefix.
-        config.storage.bundle_prefix = f"gs://marin-tmp-eu-west4/ttl=7d/iris/bundles/{label_prefix}"
+        # from previous runs that shared the default remote_state_dir.
+        config.storage.remote_state_dir = f"gs://marin-tmp-eu-west4/ttl=7d/iris/state/{label_prefix}"
 
     logger.info("Pinning and building cluster images...")
     _pin_latest_images(config)

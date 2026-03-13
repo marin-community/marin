@@ -20,6 +20,9 @@ defaults:
     port: 10001
     controller_address: "${IRIS_CONTROLLER_ADDRESS}"
 
+storage:
+  remote_state_dir: gs://marin-us-central2/iris/test/state
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:

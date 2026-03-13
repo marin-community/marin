@@ -19,6 +19,9 @@ defaults:
     default_task_image: ghcr.io/marin-community/iris-task:latest
     port: 10001
 
+storage:
+  remote_state_dir: gs://marin-us-central2/iris/marin/state
+
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:

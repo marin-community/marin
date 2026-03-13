@@ -88,7 +88,7 @@ def create_local_autoscaler(
         if sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and sg_config.resources.device_count > 0:
             gpu_count_by_group[name] = sg_config.resources.device_count
 
-    storage_prefix = config.storage.bundle_prefix or ""
+    storage_prefix = config.storage.remote_state_dir or ""
 
     platform = LocalPlatform(
         label_prefix=label_prefix,
@@ -135,7 +135,6 @@ class _InProcessController(Protocol):
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
-    def restore_from_checkpoint(self) -> bool: ...
 
     @property
     def url(self) -> str: ...
@@ -194,17 +193,16 @@ class LocalController:
             config=_InnerControllerConfig(
                 host="127.0.0.1",
                 port=port,
-                bundle_prefix=self._config.storage.bundle_prefix or f"file://{bundle_dir}",
+                remote_state_dir=self._config.storage.remote_state_dir or f"file://{bundle_dir}",
                 heartbeat_interval=Duration.from_seconds(0.5),
                 heartbeat_failure_threshold=self._config.controller.heartbeat_failure_threshold,
-                log_dir=Path(self._db_dir.name),
+                local_state_dir=Path(self._db_dir.name),
             ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=self._autoscaler,
             threads=controller_threads,
             db=db,
         )
-        self._controller.restore_from_checkpoint()
         self._controller.start()
         return self._controller.url
 
