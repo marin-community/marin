@@ -81,10 +81,10 @@ class ControllerDashboard:
 
     def _create_app(self) -> Starlette:
         interceptors = [RequestTimingInterceptor()]
-        if self._auth_verifier is not None:
+        if self._auth_provider is not None:
             interceptors.insert(0, _SelectiveAuthInterceptor(self._auth_verifier))
         else:
-            interceptors.insert(0, NullAuthInterceptor())
+            interceptors.insert(0, NullAuthInterceptor(verifier=self._auth_verifier))
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service, interceptors=interceptors)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 

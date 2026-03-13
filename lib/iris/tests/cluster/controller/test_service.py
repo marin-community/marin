@@ -510,36 +510,58 @@ def test_terminate_job_allowed_by_owner(service, job_request):
     assert status.job.state == cluster_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_job_rejected_for_non_owner(service, job_request):
+def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
     from iris.rpc.auth import _verified_user
 
-    service.launch_job(job_request("/alice/my-job"), None)
+    auth_service = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles_owner.sqlite3"),
+        log_store=state._log_store,
+        auth=ControllerAuth(provider="static"),
+    )
+
+    auth_service.launch_job(job_request("/alice/my-job"), None)
 
     token = _verified_user.set("bob")
     try:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
         with pytest.raises(ConnectError) as exc_info:
-            service.terminate_job(request, None)
+            auth_service.terminate_job(request, None)
         assert exc_info.value.code == Code.PERMISSION_DENIED
     finally:
         _verified_user.reset(token)
 
     # Job should still be running
-    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    status = auth_service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
     assert status.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_child_job_rejected_for_non_owner(service, job_request):
+def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
     """Cannot submit a child job under another user's hierarchy."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
     from iris.rpc.auth import _verified_user
 
-    service.launch_job(job_request("/alice/parent-job"), None)
+    auth_service = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles_child.sqlite3"),
+        log_store=state._log_store,
+        auth=ControllerAuth(provider="static"),
+    )
+
+    auth_service.launch_job(job_request("/alice/parent-job"), None)
 
     token = _verified_user.set("bob")
     try:
         with pytest.raises(ConnectError) as exc_info:
-            service.launch_job(job_request("/alice/parent-job/sneaky-child"), None)
+            auth_service.launch_job(job_request("/alice/parent-job/sneaky-child"), None)
         assert exc_info.value.code == Code.PERMISSION_DENIED
     finally:
         _verified_user.reset(token)

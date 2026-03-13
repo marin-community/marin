@@ -180,13 +180,37 @@ class AuthInterceptor:
 
 
 class NullAuthInterceptor:
-    """Interceptor for null-auth mode: all requests are treated as a synthetic admin user."""
+    """Interceptor for null-auth mode.
 
-    def __init__(self, user: str = "anonymous"):
+    When a verifier is provided, tokens are verified if present (e.g. worker
+    tokens) but unauthenticated requests fall through as the anonymous user.
+    Without a verifier, all requests are treated as anonymous.
+    """
+
+    def __init__(self, user: str = "anonymous", verifier: TokenVerifier | None = None):
         self._user = user
+        self._verifier = verifier
 
     def intercept_unary_sync(self, call_next, request, ctx):
-        reset_token = _verified_user.set(self._user)
+        user = self._user
+
+        if self._verifier is not None:
+            headers = ctx.request_headers()
+            auth_header = headers.get("authorization", "")
+            token = None
+            if auth_header.startswith("Bearer "):
+                token = auth_header[len("Bearer ") :]
+            else:
+                cookie_header = headers.get("cookie", "")
+                token = _extract_cookie(cookie_header, SESSION_COOKIE)
+
+            if token:
+                try:
+                    user = self._verifier.verify(token)
+                except ValueError:
+                    pass
+
+        reset_token = _verified_user.set(user)
         try:
             return call_next(request, ctx)
         finally:

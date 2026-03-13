@@ -142,7 +142,11 @@ def create_controller_auth(
             now = Timestamp.now()
             db.ensure_user("anonymous", now, role="admin")
             db.set_user_role("anonymous", "admin")
-        logger.info("Authentication disabled — null-auth mode (all requests as anonymous admin)")
+            worker_token = _create_worker_token(db, now)
+            verifier = DbTokenVerifier(db)
+            logger.info("Authentication disabled — null-auth mode (workers use internal token)")
+            return ControllerAuth(verifier=verifier, worker_token=worker_token)
+        logger.info("Authentication disabled — null-auth mode, no DB")
         return ControllerAuth()
 
     provider = auth_config.WhichOneof("provider")

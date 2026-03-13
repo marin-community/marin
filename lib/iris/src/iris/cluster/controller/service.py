@@ -538,8 +538,10 @@ class ControllerServiceImpl:
     def _authorize_job_owner(self, job_id: JobName) -> None:
         """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
 
-        When auth is disabled (get_verified_user() returns None), all access is allowed.
+        Skipped when no auth provider is configured (null-auth mode).
         """
+        if not self._auth.provider:
+            return
         verified_user = get_verified_user()
         if verified_user is None:
             return
@@ -564,15 +566,15 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
-        # When auth is active, override the user segment with the verified identity.
-        # This ensures users can't impersonate each other. Only override for
+        # When an auth provider is configured, override the user segment with
+        # the verified identity to prevent impersonation. Only override for
         # root-level submissions; child jobs inherit the parent's user.
         verified_user = get_verified_user()
-        if verified_user is not None and job_id.is_root:
+        if self._auth.provider and verified_user is not None and job_id.is_root:
             job_id = JobName.root(verified_user, job_id.name)
 
         # For non-root jobs, verify the caller owns the parent hierarchy
-        if verified_user is not None and not job_id.is_root:
+        if self._auth.provider and verified_user is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
 
         # Reject submissions if the parent job has already terminated

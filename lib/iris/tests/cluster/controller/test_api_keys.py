@@ -3,6 +3,7 @@
 
 """Tests for API key management: DB CRUD, auth_setup preloading, and service RPCs."""
 
+import secrets
 from unittest.mock import Mock
 
 import pytest
@@ -14,9 +15,12 @@ from iris.cluster.controller.auth import (
     WORKER_USER,
     ControllerAuth,
     DbTokenVerifier,
+    create_api_key,
     create_controller_auth,
     list_api_keys,
 )
+from iris.rpc.auth import hash_token
+from iris.time_utils import Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import ControllerTransitions
@@ -392,21 +396,37 @@ def test_discovery_login_flow(db):
 # ---------------------------------------------------------------------------
 
 
-def test_null_auth_creates_anonymous_admin(db):
-    """No auth config + DB bootstraps an anonymous admin user."""
+def test_null_auth_creates_anonymous_admin_and_worker_token(db):
+    """No auth config + DB bootstraps anonymous admin and generates worker token."""
     config = config_pb2.AuthConfig()
-    create_controller_auth(config, db=db)
+    auth = create_controller_auth(config, db=db)
     assert db.get_user_role("anonymous") == "admin"
+    assert auth.verifier is not None
+    assert auth.worker_token is not None
+    assert auth.provider is None
+    assert auth.login_verifier is None
 
 
-def test_null_auth_rpcs_work_without_tokens(db):
-    """Auth RPCs work in null-auth mode when NullAuthInterceptor is active."""
+def test_null_auth_rpcs_work_with_anonymous_token(db):
+    """Auth RPCs work in null-auth mode via DbTokenVerifier."""
     config = config_pb2.AuthConfig()
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    # Simulate NullAuthInterceptor setting the verified user
-    token = _verified_user.set("anonymous")
+    # Create an API key for "anonymous" to simulate authenticated access
+    anonymous_token = secrets.token_urlsafe(32)
+    create_api_key(
+        db,
+        key_id=f"iris_k_test_{secrets.token_hex(4)}",
+        key_hash=hash_token(anonymous_token),
+        key_prefix=anonymous_token[:8],
+        user_id="anonymous",
+        name="test-null-auth",
+        now=Timestamp.now(),
+    )
+
+    verified_user = auth.verifier.verify(anonymous_token)
+    reset = _verified_user.set(verified_user)
     try:
         keys_resp = service.list_api_keys(cluster_pb2.ListApiKeysRequest(), None)
         assert keys_resp is not None
@@ -418,7 +438,7 @@ def test_null_auth_rpcs_work_without_tokens(db):
         assert create_resp.token
         assert create_resp.key_id.startswith("iris_k_")
     finally:
-        _verified_user.reset(token)
+        _verified_user.reset(reset)
 
 
 def test_null_auth_get_current_user(db):
@@ -427,10 +447,23 @@ def test_null_auth_get_current_user(db):
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, auth=auth)
 
-    token = _verified_user.set("anonymous")
+    # Create an API key for "anonymous" to simulate authenticated access
+    anonymous_token = secrets.token_urlsafe(32)
+    create_api_key(
+        db,
+        key_id=f"iris_k_test_{secrets.token_hex(4)}",
+        key_hash=hash_token(anonymous_token),
+        key_prefix=anonymous_token[:8],
+        user_id="anonymous",
+        name="test-null-auth-user",
+        now=Timestamp.now(),
+    )
+
+    verified_user = auth.verifier.verify(anonymous_token)
+    reset = _verified_user.set(verified_user)
     try:
         resp = service.get_current_user(cluster_pb2.GetCurrentUserRequest(), None)
         assert resp.user_id == "anonymous"
         assert resp.role == "admin"
     finally:
-        _verified_user.reset(token)
+        _verified_user.reset(reset)
