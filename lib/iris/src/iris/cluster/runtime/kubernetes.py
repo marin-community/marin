@@ -109,14 +109,16 @@ def _build_gpu_resources(config: ContainerConfig) -> dict[str, str]:
 
 
 def _build_tolerations(config: ContainerConfig) -> list[dict]:
-    """Build tolerations for GPU/RDMA node taints.
+    """Build tolerations for GPU node taints.
 
-    CoreWeave GPU nodes carry ``nvidia.com/gpu`` taints. Tolerations ensure
-    task Pods are eligible for those nodes.
+    GPU nodes may carry ``nvidia.com/gpu:NoSchedule`` and CoreWeave nodes may
+    additionally carry ``qos.coreweave.cloud/interruptable:NoExecute``. The CW
+    toleration is harmless on non-CoreWeave clusters.
     """
     tolerations: list[dict] = []
     if config.resources and config.resources.HasField("device") and get_gpu_count(config.resources.device) > 0:
         tolerations.append({"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"})
+        tolerations.append({"key": "qos.coreweave.cloud/interruptable", "operator": "Exists", "effect": "NoExecute"})
     return tolerations
 
 

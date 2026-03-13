@@ -175,6 +175,7 @@ def test_gpu_resources_and_tolerations(monkeypatch):
 
     tolerations = manifest["spec"]["tolerations"]
     assert any(t["key"] == "nvidia.com/gpu" and t["operator"] == "Exists" for t in tolerations)
+    assert any(t["key"] == "qos.coreweave.cloud/interruptable" and t["effect"] == "NoExecute" for t in tolerations)
 
 
 def test_no_gpu_resources_when_zero_gpus(monkeypatch):
