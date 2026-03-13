@@ -108,8 +108,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
     batch_block_size: int,
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-    return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     if batch_block_size <= 0:
         raise ValueError(f"batch_block_size must be positive, got {batch_block_size}.")
 
@@ -120,15 +119,18 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
         )
 
     if batch_block_size >= b_dim:
-        return linear_softmax_cross_entropy_loss_streaming(
-            x,
-            labels,
-            w,
-            block_size=block_size,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            return_argmax=return_argmax,
+        return cast(
+            tuple[jax.Array, jax.Array],
+            linear_softmax_cross_entropy_loss_streaming(
+                x,
+                labels,
+                w,
+                block_size=block_size,
+                dtype=dtype,
+                logit_soft_cap=logit_soft_cap,
+                precision=precision,
+                return_argmax=False,
+            ),
         )
 
     out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
@@ -137,33 +139,10 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
     num_b_blocks = b_dim // batch_block_size
 
     def body(block_idx, state):
-        if return_argmax:
-            loss, lse, argmax = state
-        else:
-            loss, lse = state
-
+        loss, lse = state
         start = block_idx * batch_block_size
         x_block = jax.lax.dynamic_slice(x, (start, 0), (batch_block_size, h_dim))
         labels_block = jax.lax.dynamic_slice(labels, (start,), (batch_block_size,))
-
-        if return_argmax:
-            loss_block, lse_block, argmax_block = cast(
-                tuple[jax.Array, jax.Array, jax.Array],
-                linear_softmax_cross_entropy_loss_streaming(
-                    x_block,
-                    labels_block,
-                    w,
-                    block_size=block_size,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                    return_argmax=True,
-                ),
-            )
-            loss = jax.lax.dynamic_update_slice(loss, loss_block, (start,))
-            lse = jax.lax.dynamic_update_slice(lse, lse_block, (start,))
-            argmax = jax.lax.dynamic_update_slice(argmax, argmax_block, (start,))
-            return loss, lse, argmax
 
         loss_block, lse_block = cast(
             tuple[jax.Array, jax.Array],
@@ -182,11 +161,75 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
         lse = jax.lax.dynamic_update_slice(lse, lse_block, (start,))
         return loss, lse
 
-    if return_argmax:
-        argmax_init = jnp.zeros((b_dim,), dtype=jnp.int32)
-        return jax.lax.fori_loop(0, num_b_blocks, body, (loss_init, lse_init, argmax_init))
-
     return jax.lax.fori_loop(0, num_b_blocks, body, (loss_init, lse_init))
+
+
+def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    block_size: int,
+    dtype: Optional[jnp.dtype],
+    batch_block_size: int,
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+) -> tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+    if batch_block_size <= 0:
+        raise ValueError(f"batch_block_size must be positive, got {batch_block_size}.")
+
+    b_dim, h_dim = x.shape
+    if b_dim % batch_block_size != 0:
+        raise ValueError(
+            f"batch_block_size must divide batch dimension, got B={b_dim}, batch_block_size={batch_block_size}."
+        )
+
+    if batch_block_size >= b_dim:
+        return cast(
+            tuple[jax.Array, jax.Array, jax.Array],
+            linear_softmax_cross_entropy_loss_streaming(
+                x,
+                labels,
+                w,
+                block_size=block_size,
+                dtype=dtype,
+                logit_soft_cap=logit_soft_cap,
+                precision=precision,
+                return_argmax=True,
+            ),
+        )
+
+    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
+    lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
+    argmax_init = jnp.zeros((b_dim,), dtype=jnp.int32)
+    num_b_blocks = b_dim // batch_block_size
+
+    def body(block_idx, state):
+        loss, lse, argmax = state
+        start = block_idx * batch_block_size
+        x_block = jax.lax.dynamic_slice(x, (start, 0), (batch_block_size, h_dim))
+        labels_block = jax.lax.dynamic_slice(labels, (start,), (batch_block_size,))
+
+        loss_block, lse_block, argmax_block = cast(
+            tuple[jax.Array, jax.Array, jax.Array],
+            linear_softmax_cross_entropy_loss_streaming(
+                x_block,
+                labels_block,
+                w,
+                block_size=block_size,
+                dtype=dtype,
+                logit_soft_cap=logit_soft_cap,
+                precision=precision,
+                return_argmax=True,
+            ),
+        )
+        loss = jax.lax.dynamic_update_slice(loss, loss_block, (start,))
+        lse = jax.lax.dynamic_update_slice(lse, lse_block, (start,))
+        argmax = jax.lax.dynamic_update_slice(argmax, argmax_block, (start,))
+        return loss, lse, argmax
+
+    return jax.lax.fori_loop(0, num_b_blocks, body, (loss_init, lse_init, argmax_init))
 
 
 def _linear_softmax_cross_entropy_loss_streaming_bwd(
@@ -318,7 +361,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
-    loss, lse, *_ = _linear_softmax_cross_entropy_loss_streaming_fwd(
+    loss, lse = _linear_softmax_cross_entropy_loss_streaming_fwd(
         x,
         labels,
         w,
@@ -341,7 +384,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[tuple[Float[Array, "B"], Float[Array, "B"]], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
-    loss, lse, *_ = _linear_softmax_cross_entropy_loss_streaming_fwd(
+    loss, lse = _linear_softmax_cross_entropy_loss_streaming_fwd(
         x,
         labels,
         w,
@@ -432,7 +475,7 @@ def linear_softmax_cross_entropy_loss_xla(
         )
 
     if return_argmax:
-        return _linear_softmax_cross_entropy_loss_streaming_fwd(
+        return _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
             x,
             labels,
             w,
@@ -441,7 +484,6 @@ def linear_softmax_cross_entropy_loss_xla(
             batch_block_size=b_block_size,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
-            return_argmax=True,
         )
 
     return _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
