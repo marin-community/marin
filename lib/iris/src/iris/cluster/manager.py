@@ -15,7 +15,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from iris.cluster.config import IrisConfig, validate_config
-from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -34,8 +33,7 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
     if is_local:
         from iris.cluster.local_cluster import LocalCluster
 
-        threads = ThreadContainer("local-cluster")
-        cluster = LocalCluster(config, threads=threads)
+        cluster = LocalCluster(config)
         address = cluster.start()
         try:
             yield address

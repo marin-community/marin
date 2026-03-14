@@ -156,7 +156,7 @@ class LocalCluster:
         threads: ThreadContainer | None = None,
     ):
         self._config = config
-        self._threads = threads
+        self._threads = threads or ThreadContainer("local-cluster")
         self._controller: Controller | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None

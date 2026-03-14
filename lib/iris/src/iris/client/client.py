@@ -39,7 +39,6 @@ from iris.cluster.client import (
 )
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.cluster.local_cluster import LocalCluster, make_local_cluster_config
-from iris.managed_thread import ThreadContainer
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -522,8 +521,7 @@ class IrisClient:
         """
         cfg = config or LocalClientConfig()
         config_proto = make_local_cluster_config(cfg.max_workers)
-        threads = ThreadContainer("local-cluster")
-        controller = LocalCluster(config_proto, threads=threads)
+        controller = LocalCluster(config_proto)
         address = controller.start()
         cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
         return cls(cluster, controller=controller)
