@@ -231,12 +231,12 @@ def _make_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]
 
 
 def _make_pickle_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]:
-    """Wrap items as cloudpickle-serialized bytes for Arrow-incompatible types."""
+    """Wrap items as pickle-serialized bytes for Arrow-incompatible types."""
     return [
         {
             _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
             _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
-            _ZEPHYR_SHUFFLE_PICKLED_COL: cloudpickle.dumps(item),
+            _ZEPHYR_SHUFFLE_PICKLED_COL: pickle.dumps(item),
         }
         for item in items
     ]
@@ -271,7 +271,7 @@ def _write_parquet_scatter(
     current file is closed, the schema is unified via ``pa.unify_schemas``,
     and a new segment file is opened with the evolved schema.
 
-    When ``pickled=True``, items are serialized via cloudpickle into a binary
+    When ``pickled=True``, items are serialized via pickle into a binary
     ``pickled`` column instead of being stored natively in the ``item`` column.
     """
     chunk_results: list[_ChunkMetadata] = []
