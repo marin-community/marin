@@ -759,6 +759,9 @@ class Dataset(Generic[T]):
         The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
         results for that group.
 
+        Incoming records are strongly encouraged to be Arrow-serializable (dicts, lists, scalars, etc.).
+        Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
+
         Args:
             key: Function extracting grouping key from item (must be hashable)
             reducer: Function from (key, Iterator[items]) -> result

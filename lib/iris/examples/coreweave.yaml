@@ -35,10 +35,10 @@ platform:
     region: US-WEST-04A
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris  # Set this to your local kubeconfig, or use KUBECONFIG env var
-    object_storage_endpoint: https://a5a1f66f973e2196a26bae21c81b899b.r2.cloudflarestorage.com
+    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
-  remote_state_dir: s3://marin-test/iris/state
+  remote_state_dir: s3://marin-na/iris/state
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

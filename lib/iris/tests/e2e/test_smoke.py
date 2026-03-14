@@ -719,18 +719,19 @@ def test_profile_running_task(smoke_cluster):
 def test_checkpoint_restore():
     """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
 
-    Uses a dedicated cluster (not the shared smoke_cluster). A single platform
-    instance restarts its controller between phases so the persistent DB dir
-    (held by LocalController across stop/start) preserves checkpoint state.
+    Uses a dedicated LocalCluster (not the shared smoke_cluster). The persistent DB dir
+    (held by LocalCluster across stop/start) preserves checkpoint state.
     Phase 1 — run a job and write a checkpoint.
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
+    from iris.cluster.local_cluster import LocalCluster
+
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
 
-    platform = IrisConfig(config).platform()
-    url = platform.start_controller(config)
+    cluster = LocalCluster(config)
+    url = cluster.start()
     try:
         # Phase 1: complete a job, write checkpoint, restart controller.
         client = IrisClient.remote(url, workspace=IRIS_ROOT)
@@ -747,7 +748,7 @@ def test_checkpoint_restore():
         assert ckpt.job_count >= 1
         controller_client.close()
 
-        url = platform.restart_controller(config)
+        url = cluster.restart()
 
         # Phase 2: verify restored state and submit new work.
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
@@ -767,8 +768,7 @@ def test_checkpoint_restore():
 
         controller_client.close()
     finally:
-        platform.stop_controller(config)
-        platform.shutdown()
+        cluster.close()
 
 
 # ============================================================================
@@ -902,7 +902,7 @@ def test_dashboard_login_flow():
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
-    from iris.cluster.controller.local import LocalController
+    from iris.cluster.local_cluster import LocalCluster
 
     try:
         import playwright.sync_api as pw
@@ -911,7 +911,7 @@ def test_dashboard_login_flow():
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
-    controller = LocalController(config)
+    controller = LocalCluster(config)
     url = controller.start()
 
     # Run Playwright in a separate thread to avoid conflict with the asyncio
@@ -988,12 +988,12 @@ def test_dashboard_login_flow():
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid token."""
-    from iris.cluster.controller.local import LocalController
+    from iris.cluster.local_cluster import LocalCluster
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
-    controller = LocalController(config)
+    controller = LocalCluster(config)
     url = controller.start()
 
     try:
@@ -1029,7 +1029,7 @@ def test_static_auth_job_ownership():
     PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
     it, while user-a can terminate their own job.
     """
-    from iris.cluster.controller.local import LocalController
+    from iris.cluster.local_cluster import LocalCluster
     from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     _TOKEN_A = "token-user-a"
@@ -1038,7 +1038,7 @@ def test_static_auth_job_ownership():
     config = _make_controller_only_config()
     config.auth.static.tokens[_TOKEN_A] = "user-a"
     config.auth.static.tokens[_TOKEN_B] = "user-b"
-    controller = LocalController(config)
+    controller = LocalCluster(config)
     url = controller.start()
 
     try:

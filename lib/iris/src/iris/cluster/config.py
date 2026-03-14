@@ -487,7 +487,7 @@ def make_local_config(
     # Transform controller to local
     config.controller.ClearField("controller")
     config.controller.local.port = 0  # auto-assign
-    config.storage.remote_state_dir = ""  # LocalController will set temp path
+    config.storage.remote_state_dir = ""  # LocalCluster will set temp path
 
     # Apply local defaults (fast timings for testing)
     # Unconditionally use fast timings for local mode - this overrides any production timings

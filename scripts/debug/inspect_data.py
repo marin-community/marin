@@ -4,29 +4,33 @@
 
 """Inspect training data at a given step.
 
-Given an experiment file and a step number, dump the decoded training examples
-for that step's batch to JSONL. Requires a Ray cluster (--cluster).
+Given a WandB run and a step number, dump the decoded training examples for
+that step's batch to JSONL. Requires a Ray cluster (--cluster).
 
 Usage:
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+  uv run scripts/debug/inspect_data.py --wandb-run marin-community/marin/<run-id> \
       --step 100 --cluster us-central2
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+  uv run scripts/debug/inspect_data.py --wandb-run marin-community/marin/<run-id> \
       --step 100 --cluster us-central2 --output step_100.jsonl
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
-      --step 100 --cluster us-central2 --var training_step
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+  uv run scripts/debug/inspect_data.py --wandb-run marin-community/marin/<run-id> \
       --step 100 --cluster us-central2 --summary
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+  uv run scripts/debug/inspect_data.py --wandb-run marin-community/marin/<run-id> \
       --steps 0,100,500 --cluster us-central2 --summary
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+  uv run scripts/debug/inspect_data.py --wandb-run marin-community/marin/<run-id> \
       --step 100 --cluster us-central2 --truncate 200
-  uv run scripts/debug/inspect_data.py experiments/references/canary_train.py \
+  uv run scripts/debug/inspect_data.py --wandb-run marin-community/marin/<run-id> \
       --step 100 --cluster us-central2 --tui
+
+  # Also accepts full WandB URLs:
+  uv run scripts/debug/inspect_data.py \
+      --wandb-run https://wandb.ai/marin-community/marin/runs/<run-id> \
+      --step 100 --cluster us-central2 --summary
 """
 
-import importlib.util
 import json
+import logging
 import os
+import re
 import shlex
 import sys
 from collections import Counter
@@ -37,51 +41,149 @@ import jax.random as jrandom
 
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.utils.thread_utils import blocking_wait
-from marin.execution.executor import Executor, ExecutorStep
-from marin.training.training import TrainLmOnPodConfig
+
+logger = logging.getLogger(__name__)
 
 
-def _load_module(path: str):
-    spec = importlib.util.spec_from_file_location("experiment", path)
-    if spec is None or spec.loader is None:
-        raise click.ClickException(f"Cannot load module from {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _fetch_wandb_config(wandb_run: str) -> dict:
+    """Fetch the raw config dict from a WandB run.
+
+    This must run on a machine with WandB credentials (i.e. the client, not the
+    cluster). Returns a minimal dict that can be serialized to JSON and passed
+    to the cluster via ``--wandb-config-json``.
+
+    Args:
+        wandb_run: WandB run path like "entity/project/run_id" or a full URL.
+    """
+    import wandb
+
+    # Parse URL if provided
+    url_match = re.search(r"wandb\.ai/([^/]+)/([^/]+)/runs/([^/?]+)", wandb_run)
+    if url_match:
+        wandb_run = f"{url_match.group(1)}/{url_match.group(2)}/{url_match.group(3)}"
+
+    api = wandb.Api()
+    run = api.run(wandb_run)
+    c = run.config
+
+    data_cfg = c.get("data", {})
+    trainer_cfg = c.get("trainer", {})
+
+    return {
+        "components": {name: comp["cache_dir"] for name, comp in data_cfg.get("components", {}).items()},
+        "train_weights": data_cfg.get("train_weights"),
+        "tokenizer": data_cfg.get("tokenizer", "gpt2"),
+        "mixture_block_size": data_cfg.get("mixture_block_size", 2048),
+        "stop_strategy": data_cfg.get("stop_strategy", "restart"),
+        "shuffle": data_cfg.get("shuffle", True),
+        "enforce_eos": data_cfg.get("enforce_eos", True),
+        "block_cross_document_attention": data_cfg.get("block_cross_document_attention", True),
+        "train_batch_size": trainer_cfg.get("train_batch_size", 128),
+        "num_train_steps": trainer_cfg.get("num_train_steps", 1),
+        "seed": trainer_cfg.get("seed", 0),
+        "data_seed": c.get("data_seed"),
+        "train_seq_len": c.get("train_seq_len"),
+        "run_id": trainer_cfg.get("id", wandb_run.split("/")[-1]),
+    }
 
 
-def _find_training_step(mod, var: str | None) -> ExecutorStep:
-    """Find an ExecutorStep whose config is a TrainLmOnPodConfig."""
-    candidates = {}
-    for name in dir(mod):
-        obj = getattr(mod, name)
-        if isinstance(obj, ExecutorStep) and isinstance(obj.config, TrainLmOnPodConfig):
-            candidates[name] = obj
+def _config_from_wandb_dict(d: dict):
+    """Build a TrainLmConfig from a serialized WandB config dict.
 
-    if var is not None:
-        if var not in candidates:
-            available = ", ".join(candidates) or "(none)"
-            raise click.ClickException(f"Variable '{var}' is not a training ExecutorStep. Available: {available}")
-        return candidates[var]
+    Returns (TrainLmConfig, run_id).
+    """
+    from levanter.data.text import DatasetComponent, LMMixtureDatasetConfig
+    from levanter.main.train_lm import TrainLmConfig
+    from levanter.tracker.wandb import WandbConfig
+    from levanter.trainer import TrainerConfig
 
-    if len(candidates) == 0:
-        raise click.ClickException("No ExecutorStep with TrainLmOnPodConfig found in module.")
-    if len(candidates) > 1:
-        names = ", ".join(candidates)
-        raise click.ClickException(f"Multiple training steps found: {names}. Use --var to specify one.")
-    return next(iter(candidates.values()))
+    components = {name: DatasetComponent(cache_dir=cache_dir) for name, cache_dir in d["components"].items()}
+
+    data = LMMixtureDatasetConfig(
+        components=components,
+        train_weights=d["train_weights"],
+        tokenizer=d["tokenizer"],
+        mixture_block_size=d["mixture_block_size"],
+        stop_strategy=d["stop_strategy"],
+        shuffle=d["shuffle"],
+        enforce_eos=d["enforce_eos"],
+        block_cross_document_attention=d["block_cross_document_attention"],
+        auto_build_caches=False,
+    )
+
+    trainer = TrainerConfig(
+        tracker=WandbConfig(entity="marin-community", project="marin"),
+        train_batch_size=d["train_batch_size"],
+        num_train_steps=d["num_train_steps"],
+        seed=d["seed"],
+    )
+
+    config = TrainLmConfig(
+        data=data,
+        trainer=trainer,
+        train_seq_len=d["train_seq_len"],
+        data_seed=d.get("data_seed"),
+    )
+
+    logger.info(
+        "Reconstructed config: %d components, batch_size=%d, seed=%d",
+        len(components),
+        trainer.train_batch_size,
+        trainer.seed,
+    )
+    return config, d["run_id"]
+
+
+def _compute_outlier_scores(text: str) -> dict:
+    """Compute data quality scores for a single example.
+
+    Returns a dict of score names to values. Higher values indicate more
+    anomalous text.
+    """
+    if not text:
+        return {"unique_word_ratio": 0.0, "non_ascii_ratio": 0.0, "digit_ratio": 0.0, "repetition_ratio": 0.0}
+
+    words = text.split()
+    unique_word_ratio = len(set(words)) / len(words) if words else 0.0
+
+    non_ascii_ratio = sum(1 for c in text if ord(c) > 127) / len(text)
+    digit_ratio = sum(1 for c in text if c.isdigit()) / len(text)
+
+    # Check for repetitive 50-char chunks
+    chunk_size = 50
+    chunks = [text[i : i + chunk_size] for i in range(0, max(1, len(text) - chunk_size), chunk_size)]
+    repetition_ratio = 1.0 - len(set(chunks)) / len(chunks) if len(chunks) > 1 else 0.0
+
+    return {
+        "unique_word_ratio": round(unique_word_ratio, 3),
+        "non_ascii_ratio": round(non_ascii_ratio, 3),
+        "digit_ratio": round(digit_ratio, 3),
+        "repetition_ratio": round(repetition_ratio, 3),
+    }
+
+
+def _is_outlier(scores: dict) -> str | None:
+    """Return a human-readable reason if the scores indicate an outlier, else None."""
+    reasons = []
+    if scores["unique_word_ratio"] < 0.3:
+        reasons.append(f"unique_word_ratio={scores['unique_word_ratio']}")
+    if scores["non_ascii_ratio"] > 0.4:
+        reasons.append(f"non_ascii={scores['non_ascii_ratio']:.0%}")
+    if scores["digit_ratio"] > 0.5:
+        reasons.append(f"digits={scores['digit_ratio']:.0%}")
+    if scores["repetition_ratio"] > 0.3:
+        reasons.append(f"repetition={scores['repetition_ratio']:.0%}")
+    return ", ".join(reasons) if reasons else None
 
 
 def _submit_to_cluster(
     cluster: str,
-    experiment: str,
     step: int | None,
-    var: str | None,
     output: str | None,
-    prefix: str | None = None,
     steps: str | None = None,
     truncate: int | None = None,
     summary: bool = False,
+    wandb_config_json: str | None = None,
 ):
     import asyncio
 
@@ -91,17 +193,15 @@ def _submit_to_cluster(
 
     config = _resolve_cluster_config(cluster)
 
-    parts = ["python", "scripts/debug/inspect_data.py", experiment]
+    parts = ["python", "scripts/debug/inspect_data.py"]
+    if wandb_config_json:
+        parts.extend(["--wandb-config-json", wandb_config_json])
     if steps:
         parts.extend(["--steps", steps])
     else:
         parts.extend(["--step", str(step)])
-    if var:
-        parts.extend(["--var", var])
     if output:
         parts.extend(["--output", output])
-    if prefix:
-        parts.extend(["--prefix", prefix])
     if truncate is not None:
         parts.extend(["--truncate", str(truncate)])
     if summary:
@@ -119,16 +219,6 @@ def _submit_to_cluster(
 
     with ray_dashboard(DashboardConfig.from_cluster(config)):
         asyncio.run(_run())
-
-
-def _resolve_config(executor_step: ExecutorStep, prefix: str) -> tuple[TrainLmOnPodConfig, str]:
-    """Resolve InputName references in the config using the Executor.
-
-    Returns (resolved_config, step_output_path).
-    """
-    executor = Executor(prefix=prefix, executor_info_base_path=os.path.join(prefix, "experiments"))
-    executor.compute_version(executor_step, is_pseudo_dep=False)
-    return executor.configs[executor_step], executor.output_paths[executor_step]
 
 
 def _build_dataset(train_config):
@@ -194,8 +284,9 @@ def _fetch_step_examples(dataset, batch_schedule, tokenizer, step: int) -> list[
     sources = _get_source_names(dataset, indices)
     results = []
     for i, (ex, src) in enumerate(zip(examples, sources, strict=True)):
-        tokens = ex.tokens.array.tolist()
-        lw = ex.loss_weight.array
+        tok_arr = ex.tokens.array if hasattr(ex.tokens, "array") else ex.tokens
+        tokens = tok_arr.tolist()
+        lw = ex.loss_weight.array if hasattr(ex.loss_weight, "array") else ex.loss_weight
         pct_masked = float((lw == 0).sum()) / lw.size * 100
         results.append(
             {
@@ -210,11 +301,28 @@ def _fetch_step_examples(dataset, batch_schedule, tokenizer, step: int) -> list[
 
 
 def _build_summary(dataset, batch_schedule, examples: list[dict], step: int) -> dict:
-    """Build a summary dict for a step's batch."""
+    """Build a summary dict for a step's batch, including outlier detection."""
     weights = _get_step_weights(dataset, batch_schedule, step)
     source_counts = dict(Counter(ex["source"] for ex in examples))
     token_counts = [ex["num_tokens"] for ex in examples]
     mask_pcts = [ex["pct_masked"] for ex in examples]
+
+    # Detect outliers
+    outliers = []
+    for ex in examples:
+        scores = _compute_outlier_scores(ex["text"])
+        reason = _is_outlier(scores)
+        if reason is not None:
+            outliers.append(
+                {
+                    "index": ex["index"],
+                    "source": ex["source"],
+                    "reason": reason,
+                    "scores": scores,
+                    "text_preview": ex["text"][:300],
+                }
+            )
+
     return {
         "step": step,
         "batch_size": len(examples),
@@ -230,6 +338,8 @@ def _build_summary(dataset, batch_schedule, examples: list[dict], step: int) -> 
             "max_pct": max(mask_pcts),
             "mean_pct": round(sum(mask_pcts) / len(mask_pcts), 1),
         },
+        "outlier_count": len(outliers),
+        "outliers": outliers,
     }
 
 
@@ -435,6 +545,63 @@ def _run_tui(fetch_fn, start_step: int):
     curses.wrapper(main_loop)
 
 
+def _normalize_cluster_region(cluster: str) -> str:
+    """Extract the canonical region string from a --cluster argument.
+
+    Accepts region names like ``us-central2`` or ``marin-us-central2`` and
+    strips the ``marin-`` prefix if present.
+    """
+    region = cluster
+    if region.startswith("marin-"):
+        region = region[len("marin-") :]
+    return region
+
+
+def _validate_data_region(wandb_dict: dict, cluster: str) -> None:
+    """Ensure every component cache_dir lives in the same region as *cluster*.
+
+    Raises ``click.ClickException`` if any component's GCS bucket is in a
+    different region, preventing accidental cross-region egress charges.
+    """
+    from iris.marin_fs import REGION_TO_DATA_BUCKET
+
+    cluster_region = _normalize_cluster_region(cluster)
+
+    # Build reverse mapping: bucket name -> region
+    bucket_to_region: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+
+    mismatches: list[str] = []
+    for name, cache_dir in wandb_dict.get("components", {}).items():
+        if not cache_dir or not cache_dir.startswith("gs://"):
+            continue
+        # Extract bucket name from gs://bucket/path
+        bucket_name = cache_dir.split("/")[2]
+        data_region = bucket_to_region.get(bucket_name)
+        if data_region is None:
+            # Unknown bucket — can't verify, warn but allow
+            logger.warning(
+                "Cannot determine region for bucket %r (component %r); skipping region check.",
+                bucket_name,
+                name,
+            )
+            continue
+        if data_region != cluster_region:
+            mismatches.append(
+                f"  - component {name!r}: bucket {bucket_name!r} is in {data_region}, "
+                f"but cluster is in {cluster_region}"
+            )
+
+    if mismatches:
+        detail = "\n".join(mismatches)
+        raise click.ClickException(
+            f"Cross-region data access detected! The data lives in a different region "
+            f"than the target cluster ({cluster_region}).\n"
+            f"This would incur significant egress charges.\n\n"
+            f"{detail}\n\n"
+            f"Please use --cluster <region> matching your data's region."
+        )
+
+
 def _resolve_cluster_config(cluster: str) -> str:
     from marin.cluster.config import find_config_by_region
 
@@ -453,7 +620,7 @@ def _cluster_runtime_env() -> dict:
     }
 
 
-def _run_tui_on_cluster(cluster: str, experiment: str, step: int, var: str | None, prefix: str | None):
+def _run_tui_on_cluster(cluster: str, wandb_config_json: str, step: int):
     """Run the TUI locally with data fetched from a Ray cluster actor."""
     import ray
 
@@ -462,7 +629,6 @@ def _run_tui_on_cluster(cluster: str, experiment: str, step: int, var: str | Non
     config = _resolve_cluster_config(cluster)
     runtime_env = _cluster_runtime_env()
 
-    # ray_init=False: we call ray.init() ourselves so we can pass our runtime_env
     with ray_dashboard(DashboardConfig.from_cluster(config)) as conn:
         cluster_name = next(iter(conn.port_mappings))
         api_port = conn.port_mappings[cluster_name].api_port
@@ -470,14 +636,9 @@ def _run_tui_on_cluster(cluster: str, experiment: str, step: int, var: str | Non
 
         @ray.remote
         class DataInspector:
-            def __init__(self, experiment_path, prefix, var):
-                # On the cluster, MARIN_PREFIX is set in the node environment.
-                # Our runtime_env env_vars don't include it, so fall back to os.environ.
-                prefix = prefix or os.environ.get("MARIN_PREFIX")
-                mod = _load_module(experiment_path)
-                executor_step = _find_training_step(mod, var)
-                resolved, _ = _resolve_config(executor_step, prefix)
-                train_config = resolved.train_config
+            def __init__(self, config_json):
+                wandb_dict = json.loads(config_json)
+                train_config, _ = _config_from_wandb_dict(wandb_dict)
                 self.tokenizer = train_config.data.the_tokenizer
                 self.dataset, self.batch_schedule = _build_dataset(train_config)
 
@@ -485,7 +646,7 @@ def _run_tui_on_cluster(cluster: str, experiment: str, step: int, var: str | Non
                 return _fetch_step_examples(self.dataset, self.batch_schedule, self.tokenizer, step)
 
         click.echo("Creating data inspector on cluster...", err=True)
-        inspector = DataInspector.remote(experiment, prefix, var)
+        inspector = DataInspector.remote(wandb_config_json)
         # Warm up: ensure actor is ready before entering curses
         ray.get(inspector.fetch_step.remote(step))
         click.echo("Ready.", err=True)
@@ -497,29 +658,37 @@ def _run_tui_on_cluster(cluster: str, experiment: str, step: int, var: str | Non
 
 
 @click.command()
-@click.argument("experiment", type=click.Path(exists=True))
+@click.option("--wandb-run", default=None, help="WandB run path (entity/project/run_id) or URL.")
+@click.option(
+    "--wandb-config-json",
+    default=None,
+    hidden=True,
+    help="Serialized WandB config (internal, used for cluster passthrough).",
+)
 @click.option("--step", default=None, type=int, help="Training step to inspect.")
 @click.option("--steps", default=None, type=str, help="Comma-separated steps or start:end:stride range.")
-@click.option("--var", default=None, help="Name of the ExecutorStep variable (auto-detected if unambiguous).")
 @click.option("--output", "-o", default=None, type=click.Path(), help="Output JSONL path (default: stdout).")
 @click.option("--cluster", default=None, help="Ray cluster name or config path. Submits as a Ray job when set.")
-@click.option("--prefix", default=None, help="Marin prefix (default: $MARIN_PREFIX).")
 @click.option("--tui", is_flag=True, default=False, help="Interactive viewer.")
 @click.option("--truncate", default=None, type=int, help="Max characters per text in output.")
 @click.option("--summary", is_flag=True, default=False, help="Print per-step stats instead of full text.")
 def main(
-    experiment: str,
+    wandb_run: str | None,
+    wandb_config_json: str | None,
     step: int | None,
     steps: str | None,
-    var: str | None,
     output: str | None,
     cluster: str | None,
-    prefix: str | None,
     tui: bool,
     truncate: int | None,
     summary: bool,
 ):
     """Dump decoded training examples for a given step's batch to JSONL."""
+    if wandb_run is None and wandb_config_json is None:
+        raise click.ClickException("Must specify --wandb-run.")
+    if wandb_run is not None and wandb_config_json is not None:
+        raise click.ClickException("Cannot use both --wandb-run and --wandb-config-json.")
+
     if step is None and steps is None:
         if tui:
             step = 0
@@ -539,33 +708,44 @@ def main(
     if not cluster and not on_cluster_node:
         raise click.ClickException("Must specify --cluster.")
 
+    # Resolve --wandb-run locally (where we have credentials) and pass the
+    # serialized config to the cluster as --wandb-config-json.
+    if wandb_run and cluster:
+        click.echo(f"Fetching config from WandB run: {wandb_run}", err=True)
+        wandb_config_json = json.dumps(_fetch_wandb_config(wandb_run))
+        wandb_run = None
+
+    # Validate that the data's region matches the cluster before submitting,
+    # to avoid cross-region egress charges.
+    if cluster and wandb_config_json:
+        _validate_data_region(json.loads(wandb_config_json), cluster)
+
     if cluster and tui:
-        _run_tui_on_cluster(cluster, experiment, step_list[0], var, prefix)
+        _run_tui_on_cluster(cluster, wandb_config_json, step_list[0])
         return
 
     if cluster:
         _submit_to_cluster(
             cluster,
-            experiment,
             step,
-            var,
             output,
-            prefix,
             steps=steps,
             truncate=truncate,
             summary=summary,
+            wandb_config_json=wandb_config_json,
         )
         return
 
     # Running on a cluster node as a submitted Ray job.
-    prefix = prefix or os.environ.get("MARIN_PREFIX")
-    if not prefix:
-        raise click.ClickException("MARIN_PREFIX not set on cluster node.")
+    if wandb_config_json:
+        wandb_dict = json.loads(wandb_config_json)
+    else:
+        wandb_dict = _fetch_wandb_config(wandb_run)
 
-    mod = _load_module(experiment)
-    executor_step = _find_training_step(mod, var)
-    resolved_config, step_output_path = _resolve_config(executor_step, prefix)
-    train_config = resolved_config.train_config
+    train_config, run_id = _config_from_wandb_dict(wandb_dict)
+    marin_prefix = os.environ.get("MARIN_PREFIX", "")
+    step_output_path = os.path.join(marin_prefix, run_id) if marin_prefix else run_id
+
     tokenizer = train_config.data.the_tokenizer
 
     dataset, batch_schedule = _build_dataset(train_config)

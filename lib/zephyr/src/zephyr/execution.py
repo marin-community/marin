@@ -11,21 +11,27 @@ protocol.
 
 from __future__ import annotations
 
+import dataclasses
 import enum
+import itertools
 import logging
 import os
 import pickle
+import re
 import threading
 import time
 import uuid
 from collections import defaultdict, deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 import cloudpickle
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from iris.marin_fs import open_url, url_to_fs
 from fray.v2 import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from iris.marin_fs import marin_temp_bucket
@@ -37,8 +43,10 @@ from zephyr.plan import (
     Join,
     PhysicalOp,
     PhysicalPlan,
+    Scatter,
     SourceItem,
     StageContext,
+    StageResultChunk,
     StageType,
     compute_plan,
     run_stage,
@@ -52,9 +60,14 @@ class Chunk(Protocol):
     def __iter__(self) -> Iterator: ...
 
 
+_ZEPHYR_SHUFFLE_SHARD_IDX_COL = "shard_idx"
+_ZEPHYR_SHUFFLE_CHUNK_IDX_COL = "chunk_idx"
+_ZEPHYR_SHUFFLE_ITEM_COL = "item"
+
+
 @dataclass(frozen=True)
-class DiskChunk:
-    """Reference to a chunk stored on disk.
+class PickleDiskChunk:
+    """Reference to a pickle chunk stored on disk.
 
     Each write goes to a UUID-unique path to avoid collisions when multiple
     workers race on the same shard.  No coordinator-side rename is needed;
@@ -69,7 +82,7 @@ class DiskChunk:
         return iter(self.read())
 
     @classmethod
-    def write(cls, path: str, data: list) -> DiskChunk:
+    def write(cls, path: str, data: list) -> PickleDiskChunk:
         """Write *data* to a UUID-unique path derived from *path*.
 
         The UUID suffix avoids collisions when multiple workers race on
@@ -91,6 +104,44 @@ class DiskChunk:
         """Load chunk data from disk."""
         with open_url(self.path, "rb") as f:
             return pickle.load(f)
+
+
+@dataclass(frozen=True)
+class ParquetDiskChunk:
+    """Slice of a shared Parquet scatter file, filtered by target shard and chunk.
+
+    Multiple ParquetDiskChunk instances share the same file path but filter
+    for different (shard_idx, chunk_idx) pairs. Each chunk is pre-sorted
+    by key, preserving the invariant needed for k-way merge in Reduce.
+
+    Items are stored wrapped in an envelope struct with routing metadata::
+
+        {"shard_idx": int, "chunk_idx": int, "item": <user_data>}
+
+    The ``read`` method filters by shard/chunk and unwraps the ``item`` field.
+    Predicate pushdown in Parquet skips irrelevant row groups, so each
+    reducer reads only its own data efficiently.
+    """
+
+    path: str
+    filter_shard: int
+    filter_chunk: int
+    count: int
+
+    def __iter__(self) -> Iterator:
+        return iter(self.read())
+
+    def read(self) -> list:
+        """Load filtered chunk data from a Parquet file, unwrapping envelope."""
+        table = pq.read_table(
+            self.path,
+            columns=[_ZEPHYR_SHUFFLE_ITEM_COL],
+            filters=(
+                (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.filter_shard)
+                & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.filter_chunk)
+            ),
+        )
+        return table.column(_ZEPHYR_SHUFFLE_ITEM_COL).to_pylist()
 
 
 @dataclass
@@ -146,20 +197,6 @@ def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
 
 
-def _chunk_path(
-    prefix: str,
-    execution_id: str,
-    stage_name: str,
-    shard_idx: int,
-    chunk_idx: int,
-) -> str:
-    """Generate path for a chunk file.
-
-    Format: {prefix}/{execution_id}/{stage_name}/shard-{shard_idx:04d}/chunk-{chunk_idx:04d}.pkl
-    """
-    return f"{prefix}/{execution_id}/{stage_name}/shard-{shard_idx:04d}/chunk-{chunk_idx:04d}.pkl"
-
-
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
     """Remove all chunk files for an execution."""
     exec_dir = f"{prefix}/{execution_id}"
@@ -175,6 +212,213 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
         finally:
             elapsed = time.monotonic() - t_0
             logger.info(f"Cleaned up execution directory {exec_dir} in {elapsed:.1f}s")
+
+
+def _make_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]:
+    return [
+        {
+            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
+            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
+            _ZEPHYR_SHUFFLE_ITEM_COL: item,
+        }
+        for item in items
+    ]
+
+
+def _segment_path(base_path: str, seg_idx: int) -> str:
+    """Return the file path for a given segment index.
+
+    ``shard-0000.parquet`` → ``shard-0000-seg0000.parquet``
+    """
+    stem, ext = os.path.splitext(base_path)
+    return f"{stem}-seg{seg_idx:04d}{ext}"
+
+
+class _ChunkMetadata(NamedTuple):
+    path: str
+    target_shard: int
+    chunk_idx: int
+    cnt: int
+
+
+def _write_parquet_scatter(
+    stage_gen: Iterator[StageResultChunk],
+    source_shard: int,
+    parquet_path: str,
+) -> list[ResultChunk]:
+    """Stream scatter chunks into Parquet files as row groups.
+
+    Writes batches to a Parquet file until a schema mismatch is detected
+    (e.g. a field evolves from null to a concrete type). On mismatch the
+    current file is closed, the schema is unified via ``pa.unify_schemas``,
+    and a new segment file is opened with the evolved schema.
+    """
+    chunk_results: list[_ChunkMetadata] = []
+    per_shard_chunk_cnt: dict[int, int] = defaultdict(int)
+    n_chunks_flushed = 0
+    seg_idx = 0
+    schema: pa.Schema | None = None
+    writer: pq.ParquetWriter | None = None
+    seg_file = ""
+
+    pending_chunk: pa.RecordBatch | None = None
+    pending_chunk_metadata: _ChunkMetadata | None = None
+
+    def _flush_pending():
+        nonlocal n_chunks_flushed
+        if pending_chunk is None:
+            return
+        writer.write_batch(pending_chunk)
+        chunk_results.append(pending_chunk_metadata)
+        n_chunks_flushed += 1
+        if n_chunks_flushed % 10 == 0:
+            logger.info(
+                "[shard %d segment %d] Wrote %d parquet chunks so far (latest chunk size: %d items)",
+                source_shard,
+                seg_idx,
+                n_chunks_flushed,
+                pending_chunk_metadata.cnt,
+            )
+
+    for result in stage_gen:
+        chunk_items = list(result.chunk)
+        target_shard = result.target_shard
+        shard_chunk_idx = per_shard_chunk_cnt[target_shard]
+        per_shard_chunk_cnt[target_shard] += 1
+        envelope = _make_envelope(chunk_items, target_shard, shard_chunk_idx)
+        chunk_arrow = pa.RecordBatch.from_pylist(envelope)
+
+        if schema is None:
+            # First batch — initialize writer
+            schema = chunk_arrow.schema
+            seg_file = _segment_path(parquet_path, seg_idx)
+            ensure_parent_dir(seg_file)
+            writer = pq.ParquetWriter(seg_file, schema)
+        elif chunk_arrow.schema != schema:
+            # Schema evolved — flush pending, start new segment
+            _flush_pending()
+            writer.close()
+
+            schema = pa.unify_schemas([schema, chunk_arrow.schema])
+            seg_idx += 1
+            seg_file = _segment_path(parquet_path, seg_idx)
+            ensure_parent_dir(seg_file)
+            writer = pq.ParquetWriter(seg_file, schema)
+            logger.info(
+                "[shard %d] Schema evolved after %d chunks; starting segment %d",
+                source_shard,
+                n_chunks_flushed,
+                seg_idx,
+            )
+            chunk_arrow = chunk_arrow.cast(schema)
+        else:
+            _flush_pending()
+
+        pending_chunk = chunk_arrow
+        pending_chunk_metadata = _ChunkMetadata(
+            path=seg_file, target_shard=target_shard, chunk_idx=shard_chunk_idx, cnt=len(chunk_items)
+        )
+
+    _flush_pending()
+    if writer is not None:
+        writer.close()
+
+    return [
+        ResultChunk(
+            source_shard=source_shard,
+            target_shard=rec.target_shard,
+            data=ParquetDiskChunk(
+                path=rec.path, filter_shard=rec.target_shard, filter_chunk=rec.chunk_idx, count=rec.cnt
+            ),
+        )
+        for rec in chunk_results
+    ]
+
+
+def _write_pickle_chunks(
+    stage_gen: Iterator[StageResultChunk],
+    source_shard: int,
+    chunk_path_fn: Callable[[int], str],
+) -> list[ResultChunk]:
+    """Write stage output chunks as pickle files."""
+    results: list[ResultChunk] = []
+    for pidx, result in enumerate(stage_gen):
+        items = list(result.chunk)
+        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), items)
+        results.append(ResultChunk(source_shard=source_shard, target_shard=result.target_shard, data=chunk_ref))
+        if (pidx + 1) % 10 == 0:
+            logger.info(
+                "[shard %d] Wrote %d chunks so far (latest: %d items)",
+                source_shard,
+                pidx + 1,
+                chunk_ref.count,
+            )
+    return results
+
+
+def _write_stage_chunks(
+    stage_gen: Iterator[StageResultChunk],
+    source_shard: int,
+    stage_dir: str,
+    shard_idx: int,
+    is_scatter: bool,
+) -> list[ResultChunk]:
+    """Write stage output chunks to disk.
+
+    For scatter stages, attempts to stream all chunks into Parquet files
+    with envelope wrapping. Falls back to pickle if Arrow conversion fails
+    on the first chunk.
+
+    For non-scatter stages, writes each chunk as a PickleDiskChunk.
+
+    Args:
+        stage_gen: Generator of StageResultChunks from run_stage
+        source_shard: Source shard index
+        stage_dir: Directory for this stage's output (``{prefix}/{execution_id}/{stage_name}``)
+        shard_idx: Shard index (used to derive file paths)
+        is_scatter: Whether this stage contains a scatter operation
+
+    Returns:
+        List of ResultChunks with ParquetDiskChunk or PickleDiskChunk data
+    """
+    first_result = next(stage_gen, None)
+    if first_result is None:
+        return []
+
+    first_items = list(first_result.chunk)
+
+    # Test Arrow serializability on the first chunk to decide parquet vs pickle
+    use_parquet = False
+    if is_scatter:
+        try:
+            test_envelope = _make_envelope(first_items, 0, 0)
+            pa.RecordBatch.from_pylist(test_envelope)
+            use_parquet = True
+            logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
+        except Exception:
+            sample_rows = str(test_envelope[:5]) if len(test_envelope) > 5 else str(test_envelope)
+            if len(sample_rows) > 1000:
+                sample_rows = sample_rows[:1000] + "...(truncated)"
+            logger.warning(
+                "Arrow scatter serialization failed for shard %d; "
+                "falling back to pickle. Performance will be degraded. Sample rows: %s",
+                source_shard,
+                sample_rows,
+                exc_info=True,
+            )
+
+    # Prepend the already-consumed first result back into the stream
+    first_with_materialized_chunk = dataclasses.replace(first_result, chunk=first_items)
+    full_gen = itertools.chain([first_with_materialized_chunk], stage_gen)
+
+    if use_parquet:
+        parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
+        return _write_parquet_scatter(full_gen, source_shard, parquet_path)
+
+    def chunk_path_fn(idx: int) -> str:
+        return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
+
+    return _write_pickle_chunks(full_gen, source_shard, chunk_path_fn)
 
 
 class WorkerState(enum.Enum):
@@ -958,36 +1202,17 @@ class ZephyrWorker:
             aux_shards=task.aux_shards,
         )
 
-        results: list[ResultChunk] = []
-        chunk_idx = 0
+        stage_dir = f"{self._chunk_prefix}/{self._execution_id}/{task.stage_name}"
+        is_scatter = any(isinstance(op, Scatter) for op in task.operations)
 
-        for stage_output in run_stage(stage_ctx, task.operations):
-            chunk_path = _chunk_path(
-                self._chunk_prefix,
-                self._execution_id,
-                task.stage_name,
-                task.shard_idx,
-                chunk_idx,
-            )
-            chunk = list(stage_output.chunk)
-            chunk_ref = DiskChunk.write(chunk_path, chunk)
-            results.append(
-                ResultChunk(
-                    source_shard=stage_output.source_shard,
-                    target_shard=stage_output.target_shard,
-                    data=chunk_ref,
-                )
-            )
-            chunk_idx += 1
-            if chunk_idx % 10 == 0:
-                logger.info(
-                    "[shard %d] Wrote %d chunks so far (latest: %d items)",
-                    task.shard_idx,
-                    chunk_idx,
-                    len(stage_output.chunk),
-                )
-
-        logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, chunk_idx)
+        results = _write_stage_chunks(
+            run_stage(stage_ctx, task.operations),
+            source_shard=task.shard_idx,
+            stage_dir=stage_dir,
+            shard_idx=task.shard_idx,
+            is_scatter=is_scatter,
+        )
+        logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, len(results))
         return TaskResult(chunks=results)
 
     def __repr__(self) -> str:
@@ -1354,7 +1579,9 @@ def _compute_tasks_from_shards(
     """Convert shard references into ShardTasks for the coordinator."""
     total = len(shard_refs)
     tasks = []
-    output_stage_name = stage_name or stage.stage_name(max_length=60)
+    # Sanitize for use as a path component: replace non-alphanumeric runs with '-'
+    raw_name = stage_name or stage.stage_name(max_length=60)
+    output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw_name).strip("-")
 
     for i, shard in enumerate(shard_refs):
         aux_shards = None
