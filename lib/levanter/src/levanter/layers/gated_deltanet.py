@@ -4280,9 +4280,10 @@ def chunk_gated_delta_rule(
             use_triangular_solve=use_triangular_solve,
         )
 
-    # Back to NamedArray (B, L, H, dv)
+    # Preserve the caller's branch-local layout contract when requested so
+    # higher-level code can keep the train-path kernel boundary head-first.
     out_named = hax.named(out_arr, (Batch, Heads, Pos, Dv))
-    out_final = hax.rearrange(out_named, (Batch, Pos, Heads, Dv))
+    out_final = out_named if head_first else hax.rearrange(out_named, (Batch, Pos, Heads, Dv))
 
     return (out_final, S_final) if output_final_state else (out_final, None)
 
@@ -4448,6 +4449,7 @@ class GatedDeltaNet(eqx.Module):
         chunk_size: int = 64,
         segment_size: int = 8,
         attention_mask: Optional[NamedArray] = None,
+        kernel_input_layout: Literal["pos_first", "head_first"] = "pos_first",
         decode_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None,  # (conv_state, S_state)
     ) -> Tuple[NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
         """Run the full GDN token mixer.
@@ -4456,6 +4458,7 @@ class GatedDeltaNet(eqx.Module):
           x: [B, Pos, Embed]
           inference: if True, returns and expects state for streaming decode.
           chunk_size: chunk length for the parallel kernel (prefill/train).
+          kernel_input_layout: branch-local layout contract for kernel I/O.
           attention_mask: optional [B, Pos] (1 for real tokens, 0 for pad).
           decode_state: optional tuple (conv_state, S_state) for streaming decode:
               conv_state: (N, Channels, K)
@@ -4466,6 +4469,10 @@ class GatedDeltaNet(eqx.Module):
           new_state (optional): (conv_state, S_state) if inference=True
         """
         cfg = self.config
+        if kernel_input_layout not in {"pos_first", "head_first"}:
+            raise ValueError(
+                "kernel_input_layout must be one of {'pos_first', 'head_first'}. " f"Got {kernel_input_layout!r}."
+            )
 
         # Zero out padding tokens early so they don't affect conv or states.
         if attention_mask is not None:
@@ -4561,58 +4568,73 @@ class GatedDeltaNet(eqx.Module):
         A_exp = hax.exp(self.A_log.astype(jnp.float32))
         g = -(A_exp * hnn.softplus(a32 + dt_bias_na)).astype(x.dtype)  # log-decay on Heads
 
-        # 4) Kernels expect [batch, position, heads, dim] (axis name "heads")
+        # 4) Kernels operate on one explicit branch-local layout contract so the
+        # train path can diagnose layout/sharding ownership without changing math.
         q_h = q.rename({cfg.Heads.name: "heads"})
         k_h = k.rename({cfg.Heads.name: "heads"})
         v_kern = v_h.rename({cfg.Heads.name: "heads"})
         g_h = g.rename({cfg.Heads.name: "heads"})
         b_h = beta.rename({cfg.Heads.name: "heads"})
-
-        q_bphd = hax.rearrange(q_h, ("batch", "position", "heads", cfg.KHeadDim.name))
-        k_bphd = hax.rearrange(k_h, ("batch", "position", "heads", cfg.KHeadDim.name))
-        v_bphd = hax.rearrange(v_kern, ("batch", "position", "heads", cfg.VHeadDim.name))
-        _dbg("kernel/q_bphd", q_bphd.array)
-        _dbg("kernel/k_bphd", k_bphd.array)
-        _dbg("kernel/v_bphd", v_bphd.array)
+        if kernel_input_layout == "head_first":
+            q_kernel = hax.rearrange(q_h, ("batch", "heads", "position", cfg.KHeadDim.name))
+            k_kernel = hax.rearrange(k_h, ("batch", "heads", "position", cfg.KHeadDim.name))
+            v_kernel = hax.rearrange(v_kern, ("batch", "heads", "position", cfg.VHeadDim.name))
+            g_kernel = hax.rearrange(g_h, ("batch", "heads", "position"))
+            b_kernel = hax.rearrange(b_h, ("batch", "heads", "position"))
+        else:
+            q_kernel = hax.rearrange(q_h, ("batch", "position", "heads", cfg.KHeadDim.name))
+            k_kernel = hax.rearrange(k_h, ("batch", "position", "heads", cfg.KHeadDim.name))
+            v_kernel = hax.rearrange(v_kern, ("batch", "position", "heads", cfg.VHeadDim.name))
+            g_kernel = g_h
+            b_kernel = b_h
+        _dbg("kernel/q", q_kernel.array)
+        _dbg("kernel/k", k_kernel.array)
+        _dbg("kernel/v", v_kernel.array)
 
         # Choose the kernel:
         if decode_state is not None and x.axis_size("position") == 1 and S_state is not None:
-            out_bphd, S_new = recurrent_gated_delta_rule(
-                q_bphd,
-                k_bphd,
-                v_bphd,
-                g_h,
-                b_h,
+            out_kernel, S_new = recurrent_gated_delta_rule(
+                q_kernel,
+                k_kernel,
+                v_kernel,
+                g_kernel,
+                b_kernel,
                 initial_state=S_state,
                 output_final_state=True,
                 use_qk_l2norm_in_kernel=True,
                 use_flash=self.use_flash,
             )
         else:
-            out_bphd, S_new = chunk_gated_delta_rule(
-                q_bphd,
-                k_bphd,
-                v_bphd,
-                g_h,
-                b_h,
+            out_kernel, S_new = chunk_gated_delta_rule(
+                q_kernel,
+                k_kernel,
+                v_kernel,
+                g_kernel,
+                b_kernel,
                 chunk_size=chunk_size,
                 segment_size=segment_size,
                 initial_state=None,
                 output_final_state=inference,
                 use_qk_l2norm_in_kernel=True,
                 use_flash=self.use_flash,
+                head_first=kernel_input_layout == "head_first",
             )
 
-        # Keep the kernel output on "heads" so TP can shard the out-projection.
-        out = out_bphd  # [B, Pos, heads, VHeadDim]
-        _dbg("kernel/out_bphd", out.array)
+        if kernel_input_layout == "head_first":
+            out = hax.rearrange(out_kernel, ("batch", "heads", "position", cfg.VHeadDim.name))
+            z_gate = hax.rearrange(z_h.rename({cfg.Heads.name: "heads"}), out.axes)
+        else:
+            out = out_kernel
+            z_gate = z_h.rename({cfg.Heads.name: "heads"})
+        _dbg("kernel/out", out.array)
 
         # 5) Gated RMSNorm with Z (rename Z to "heads" to match)
-        z_gate = z_h.rename({cfg.Heads.name: "heads"})
         y_norm = self.o_norm(out, gate=z_gate)
 
         # 6) Output projection back to model dimension (In=(Heads, VHeadDim) -> Out=Embed)
         y_out = self.out_proj(y_norm.astype(x.dtype))
+        if kernel_input_layout == "head_first":
+            y_out = hax.rearrange(y_out, x.axes)
         _dbg("layer/y_out", y_out.array)
 
         # State packing for streaming

@@ -42,6 +42,9 @@ Current mainline target order:
 - `G1`: first stronger branch-local ownership attempt attempted and rejected
   - staged pre/kernel/post branch ownership removed visible old train-path buckets but massively increased the real branch-local shell budgets and slowed the full step
   - future `G1` work needs a materially smaller, const-cleaner, and sharding-cleaner branch cut; do not spend another turn on a broad branch wrapper that just renames the shell tax
+- `D1`: first branch-local head-first train-layout diagnostic complete
+  - reduced `ad_wrapper_shell_delta_ms` and slightly improved the full step, but `dispatch_shard_shell_delta_ms` stayed effectively flat
+  - matched xprof still showed higher `IDLE`, so layout ownership alone is diagnostic-only and not promotable
 
 ## G1 Definition
 

@@ -208,6 +208,31 @@ def test_layer_chunk_size_invariance(csize_a, csize_b, use_flash: bool):
 
 
 @pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
+def test_layer_head_first_kernel_layout_equivalence(use_flash: bool):
+    """The opt-in head-first train layout should preserve full-layer outputs."""
+    key = jax.random.PRNGKey(7)
+    B, L = 2, 29
+    cfg = GatedDeltaNetConfig(
+        Embed=Axis("embed", 40),
+        num_k_heads=2,
+        num_v_heads=4,
+        head_k_dim=8,
+        head_v_dim=8,
+        conv_kernel_size=4,
+        rms_norm_eps=1e-6,
+    )
+    layer = GatedDeltaNet.init(cfg, key=key, use_flash=use_flash)
+
+    Batch, Pos, Embed = Axis("batch", B), Axis("position", L), cfg.Embed
+    x = hax.named(jax.random.normal(key, (B, L, Embed.size), dtype=jnp.float32), (Batch, Pos, Embed))
+
+    y_std, _ = layer(x, inference=False, chunk_size=16, kernel_input_layout="pos_first")
+    y_hf, _ = layer(x, inference=False, chunk_size=16, kernel_input_layout="head_first")
+
+    np.testing.assert_allclose(y_std.array, y_hf.array, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_layer_gradients_exist(use_flash: bool):
     """End-to-end differentiability: grads w.r.t. inputs exist and are finite."""
     key = jax.random.PRNGKey(0)
