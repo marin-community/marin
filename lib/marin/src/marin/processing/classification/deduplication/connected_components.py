@@ -3,7 +3,6 @@
 
 import logging
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
 from functools import partial
 from typing import Any, TypedDict
 
@@ -28,20 +27,6 @@ class CCNode(TypedDict):
     component_id: str
     changed: bool
     file_idx: int
-
-
-@dataclass
-class CCMessage: ...
-
-
-@dataclass
-class SelfMessage(CCMessage):
-    node: CCNode
-
-
-@dataclass
-class CompMessage(CCMessage):
-    component_id: str
 
 
 class CCInput(TypedDict):
@@ -101,7 +86,7 @@ def connected_components(
         #  * each node is its own component
         #  * adjacency list from links
         .group_by(
-            lambda x: x[0]["record_id_norm"],
+            lambda x: x["source_record_id_norm"],
             reducer=_build_adjacency,
         ).write_vortex(f"{output_dir}/it_0/part-{{shard:05d}}.vortex"),
         verbose=True,
@@ -115,7 +100,7 @@ def connected_components(
             .load_vortex()
             .map(lambda record: CCNode(**record))
             .flat_map(_emit_messages)
-            .group_by(key=lambda x: x[0], reducer=_reduce_node_step)
+            .group_by(key=lambda x: x["key"], reducer=_reduce_node_step)
             .write_vortex(f"{output_dir}/it_{i}/part-{{shard:05d}}.vortex"),
             verbose=True,
         )
@@ -154,7 +139,16 @@ def _reduce_buckets(bucket: str, items: Iterator[CCInput]) -> BucketWithIds:
     }
 
 
-def _gen_links_within_buckets(record: CCInput, *, preserve_singletons: bool) -> Iterator[tuple[RecordId, RecordId]]:
+def _make_link(source: RecordId, dest: RecordId) -> dict:
+    return {
+        "source_record_id": source["record_id"],
+        "source_record_id_norm": source["record_id_norm"],
+        "source_file_idx": source["file_idx"],
+        "dest_record_id_norm": dest["record_id_norm"],
+    }
+
+
+def _gen_links_within_buckets(record: CCInput, *, preserve_singletons: bool) -> Iterator[dict]:
     ids = record.get("ids", [])
 
     norm_ids = [i["record_id_norm"] for i in ids]
@@ -164,7 +158,7 @@ def _gen_links_within_buckets(record: CCInput, *, preserve_singletons: bool) -> 
         raise ValueError(f"Duplicate found in bucket during link_reduce: {duplicate_ids}")
 
     if preserve_singletons and len(ids) == 1:
-        yield (ids[0], ids[0])
+        yield _make_link(ids[0], ids[0])
         return
 
     # Emit all pairwise links
@@ -173,63 +167,81 @@ def _gen_links_within_buckets(record: CCInput, *, preserve_singletons: bool) -> 
             if ids[i] == ids[j]:
                 continue
 
-            yield (ids[i], ids[j])
-            yield (ids[j], ids[i])
+            yield _make_link(ids[i], ids[j])
+            yield _make_link(ids[j], ids[i])
 
 
-def _build_adjacency(node_id: str, links: Iterator[tuple[RecordId, RecordId]]) -> CCNode:
+def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
     all_links = list(links)
-    source = all_links[0][0]
     return CCNode(
-        record_id=source["record_id"],
-        record_id_norm=source["record_id_norm"],
-        adjacency_list=list(set([link[1]["record_id_norm"] for link in all_links])),
+        record_id=all_links[0]["source_record_id"],
+        record_id_norm=all_links[0]["source_record_id_norm"],
+        adjacency_list=list(set(link["dest_record_id_norm"] for link in all_links)),
         # init with own id as component
         component_id=node_id,
         changed=True,
-        file_idx=source["file_idx"],
+        file_idx=all_links[0]["source_file_idx"],
     )
 
 
-def _emit_messages(node: CCNode) -> Iterator[tuple[str, CCMessage]]:
+def _emit_messages(node: CCNode) -> Iterator[dict]:
     """
     1. Emit the node structure to itself (to preserve graph topology).
     2. Emit the current component ID to all neighbors.
     """
-    # 1. Preserve structure
-    yield (node["record_id_norm"], SelfMessage(node=node))
+    # 1. Preserve structure (self-message carries all node fields)
+    yield {
+        "key": node["record_id_norm"],
+        "is_self": True,
+        "record_id": node["record_id"],
+        "record_id_norm": node["record_id_norm"],
+        "adjacency_list": node["adjacency_list"],
+        "component_id": node["component_id"],
+        "changed": node["changed"],
+        "file_idx": node["file_idx"],
+    }
 
     # 2. Propagate component ID to neighbors
-    # (Optimization: Only send if we changed recently, but strictly Hash-to-Min sends always)
-    msg = CompMessage(component_id=node["component_id"])
     for neighbor_id in node["adjacency_list"]:
-        yield (neighbor_id, msg)
+        yield {
+            "key": neighbor_id,
+            "is_self": False,
+            "record_id": node["record_id"],
+            "record_id_norm": "",
+            "adjacency_list": [],
+            "component_id": node["component_id"],
+            "changed": False,
+            "file_idx": 0,
+        }
 
 
-def _reduce_node_step(key: str, incoming: Iterator[tuple[str, CCMessage]]) -> CCNode:
+def _reduce_node_step(key: str, incoming: Iterator[dict]) -> CCNode:
     """
-    1. Recover NodeState.
-    2. Find minimum component ID from messages.
+    1. Recover NodeState from self-message.
+    2. Find minimum component ID from all messages.
     3. Update state if a smaller ID is found.
     """
     # NOTE: init the minimum component ID with the current key
     min_comp = key
     node_structure: CCNode | None = None
 
-    # Iterate through mixed stream of structure and messages
-    for _, msg in incoming:
-        if isinstance(msg, SelfMessage):
-            node_structure = msg.node
+    for msg in incoming:
+        if msg["is_self"]:
+            node_structure = CCNode(
+                record_id=msg["record_id"],
+                record_id_norm=msg["record_id_norm"],
+                adjacency_list=msg["adjacency_list"],
+                component_id=msg["component_id"],
+                changed=msg["changed"],
+                file_idx=msg["file_idx"],
+            )
             if node_structure["component_id"] < min_comp:
                 min_comp = node_structure["component_id"]
         else:
-            assert isinstance(msg, CompMessage)
-            remote_comp = msg.component_id
-            if remote_comp < min_comp:
-                min_comp = remote_comp
+            if msg["component_id"] < min_comp:
+                min_comp = msg["component_id"]
 
     if node_structure is None:
-        # Should technically not happen if graph is well-formed
         raise ValueError(f"Lost/corrupted structure for node {key}")
 
     if min_comp < node_structure["component_id"]:
