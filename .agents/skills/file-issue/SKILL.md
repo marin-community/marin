@@ -120,10 +120,13 @@ If a matching issue exists, tell the user and offer to comment on it instead.
 - For task issues: include a concrete Definition of Done.
 - For bug issues: include numbered reproduction steps.
 
-### 5. Confirm with User
+### 5. Confirm or File Directly
 
-Show the user the drafted title and body before filing. Wait for approval or
-edits. Do not file without confirmation.
+If the user explicitly asked to file an issue, skip the draft preview — file it
+and share the GitHub link. They can review and edit directly on GitHub.
+
+If the issue was surfaced by the agent (not explicitly requested), show the
+drafted title and body before filing. Wait for approval or edits.
 
 ### 6. File the Issue
 
@@ -171,7 +174,8 @@ Follow the same terse style from `fix-issue`:
 
 0. Never credit yourself in the issue.
 1. Always add the `agent-generated` label.
-2. Always confirm with the user before filing.
+2. Confirm with the user before filing only when the agent surfaced the issue
+   (not when the user explicitly asked to file).
 3. If the conversation does not contain a clear bug or actionable improvement,
    say so and ask the user what they want to file.
 4. Always use the section structure from the matching `.github/ISSUE_TEMPLATE/`
