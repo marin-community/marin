@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
+from marin.evaluation.evaluators.harbor_evaluator import HARBOR_FORWARDED_ENV_KEYS, _env_vars_from_keys
 from marin.evaluation.run import evaluate
 from marin.execution.remote import remote
 from marin.execution.executor import (
@@ -427,6 +428,9 @@ def evaluate_harbor(
     """
 
     # Harbor config goes in engine_kwargs
+    # Forward env vars through engine_kwargs so they survive serialization across
+    # fray job boundaries (Ray runtime env vars don't propagate to nested sub-jobs).
+    forwarded_env_vars = _env_vars_from_keys(HARBOR_FORWARDED_ENV_KEYS)
     engine_kwargs = {
         "harbor_config": {
             "dataset": dataset,
@@ -435,7 +439,8 @@ def evaluate_harbor(
             "n_concurrent": n_concurrent,
             "env": env,
             "agent_kwargs": agent_kwargs or {},
-        }
+        },
+        "forwarded_env_vars": forwarded_env_vars,
     }
 
     # When model_path is set, the evaluator launches a fray sub-job for vLLM serving

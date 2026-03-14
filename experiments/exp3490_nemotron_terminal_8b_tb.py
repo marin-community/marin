@@ -6,7 +6,7 @@ Reproduce NemotronTerminal-8B on Terminal-Bench 2.0 (13.0 +/- 2.2)
 
 Model: nvidia/Nemotron-Terminal-8B (SFT from Qwen3-8B)
 Agent: Terminus 2 (model-agnostic reference agent from Terminal-Bench 2.0)
-Benchmark: Terminal-Bench 2.0 (89 tasks)
+Benchmark: Terminal-Bench 2.0 (89 tasks) or TBLite (100-task curated subset)
 Paper: https://arxiv.org/abs/2602.21193
 
 Tracked in: https://github.com/marin-community/marin/issues/3490
@@ -24,9 +24,13 @@ Usage (Ray Cluster with Daytona):
         --no_wait \
         -- python experiments/exp3490_nemotron_terminal_8b_tb.py
 
+    For TBLite (open-thoughts/OpenThoughts-TBLite):
+        Add --env_vars HARBOR_DATASET_LITE true to the command above.
+
 Environment variables:
     - ENV_TYPE: "local" | "daytona" | "e2b" | "modal" (default: "daytona")
-    - HARBOR_MAX_INSTANCES: number of tasks to run (default: all 89)
+    - HARBOR_DATASET_LITE: "true" | "1" to use TBLite instead of TB2 (default: false)
+    - HARBOR_MAX_INSTANCES: number of tasks to run (default: all)
     - HARBOR_N_CONCURRENT: number of parallel trials (default: 100)
     - HARBOR_AGENT_KWARGS_JSON: JSON dict forwarded to Harbor AgentConfig.kwargs
 """
@@ -69,8 +73,14 @@ def _optional_json_dict_from_env(var_name: str) -> dict:
     return parsed
 
 
-DATASET = "terminal-bench"
-VERSION = "2.0"
+USE_TBLITE = os.environ.get("HARBOR_DATASET_LITE", "").strip().lower() in {"true", "1", "yes"}
+
+if USE_TBLITE:
+    DATASET = "open-thoughts/OpenThoughts-TBLite"
+    VERSION = "hf"
+else:
+    DATASET = "terminal-bench"
+    VERSION = "2.0"
 
 ENV_TYPE = os.environ.get("ENV_TYPE", "daytona")
 HARBOR_AGENT = "terminus-2"
@@ -79,14 +89,15 @@ MODEL_NAME = "nemotron-terminal-8b"
 MODEL_PATH = "gs://marin-us-central1/models/nvidia--Nemotron-Terminal-8B--main/"
 
 HARBOR_MAX_INSTANCES = _optional_int_from_env("HARBOR_MAX_INSTANCES", default=None)
-HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=100) or 1
+HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=25) or 1
 HARBOR_AGENT_KWARGS = _optional_json_dict_from_env("HARBOR_AGENT_KWARGS_JSON")
 
 # Sampling parameters from the model's generation_config.json to match the paper.
 # Terminus-2 defaults to temperature=0.7; the model was evaluated with temperature=0.6.
 HARBOR_AGENT_KWARGS.setdefault("temperature", 0.6)
 
-OUTPUT_DIR = os.path.join("evaluation", "harbor", "terminal-bench", MODEL_NAME, HARBOR_AGENT)
+DATASET_PATH_SEGMENT = DATASET.replace("/", "__") if USE_TBLITE else "terminal-bench"
+OUTPUT_DIR = os.path.join("evaluation", "harbor", DATASET_PATH_SEGMENT, MODEL_NAME, HARBOR_AGENT)
 
 if ENV_TYPE == "daytona" and not os.environ.get("DAYTONA_API_KEY"):
     logger.warning(
@@ -116,7 +127,8 @@ if __name__ == "__main__":
         version=VERSION,
         max_eval_instances=HARBOR_MAX_INSTANCES,
         resource_config=ResourceConfig.with_tpu("v5p-8"),
-        wandb_tags=["harbor", DATASET, "terminus-2", ENV_TYPE, MODEL_NAME, "vllm", "repro-3490"],
+        wandb_tags=["harbor", DATASET, "terminus-2", ENV_TYPE, MODEL_NAME, "vllm", "repro-3490"]
+        + (["tblite"] if USE_TBLITE else []),
         agent=HARBOR_AGENT,
         n_concurrent=HARBOR_N_CONCURRENT,
         env=ENV_TYPE,

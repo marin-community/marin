@@ -176,9 +176,15 @@ async def submit_and_track_job(
         f" -- {entrypoint}"
     )
 
+    # Prepend env var exports to the entrypoint so they're available in the driver's
+    # os.environ. Ray runtime_env.env_vars may not be injected into the driver process
+    # on all cluster configurations.
+    env_prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())
+    driver_entrypoint = f"{env_prefix} {entrypoint}" if env_prefix else entrypoint
+
     # Submit the job with runtime environment and entrypoint
     submission_id = client.submit_job(
-        entrypoint=entrypoint,
+        entrypoint=driver_entrypoint,
         runtime_env=runtime_dict,
         entrypoint_num_cpus=entrypoint_num_cpus,
         entrypoint_num_gpus=entrypoint_num_gpus,
@@ -295,7 +301,7 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to parse {marin_yaml}: {e}")
 
-    for key in ("HF_TOKEN", "WANDB_API_KEY"):
+    for key in ("HF_TOKEN", "WANDB_API_KEY", "DAYTONA_API_KEY"):
         if key not in env_vars and os.environ.get(key) is not None:
             env_vars[key] = os.environ[key]
 

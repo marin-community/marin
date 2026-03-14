@@ -92,6 +92,25 @@ def _warmup_vllm_server(server_url: str, model_name: str) -> None:
         logger.warning("vLLM warmup request failed after %.1fs: %s", elapsed, e)
 
 
+HARBOR_FORWARDED_ENV_KEYS = [
+    "WANDB_API_KEY",
+    "WANDB_ENTITY",
+    "WANDB_PROJECT",
+    "HF_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "DAYTONA_API_KEY",
+    "E2B_API_KEY",
+    "MODAL_API_KEY",
+    "TPU_CI",
+    "MARIN_PREFIX",
+    "MARIN_VLLM_MODE",
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+    "VLLM_TPU_SKIP_PRECOMPILE",
+]
+
+
 def _env_vars_from_keys(keys: list[str]) -> dict[str, str]:
     env_vars: dict[str, str] = {}
     for key in keys:
@@ -225,6 +244,12 @@ class HarborEvaluator(Evaluator):
             "env": str,            # "local", "daytona", "e2b"
         }
         """
+        # Inject forwarded env vars into os.environ so they propagate to fray sub-jobs.
+        # Ray runtime env vars from the outer job don't automatically reach nested sub-jobs.
+        forwarded_env_vars = (model.engine_kwargs or {}).get("forwarded_env_vars", {})
+        for key, value in forwarded_env_vars.items():
+            os.environ.setdefault(key, value)
+
         harbor_config = (model.engine_kwargs or {}).get("harbor_config", {})
 
         dataset = harbor_config.get("dataset", "aime")
@@ -314,25 +339,7 @@ class HarborEvaluator(Evaluator):
         mode_str = resolve_vllm_mode(None)
         pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
 
-        env_vars = _env_vars_from_keys(
-            [
-                "WANDB_API_KEY",
-                "WANDB_ENTITY",
-                "WANDB_PROJECT",
-                "HF_TOKEN",
-                "ANTHROPIC_API_KEY",
-                "OPENAI_API_KEY",
-                "DAYTONA_API_KEY",
-                "E2B_API_KEY",
-                "MODAL_API_KEY",
-                "TPU_CI",
-                "MARIN_PREFIX",
-                "MARIN_VLLM_MODE",
-                "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-                "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-                "VLLM_TPU_SKIP_PRECOMPILE",
-            ]
-        )
+        env_vars = _env_vars_from_keys(HARBOR_FORWARDED_ENV_KEYS)
         env_vars.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
         env_vars.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
         env_vars.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
