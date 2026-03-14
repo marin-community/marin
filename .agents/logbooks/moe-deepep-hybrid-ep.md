@@ -141,3 +141,96 @@
 - Next action:
   - Check whether the upstream fallback knobs (`DISABLE_SM90_FEATURES` / related JIT settings) actually apply to the hybrid runtime path.
   - If not, try a different CUDA minor/toolchain that is still consistent with the upstream Hopper support claim and rerun the same fixed H100x8 smoke command.
+
+### 2026-03-14 07:28 - Intranode RDMA hint skip unblocks the first DeepEP timing on H100x8
+- Hypothesis: the remaining `deep_ep.Buffer` blocker is local to the benchmark harness calling `get_rdma_buffer_size_hint(...)` even for an intranode-only H100x8 build with NVSHMEM intentionally disabled, so treating the RDMA buffer size as zero in that narrow case should allow the NVLink path to run.
+- Command:
+  ```bash
+  python -m py_compile lib/levanter/scripts/bench/bench_deepep_torch.py
+  uv run ruff check lib/levanter/scripts/bench/bench_deepep_torch.py
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel deep_ep \
+    --torch-cuda-arch-list '9.0' \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - harness change: skip `get_rdma_buffer_size_hint(...)` only when `world_size <= 8` and the exception contains `NVSHMEM is disable during compilation`
+  - pod ID: `iris-task-6fe87405ea0e`
+  - shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `topk=2`, `distribution=random`, `world_size=8`
+- Result:
+  - The patched harness now gets through `deep_ep.Buffer` initialization and completes the benchmark loop.
+  - First steady-state timing:
+    - `RESULT kernel=deep_ep ep=8 distribution=random topk=2 pass=dispatch_combine time_s=0.000463 tokens_per_s=70742659.76`
+- Interpretation:
+  - The intranode-only NVSHMEM assertion was a harness-level bring-up bug, not a proof that the DeepEP path itself was unusable on H100x8.
+  - We now have a working torch-side DeepEP baseline on the same CoreWeave H100x8 environment used earlier in this thread.
+- Next action:
+  - Probe Hybrid-EP again with the documented compatibility knobs.
+  - Add at least one more DeepEP datapoint from the `#3633`-style routing matrix.
+
+### 2026-03-14 07:31 - Hybrid-EP still fails under both documented compatibility knobs
+- Hypothesis: the upstream Hopper compatibility knobs might redirect Hybrid-EP away from the failing `cp_async_bulk` code path enough to make the runtime JIT compile succeed on H100.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --torch-cuda-arch-list '9.0' \
+    --disable-aggressive-ptx-instrs \
+    --warmup 1 \
+    --iters 3
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --torch-cuda-arch-list '9.0' \
+    --disable-sm90-features \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - pod IDs: `iris-task-5bb63a173954`, `iris-task-a1311a342cb2`
+  - shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `topk=2`, `distribution=random`, `world_size=8`
+- Result:
+  - Both runs rebuild and import `deep_ep` successfully, then fail at the same Hybrid-EP runtime JIT stage.
+  - In both cases the failure remains:
+    - `error: no instance of overloaded function "cuda::ptx::cp_async_bulk" matches the argument list`
+    - `RuntimeError: Failed to compile the code, compile command: /usr/local/cuda/bin/nvcc -std=c++17 -gencode=arch=compute_90,code=sm_90 ...`
+- Interpretation:
+  - Neither `DISABLE_AGGRESSIVE_PTX_INSTRS=1` nor `DISABLE_SM90_FEATURES=1` changes the failing code path for this H100 / CUDA 12.8 Hybrid-EP JIT.
+  - The current Hybrid-EP blocker looks upstream/toolchain-specific rather than something Marin can paper over with the documented environment flags.
+- Next action:
+  - Record the negative result in the public issue and branch snapshot.
+  - Continue using `deep_ep` as the only working torch-side GPU datapath until Hybrid-EP has a different upstream fix or toolchain recommendation.
+
+### 2026-03-14 07:34 - Second DeepEP datapoint lands on a `#3633`-style routed case
+- Hypothesis: after the intranode bring-up fix, the same DeepEP path should continue to run under a more stressed routing case drawn from the earlier GPU comparison matrix.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel deep_ep \
+    --torch-cuda-arch-list '9.0' \
+    --distribution runs \
+    --topk 8 \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - pod ID: `iris-task-1fc16e6ee7e2`
+  - shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `topk=8`, `distribution=runs`, `world_size=8`
+- Result:
+  - Second steady-state timing:
+    - `RESULT kernel=deep_ep ep=8 distribution=runs topk=8 pass=dispatch_combine time_s=0.001047 tokens_per_s=31285893.37`
+- Interpretation:
+  - The torch-side DeepEP path is not limited to a single smoke case; it also runs on a routed case closer to the prior GPU comparison matrix.
+  - Confidence is still exploratory because the table is small, but the experiment has now moved beyond pure bring-up into actual GPU measurement.
+- Next action:
+  - Commit and push the harness update and launcher knobs.
+  - Update `#3641` with the first working timing table and the Hybrid-EP failure status.

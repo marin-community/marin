@@ -153,7 +153,15 @@ def _make_deepep_buffer(deep_ep, *, group, hidden: int, world_size: int, num_sms
     num_rdma_bytes = 0
     for config in (deep_ep.Buffer.get_dispatch_config(world_size), deep_ep.Buffer.get_combine_config(world_size)):
         num_nvl_bytes = max(config.get_nvl_buffer_size_hint(hidden_bytes, world_size), num_nvl_bytes)
-        num_rdma_bytes = max(config.get_rdma_buffer_size_hint(hidden_bytes, world_size), num_rdma_bytes)
+        try:
+            num_rdma_bytes = max(config.get_rdma_buffer_size_hint(hidden_bytes, world_size), num_rdma_bytes)
+        except RuntimeError as exc:
+            # An intranode H100x8 build can still use the NVLink path even when
+            # DeepEP was compiled without NVSHMEM internode support.
+            if world_size <= 8 and "NVSHMEM is disable during compilation" in str(exc):
+                num_rdma_bytes = max(0, num_rdma_bytes)
+            else:
+                raise
     return deep_ep.Buffer(group, num_nvl_bytes, num_rdma_bytes)
 
 
