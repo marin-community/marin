@@ -19,7 +19,10 @@ defineProps<{
         &larr; {{ backLabel ?? 'Back' }}
       </RouterLink>
     </div>
-    <h2 class="text-xl font-semibold text-text font-mono mb-6">{{ title }}</h2>
+    <div class="flex items-center gap-2 mb-6">
+      <h2 class="text-xl font-semibold text-text font-mono">{{ title }}</h2>
+      <slot name="title-suffix" />
+    </div>
     <slot />
   </div>
 </template>

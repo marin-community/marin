@@ -33,6 +33,15 @@ const tasks = ref<TaskStatus[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
+const copiedName = ref(false)
+
+async function copyJobName() {
+  const name = job.value?.name
+  if (!name) return
+  await navigator.clipboard.writeText(name)
+  copiedName.value = true
+  setTimeout(() => { copiedName.value = false }, 1500)
+}
 
 // -- Fetch --
 
@@ -210,6 +219,24 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
 
 <template>
   <PageShell :title="pageTitle" back-to="/" back-label="Jobs">
+    <template v-if="job?.name" #title-suffix>
+      <button
+        class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-text-muted hover:text-text
+               border border-surface-border rounded hover:bg-surface-raised transition-colors"
+        title="Copy job name"
+        @click="copyJobName"
+      >
+        <svg v-if="copiedName" class="w-3 h-3 text-status-success" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+        </svg>
+        <svg v-else class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+        </svg>
+        {{ copiedName ? 'Copied' : 'Copy name' }}
+      </button>
+    </template>
+
     <!-- Subtitle (job ID when name differs) -->
     <p v-if="subtitle" class="text-sm text-text-secondary font-mono -mt-4 mb-6">
       {{ subtitle }}
