@@ -330,16 +330,16 @@ def test_group_by_with_none_and_filter(zephyr_ctx):
 
 
 def test_group_by_non_vortex_serializable(zephyr_ctx):
-    """Shuffle with items that Vortex/Arrow cannot serialize falls back to pickle.
+    """Shuffle with items that Vortex/Arrow cannot serialize uses pickle-in-parquet.
 
-    Uses SimpleNamespace (not a dict) so Arrow conversion fails and the pickle
-    fallback is exercised.  SimpleNamespace is a stdlib type importable by any
-    worker process, avoiding module-resolution issues with test-local classes.
+    Uses frozenset (not Arrow-serializable) so the pickle envelope path is
+    exercised. Items are serialized via cloudpickle into a binary ``__pickle__``
+    column inside Parquet, avoiding the N*M pickle file blowup.
     """
 
     from zephyr.writers import infer_arrow_schema
 
-    # NOTE: confirm frozenset is not arrow-serializable type to trigger the fallback path
+    # NOTE: confirm frozenset is not arrow-serializable type to trigger the pickle envelope path
     with pytest.raises(pa.lib.ArrowInvalid, match="Could not convert frozenset"):
         infer_arrow_schema([{"foo": frozenset([1, 2, 3])}])
 
@@ -359,6 +359,27 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     assert len(results) == 2
     assert results[0] == {"key": "a", "value": frozenset([1, 2, 3, 4])}
     assert results[1] == {"key": "b", "value": frozenset([2])}
+
+
+def test_parquet_disk_chunk_pickle_roundtrip(tmp_path):
+    """ParquetDiskChunk with is_pickled=True round-trips non-Arrow-serializable items."""
+    import pyarrow.parquet as pq
+
+    from zephyr.execution import (
+        ParquetDiskChunk,
+        _make_pickle_envelope,
+    )
+
+    items = [frozenset([1, 2]), frozenset([3, 4, 5])]
+    envelope = _make_pickle_envelope(items, target_shard=0, chunk_idx=0)
+    batch = pa.RecordBatch.from_pylist(envelope)
+
+    path = str(tmp_path / "test.parquet")
+    pq.write_table(pa.Table.from_batches([batch]), path)
+
+    chunk = ParquetDiskChunk(path=path, filter_shard=0, filter_chunk=0, count=2, is_pickled=True)
+    result = chunk.read()
+    assert result == items
 
 
 def test_group_by_schema_evolution(zephyr_ctx):
