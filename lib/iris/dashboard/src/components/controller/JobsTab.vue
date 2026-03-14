@@ -22,6 +22,14 @@ const SORT_FIELD_MAP: Record<string, string> = {
 type SortField = 'date' | 'name' | 'state' | 'failures' | 'preemptions'
 type SortDir = 'asc' | 'desc'
 
+const copiedJob = ref<string | null>(null)
+
+async function copyJobName(name: string) {
+  await navigator.clipboard.writeText(name)
+  copiedJob.value = name
+  setTimeout(() => { copiedJob.value = null }, 1500)
+}
+
 const EXPANDED_JOBS_KEY = 'iris.controller.expandedJobs'
 
 // -- State --
@@ -359,7 +367,7 @@ function sortIndicator(field: SortField): string {
         <tr
           v-for="node in flattenedJobs"
           :key="node.job.jobId"
-          class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+          class="group/row border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
         >
           <!-- Name -->
           <td
@@ -381,6 +389,20 @@ function sortIndicator(field: SortField): string {
               >
                 {{ node.depth > 0 ? getLeafName(node.job.name) : (node.job.name || 'unnamed') }}
               </RouterLink>
+              <button
+                v-if="node.job.name"
+                class="ml-1 text-text-muted hover:text-text opacity-0 group-hover/row:opacity-100 transition-opacity"
+                title="Copy job name"
+                @click.stop="copyJobName(node.job.name)"
+              >
+                <svg v-if="copiedJob === node.job.name" class="w-3.5 h-3.5 text-status-success" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                </svg>
+                <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                </svg>
+              </button>
             </span>
           </td>
 
