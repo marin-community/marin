@@ -677,6 +677,7 @@ def test_region_constrained_routing(smoke_cluster, capabilities):
 # ============================================================================
 
 
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="py-spy ptrace can segfault worker threads in CI")
 def test_profile_running_task(smoke_cluster):
     """Profile a running task, verify data returned."""
     if smoke_cluster.is_cloud:

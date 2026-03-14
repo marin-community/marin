@@ -47,27 +47,6 @@ IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _build_dashboard():
-    """Build the Vue dashboard once per test session so dashboard tests can render.
-
-    Uses fcntl to serialize across pytest-xdist workers so concurrent
-    ``npm ci`` / ``npm run build`` invocations don't corrupt each other.
-    """
-    import fcntl
-    import tempfile
-
-    lock_path = Path(tempfile.gettempdir()) / "iris-dashboard-build.lock"
-    with open(lock_path, "w") as lock_fd:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        try:
-            from iris.cli.build import _ensure_dashboard_dist
-
-            _ensure_dashboard_dist()
-        finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-
-
 def pytest_addoption(parser):
     """Cloud mode CLI options for running smoke tests against remote clusters."""
     parser.addoption("--iris-config", default=None, help="Path to cluster config YAML for cloud mode")
