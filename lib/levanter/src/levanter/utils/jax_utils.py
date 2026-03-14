@@ -121,19 +121,6 @@ def parameter_count(model: PyTree):
     return sum(x.size for x in leaves.values())
 
 
-def move_tree_to_memory_kind(tree: T, *, memory_kind: str) -> T:
-    """Move all JAX array leaves in a tree to a target sharding memory kind."""
-
-    def _move_leaf(leaf):
-        if isinstance(leaf, jax.Array):
-            if leaf.sharding.memory_kind == memory_kind:
-                return leaf
-            return jax.device_put(leaf, leaf.sharding.with_memory_kind(memory_kind))
-        return leaf
-
-    return jax.tree.map(_move_leaf, tree)
-
-
 _sync_counter = 0
 
 
