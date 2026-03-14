@@ -1,0 +1,10 @@
+version: v2
+managed:
+  enabled: true
+plugins:
+  - remote: buf.build/protocolbuffers/python:v33.4
+    out: src/iris/rpc
+  - remote: buf.build/protocolbuffers/pyi:v33.4
+    out: src/iris/rpc
+  - remote: buf.build/connectrpc/python
+    out: src/iris/rpc
