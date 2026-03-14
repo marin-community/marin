@@ -41,3 +41,30 @@
   - Neither v5 method beats `fixed_best_schedule`, so rollout remains unjustified.
 - Next action:
   - keep `dense_direct_v5` as the new offline baseline and focus future work on closing the gap to `fixed_best_schedule`.
+
+### 2026-03-14 17:10 - v6/v7/v8 follow-ups against fixed schedule
+- Hypothesis:
+  - v6: the remaining gap comes from overusing StarCoder in phase 0; cap phase 0 and train only on three-phase targets.
+  - v7: preserve the best historical prefix and only adapt later phases.
+  - v8: use a conservative phase-2 adapter on top of the fixed best schedule.
+- Command:
+  - `uv run python /tmp/eval_v6_candidates.py`
+  - `uv run python /tmp/eval_v7_fixed_prefix.py`
+  - `uv run python /tmp/eval_v8_conservative.py`
+  - `uv run python /tmp/eval_v8_conservative_hi.py`
+- Result:
+  - best v6 candidate: `three_only_capped_hybrid_v6`
+    - `fqe_value_mean = 4.1002`
+    - `dr_value_mean = 4.1781`
+  - best v7 candidate: `fixed_phase0_plus_hybrid_v7`
+    - `fqe_value_mean = 4.1026`
+    - `dr_value_mean = 4.1869`
+  - best v8 conservative candidate: `conservative_phase2_direct_m0.10`
+    - `fqe_value_mean = 4.1201`
+    - `dr_value_mean = 4.4583`
+- Interpretation:
+  - phase-0 control was part of the issue, but fixing it alone was not enough.
+  - the conservative phase-2 adapter gets very close to the fixed schedule and even exceeds it on mean DR, but still misses on mean FQE.
+  - none of these variants beats `fixed_best_schedule` on both FQE and DR, so none is rollout-ready.
+- Next action:
+  - keep `dense_direct_v5` as the best replacement for the legacy planner, and treat conservative/fixed-prefix adapters as promising but still incomplete branches.
