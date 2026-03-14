@@ -515,6 +515,68 @@ def test_gcp_list_slices_preserves_vm_creation_timestamp():
         assert listed_by_id[handle.slice_id].created_at.epoch_ms() == expected_epoch_ms
 
 
+def test_gcp_terminate_passes_async_flag():
+    """All gcloud delete commands use --async to avoid blocking the caller."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        # TPU slice
+        tpu_cfg = config_pb2.SliceConfig(
+            name_prefix="iris-tpu",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-8",
+        )
+        tpu_cfg.gcp.zone = "us-central2-b"
+        tpu_cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+        tpu_handle = platform.create_slice(tpu_cfg)
+
+        # VM slice
+        vm_cfg = config_pb2.SliceConfig(
+            name_prefix="iris-cpu-vm",
+            num_vms=1,
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        )
+        vm_cfg.gcp.zone = "us-central2-b"
+        vm_cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
+        vm_cfg.gcp.machine_type = "n2-standard-4"
+        vm_handle = platform.create_slice(vm_cfg)
+
+        # Standalone VM
+        vm_config = config_pb2.VmConfig(name="test-ctrl")
+        vm_config.gcp.zone = "us-central2-b"
+        vm_config.gcp.machine_type = "n2-standard-4"
+        standalone = platform.create_vm(vm_config)
+
+        fake.recorded_commands.clear()
+
+        tpu_handle.terminate()
+        vm_handle.terminate()
+        standalone.terminate()
+
+    delete_cmds = [cmd for cmd in fake.recorded_commands if "delete" in cmd]
+    assert len(delete_cmds) == 3
+    for cmd in delete_cmds:
+        assert "--async" in cmd, f"Missing --async in delete command: {cmd}"
+
+
+def test_gcp_best_effort_delete_passes_async_flag():
+    """_best_effort_delete_tpu/vm use --async to avoid blocking."""
+    fake = FakeGcloud()
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    platform = GcpPlatform(gcp_config, label_prefix="iris")
+
+    with unittest.mock.patch("iris.cluster.platform.gcp.subprocess.run", side_effect=fake):
+        platform._best_effort_delete_tpu("orphan-tpu", "us-central2-b")
+        platform._best_effort_delete_vm("orphan-vm", "us-central2-b")
+
+    delete_cmds = [cmd for cmd in fake.recorded_commands if "delete" in cmd]
+    assert len(delete_cmds) == 2
+    for cmd in delete_cmds:
+        assert "--async" in cmd, f"Missing --async in delete command: {cmd}"
+
+
 # =============================================================================
 # Section 3: Manual-Specific Tests
 #
