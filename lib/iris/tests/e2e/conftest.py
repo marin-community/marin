@@ -51,9 +51,6 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 def _ensure_dashboard_built():
     """Build dashboard assets once per session so dashboard tests have content to render."""
     dashboard_dir = IRIS_ROOT / "dashboard"
-    dist_dir = dashboard_dir / "dist"
-    if dist_dir.exists() and any(dist_dir.iterdir()):
-        return
     if not (dashboard_dir / "package.json").exists():
         return
     if shutil.which("npm") is None:
