@@ -608,6 +608,8 @@ class IrisClient:
         timeout: Duration | None = None,
         user: str | None = None,
         reservation: list[ReservationEntry] | None = None,
+        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -716,6 +718,8 @@ class IrisClient:
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
                 reservation=reservation_proto,
+                preemption_policy=preemption_policy,
+                existing_job_policy=existing_job_policy,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:
