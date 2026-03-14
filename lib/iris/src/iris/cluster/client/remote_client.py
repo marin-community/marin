@@ -71,6 +71,8 @@ class RemoteClusterClient:
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
         reservation: cluster_pb2.ReservationConfig | None = None,
+        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -92,7 +94,8 @@ class RemoteClusterClient:
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
-            fail_if_exists=False,
+            preemption_policy=preemption_policy,
+            existing_job_policy=existing_job_policy,
         )
         if self._bundle_id:
             request.bundle_id = self._bundle_id

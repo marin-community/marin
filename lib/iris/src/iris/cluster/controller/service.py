@@ -590,19 +590,29 @@ class ControllerServiceImpl:
 
         existing_job = _read_job(self._db, job_id)
         if existing_job:
-            # By default (fail_if_exists=False), replace finished jobs
-            if existing_job.is_finished() and not request.fail_if_exists:
+            policy = request.existing_job_policy
+            if policy == cluster_pb2.EXISTING_JOB_POLICY_ERROR:
+                raise ConnectError(
+                    Code.ALREADY_EXISTS,
+                    f"Job {job_id} already exists (state={cluster_pb2.JobState.Name(existing_job.state)})",
+                )
+            elif policy == cluster_pb2.EXISTING_JOB_POLICY_KEEP:
+                if not existing_job.is_finished():
+                    return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
+                # Job finished, replace it (KEEP only preserves running jobs)
+                self._transitions.remove_finished_job(job_id)
+            elif policy == cluster_pb2.EXISTING_JOB_POLICY_RECREATE:
+                if not existing_job.is_finished():
+                    self._transitions.cancel_job(job_id, "Replaced by new submission")
+                self._transitions.remove_finished_job(job_id)
+            elif existing_job.is_finished():
+                # Default/UNSPECIFIED: replace finished jobs
                 logger.info(
                     "Replacing finished job %s (state=%s) with new submission",
                     job_id,
                     cluster_pb2.JobState.Name(existing_job.state),
                 )
                 self._transitions.remove_finished_job(job_id)
-            elif existing_job.is_finished():
-                raise ConnectError(
-                    Code.ALREADY_EXISTS,
-                    f"Job {job_id} already exists (state={cluster_pb2.JobState.Name(existing_job.state)})",
-                )
             else:
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 

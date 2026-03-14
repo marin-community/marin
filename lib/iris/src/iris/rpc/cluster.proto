@@ -530,6 +530,19 @@ message WorkerMetadata {
   string git_hash = 42;
 }
 
+enum JobPreemptionPolicy {
+  JOB_PREEMPTION_POLICY_UNSPECIFIED = 0;
+  JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN = 1;
+  JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN = 2;
+}
+
+enum ExistingJobPolicy {
+  EXISTING_JOB_POLICY_UNSPECIFIED = 0;
+  EXISTING_JOB_POLICY_ERROR = 1;
+  EXISTING_JOB_POLICY_KEEP = 2;
+  EXISTING_JOB_POLICY_RECREATE = 3;
+}
+
 // ============================================================================
 // CONTROLLER SERVICE MESSAGES
 // ============================================================================
@@ -592,6 +605,9 @@ message Controller {
     // Resource reservation. When set, the autoscaler pre-provisions capacity
     // and the reserving job is held pending until the reservation is satisfied.
     ReservationConfig reservation = 30;
+
+    JobPreemptionPolicy preemption_policy = 31;
+    ExistingJobPolicy existing_job_policy = 32;
   }
 
   message LaunchJobResponse {
