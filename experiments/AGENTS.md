@@ -21,7 +21,6 @@ Start with `/AGENTS.md`; this file adds experiment-specific guidance.
 - Read behavior: check local `marin_prefix()` first; if missing, scan other Marin regional buckets, copy to local once, then serve locally.
 - Copying uses a distributed lock so concurrent workers do not duplicate the same transfer.
 - Write behavior: writes go directly to the local prefix.
-- There is a cumulative copy budget (`MIRROR_COPY_LIMIT_BYTES`, default 10 GB) that can raise `MirrorCopyLimitExceeded`.
-- Separate from `mirror://`, direct cross-region GCS reads are guarded at 100 MB in `CrossRegionGuardedFS`.
+- Both `mirror://` copies and direct cross-region GCS reads share a single process-global `TransferBudget` (default 10 GB) that raises `TransferBudgetExceeded` when exhausted.
 
-Implementation references: `lib/iris/src/iris/mirror_fs.py`, `lib/iris/src/iris/marin_fs.py`, and `lib/marin/src/marin/execution/executor.py`.
+Implementation references: `lib/iris/src/iris/marin_fs.py` and `lib/marin/src/marin/execution/executor.py`.
