@@ -58,10 +58,15 @@ def _outputs_exist(root: Path, output_globs: list[str]) -> bool:
 
 
 def _needs_rebuild(root: Path, source_globs: list[str], output_globs: list[str]) -> bool:
-    """Return True if any source file is newer than the oldest output file."""
+    """Return True if any source file is strictly newer than the oldest output file.
+
+    Uses a 60-second tolerance because zip archives (used by task bundles)
+    can extract files with slightly different timestamps, causing spurious
+    rebuilds.
+    """
     source_newest = _newest_mtime(root, source_globs)
     output_oldest = _oldest_mtime(root, output_globs)
-    return source_newest > output_oldest
+    return source_newest > output_oldest + 60.0
 
 
 class CustomBuildHook(BuildHookInterface):
