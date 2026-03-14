@@ -333,8 +333,8 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     """Shuffle with items that Vortex/Arrow cannot serialize uses pickle-in-parquet.
 
     Uses frozenset (not Arrow-serializable) so the pickle envelope path is
-    exercised. Items are serialized via cloudpickle into a ``__pickle__``
-    binary column inside Parquet, avoiding the N*M pickle file blowup.
+    exercised. Items are serialized via cloudpickle into a binary ``__pickle__``
+    column inside Parquet, avoiding the N*M pickle file blowup.
     """
 
     from zephyr.writers import infer_arrow_schema

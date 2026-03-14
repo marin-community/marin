@@ -236,7 +236,7 @@ def _make_pickle_envelope(items: list, target_shard: int, chunk_idx: int) -> lis
         {
             _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
             _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
-            _ZEPHYR_SHUFFLE_PICKLED_COL: pickle.dumps(item),
+            _ZEPHYR_SHUFFLE_PICKLED_COL: cloudpickle.dumps(item),
         }
         for item in items
     ]
