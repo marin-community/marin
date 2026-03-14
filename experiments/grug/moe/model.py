@@ -457,6 +457,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation="pallas_tpu" if jax.default_backend() == "tpu" else None,
         )
         # Keep router metrics raw and apply coefficients only at the final
         # objective composition step (same separation as MaxText/Megatron).
