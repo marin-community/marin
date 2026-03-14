@@ -1,51 +1,68 @@
 ---
 name: iris-controller-debug
-description: Debug Iris controller state using the live SQLite database. Use when investigating stuck jobs, resource leaks, scheduling failures, or worker issues.
+description: Debug Iris controller state using offline checkpoint snapshots and the process RPC. Use when investigating stuck jobs, resource leaks, scheduling failures, or worker issues.
 ---
 
 # Skill: Iris Controller Debug
 
-Debug Iris controller issues by querying the live SQLite database on the controller VM.
+Debug Iris controller issues by downloading a checkpoint snapshot and querying it offline. Use the `/system/process` RPC (via `iris process`) for profiling — no SSH required.
 
 Read first: @lib/iris/AGENTS.md
 
 ## Access Pattern
 
-The DB is inside a Docker container on a GCP VM. Write a Python script locally and pipe it via stdin:
+**Always debug offline against a checkpoint copy — never run queries against the live controller DB.**
+The controller writes hourly SQLite checkpoints to remote storage. Download the latest checkpoint and query it locally:
 
 ```bash
-cat /tmp/query.py | uv run ./scripts/gcp-ssh <VM_IP> -- docker exec -i <CONTAINER> python3 -
-```
+# Download the latest checkpoint (production Marin cluster)
+gcloud storage cp gs://marin-us-central2/iris/marin/state/controller-state/latest.sqlite3 /tmp/controller.sqlite3
 
-where `query.py` opens the DB:
-
-```python
+# Query offline
+python3 -c "
 import sqlite3
-conn = sqlite3.connect("/var/cache/iris/controller/controller.sqlite3")
+conn = sqlite3.connect('/tmp/controller.sqlite3')
 conn.row_factory = sqlite3.Row
 # ... queries ...
+"
 ```
 
-**Find the container ID** with `docker ps` on the VM — look for the iris controller container.
+If you need a fresher snapshot, ask the user to trigger a checkpoint via the controller API or wait for the next hourly cycle. **Do not SSH into the controller VM to run scripts against the live database** — a slow query can stall the controller and break other users.
 
 **Production defaults** (verify at session start):
-- VM: `iris-controller-marin`, zone `us-central1-a`, project `hai-gcp-models`
-- Controller DB: `/var/cache/iris/controller/controller.sqlite3`
-- Log store DB: `/var/cache/iris/controller/logs.sqlite3` (can be multi-GB)
+- Checkpoint location: `gs://marin-us-central2/iris/marin/state/controller-state/latest.sqlite3`
+- Timestamped checkpoints: `gs://marin-us-central2/iris/marin/state/controller-state/checkpoint-<epoch_ms>.sqlite3`
 
 ## Profiling
 
-Use `py-spy` for live thread dumps and CPU profiling:
+Use the `iris process` CLI which talks to the controller via the `/system/process` RPC — no SSH required:
 
 ```bash
-# Stack dump (instant snapshot of all threads)
-uv run ./scripts/gcp-ssh <VM_IP> -- docker exec <CONTAINER> uvx py-spy dump --pid 1
+# Thread dump (instant snapshot of all threads)
+uv run iris process profile threads
 
-# CPU profile (writes speedscope JSON)
-uv run ./scripts/gcp-ssh <VM_IP> -- docker exec <CONTAINER> uvx py-spy record --pid 1 --duration 5 --format speedscope --output /tmp/profile.json
+# CPU profile (writes speedscope JSON, 10s default)
+uv run iris process profile cpu --duration 10 --output /tmp/profile.speedscope.json
+
+# Memory profile (writes flamegraph HTML)
+uv run iris process profile mem --duration 10 --output /tmp/profile.html
+
+# Target a specific worker instead of the controller
+uv run iris process profile threads --worker <WORKER_ID>
+
+# Process status (host info, resource usage)
+uv run iris process status
 ```
 
-Controller logs are on stderr of the container (`docker logs <CONTAINER>`). Grep for `Slow ` to find timing warnings emitted by the `slow_log` helper.
+Controller logs can also be fetched via the CLI:
+
+```bash
+# Tail controller logs
+uv run iris process logs --max-lines 200
+
+# Filter for slow-path warnings
+uv run iris process logs --substring "Slow "
+```
 
 ## Schema
 
@@ -101,6 +118,7 @@ These are real issues in the codebase that will mislead you if you don't know ab
 
 ## Rules
 
-- **NEVER modify the database without explicit user approval.** Read-only queries first; writes only as a last resort with user consent. Always run a verification query after any write.
+- **NEVER run scripts or queries against the live controller DB.** Always work offline against a downloaded checkpoint. A slow or locking query on the live DB can stall the controller and break other users.
+- **NEVER SSH into the controller VM to profile.** Use `iris process profile` which talks to the controller via the `/system/process` RPC.
+- **NEVER modify the database without explicit user approval.** Read-only queries on the local checkpoint copy only; writes only as a last resort with user consent on a fresh checkpoint.
 - **NEVER restart the controller or Docker container** — this kills all running jobs cluster-wide.
-- Always verify VM name, zone, and container ID at the start of each session.
