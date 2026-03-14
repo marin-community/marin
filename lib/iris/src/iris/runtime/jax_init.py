@@ -96,13 +96,16 @@ def initialize_jax(
     if task_index == 0:
         bound_port = job_info.ports.get("jax", port)
         coordinator = f"{job_info.advertise_host}:{bound_port}"
-        # Initialize first so the gRPC coordinator is listening before we
-        # advertise the address to other tasks via the endpoint registry.
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        # Register the endpoint first so other tasks can discover the
+        # coordinator address. jax.distributed.initialize() blocks until
+        # all processes connect, so registering after would deadlock.
+        # JAX's internal gRPC retry handles the brief window between
+        # endpoint registration and the coordinator starting to listen.
         endpoint_id = ctx.registry.register(endpoint_name, coordinator)
         # Best-effort cleanup: if the process crashes, the controller's
         # cascade delete on task cleanup handles endpoint removal.
         atexit.register(ctx.registry.unregister, endpoint_id)
+        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
     else:
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
         jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
