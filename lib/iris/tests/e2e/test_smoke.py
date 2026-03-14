@@ -591,7 +591,10 @@ def test_cancel_job_releases_resources(smoke_cluster):
 
     Regression test for #3553.
     """
-    heavy_cpu = 900  # close to the 1000-core local worker capacity (ResourceSpec.cpu is in cores)
+    # Use most of a single worker's CPU so the followup job can't schedule
+    # until the heavy job is cancelled. Local workers have 1000 cores, cloud
+    # TPU VMs have 128 — pick a value that works in both modes.
+    heavy_cpu = 8 if smoke_cluster.is_cloud else 900
 
     job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
     smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
