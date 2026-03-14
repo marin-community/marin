@@ -167,7 +167,12 @@ message LikeFilter {
 message NullCheckFilter {
   string column = 1;
   string table = 2;
-  bool is_null = 3;   // true = IS NULL, false = IS NOT NULL
+  NullOp op = 3;
+}
+
+enum NullOp {
+  NULL_IS_NULL = 0;
+  NULL_IS_NOT_NULL = 1;
 }
 
 message BetweenFilter {
@@ -286,6 +291,7 @@ New file: `lib/iris/src/iris/cluster/controller/query.py`
 """Structured query executor for the generic query API."""
 
 import json
+import re
 from dataclasses import dataclass
 
 from iris.cluster.controller.db import ControllerDB
@@ -301,7 +307,7 @@ USER_TABLES: dict[str, set[str]] = {
         "job_id", "user_id", "parent_job_id", "root_job_id", "depth",
         "state", "submitted_at_ms", "root_submitted_at_ms",
         "started_at_ms", "finished_at_ms", "error", "exit_code",
-        "num_tasks", "is_reservation_holder",
+        "num_tasks", "is_reservation_holder", "scheduling_deadline_epoch_ms",
     },
     "tasks": {
         "task_id", "job_id", "task_index", "state", "error", "exit_code",
@@ -347,7 +353,15 @@ ADMIN_TABLES: dict[str, set[str]] = {
         "revoked_at_ms",
         # key_hash intentionally excluded — never exposed via query API
     },
-    "scaling_groups": {"name", "updated_at_ms"},
+    "scaling_groups": {
+        "name", "consecutive_failures", "backoff_until_ms",
+        "last_scale_up_ms", "last_scale_down_ms",
+        "quota_exceeded_until_ms", "quota_reason", "updated_at_ms",
+    },
+    "slices": {
+        "slice_id", "scale_group", "lifecycle", "worker_ids",
+        "created_at_ms", "last_active_ms", "error_message",
+    },
     "tracked_workers": {
         "worker_id", "slice_id", "scale_group", "internal_address",
     },
@@ -376,7 +390,6 @@ BLOB_COLUMNS = {
     ("tasks", "resource_usage_proto"),
     ("worker_resource_history", "snapshot_proto"),
     ("dispatch_queue", "payload_proto"),
-    ("scaling_groups", "snapshot_proto"),
     ("task_profiles", "profile_data"),
 }
 
@@ -503,7 +516,7 @@ def _compile_filter(
         nc = f.null_check
         alias = nc.table or default_alias
         col = _resolve_column(nc.column, alias, alias_to_table, allowed)
-        op = "IS NULL" if nc.is_null else "IS NOT NULL"
+        op = "IS NULL" if nc.op == cluster_pb2.NULL_IS_NULL else "IS NOT NULL"
         return f"{col} {op}", []
 
     if which == "between":
@@ -539,7 +552,6 @@ def execute_query(
     if len(query.joins) > MAX_JOINS:
         raise ValueError(f"Maximum {MAX_JOINS} joins allowed")
     join_clauses: list[str] = []
-    join_params: list[object] = []
     for j in query.joins:
         if not j.table.name or j.table.name not in allowed:
             raise ValueError(f"Join table {j.table.name!r} is not accessible")
@@ -632,11 +644,25 @@ def execute_query(
 
     sql = f"SELECT {select_sql} FROM {from_table.name} {primary_alias}{joins_sql}{where_sql}{group_sql}{order_sql}{limit_sql}"
 
-    # Execute under snapshot
+    # Build the base query (without LIMIT/OFFSET) for counting total matching rows.
+    base_sql = f"FROM {from_table.name} {primary_alias}{joins_sql}{where_sql}{group_sql}"
+
+    # Execute under snapshot.
+    # TODO: Add an `execute_raw` method to QuerySnapshot during implementation
+    # so we don't access the private _conn attribute:
+    #   def execute_raw(self, sql: str, params: tuple) -> sqlite3.Cursor
     with db.snapshot() as q:
-        cursor = q._conn.execute(sql, tuple(params + join_params))
+        cursor = q._conn.execute(sql, tuple(params))
         col_descriptions = cursor.description
         raw_rows = cursor.fetchall()
+
+        # Compute pre-LIMIT total count on the first page so clients know
+        # how many rows match the query for pagination purposes.
+        total_count = len(raw_rows)
+        if query.offset == 0 and limit > 0:
+            count_sql = f"SELECT COUNT(*) {base_sql}"
+            count_cursor = q._conn.execute(count_sql, tuple(params))
+            total_count = count_cursor.fetchone()[0]
 
     # Build column metadata
     columns = [
@@ -647,7 +673,7 @@ def execute_query(
     # Encode rows as JSON arrays
     rows = [json.dumps([_encode_cell(row[i]) for i in range(len(columns))]) for row in raw_rows]
 
-    return QueryResult(columns=columns, rows=rows, total_count=len(rows))
+    return QueryResult(columns=columns, rows=rows, total_count=total_count)
 
 
 def execute_raw_query(
@@ -659,13 +685,17 @@ def execute_raw_query(
     if not stripped.upper().startswith("SELECT"):
         raise ValueError("Only SELECT statements are allowed")
 
-    # Block dangerous patterns
+    # Reject multi-statement execution
+    if ";" in stripped:
+        raise ValueError("Multiple SQL statements are not allowed")
+
+    # Block dangerous keywords using word-boundary matching
     upper = stripped.upper()
     for keyword in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "ATTACH", "DETACH"):
-        # Check for keyword as a standalone word (not inside a string or column name)
-        if f" {keyword} " in f" {upper} ":
+        if re.search(rf"\b{keyword}\b", upper):
             raise ValueError(f"Forbidden SQL keyword: {keyword}")
 
+    # TODO: Use QuerySnapshot.execute_raw() once added (see execute_query above)
     with db.snapshot() as q:
         cursor = q._conn.execute(stripped)
         col_descriptions = cursor.description
@@ -716,7 +746,8 @@ def _encode_cell(value: object) -> object:
 | Table | Excluded Columns | Reason |
 |-------|-----------------|--------|
 | `api_keys` | `key_hash` | Contains credential material. `key_hash` is **never** exposed. |
-| `scaling_groups` | `snapshot_proto` (BLOB) | Autoscaler internals. |
+| `scaling_groups` | — | Autoscaler internals. All scalar columns exposed after migration 0003 normalization. |
+| `slices` | — | Slice lifecycle tracking (added in migration 0003). |
 | `tracked_workers` | — | Autoscaler worker tracking. |
 | `reservation_claims` | — | Reservation state. |
 | `dispatch_queue` | `payload_proto` (BLOB) | Pending worker dispatches. |
@@ -727,9 +758,13 @@ def _encode_cell(value: object) -> object:
 | `schema_migrations` | — | Migration state. |
 | `meta` | — | Key-value metadata. |
 
+### Excluded Tables
+
+The `logs` table is intentionally excluded from both allowlists. Log access goes through the in-memory `LogStore` API via `GetTaskLogs` and `FetchLogs` RPCs, not through direct SQL queries. The `logs` table is a persistence backing store and its schema is an implementation detail of the log store.
+
 ### BLOB Column Limitation
 
-Columns storing serialized protobufs (`request_proto`, `metadata_proto`, `resource_snapshot_proto`, `resource_usage_proto`, `snapshot_proto`, `payload_proto`, `profile_data`) are excluded from query results. They contain binary data that is meaningless as SQL values. The dedicated RPCs (`GetJobStatus`, `GetWorkerStatus`, etc.) remain the correct way to retrieve deserialized protobuf data.
+Columns storing serialized protobufs (`request_proto`, `metadata_proto`, `resource_snapshot_proto`, `resource_usage_proto`, `payload_proto`, `profile_data`) are excluded from query results. They contain binary data that is meaningless as SQL values. The dedicated RPCs (`GetJobStatus`, `GetWorkerStatus`, etc.) remain the correct way to retrieve deserialized protobuf data.
 
 ## 6. Raw SQL Bypass
 
@@ -1088,7 +1123,7 @@ iris rpc controller execute-raw-query --sql '...'
 
 1. **Should `ExecuteQuery` support `HAVING` clauses?** — `HAVING` filters after `GROUP BY` aggregation. Useful for queries like "users with more than 10 running jobs". Could be added as a `QueryFilter having` field on `QueryGroupBy`. Recommend: defer to Phase 2, add if dashboard needs it.
 
-2. **Should results include row count before LIMIT?** — The current design includes `total_count` on `QueryResponse`. This requires a `SELECT COUNT(*)` of the same query without LIMIT, doubling query cost. Recommend: only compute when `offset == 0` and `limit > 0`, so the first page knows total pages.
+2. **Should results include row count before LIMIT?** — The implementation computes `total_count` via a `SELECT COUNT(*)` of the same query (without LIMIT) only when `offset == 0` and `limit > 0`, so the first page knows total pages without doubling cost on subsequent pages.
 
 3. **Should `QueryResponse.rows` use a more structured format?** — JSON-encoded string arrays are simple but require client-side parsing. Alternatives: repeated `QueryRow` with `repeated QueryValue` fields (more protobuf-native), or a columnar format. Recommend: start with JSON arrays for simplicity; the overhead is negligible for <1000 rows.
 
