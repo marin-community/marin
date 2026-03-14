@@ -37,22 +37,29 @@ Current state:
   - the repo-local benchmark script can be staged into the pod reliably
   - `pip install --no-build-isolation /tmp/DeepEP` succeeds
   - `import deep_ep` succeeds and `HybridEPBuffer` is available
-- There are still no steady-state timings because the failures have moved into the kernel paths:
-  - `deep_ep.Buffer` still asserts on `get_rdma_buffer_size_hint(...)` when the build is intranode-only with NVSHMEM disabled
-  - `HybridEPBuffer` reaches its runtime JIT, but the JIT compile fails on H100 / CUDA 12.8 with `cuda::ptx::cp_async_bulk` overload mismatches in `hybrid_ep_backend.cuh`
-- Upstream DeepEP docs still claim Hopper support on CUDA `12.3+`, so the current Hybrid-EP failure looks like a narrower toolchain/kernel compatibility issue rather than a generic unsupported-environment case.
+- The repo-local harness now has a narrow intranode fallback for `deep_ep.Buffer`: when `world_size <= 8` and the build was compiled without NVSHMEM, it skips the RDMA size hint instead of treating that assertion as fatal.
+- That change produces the first steady-state DeepEP timings on H100x8 (`exploratory` confidence):
+  - `deep_ep`, `distribution=random`, `topk=2`: `time_s=0.000463`, `tokens_per_s=70,742,659.76`
+  - `deep_ep`, `distribution=runs`, `topk=8`: `time_s=0.001047`, `tokens_per_s=31,285,893.37`
+- Hybrid-EP is still blocked before any timing loop runs:
+  - baseline H100 / CUDA 12.8 runtime JIT fails with `cuda::ptx::cp_async_bulk` overload mismatches in `hybrid_ep_backend.cuh`
+  - `DISABLE_AGGRESSIVE_PTX_INSTRS=1` does not change the failure
+  - `DISABLE_SM90_FEATURES=1` does not change the failure
+- Upstream DeepEP docs still claim Hopper support on CUDA `12.3+`, so the current Hybrid-EP result still looks like a narrower toolchain/kernel compatibility issue rather than a generic unsupported-environment case.
 
 ## Decision Log
 
 - 2026-03-13: Treat this as a torch-kernel benchmark experiment first, not a production JAX integration project.
 - 2026-03-13: Start with intranode H100x8 DeepEP / Hybrid-EP measurements before any multi-node or JAX-bridge work.
+- 2026-03-14: Accept a harness-side intranode RDMA hint skip for exploratory DeepEP bring-up on `world_size <= 8`; keep Hybrid-EP blocked until the runtime JIT compiles on Hopper.
 
 ## Negative Results
 
 - 2026-03-13: the default Iris task image (`ghcr.io/marin-community/iris-task:latest`) cannot build DeepEP because it has no CUDA toolkit (`CUDA_HOME` unset, `nvcc` missing).
-- 2026-03-14: the direct CUDA-devel pod path fixes the environment blocker, but `deep_ep.Buffer` still asserts when NVSHMEM is disabled for the intranode-only build.
+- 2026-03-14: `deep_ep.Buffer` initially asserted on `get_rdma_buffer_size_hint(...)` with `NVSHMEM is disable during compilation`; this turned out to be a harness-level intranode bring-up bug rather than a hard stop for the NVLink path.
 - 2026-03-14: `HybridEPBuffer` runtime JIT on H100 / CUDA 12.8 fails with `cuda::ptx::cp_async_bulk` overload mismatches before any timing loop runs.
+- 2026-03-14: `DISABLE_AGGRESSIVE_PTX_INSTRS=1` and `DISABLE_SM90_FEATURES=1` do not change the Hybrid-EP JIT failure on H100 / CUDA 12.8.
 
 ## Conclusion
 
-Pending. The experiment has advanced from task-image failure to kernel-specific failure, but there is still no valid timing table yet.
+Partial success. The torch-side benchmark path is now validated for DeepEP on CoreWeave H100x8 and yields real dispatch/combine timings, but Hybrid-EP remains blocked by an upstream/runtime JIT compile incompatibility on Hopper that is not resolved by the documented compatibility flags.

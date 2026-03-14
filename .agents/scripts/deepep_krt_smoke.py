@@ -29,6 +29,15 @@ def _entrypoint(argv: list[str], *, workdir_files: dict[str, bytes]) -> cluster_
 
 
 def _build_run_script(args: argparse.Namespace, *, bench_file_b64: str) -> str:
+    install_env_exports = []
+    if args.torch_cuda_arch_list:
+        install_env_exports.append(f'export TORCH_CUDA_ARCH_LIST="{args.torch_cuda_arch_list}"')
+    if args.disable_sm90_features:
+        install_env_exports.append("export DISABLE_SM90_FEATURES=1")
+    if args.disable_aggressive_ptx_instrs:
+        install_env_exports.append("export DISABLE_AGGRESSIVE_PTX_INSTRS=1")
+    install_env_block = "\n".join(install_env_exports)
+
     bench_cmd = ""
     if args.run_bench:
         bench_cmd = f"""
@@ -68,8 +77,11 @@ ORIGINAL_PYTHONPATH="${{PYTHONPATH:-}}"
 export PYTHONPATH="/tmp/no_nvshmem${{ORIGINAL_PYTHONPATH:+:$ORIGINAL_PYTHONPATH}}"
 export CUDA_HOME=/usr/local/cuda
 export PATH=/usr/local/cuda/bin:$PATH
-export TORCH_CUDA_ARCH_LIST=9.0
 export MAX_JOBS=8
+{install_env_block}
+env | grep -E \
+  '^(TORCH_CUDA_ARCH_LIST|DISABLE_SM90_FEATURES|DISABLE_AGGRESSIVE_PTX_INSTRS|CUDA_HOME|MAX_JOBS)=' \
+  | sort || true
 /opt/conda/bin/python - <<'PY'
 import shutil
 import tarfile
@@ -185,6 +197,9 @@ def _parse_args() -> argparse.Namespace:
         choices=("deep_ep", "hybrid_ep", "hybrid_ep_permute", "all"),
         default="all",
     )
+    parser.add_argument("--torch-cuda-arch-list", default="9.0")
+    parser.add_argument("--disable-sm90-features", action="store_true")
+    parser.add_argument("--disable-aggressive-ptx-instrs", action="store_true")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iters", type=int, default=5)
     return parser.parse_args()
