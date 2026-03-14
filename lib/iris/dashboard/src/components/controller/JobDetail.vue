@@ -35,6 +35,22 @@ const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
 const copiedName = ref(false)
 const taskSearch = ref('')
+const stateFilter = ref('')
+
+type SortColumn = 'task' | 'state' | 'mem' | 'cpu' | 'duration'
+type SortDir = 'asc' | 'desc'
+const sortColumn = ref<SortColumn | null>(null)
+const sortDir = ref<SortDir>('asc')
+
+function toggleSort(col: SortColumn) {
+  if (sortColumn.value === col) {
+    if (sortDir.value === 'asc') sortDir.value = 'desc'
+    else { sortColumn.value = null; sortDir.value = 'asc' }
+  } else {
+    sortColumn.value = col
+    sortDir.value = 'asc'
+  }
+}
 
 async function copyJobName() {
   const name = job.value?.name
@@ -170,14 +186,62 @@ const diskDisplay = computed(() => {
   return formatBytes(parseInt(db, 10))
 })
 
+const STATE_SORT_ORDER: Record<string, number> = {
+  running: 0, building: 1, assigned: 2, pending: 3,
+  succeeded: 4, killed: 5, failed: 6, worker_failed: 7, unschedulable: 8,
+}
+
+function taskDurationMs(t: TaskStatus): number {
+  const started = timestampMs(t.startedAt)
+  if (!started) return 0
+  const ended = timestampMs(t.finishedAt) || Date.now()
+  return ended - started
+}
+
+const availableStates = computed(() => {
+  const seen = new Set<string>()
+  for (const t of tasks.value) seen.add(stateToName(t.state))
+  return [...seen].sort((a, b) => (STATE_SORT_ORDER[a] ?? 99) - (STATE_SORT_ORDER[b] ?? 99))
+})
+
 const filteredTasks = computed(() => {
   const q = taskSearch.value.toLowerCase().trim()
-  if (!q) return tasks.value
-  return tasks.value.filter(t =>
-    (t.workerId?.toLowerCase().includes(q))
-    || taskIndex(t.taskId).includes(q)
-    || stateDisplayName(t.state).toLowerCase().includes(q)
-  )
+  const sf = stateFilter.value
+  const result = (!q && !sf)
+    ? [...tasks.value]
+    : tasks.value.filter(t => {
+        if (sf && stateToName(t.state) !== sf) return false
+        if (!q) return true
+        return (t.workerId?.toLowerCase().includes(q))
+          || taskIndex(t.taskId).includes(q)
+      })
+
+  const col = sortColumn.value
+  if (!col) return result
+
+  const dir = sortDir.value === 'asc' ? 1 : -1
+  result.sort((a, b) => {
+    let cmp = 0
+    switch (col) {
+      case 'task':
+        cmp = parseInt(taskIndex(a.taskId)) - parseInt(taskIndex(b.taskId))
+        break
+      case 'state':
+        cmp = (STATE_SORT_ORDER[stateToName(a.state)] ?? 99) - (STATE_SORT_ORDER[stateToName(b.state)] ?? 99)
+        break
+      case 'mem':
+        cmp = (parseInt(a.resourceUsage?.memoryMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryMb ?? '0') || 0)
+        break
+      case 'cpu':
+        cmp = (a.resourceUsage?.cpuPercent ?? 0) - (b.resourceUsage?.cpuPercent ?? 0)
+        break
+      case 'duration':
+        cmp = taskDurationMs(a) - taskDurationMs(b)
+        break
+    }
+    return cmp * dir
+  })
+  return result
 })
 
 // -- Profiling --
@@ -352,13 +416,21 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">
           Tasks
         </h3>
-        <input
-          v-if="tasks.length > 0"
-          v-model="taskSearch"
-          type="text"
-          placeholder="Filter tasks..."
-          class="px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent w-64"
-        />
+        <div v-if="tasks.length > 0" class="flex items-center gap-2">
+          <select
+            v-model="stateFilter"
+            class="px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            <option value="">All states</option>
+            <option v-for="s in availableStates" :key="s" :value="s">{{ stateDisplayName(s) }}</option>
+          </select>
+          <input
+            v-model="taskSearch"
+            type="text"
+            placeholder="Search workers..."
+            class="px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent w-64"
+          />
+        </div>
       </div>
 
       <EmptyState v-if="tasks.length === 0" message="No tasks" />
@@ -380,13 +452,23 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </colgroup>
           <thead>
             <tr class="border-b border-surface-border">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Task</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('task')">
+                Task <span v-if="sortColumn === 'task'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('state')">
+                State <span v-if="sortColumn === 'state'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Worker</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Mem</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">CPU</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('mem')">
+                Mem <span v-if="sortColumn === 'mem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('cpu')">
+                CPU <span v-if="sortColumn === 'cpu'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Started</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Duration</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('duration')">
+                Duration <span v-if="sortColumn === 'duration'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              </th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Exit</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Error</th>
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Profiling</th>
