@@ -344,7 +344,19 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       <EmptyState v-if="tasks.length === 0" message="No tasks" />
 
       <div v-else class="overflow-x-auto">
-        <table class="w-full border-collapse">
+        <table class="w-full border-collapse table-fixed">
+          <colgroup>
+            <col class="w-[5%]" />
+            <col class="w-[10%]" />
+            <col class="w-[20%]" />
+            <col class="w-[7%]" />
+            <col class="w-[6%]" />
+            <col class="w-[14%]" />
+            <col class="w-[10%]" />
+            <col class="w-[5%]" />
+            <col class="w-[13%]" />
+            <col class="w-[10%]" />
+          </colgroup>
           <thead>
             <tr class="border-b border-surface-border">
               <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Task</th>
@@ -379,7 +391,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   {{ task.pendingReason }}
                 </div>
               </td>
-              <td class="px-3 py-2 text-[13px]">
+              <td class="px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
                 <RouterLink
                   v-if="task.workerId"
                   :to="'/worker/' + encodeURIComponent(task.workerId)"
