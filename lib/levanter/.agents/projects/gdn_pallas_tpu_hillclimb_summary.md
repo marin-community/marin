@@ -39,32 +39,43 @@ Current mainline target order:
   - outward layer-level manual-backward boundary increased shell tax and slowed the full step
 - outward `P3` block-boundary family: attempted and rejected
   - outward block custom-VJP / scan-switch / shard-map / custom-partitioning / no-checkpoint variants all failed
-- `G1`: first stronger branch-local ownership attempt attempted and rejected
-  - staged pre/kernel/post branch ownership removed visible old train-path buckets but massively increased the real branch-local shell budgets and slowed the full step
-  - future `G1` work needs a materially smaller, const-cleaner, and sharding-cleaner branch cut; do not spend another turn on a broad branch wrapper that just renames the shell tax
+- broad `G1` branch-wrapper family: attempted and rejected
+  - staged pre/kernel/post, whole-branch, and array-only wrappers all re-emitted shell under branch-local wrapper names and slowed the full step
+- `D1`: completed as a partial diagnostic lead
+  - narrower head-first branch layout handling slightly improved AD/layout behavior and step time
+  - but it did not reduce `dispatch_shard_shell_delta_ms`, and xprof `IDLE` worsened
 
-## G1 Definition
+## D2 Definition
 
-Use the hybrid-specific GDN branch inside a GDN-bearing decoder layer as the optimization unit.
+Use a smaller branch-core island inside the hybrid-specific GDN branch as the optimization unit.
 
 Required properties:
 
-- bespoke backward/custom VJP at the branch boundary
-- explicit sharding contract
-- explicit layout contract
+- explicit branch-core sharding contract
+- explicit branch-core layout contract
 - reuse current GDN leaf kernels initially
-- the branch starts at normalized hidden state plus mask and ends at the branch contribution before the generic decoder shell resumes
-- do not own the generic MLP / residual shell in the first prototype
+- smaller cut than the rejected broad `G1` wrappers
+- no new custom VJP on the first `D2` attempt
+- the cut should begin below the generic branch wrapper and end before the generic decoder shell resumes
+
+## A2 Definition
+
+Only after a positive `D2` on the same cut:
+
+- keep the `D2` forward/sharding cut fixed
+- move AD/manual-backward ownership onto that already-proven cut
+- reject immediately if dispatch/shard regresses
 
 ## Anti-Goals
 
 Do not spend mainline budget on:
 
 - another `S3` refresh without tooling changes
-- another near-identical `A3` retry
-- another outward `P3` block wrapper on the same generic block/module shell
+- another outward `A3`/`P3` retry
+- another broad `G1` wrapper that owns forward/backward/sharding all at once
 - same-boundary GDN solver/tape/kernel tweaks
 - CE side-arms unless attribution points back to CE again
+- checkpoint/remat toggles as a mainline strategy
 
 ## Source Of Truth
 

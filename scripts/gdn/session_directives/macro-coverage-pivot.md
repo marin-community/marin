@@ -1,16 +1,17 @@
-# Session Directive: Coverage Pivot To G1
+# Session Directive: Coverage Pivot To D2
 
 Coverage status:
 - `S3` complete
 - `A3` complete and rejected
 - outward `P3` block-boundary family complete and rejected
+- broad `G1` branch-wrapper family complete and rejected
+- `D1` complete as a partial diagnostic lead
 
 Next required optimization slot:
-- `G1`
+- `D2`
 
 Diagnostic allowance:
 - `S3` only when attribution tooling changes
-- `A1` only when the backward/AD contract is materially different from the rejected outward attempts
-- `D1` only when the sharding/collective ownership experiment is isolated from forward math changes
-- `G2` only when the chosen lower branch cut is const-clean enough to lower as one primitive
+- `A2` only after a positive `D2` on the same cut
+- `G2` only when the chosen lower branch-core cut is const-clean enough and a prior `D2` proved the sharding cut helps
 - CE work only when fresh attribution re-implicates CE

@@ -40,12 +40,9 @@ Therefore:
 
 - same-boundary GDN Pallas kernel hillclimbing stays demoted
 - broad `HackableDecoderLayer/*` accounting is too coarse to be the main optimization target
-- the obvious outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries are also demoted after the `A3/P3` failures
-- the next serious systems prototype is the hybrid-specific GDN branch inside a GDN-bearing decoder layer
-- that boundary must own:
-  - forward boundary
-  - backward/custom-VJP contract
-  - sharding/layout contract
+- the obvious outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries are demoted after the `A3/P3` failures
+- the first broad `G1` branch-wrapper family is also demoted after repeated regressions
+- the next serious mainline move is a smaller branch-core sharding diagnostic, not another broad wrapper or manual-backward move
 
 ## Mainline Metrics
 
@@ -99,6 +96,7 @@ Classification rules:
 - `train_path_budget_ms down, shell delta flat/up` => wrong-boundary / renamed-bucket progress
 - `shell delta down, xprof_idle_attributed_ms flat/up` => waiting/serialization still dominant
 - `old bucket names disappear but canonical shell delta grows` => not a win
+- `AD/layout improves but dispatch/shard stays flat/up` => diagnostic lead only, not a mainline win
 
 ## Coverage Sequencing
 
@@ -111,26 +109,36 @@ Current coverage status:
   - outward layer-level manual-backward boundary increased shell tax badly
 - outward `P3` block-boundary family: complete and rejected
   - outward block custom-VJP / scan-switch / shard-map / custom-partitioning / no-checkpoint variants all failed
+- broad `G1` family: complete and rejected
+  - broad branch wrappers re-emitted shell under new branch-local names and slowed the step
+- `D1`: partial positive lead only
+  - it improved AD/layout behavior somewhat, but not the main dispatch/shard budget
 
 Next required optimization slot:
 
-- `G1`
+- `D2`
 
-`G1` definition:
+`D2` definition:
 
-- single hybrid-specific GDN branch inside a GDN-bearing decoder layer
-- bespoke backward/custom VJP at the branch boundary
-- explicit sharding contract
-- explicit layout contract
+- smaller branch-core sharding/layout ownership cut inside the hybrid-specific GDN branch
 - reuse current GDN leaf kernels first
-- do not own the generic MLP / residual shell in the first prototype
+- no new custom VJP on the first `D2` pass
+- carry forward head-first layout when it helps
+- the goal is to move `dispatch_shard_shell_delta_ms` first
+
+`A2` definition:
+
+- only after a positive `D2` on the same cut
+- keep the `D2` forward/sharding cut fixed
+- change only AD/manual-backward ownership on that proven cut
 
 Do not spend mainline budget on:
 
 - another `S3` refresh just to reconfirm the same ranking
-- another `A3` retry with only minor boundary edits
-- another outward `P3` block wrapper on the same generic block/module shell
+- another outward `A3` or `P3` retry
+- another broad `G1` wrapper
 - same-boundary GDN tape/kernel tweaks
+- checkpoint/remat toggles as a mainline strategy
 - CE micro-tuning unless fresh attribution points back to CE
 
 ## Required Validation
@@ -146,6 +154,7 @@ When code changes:
 Full TPU parity expectation:
 
 - `88 passed, 2 skipped` on the current inventory
+- `90 passed, 2 skipped` if the iteration intentionally adds one new branch-layout parity test
 
 Treat the old incomplete remote setup as invalid evidence if it silently skipped HF parity because `torch` or `transformers` were missing.
 
@@ -203,8 +212,9 @@ uv run python scripts/gdn/gdnctl.py xprof-compare-runs \
 
 A good iteration is one of:
 
-- a `G1` prototype that improves the full step and shell-delta budgets
-- a materially different boundary experiment that improves the full step and shell-delta budgets
+- a `D2` diagnostic that materially reduces `dispatch_shard_shell_delta_ms` and improves the step
+- an `A2` follow-up on a winning `D2` cut that reduces `ad_wrapper_shell_delta_ms` without giving back dispatch/shard wins
+- a lower primitive experiment justified by a prior positive `D2` on the same const-clean cut
 - a tooling-attribution change that materially improves understanding and is explicitly marked diagnostic
 
 Everything else should be logged and rejected cleanly.

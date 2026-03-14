@@ -17,4 +17,5 @@ Use coarse `decoder_layer_shell_budget_ms` only as an upper bound, not as the ma
 
 Immediate implication:
 - do not optimize the broad `HackableDecoderLayer/*` or `HackableDecoderBlock/*` shell directly,
-- optimize the hybrid-specific GDN branch boundary that generates the positive shell deltas.
+- do not optimize another broad GDN-branch wrapper directly,
+- optimize the smaller branch-core sharding cut that generates the positive shell deltas.

@@ -15,14 +15,17 @@ Primary objective:
 
 Current regime:
 - same-boundary GDN kernel hillclimbing is demoted
-- the obvious outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries are also demoted
+- the obvious outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries are demoted
+- the first broad lower `G1` branch-wrapper family is also demoted
 - `dispatch_shard_shell_delta_ms` is the mainline budget
 - `ad_wrapper_shell_delta_ms` is the second budget
 - `interaction_remainder_ms` and `xprof_idle_attributed_ms` are safety checks
 - `S3` is complete
 - `A3` is complete and rejected
 - outward `P3` block-boundary variants are complete and rejected
-- the next required optimization slot is `G1`
+- the first broad `G1` family is complete and rejected
+- `D1` is complete as a partial diagnostic lead only
+- the next required optimization slot is `D2`
 
 Repo context:
 - GDN implementation: `lib/levanter/src/levanter/layers/gated_deltanet.py`
@@ -35,14 +38,14 @@ Required behavior:
 1. Read the current summary and latest log entries.
 2. Generate a shortlist of 2-3 candidates with upside and risk.
 3. Pick exactly one slot:
-   - `G1` single-GDN-branch primitive with bespoke backward + explicit sharding/layout contract
-   - `G2` lower primitive / `custom_partitioning` branch attempt only if the chosen `G1` cut is const-clean enough
-   - `D1` dispatch-shell diagnostic only if you can isolate sharding/collective ownership without changing the forward math
-   - `A1` AD-boundary diagnostic only if you can move the manual backward inward to the hybrid-specific branch
+   - `D2` branch-core sharding diagnostic with no new AD boundary
+   - `A2` branch-core AD-boundary diagnostic only if there is already a positive `D2` on the same cut
+   - `G2` lower primitive / `custom_partitioning` branch-core attempt only if the chosen `D2` cut is const-clean enough and a prior `D2` proved the sharding cut helps
    - `U` bounded CE side-arm only if fresh attribution re-implicates CE
 4. Classify the change as exactly one of:
-   - `hybrid branch boundary`
-   - `branch diagnostic`
+   - `branch-core sharding diagnostic`
+   - `branch-core AD diagnostic`
+   - `branch-core primitive`
    - `CE backend`
 5. Keep CE fixed unless this is an explicit CE side-arm:
    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu`
@@ -62,40 +65,43 @@ Required behavior:
 
 Slots:
 
-### G1) Mainline prototype
-- Optimize only the hybrid-specific GDN branch inside a GDN-bearing decoder layer.
-- The branch starts from normalized hidden state plus mask and ends at the branch contribution before the generic decoder shell resumes.
-- The branch must own:
-  - forward boundary
-  - backward/custom VJP contract
-  - sharding contract
-  - layout contract
-- Reuse current GDN leaf kernels first.
-- Do not wrap the whole `HackableDecoderLayer` or `HackableDecoderBlock` again.
+### D2) Mainline sharding diagnostic
+- Optimize a smaller branch-core island inside the hybrid-specific GDN branch.
+- This cut must be smaller than the rejected broad `G1` wrappers.
+- It should own only:
+  - branch-core sharding contract
+  - branch-core layout contract
+  - the existing GDN leaf-kernel island or the smallest deterministic subgraph around it
+- Do not introduce a new custom VJP or broad branch wrapper in `D2`.
+- Carry forward the `D1` head-first layout idea where applicable.
 - Reject the prototype if:
   - `dispatch_shard_shell_delta_ms` stays flat/up,
-  - or `ad_wrapper_shell_delta_ms` grows,
   - or `interaction_remainder_ms` grows,
   - or `xprof_idle_attributed_ms` stays flat/up when available,
-  - even if old bucket names disappear.
+  - even if `ad_wrapper_shell_delta_ms` improves.
 
-### G2) Lower primitive / custom-partitioned branch
-- Only after `G1` exists in a clean array-only / const-clean form.
-- Use this slot to test whether the branch, unlike the mixed block, can lower as one primitive.
-- If the chosen cut still carries closed-over const arrays, do not spend the iteration here.
+### A2) AD-boundary diagnostic
+- Only after a positive `D2` on the same branch-core cut.
+- Keep the `D2` forward/sharding cut fixed.
+- Change only the AD/manual-backward ownership on that already-proven cut.
+- Reject if:
+  - `dispatch_shard_shell_delta_ms` regresses versus the winning `D2`,
+  - or `ad_wrapper_shell_delta_ms` stays flat/up,
+  - or `xprof_idle_attributed_ms` grows.
 
-### D1) Dispatch-shell diagnostic
-- Keep the branch forward math fixed.
-- Change only sharding / collective ownership.
-- The purpose is to move `dispatch_shard_shell_delta_ms`, not to change AD.
-
-### A1) AD-boundary diagnostic
-- Keep the branch forward structure fixed.
-- Move the manual backward boundary inward to the hybrid-specific branch.
-- Do not propose another outward layer-level or block-level manual-VJP wrapper.
+### G2) Lower primitive / custom-partitioned branch-core cut
+- Only after `D2` proves the smaller sharding cut helps and the chosen cut is const-clean enough.
+- Do not spend the iteration here if the cut still closes over const arrays or would simply rebuild wrapper shell under a new name.
 
 ### U) CE side-arm
 - Only if fresh evidence points back to CE.
+
+Hard anti-goals:
+- do not propose another outward `HackableDecoderLayer` boundary
+- do not propose another outward `HackableDecoderBlock` wrapper
+- do not propose another broad `G1` branch wrapper that owns forward + backward + sharding all at once
+- do not spend a mainline pass on attribution refresh unless tooling changed
+- do not spend mainline budget on checkpoint/remat toggles
 
 Required metrics in the writeup:
 - `CE backend selected`
@@ -130,7 +136,7 @@ Required metrics in the writeup:
 
 Correctness gate:
 - TPU correctness is only considered complete when run through the `gdnctl` remote TPU wrapper with `torch` and `transformers` installed.
-- Expected full parity slice is `88 passed, 2 skipped` on the current inventory.
+- Expected full parity slice is `88 passed, 2 skipped` on the current inventory, or `90 passed, 2 skipped` when a new branch-layout test is intentionally added.
 
 Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
@@ -141,8 +147,8 @@ Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py lint-log`
 
 Definition of done:
-- one validated `G1` result, or
-- one explicitly diagnostic `G2` / `D1` / `A1` run that is justified by the current shell evidence,
+- one validated `D2` result, or
+- one explicitly diagnostic `A2` / `G2` / `U` run that is justified by the current shell evidence,
 - plus TPU correctness when code changed,
 - plus profiling,
 - plus a log entry with canonical shell-delta metrics.
