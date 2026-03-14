@@ -1221,3 +1221,78 @@
 - Next action:
   - continue monitoring to terminal state; if smoke succeeds, run the `ac-dense` trial and then add whole-image
     comparison against `symbols` and `coeff_k64`.
+
+### 2026-03-13 22:55 - Switched stalled AC-dense smoke from Ray to Iris; trial launched
+
+- Trigger:
+  - user requested kill + switch to Iris after prolonged Ray scheduler stall
+- Actions:
+  - stopped Ray smoke job:
+    `ray-run-dlwh-launch-20260313-224035` (`STOPPED`)
+  - launched Iris smoke in `europe-west4-a`:
+    `/dlwh/jpeg-tokenizer-ac-dense-smoke-iris1`
+    with `JPEG_TOKENIZER_RUN_ID=jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-smoke-iris1`
+  - Iris smoke took over stale executor state by lock takeover and dispatched:
+    `grug-train-jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-smoke-iris1`
+- Smoke outcome:
+  - terminal status in executor output:
+    `SUCCESS`
+  - W&B run:
+    `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-smoke-iris1`
+  - key logs:
+    - eval loss `8.296 -> 1.848 -> 1.717`
+    - checkpoint saved at
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-smoke-666ade/checkpoints/step-32`
+- Follow-on launch:
+  - submitted Iris trial:
+    `/dlwh/jpeg-tokenizer-ac-dense-trial-iris1`
+    with `JPEG_TOKENIZER_RUN_ID=jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-trial-iris1`
+  - command path:
+    `... --run_only '["tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-trial"]'`
+- Next action:
+  - monitor `/dlwh/jpeg-tokenizer-ac-dense-trial-iris1` to terminal; then run whole-image representation eval with
+    AC-dense included.
+
+### 2026-03-14 13:52 - Perturbation-sensitivity head-to-head succeeded (whole-image deltas)
+
+- Goal:
+  - strengthen the "token meaning stability" claim with a direct local-corruption test, not just clean NLL ordering
+- Changes:
+  - added evaluator:
+    `scripts/jpeg_tokenizer/evaluate_representation_perturbation.py`
+  - bug fix after first failed submit:
+    - set `use_explicit_mesh_axes=True` and call `trainer.initialize()` in the evaluator's `TrainerConfig` path
+- Command:
+  - `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --cpu 1.0 --memory 24GB --extra marin:tpu --tpu v6e-8 --region europe-west4 --zone europe-west4-a --job-name jpeg-tokenizer-perturbation-r1-iris1 -- uv run python scripts/jpeg_tokenizer/evaluate_representation_perturbation.py --run-spec name=coeff_k64_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial-7e3e81/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0,sliding_window=4096 --run-spec name=ac_dense_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-trial-97d827/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_ac_dense_whole_libjpeg_v0,sliding_window=4096 --run-spec name=symbols_whole_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0,sliding_window=4096 --batch-size 8 --max-examples 512 --perturb-fractions 0.5 --horizons 1,64,512,4096 --output-dir gs://marin-eu-west4/tokexplore/jpeg-tokenizer-perturbation-r1-iris1`
+- Result:
+  - Iris job: `/dlwh/jpeg-tokenizer-perturbation-r1-iris1` -> `JOB_STATE_SUCCEEDED`
+  - output:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-perturbation-r1-iris1/{summary.md,perturbation_eval.json}`
+  - clean whole-image loss (`mean bits/image`, 512 validation examples):
+    - `coeff_k64_exact`: `121,938.50`
+    - `ac_dense_exact`: `122,106.54`
+    - `symbols_whole_exact`: `128,364.00`
+  - single-token corruption at fraction `0.5` (`mean delta bits/image`):
+    - total delta:
+      - `coeff_k64_exact`: `13.86`
+      - `ac_dense_exact`: `13.62`
+      - `symbols_whole_exact`: `4.04`
+    - immediate delta (`h1`):
+      - `coeff_k64_exact`: `0.03`
+      - `ac_dense_exact`: `0.03`
+      - `symbols_whole_exact`: `0.29`
+    - short-horizon tail-only delta (`h64`, excluding immediate):
+      - `coeff_k64_exact`: `0.11`
+      - `ac_dense_exact`: `0.02`
+      - `symbols_whole_exact`: `0.72`
+- Interpretation:
+  - symbols are much more locally brittle to a one-token corruption than either coefficient stream (about `10x` immediate
+    and `6x-30x` short-tail amplification), which supports the "context-dependent token semantics hurt local robustness"
+    mechanism.
+  - `ac_dense` remains the most locally stable stream among the two JPEG-syntax-adjacent baselines tested (`ac_dense` vs
+    symbols) while preserving near-lossless clean whole-image loss.
+  - total-delta ordering differs (`coeff/ac_dense > symbols`), suggesting weaker but more diffuse long-tail coupling in
+    coefficient streams; this is a follow-up axis rather than a contradiction.
+- Next action:
+  - rerun perturbation with multiple positions (`0.25,0.5,0.75`) and token-type-conditioned corruption (especially
+    symbol control-token hits) to separate immediate desync brittleness from long-tail coupling.

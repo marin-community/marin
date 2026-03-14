@@ -434,12 +434,15 @@ def main(args: argparse.Namespace | None = None) -> None:
 
     trainer = TrainerConfig(
         id="jpeg-tokenizer-perturb-eval",
-        train_batch_size=parsed.batch_size,
-        num_train_steps=1,
         tracker=NoopConfig(),
+        use_explicit_mesh_axes=True,
         require_accelerator=True,
-        checkpointer=None,
+        train_batch_size=parsed.batch_size,
+        log_jaxprs=False,
+        log_xla_hlo=False,
+        shutdown_at_exit=False,
     )
+    trainer.initialize()
 
     results: list[dict[str, object]] = []
     for spec in run_specs:
