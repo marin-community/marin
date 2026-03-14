@@ -14,6 +14,7 @@ dependencies = [
     "zephyr",
     "haliax",
     "fray",
+    "iris",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,7 @@ members = [
     "lib/zephyr",
     "lib/haliax",
     "lib/fray",
+    "lib/iris",
 ]
 
 [tool.uv.sources]
@@ -45,6 +47,7 @@ haliax = { workspace = true }
 levanter = { workspace = true }
 marin = { workspace = true }
 zephyr = { workspace = true }
+iris = { workspace = true }
 # NOTE: dupekit is an optional dependency, it could be a workspace member but declaring
 # it as a path dependency makes it less likely to trigger unnecessary build
 dupekit = { path = "lib/dupekit", editable = true }
