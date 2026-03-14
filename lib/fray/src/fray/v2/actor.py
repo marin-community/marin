@@ -80,6 +80,31 @@ class ActorMethod(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class GroupHealth:
+    """Snapshot of an ActorGroup's health.
+
+    Provides structured information about the group's state so consumers
+    (e.g. coordinators) can implement nuanced failure policies without
+    polling ``is_done()`` in a separate thread.
+    """
+
+    ready: int = 0
+    """Number of actors currently available for RPC."""
+
+    pending: int = 0
+    """Actors not yet available (e.g. job starting up)."""
+
+    is_done: bool = False
+    """True when the underlying job has permanently terminated.
+
+    When True, no new actors will ever come online — the group is dead.
+    """
+
+    error: str | None = None
+    """Human-readable error message if ``is_done`` is True due to failure."""
+
+
 class ActorGroup(Protocol):
     """Group of actor instances with lifecycle tied to underlying jobs.
 
@@ -110,6 +135,15 @@ class ActorGroup(Protocol):
 
         When True, no new actors will ever come online — the group is dead.
         Local backends always return False (in-process actors don't independently fail).
+        """
+        ...
+
+    def get_health(self) -> GroupHealth:
+        """Return a snapshot of the group's health.
+
+        Provides structured information including ready/pending actor counts
+        and whether the underlying job has permanently terminated with an
+        optional error message.
         """
         ...
 

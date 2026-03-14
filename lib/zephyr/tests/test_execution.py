@@ -714,6 +714,100 @@ def test_execute_retries_on_coordinator_death(tmp_path):
     client.shutdown(wait=True)
 
 
+def test_wait_for_stage_fails_on_worker_group_death(actor_context, tmp_path):
+    """When the worker ActorGroup reports is_done=True, _wait_for_stage raises
+    ZephyrWorkerError immediately instead of waiting for no_workers_timeout."""
+    from unittest.mock import MagicMock
+
+    from fray.v2.actor import GroupHealth
+    from zephyr.execution import Shard, ShardTask, WorkerState, ZephyrCoordinator, ZephyrWorkerError
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord._no_workers_timeout = 60.0  # long timeout — should NOT be reached
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Register a worker and kill it via heartbeat timeout
+    coord.register_worker("worker-0", MagicMock())
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+    assert coord._worker_states["worker-0"] == WorkerState.FAILED
+
+    # Attach a mock worker group that reports permanent job termination
+    mock_group = MagicMock()
+    mock_group.get_health.return_value = GroupHealth(
+        ready=0,
+        pending=0,
+        is_done=True,
+        error="OOM: all retries exhausted",
+    )
+    coord.set_worker_group(mock_group)
+
+    start = time.monotonic()
+    with pytest.raises(ZephyrWorkerError, match="Worker job terminated permanently"):
+        coord._wait_for_stage()
+    elapsed = time.monotonic() - start
+
+    # Should fail within ~10s (health check interval), not 60s
+    assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure via health check"
+
+
+def test_wait_for_stage_ignores_healthy_worker_group(actor_context, tmp_path):
+    """When the worker ActorGroup reports healthy, _wait_for_stage behaves
+    normally (uses no_workers_timeout, not health check)."""
+    import threading
+
+    from unittest.mock import MagicMock
+
+    from fray.v2.actor import GroupHealth
+    from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
+
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord._no_workers_timeout = 2.0
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        chunk_size=100,
+        shard=Shard(chunks=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord.start_stage("test", [task])
+
+    # Attach a healthy worker group
+    mock_group = MagicMock()
+    mock_group.get_health.return_value = GroupHealth(ready=1, pending=0, is_done=False)
+    coord.set_worker_group(mock_group)
+
+    # Register a worker and have it complete the task after a delay
+    coord.register_worker("worker-0", MagicMock())
+
+    def complete_task():
+        time.sleep(0.3)
+        pulled = coord.pull_task("worker-0")
+        assert pulled is not None and pulled != "SHUTDOWN"
+        _task, attempt, _config = pulled
+        coord.report_result("worker-0", 0, attempt, TaskResult(chunks=[]))
+
+    t = threading.Thread(target=complete_task)
+    t.start()
+
+    coord._wait_for_stage()
+    t.join(timeout=5.0)
+    assert coord._completed_shards == 1
+
+
 def test_execute_does_not_retry_worker_errors(fray_client, tmp_path):
     """ZephyrWorkerError (application errors) are never retried."""
     from zephyr.execution import ZephyrWorkerError

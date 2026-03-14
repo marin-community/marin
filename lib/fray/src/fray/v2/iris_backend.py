@@ -35,7 +35,7 @@ from iris.cluster.types import EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import ActorContext, ActorFuture, ActorHandle, GroupHealth, _reset_current_actor, _set_current_actor
 from fray.v2.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.v2.types import (
     ActorConfig,
@@ -436,6 +436,20 @@ class IrisActorGroup:
         client = self._get_client()
         job_status = client.status(self._job_id)
         return is_job_finished(job_status.state)
+
+    def get_health(self) -> GroupHealth:
+        """Return health snapshot including job termination state and error info."""
+        client = self._get_client()
+        job_status = client.status(self._job_id)
+        done = is_job_finished(job_status.state)
+        error = job_status.error if done else None
+        pending = self._count - len(self._discovered_names)
+        return GroupHealth(
+            ready=len(self._discovered_names),
+            pending=pending,
+            is_done=done,
+            error=error,
+        )
 
     def shutdown(self) -> None:
         """Terminate the actor job."""

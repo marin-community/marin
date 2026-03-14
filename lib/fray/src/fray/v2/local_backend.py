@@ -12,7 +12,15 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, cast
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    GroupHealth,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.types import (
     ActorConfig,
     BinaryEntrypoint,
@@ -292,6 +300,10 @@ class LocalActorGroup:
     def is_done(self) -> bool:
         """Local actors run in-process and don't independently fail."""
         return False
+
+    def get_health(self) -> GroupHealth:
+        """Local actors are always healthy."""
+        return GroupHealth(ready=len(self._handles))
 
     def shutdown(self) -> None:
         """Terminate all local actors and clean up registry."""

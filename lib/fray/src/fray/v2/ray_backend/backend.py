@@ -16,7 +16,15 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
+from fray.v2.actor import (
+    ActorContext,
+    ActorFuture,
+    ActorGroup,
+    ActorHandle,
+    GroupHealth,
+    _reset_current_actor,
+    _set_current_actor,
+)
 from fray.v2.ray_backend.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray_backend.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -589,6 +597,10 @@ class RayActorGroup:
     def is_done(self) -> bool:
         """Ray actors managed by Zephyr don't have an independent job lifecycle."""
         return False
+
+    def get_health(self) -> GroupHealth:
+        """Ray actors are always healthy (managed by Zephyr, not independent jobs)."""
+        return GroupHealth(ready=len(self._handles))
 
     def shutdown(self) -> None:
         """Kill all Ray actors."""
