@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Command-line interface for pretraining datasets."""

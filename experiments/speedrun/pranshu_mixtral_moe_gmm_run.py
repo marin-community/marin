@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # nodryrun
@@ -27,7 +27,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 # Custom MoE classes that use GMM

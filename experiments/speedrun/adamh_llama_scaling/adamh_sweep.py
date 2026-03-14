@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Speedruns using the AdamH optimizer for various Llama model sizes (Chinchilla optimal steps)."""
@@ -22,7 +22,7 @@ from experiments.speedrun.adamh_llama_scaling.llama_with_hybrid_norm import (
 
 AUTHOR = Author(name="Kaiyue Wen", affiliation="Stanford University", url="https://whenwen.github.io")
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 def get_num_train_steps(param_count, batch_size, max_seq_len):

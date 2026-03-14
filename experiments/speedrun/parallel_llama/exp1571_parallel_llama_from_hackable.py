@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -65,7 +65,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from levanter.optim import MuonConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 _IMPORT_PATH = getattr(__spec__, "name", __name__)
 

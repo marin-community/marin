@@ -38,13 +38,7 @@ import numpy as np
 from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 
-from levanter.optim import MuonConfig
-
 from experiments.defaults import default_train, default_validation_sets
-from experiments.unified.vlm_tokenize_captions import (
-    ENDOFTEXT_ID,
-    VISUAL_TOKEN_OFFSET,
-)
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.qwen3 import qwen3_0_6b, qwen3_1_7b, qwen3_4b
@@ -69,7 +63,6 @@ VISION_END_ID = 128_005  # <|reserved_special_token_3|> → <|vision_end|>
 
 UNIFIED_TOKENIZER_PATH = "gs://marin-eu-west4/tokenizers/llama3-unified-144k"
 UNIFIED_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2"
-VISUAL_ONLY_CACHE_PATH = "gs://marin-vlm-eu/hf_85m_levanter_cache_v2/visual_only"
 UNIFIED_EVAL_CACHE_PATH = "gs://marin-vlm-eu/unified_eval_cache"
 TEXT_EVAL_CACHE_PATH = "gs://marin-vlm-eu/text_eval_cache"
 
@@ -90,17 +83,14 @@ _VLM_HLO_DUMP_XLA_FLAGS = [
 # --- Train Configs ---
 
 # 1 epoch ≈ 1,582,102 records / 256 batch_size ≈ 6,180 steps
-TEXT_STEPS = int(os.environ.get("TEXT_STEPS", "5000"))
-UND_STEPS = int(os.environ.get("UND_STEPS", "2500"))
-GEN_STEPS = int(os.environ.get("GEN_STEPS", "2500"))
-VIS_STEPS = int(os.environ.get("VIS_STEPS", "0"))
+DEMO_TRAIN_STEPS = 10_000
 TPU_TYPE = os.environ.get("TPU_TYPE", "v4-64")
 EXP_NAME = os.environ.get("EXP_NAME", "")
-MUON_LR = float(os.environ.get("MUON_LR", "0.004"))
-ADAM_LR = float(os.environ.get("ADAM_LR", "0.0012"))
+TEXT_WEIGHT = float(os.environ.get("TEXT_WEIGHT", "1.0"))
+MULTIMODAL_WEIGHT = float(os.environ.get("MULTIMODAL_WEIGHT", "2.0"))
+LEARNING_RATE = float(os.environ.get("LEARNING_RATE", "3e-4"))
 W_VISUAL = float(os.environ.get("W_VISUAL", "1.0"))
-LR_SCHEDULE = os.environ.get("LR_SCHEDULE", "cosine")
-Z_LOSS_WEIGHT = float(os.environ.get("Z_LOSS_WEIGHT", "0.0"))
+UND_GEN_RATIO = float(os.environ.get("UND_GEN_RATIO", "1.0"))
 
 
 def _merge_xla_flags(existing: str, required_flags: list[str]) -> str:
@@ -210,79 +200,36 @@ def _only_fractional_transform(weights: np.ndarray) -> np.ndarray:
     return result
 
 
-def _replace_visual_with_eos(input_ids: np.ndarray) -> np.ndarray:
-    """Replace visual tokens with EOS so block_cross_document_attention prevents
-    real tokens from attending to them.
-
-    Each replaced position becomes its own segment boundary, so the remaining
-    text tokens (in a later segment) cannot attend to any visual position.
-    """
-    result = input_ids.copy()
-    visual_mask = (result >= VISUAL_TOKEN_OFFSET) | (result == VISION_START_ID) | (result == VISION_END_ID)
-    result[visual_mask] = ENDOFTEXT_ID
-    return result
-
-
-def _replace_text_with_eos(input_ids: np.ndarray) -> np.ndarray:
-    """Replace text tokens with EOS so block_cross_document_attention prevents
-    real tokens from attending to them.
-
-    Each replaced position becomes its own segment boundary, so the remaining
-    visual tokens (in a later segment) cannot attend to any text position.
-    """
-    result = input_ids.copy()
-    text_mask = (
-        (result > 0)
-        & (result < VISUAL_TOKEN_OFFSET)
-        & (result != VISION_START_ID)
-        & (result != VISION_END_ID)
-        & (result != ENDOFTEXT_ID)
-    )
-    result[text_mask] = ENDOFTEXT_ID
-    return result
-
-
 def unified_data_config(
-    text_steps: int = 5000,
-    und_steps: int = 2500,
-    gen_steps: int = 2500,
-    vis_steps: int = 0,
+    text_weight: float = 1.0,
+    multimodal_weight: float = 1.0,
     multimodal_cache_path: str = UNIFIED_CACHE_PATH,
-    visual_cache_path: str = VISUAL_ONLY_CACHE_PATH,
     eval_benchmarks: list[str] | None = None,
     eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
     w_visual: float | None = 1.0,
+    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = None,
     text_eval_cache_path: str = TEXT_EVAL_CACHE_PATH,
 ) -> LmDataConfig:
     """Build data mixture with Nemotron text + multimodal cache for unified model training.
 
     Args:
-        text_steps: Number of training steps for text data.
-        und_steps: Number of training steps for multimodal understanding data.
-        gen_steps: Number of training steps for multimodal generation data.
-        vis_steps: Number of training steps for visual-only data (pure image AR).
-            The step counts determine relative sampling weights (proportional
-            to step counts) and their sum becomes the total training steps.
+        text_weight: Scaling factor applied to each Nemotron split's weight (controls r1).
+        multimodal_weight: Total weight for multimodal data, split between understanding
+            and generation according to und_gen_ratio.
         multimodal_cache_path: GCS path to the pre-built multimodal Levanter cache.
-        visual_cache_path: GCS path to the visual-only Levanter cache.
         eval_benchmarks: List of VLM eval benchmark names to include as validation-only
             components (train_weight=0.0). Set to None to disable eval.
         eval_cache_path: GCS path to VLM eval benchmark Levanter caches.
         w_visual: Override for the visual token loss weight. When set, replaces
             the preprocessing-baked w_visual at data loading time. None uses the
             original preprocessing value unchanged.
+        und_gen_ratio: Ratio of understanding to generation weight. E.g. 3.0 means
+            understanding gets 3/(3+1) of multimodal_weight, generation gets 1/(3+1).
         text_eval_benchmarks: List of text eval benchmark names (e.g. hellaswag, mmlu)
             to include as validation-only components. Set to None to disable.
         text_eval_cache_path: GCS path to text eval benchmark Levanter caches.
     """
-    # Compute mixture weights proportional to step counts
-    total = text_steps + und_steps + gen_steps + vis_steps
-    text_weight = text_steps / total
-    und_weight = und_steps / total
-    gen_weight = gen_steps / total
-    vis_weight = vis_steps / total
-
     # Text: only hq_actual from Nemotron-CC
     nemotron_steps = tokenize_nemotron()
     hq_key = "nemotron_cc/hq_actual"
@@ -299,6 +246,8 @@ def unified_data_config(
         loss_weights_key="loss_weights",
         loss_weight_transform=loss_weight_transform,
     )
+    und_weight = multimodal_weight * und_gen_ratio / (und_gen_ratio + 1)
+    gen_weight = multimodal_weight / (und_gen_ratio + 1)
 
     components = {
         **text_components,
@@ -320,28 +269,6 @@ def unified_data_config(
         "multimodal_understanding": und_weight,
         "multimodal_generation": gen_weight,
     }
-
-    # Visual-only: pure image AR sequences (no text tokens).
-    if vis_steps > 0:
-        vis_prebuilt_format = PrebuiltLmDatasetFormat(
-            input_ids_key="input_ids",
-            loss_weights_key="loss_weights",
-        )
-        components["visual_only"] = DatasetComponent(
-            cache_dir=visual_cache_path,
-            format=vis_prebuilt_format,
-            pack=True,
-            tags=["visual"],
-        )
-        weights["visual_only"] = vis_weight
-
-        components["val_visual"] = DatasetComponent(
-            cache_dir=visual_cache_path,
-            format=vis_prebuilt_format,
-            pack=True,
-            tags=["visual"],
-        )
-        weights["val_visual"] = 0.0
 
     # Multimodal validation: separate understanding and generation val loss.
     # These are produced by vlm_tokenize_captions.py with val_fraction > 0.
@@ -410,37 +337,6 @@ def unified_data_config(
     weights["val_generation_text_only"] = 0.0
     weights["val_generation_visual_only"] = 0.0
 
-    # Ablation val: replace one modality with EOS → segment-based attention blocking
-    # prevents real tokens from attending to the replaced positions.
-    fmt_und_wo_visual = PrebuiltLmDatasetFormat(
-        input_ids_key="input_ids",
-        loss_weights_key="loss_weights",
-        loss_weight_transform=_zero_fractional_transform,
-        input_ids_transform=_replace_visual_with_eos,
-    )
-    fmt_gen_wo_language = PrebuiltLmDatasetFormat(
-        input_ids_key="input_ids",
-        loss_weights_key="loss_weights",
-        loss_weight_transform=_zero_fractional_transform,
-        input_ids_transform=_replace_text_with_eos,
-    )
-
-    components["val_understanding_wo_visual"] = DatasetComponent(
-        cache_dir=und_val_cache,
-        format=fmt_und_wo_visual,
-        pack=True,
-        tags=["multimodal", "understanding"],
-    )
-    weights["val_understanding_wo_visual"] = 0.0
-
-    components["val_generation_wo_language"] = DatasetComponent(
-        cache_dir=gen_val_cache,
-        format=fmt_gen_wo_language,
-        pack=True,
-        tags=["multimodal", "generation"],
-    )
-    weights["val_generation_wo_language"] = 0.0
-
     # Eval benchmarks: weight 0.0 → eval-only (not used in training data).
     # Levanter's validation_sets() loads these for periodic eval during training.
     if eval_benchmarks is not None:
@@ -493,97 +389,19 @@ def unified_data_config(
     return data_config
 
 
-def visual_only_data_config(
-    visual_cache_path: str = VISUAL_ONLY_CACHE_PATH,
-    eval_benchmarks: list[str] | None = None,
-    eval_cache_path: str = UNIFIED_EVAL_CACHE_PATH,
-) -> LmDataConfig:
-    """Data config for pure visual AR training — no text data.
-
-    Uses a visual-only cache where sequences are:
-    <|vision_start|> V₁..V₅₇₆ <|vision_end|> <|endoftext|>
-    with all loss weights = 1.0.
-    """
-    prebuilt_format = PrebuiltLmDatasetFormat(
-        input_ids_key="input_ids",
-        loss_weights_key="loss_weights",
-    )
-    components = {
-        "visual_only": DatasetComponent(
-            cache_dir=visual_cache_path,
-            format=prebuilt_format,
-            pack=True,
-            tags=["visual"],
-        ),
-    }
-    weights: dict[str, float] = {"visual_only": 1.0}
-
-    # Validation
-    components["val_visual"] = DatasetComponent(
-        cache_dir=visual_cache_path,
-        format=prebuilt_format,
-        pack=True,
-        tags=["visual"],
-    )
-    weights["val_visual"] = 0.0
-
-    # Eval benchmarks (generation only: cifar10, imagenet)
-    if eval_benchmarks is not None:
-        for bench in eval_benchmarks:
-            components[f"eval_{bench}"] = DatasetComponent(
-                cache_dir=f"{eval_cache_path}/{bench}",
-                format=prebuilt_format,
-                pack=True,
-                tags=["eval", "generation"],
-            )
-            weights[f"eval_{bench}"] = 0.0
-
-    return LmDataConfig(
-        tokenizer=UNIFIED_TOKENIZER_PATH,
-        components=components,
-        train_weights=weights,
-        shuffle=True,
-        permutation_type="feistel",
-        block_cross_document_attention=True,
-    )
-
-
-def _demo_train_config(
-    muon_lr: float = 0.004,
-    adam_lr: float = 0.0012,
-    num_train_steps: int = 10000,
-    lr_schedule: str = "cosine",
-    z_loss_weight: float = 0.0,
-) -> SimpleTrainConfig:
-    optimizer = MuonConfig(
-        learning_rate=muon_lr,
-        adam_lr=adam_lr,
-        weight_decay=0.1,
-        momentum=0.98,
-        beta1=0.8,
-        beta2=0.98,
-        epsilon=1e-15,
-        muon_epsilon=1e-5,
-        max_grad_norm=1.0,
-        lr_schedule=lr_schedule,
-        decay=1.0,
-        min_lr_ratio=0,
-        warmup=0,
-    )
+def _demo_train_config(learning_rate: float = 3e-4) -> SimpleTrainConfig:
     return SimpleTrainConfig(
         resources=ResourceConfig.with_tpu(TPU_TYPE, slice_count=1),
         train_batch_size=256,
-        num_train_steps=num_train_steps,
-        learning_rate=muon_lr,
-        warmup=0,
-        lr_schedule=lr_schedule,
+        num_train_steps=DEMO_TRAIN_STEPS,
+        learning_rate=learning_rate,
+        warmup=0.01,
+        lr_schedule="cosine",
         weight_decay=0.1,
         max_grad_norm=1.0,
         per_device_parallelism=1,
         steps_per_eval=500,
         steps_per_export=1000,
-        optimizer_config=optimizer,
-        z_loss_weight=z_loss_weight or None,
     )
 
 
@@ -612,37 +430,26 @@ DEFAULT_TEXT_EVAL_BENCHMARKS = [
 
 
 def make_unified_0_6b(
-    text_steps: int = 5000,
-    und_steps: int = 2500,
-    gen_steps: int = 2500,
-    vis_steps: int = 0,
-    muon_lr: float = 0.008,
-    adam_lr: float = 0.0024,
-    lr_schedule: str = "cosine",
+    text_weight: float = 1.0,
+    multimodal_weight: float = 1.0,
+    learning_rate: float = 3e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
+    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
-    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-0.6b-demo",
         tokenized=unified_data_config(
-            text_steps=text_steps,
-            und_steps=und_steps,
-            gen_steps=gen_steps,
-            vis_steps=vis_steps,
+            text_weight=text_weight,
+            multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
+            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_0_6b,
-        train_config=_demo_train_config(
-            muon_lr=muon_lr,
-            adam_lr=adam_lr,
-            num_train_steps=text_steps + und_steps + gen_steps + vis_steps,
-            lr_schedule=lr_schedule,
-            z_loss_weight=z_loss_weight,
-        ),
+        train_config=_demo_train_config(learning_rate=learning_rate),
         tags=["unified", "scaling", "qwen3", "0.6b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -653,37 +460,26 @@ def make_unified_0_6b(
 
 
 def make_unified_1_7b(
-    text_steps: int = 5000,
-    und_steps: int = 2500,
-    gen_steps: int = 2500,
-    vis_steps: int = 0,
-    muon_lr: float = 0.004,
-    adam_lr: float = 0.0012,
-    lr_schedule: str = "cosine",
+    text_weight: float = 1.0,
+    multimodal_weight: float = 1.0,
+    learning_rate: float = 3e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
+    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
-    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-1.7b-demo",
         tokenized=unified_data_config(
-            text_steps=text_steps,
-            und_steps=und_steps,
-            gen_steps=gen_steps,
-            vis_steps=vis_steps,
+            text_weight=text_weight,
+            multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
+            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_1_7b,
-        train_config=_demo_train_config(
-            muon_lr=muon_lr,
-            adam_lr=adam_lr,
-            num_train_steps=text_steps + und_steps + gen_steps + vis_steps,
-            lr_schedule=lr_schedule,
-            z_loss_weight=z_loss_weight,
-        ),
+        train_config=_demo_train_config(learning_rate=learning_rate),
         tags=["unified", "scaling", "qwen3", "1.7b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -693,37 +489,26 @@ def make_unified_1_7b(
 
 
 def make_unified_4b(
-    text_steps: int = 5000,
-    und_steps: int = 2500,
-    gen_steps: int = 2500,
-    vis_steps: int = 0,
-    muon_lr: float = 0.002,
-    adam_lr: float = 0.0006,
-    lr_schedule: str = "cosine",
+    text_weight: float = 1.0,
+    multimodal_weight: float = 1.0,
+    learning_rate: float = 1.5e-4,
     eval_benchmarks: list[str] | None = DEFAULT_EVAL_BENCHMARKS,
     w_visual: float | None = 1.0,
+    und_gen_ratio: float = 1.0,
     text_eval_benchmarks: list[str] | None = DEFAULT_TEXT_EVAL_BENCHMARKS,
-    z_loss_weight: float = 0.0,
 ):
     step = default_train(
         name=EXP_NAME or "unified-qwen3-4b-demo",
         tokenized=unified_data_config(
-            text_steps=text_steps,
-            und_steps=und_steps,
-            gen_steps=gen_steps,
-            vis_steps=vis_steps,
+            text_weight=text_weight,
+            multimodal_weight=multimodal_weight,
             eval_benchmarks=eval_benchmarks,
             w_visual=w_visual,
+            und_gen_ratio=und_gen_ratio,
             text_eval_benchmarks=text_eval_benchmarks,
         ),
         model_config=qwen3_4b,
-        train_config=_demo_train_config(
-            muon_lr=muon_lr,
-            adam_lr=adam_lr,
-            num_train_steps=text_steps + und_steps + gen_steps + vis_steps,
-            lr_schedule=lr_schedule,
-            z_loss_weight=z_loss_weight,
-        ),
+        train_config=_demo_train_config(learning_rate=learning_rate),
         tags=["unified", "scaling", "qwen3", "4b", "demo"],
         eval_harness_tasks=[],
         use_default_validation=False,
@@ -732,126 +517,18 @@ def make_unified_4b(
     return _with_vlm_hlo_dump_env(step)
 
 
-# --- Visual-Only Experiment Step Factories ---
-
-DEFAULT_VISUAL_EVAL_BENCHMARKS = [
-    "cifar10_small",
-    "imagenet_small",
-]
-
-
-def make_visual_only_0_6b(
-    muon_lr: float = 0.008,
-    adam_lr: float = 0.0024,
-    num_train_steps: int = 10000,
-    lr_schedule: str = "cosine",
-    eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
-    z_loss_weight: float = 0.0,
-):
-    step = default_train(
-        name=EXP_NAME or "visual-only-qwen3-0.6b",
-        tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
-        model_config=qwen3_0_6b,
-        train_config=_demo_train_config(
-            muon_lr=muon_lr,
-            adam_lr=adam_lr,
-            num_train_steps=num_train_steps,
-            lr_schedule=lr_schedule,
-            z_loss_weight=z_loss_weight,
-        ),
-        tags=["visual-only", "scaling", "qwen3", "0.6b"],
-        eval_harness_tasks=[],
-        use_default_validation=False,
-    )
-    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
-    return step
-
-
-def make_visual_only_1_7b(
-    muon_lr: float = 0.004,
-    adam_lr: float = 0.0012,
-    num_train_steps: int = 10000,
-    lr_schedule: str = "cosine",
-    eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
-    z_loss_weight: float = 0.0,
-):
-    step = default_train(
-        name=EXP_NAME or "visual-only-qwen3-1.7b",
-        tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
-        model_config=qwen3_1_7b,
-        train_config=_demo_train_config(
-            muon_lr=muon_lr,
-            adam_lr=adam_lr,
-            num_train_steps=num_train_steps,
-            lr_schedule=lr_schedule,
-            z_loss_weight=z_loss_weight,
-        ),
-        tags=["visual-only", "scaling", "qwen3", "1.7b"],
-        eval_harness_tasks=[],
-        use_default_validation=False,
-    )
-    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
-    return step
-
-
-def make_visual_only_4b(
-    muon_lr: float = 0.002,
-    adam_lr: float = 0.0006,
-    num_train_steps: int = 10000,
-    lr_schedule: str = "cosine",
-    eval_benchmarks: list[str] | None = DEFAULT_VISUAL_EVAL_BENCHMARKS,
-    z_loss_weight: float = 0.0,
-):
-    step = default_train(
-        name=EXP_NAME or "visual-only-qwen3-4b",
-        tokenized=visual_only_data_config(eval_benchmarks=eval_benchmarks),
-        model_config=qwen3_4b,
-        train_config=_demo_train_config(
-            muon_lr=muon_lr,
-            adam_lr=adam_lr,
-            num_train_steps=num_train_steps,
-            lr_schedule=lr_schedule,
-            z_loss_weight=z_loss_weight,
-        ),
-        tags=["visual-only", "scaling", "qwen3", "4b"],
-        eval_harness_tasks=[],
-        use_default_validation=False,
-    )
-    step = dataclasses.replace(step, config=dataclasses.replace(step.config, allow_out_of_region=("data.components",)))
-    return step
-
-
 if __name__ == "__main__":
-    # steps = [make_unified_0_6b(
-    #     text_steps=TEXT_STEPS, und_steps=UND_STEPS, gen_steps=GEN_STEPS, vis_steps=VIS_STEPS,
-    #     muon_lr=MUON_LR, adam_lr=ADAM_LR,
-    #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL,
-    #     z_loss_weight=Z_LOSS_WEIGHT,
-    # )]
+    # steps = [make_unified_0_6b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
     steps = [
         make_unified_1_7b(
-            text_steps=TEXT_STEPS,
-            und_steps=UND_STEPS,
-            gen_steps=GEN_STEPS,
-            vis_steps=VIS_STEPS,
-            muon_lr=MUON_LR,
-            adam_lr=ADAM_LR,
-            lr_schedule=LR_SCHEDULE,
+            text_weight=TEXT_WEIGHT,
+            multimodal_weight=MULTIMODAL_WEIGHT,
+            learning_rate=LEARNING_RATE,
             w_visual=W_VISUAL,
-            z_loss_weight=Z_LOSS_WEIGHT,
+            und_gen_ratio=UND_GEN_RATIO,
         )
     ]
-    # steps = [make_unified_4b(
-    #     text_steps=TEXT_STEPS, und_steps=UND_STEPS, gen_steps=GEN_STEPS, vis_steps=VIS_STEPS,
-    #     muon_lr=MUON_LR, adam_lr=ADAM_LR,
-    #     lr_schedule=LR_SCHEDULE, w_visual=W_VISUAL,
-    #     z_loss_weight=Z_LOSS_WEIGHT,
-    # )]
-    # steps = [make_visual_only_1_7b(
-    #     muon_lr=MUON_LR, adam_lr=ADAM_LR,
-    #     num_train_steps=TEXT_STEPS + UND_STEPS + GEN_STEPS + VIS_STEPS,
-    #     lr_schedule=LR_SCHEDULE, z_loss_weight=Z_LOSS_WEIGHT,
-    # )]
+    # steps = [make_unified_4b(text_weight=TEXT_WEIGHT, multimodal_weight=MULTIMODAL_WEIGHT, learning_rate=LEARNING_RATE, w_visual=W_VISUAL, und_gen_ratio=UND_GEN_RATIO)]
     executor_main(
         steps,
         description="Unified image-text model pre-training with Qwen3 architecture",

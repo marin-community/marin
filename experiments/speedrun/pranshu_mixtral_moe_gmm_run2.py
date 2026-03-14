@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Grouped-matmul Mixtral MoE speedrun (via `MixtralConfig(use_gmm=True)`)."""

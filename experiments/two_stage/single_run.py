@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from experiments.two_stage.two_stage_config import TwoStageConfig, two_stage_train_step

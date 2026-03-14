@@ -58,13 +58,6 @@ Usage:
 
 
   uv run experiments/unified/vlm_tokenize_captions.py         --input_path gs://marin-vlm/hf_85m_tokenized         --output_path gs://marin-vlm/hf_85m_levanter_cache_v2/generation         --shuffle true --max_batch_gb 30 --rows_per_shard 8000         --start_shard 0 --end_shard 10000 --num_workers 256 --dual_ordering false --generation_ratio 1.0 --w_visual 0.3
-
-
-uv run experiments/unified/vlm_tokenize_captions.py \
-    --input_path gs://marin-vlm/hf_85m_tokenized \
-    --output_path gs://marin-vlm/hf_85m_levanter_cache_v2/visual_only \
-    --visual_only true
-
 """
 
 import dataclasses
@@ -228,29 +221,7 @@ def build_text_first_sequence(
     return {"input_ids": input_ids, "loss_weights": loss_weights}
 
 
-def build_visual_only_sequence(
-    shifted_image_tokens: list[int],
-) -> dict[str, np.ndarray]:
-    """Build a visual-only sequence for pure visual AR training.
-
-    Format: <|vision_start|> V₁..V₅₇₆ <|vision_end|> <|endoftext|>
-    Loss weights: 1.0 for all tokens.
-    """
-    n_visual = len(shifted_image_tokens)
-    total_len = 1 + n_visual + 1 + 1  # start + visual + end + eos
-
-    input_ids = np.empty(total_len, dtype=np.int32)
-    loss_weights = np.ones(total_len, dtype=np.float32)
-
-    input_ids[0] = VISION_START_ID
-    input_ids[1 : 1 + n_visual] = shifted_image_tokens
-    input_ids[1 + n_visual] = VISION_END_ID
-    input_ids[1 + n_visual + 1] = ENDOFTEXT_ID
-
-    return {"input_ids": input_ids, "loss_weights": loss_weights}
-
-
-def _collect_valid_indices(table, visual_only: bool = False) -> tuple[list[int], int]:
+def _collect_valid_indices(table) -> tuple[list[int], int]:
     """First pass over a parquet table: collect valid row indices.
 
     Returns (valid_indices, mismatched_count).
@@ -264,11 +235,7 @@ def _collect_valid_indices(table, visual_only: bool = False) -> tuple[list[int],
     for i in range(len(table)):
         image_tokens_raw = image_tokens_col[i].as_py()
 
-        if visual_only:
-            # Only need non-empty image tokens
-            if not image_tokens_raw:
-                continue
-        elif has_caption_col:
+        if has_caption_col:
             caption = table.column("caption")[i].as_py()
             if not caption or not image_tokens_raw:
                 continue
@@ -313,7 +280,6 @@ def process_parquet_rows(
     generation_ratio: float,
     val_fraction: float = 0.0,
     split: str = "train",
-    visual_only: bool = False,
 ) -> Iterator[dict[str, np.ndarray]]:
     """Process rows in a PyArrow table, yielding token sequences.
 
@@ -321,32 +287,27 @@ def process_parquet_rows(
     - **Messages format**: columns ``messages`` (chat-format) + ``image_tokens`` (nested list).
     - **Caption format**: columns ``caption`` (plain string) + ``image_tokens`` (flat list).
 
-    When ``visual_only=True``, captions are ignored and only visual-only sequences
-    are produced (no understanding/generation distinction).
-
     Args:
         split: Which rows and ordering to produce:
             - ``"train"``: train rows with dual_ordering / generation_ratio logic.
             - ``"val_understanding"``: val rows, image-first sequences only.
             - ``"val_generation"``: val rows, text-first sequences only.
-            - ``"validation"``: val rows, visual-only sequences (used when visual_only=True).
         val_fraction: Fraction of valid rows to hold out for validation (0.0 to disable).
-        visual_only: If True, produce visual-only sequences (no text tokens).
     """
     has_caption_col = "caption" in table.column_names
     has_messages_col = "messages" in table.column_names
 
-    if not visual_only and not has_caption_col and not has_messages_col:
+    if not has_caption_col and not has_messages_col:
         raise ValueError(f"Parquet must have either 'caption' or 'messages' column, got: {table.column_names}")
 
     image_tokens_col = table.column("image_tokens")
 
-    valid_indices, mismatched = _collect_valid_indices(table, visual_only=visual_only)
+    valid_indices, mismatched = _collect_valid_indices(table)
     train_indices, val_indices = _split_train_val_indices(valid_indices, val_fraction)
 
     if split == "train":
         row_indices = train_indices
-    elif split in ("val_understanding", "val_generation", "validation"):
+    elif split in ("val_understanding", "val_generation"):
         row_indices = val_indices
     else:
         raise ValueError(f"Unknown split: {split!r}")
@@ -366,15 +327,6 @@ def process_parquet_rows(
     rng = random.Random(42)
 
     for i in row_indices:
-        if visual_only:
-            raw_image_tokens = image_tokens_col[i].as_py()
-            # Handle nested list format (messages schema)
-            if raw_image_tokens and isinstance(raw_image_tokens[0], list):
-                raw_image_tokens = raw_image_tokens[0]
-            shifted_image_tokens = [t + VISUAL_TOKEN_OFFSET for t in raw_image_tokens]
-            yield build_visual_only_sequence(shifted_image_tokens)
-            continue
-
         if has_caption_col:
             caption = table.column("caption")[i].as_py()
             raw_image_tokens = image_tokens_col[i].as_py()
@@ -411,16 +363,13 @@ def process_shard(
     generation_ratio: float,
     source_shard: str,
     val_fraction: float = 0.0,
-    visual_only: bool = False,
 ) -> dict:
     """Process a single parquet shard from local disk and write cache(s) to local disk.
 
-    Writes up to 3 caches (or 2 when visual_only=True):
+    Writes up to 3 caches:
     - ``{local_output_path}`` — training records
     - ``{local_output_path}_val_und`` — val understanding (image-first) records
     - ``{local_output_path}_val_gen`` — val generation (text-first) records
-
-    When visual_only=True, only train + single val cache are produced.
 
     This function is designed to run in a worker process. It only touches local files.
     """
@@ -438,20 +387,12 @@ def process_shard(
         "w_visual": w_visual,
         "dual_ordering": dual_ordering,
         "generation_ratio": generation_ratio,
-        "visual_only": visual_only,
-        "format": "visual_only_pretraining" if visual_only else "dual_ordering_pretraining",
+        "format": "dual_ordering_pretraining",
     }
 
     # Train cache
     train_records = process_parquet_rows(
-        table,
-        tokenizer,
-        w_visual,
-        dual_ordering,
-        generation_ratio,
-        val_fraction,
-        "train",
-        visual_only=visual_only,
+        table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "train"
     )
     train_result = write_levanter_cache(train_records, local_output_path, metadata)
     logger.info(
@@ -460,31 +401,8 @@ def process_shard(
 
     result = {**train_result, "val_und_path": None, "val_gen_path": None, "val_und_count": 0, "val_gen_count": 0}
 
-    if val_fraction > 0 and visual_only:
-        # Visual-only: single validation cache
-        val_path = f"{local_output_path}_val"
-        val_records = process_parquet_rows(
-            table,
-            tokenizer,
-            w_visual,
-            dual_ordering,
-            generation_ratio,
-            val_fraction,
-            "validation",
-            visual_only=True,
-        )
-        val_result = write_levanter_cache(val_records, val_path, {**metadata, "split": "validation"})
-        result["val_count"] = val_result["count"]
-        if val_result["count"] > 0:
-            result["val_path"] = val_path
-            logger.info(
-                "Shard %s validation: %d records, %d tokens",
-                source_shard,
-                val_result["count"],
-                val_result["token_count"],
-            )
-    elif val_fraction > 0:
-        # Dual-ordering: separate understanding and generation val caches
+    # Val caches (if val_fraction > 0), respecting which orderings are active
+    if val_fraction > 0:
         need_und = dual_ordering or generation_ratio < 1.0
         need_gen = dual_ordering or generation_ratio > 0.0
 
@@ -532,7 +450,6 @@ def tokenize_shard(
     dual_ordering: bool,
     generation_ratio: float,
     val_fraction: float = 0.0,
-    visual_only: bool = False,
 ) -> tuple[list[dict[str, np.ndarray]], list[dict[str, np.ndarray]], list[dict[str, np.ndarray]]]:
     """Tokenize a single parquet shard and return records without writing a cache.
 
@@ -541,8 +458,6 @@ def tokenize_shard(
 
     Returns:
         (train_records, val_understanding_records, val_generation_records)
-        When visual_only=True, val records are returned in val_understanding_records
-        (val_generation_records will be empty).
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
 
@@ -550,34 +465,12 @@ def tokenize_shard(
     table = pq.read_table(local_parquet_path)
 
     train_records = list(
-        process_parquet_rows(
-            table,
-            tokenizer,
-            w_visual,
-            dual_ordering,
-            generation_ratio,
-            val_fraction,
-            "train",
-            visual_only=visual_only,
-        )
+        process_parquet_rows(table, tokenizer, w_visual, dual_ordering, generation_ratio, val_fraction, "train")
     )
     val_und_records: list[dict[str, np.ndarray]] = []
     val_gen_records: list[dict[str, np.ndarray]] = []
 
-    if val_fraction > 0 and visual_only:
-        val_und_records = list(
-            process_parquet_rows(
-                table,
-                tokenizer,
-                w_visual,
-                dual_ordering,
-                generation_ratio,
-                val_fraction,
-                "validation",
-                visual_only=True,
-            )
-        )
-    elif val_fraction > 0:
+    if val_fraction > 0:
         need_und = dual_ordering or generation_ratio < 1.0
         need_gen = dual_ordering or generation_ratio > 0.0
 
@@ -648,9 +541,6 @@ class TokenizeVLMConfig:
     Val rows produce separate understanding (image-first) and generation (text-first)
     caches at {output_path}/val_understanding/validation/ and
     {output_path}/val_generation/validation/."""
-    visual_only: bool = False
-    """When True, produce visual-only sequences (no text tokens). Output is a single
-    cache at {output_path}/train/ and {output_path}/validation/ (no und/gen split)."""
 
 
 def _cache_tokenizer_locally(tokenizer_path: str, download_dir: str = "/dev/shm") -> str:
@@ -689,7 +579,6 @@ def _write_metadata(config: "TokenizeVLMConfig", stats: dict) -> None:
         "dual_ordering": config.dual_ordering,
         "generation_ratio": config.generation_ratio,
         "w_visual": config.w_visual,
-        "visual_only": config.visual_only,
         "val_fraction": config.val_fraction,
         **stats,
     }
@@ -749,12 +638,10 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
     # Track val shard paths for consolidation and counts
     val_und_gcs_paths: list[str] = []
     val_gen_gcs_paths: list[str] = []
-    val_gcs_paths: list[str] = []  # visual_only mode: single val cache
     total_train_records = 0
     total_train_tokens = 0
     total_val_und_records = 0
     total_val_gen_records = 0
-    total_val_records = 0
 
     if not pending:
         logger.info("All shards already processed. Running consolidation only.")
@@ -823,7 +710,6 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                             config.generation_ratio,
                             source_shard,
                             config.val_fraction,
-                            config.visual_only,
                         ): (local_cache, source_shard)
                         for local_parquet, local_cache, _gcs_out, source_shard in chunk_jobs
                     }
@@ -843,27 +729,18 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                             parquet_pbar.set_postfix_str(f"done {total_completed}/{len(pending)}")
                             total_train_records += result["count"]
                             total_train_tokens += result["token_count"]
+                            total_val_und_records += result.get("val_und_count", 0)
+                            total_val_gen_records += result.get("val_gen_count", 0)
 
                             # Track val cache paths
-                            if config.visual_only:
-                                total_val_records += result.get("val_count", 0)
-                                if result.get("val_path"):
-                                    shard_name = local_cache.rsplit("/", 1)[-1]
-                                    val_gcs = f"{config.output_path}/validation/{shard_name}_val"
-                                    val_gcs_paths.append(val_gcs)
-                            else:
-                                total_val_und_records += result.get("val_und_count", 0)
-                                total_val_gen_records += result.get("val_gen_count", 0)
-                                if result.get("val_und_path"):
-                                    shard_name = local_cache.rsplit("/", 1)[-1]
-                                    val_und_gcs = (
-                                        f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
-                                    )
-                                    val_und_gcs_paths.append(val_und_gcs)
-                                if result.get("val_gen_path"):
-                                    shard_name = local_cache.rsplit("/", 1)[-1]
-                                    val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
-                                    val_gen_gcs_paths.append(val_gen_gcs)
+                            if result.get("val_und_path"):
+                                shard_name = local_cache.rsplit("/", 1)[-1]
+                                val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
+                                val_und_gcs_paths.append(val_und_gcs)
+                            if result.get("val_gen_path"):
+                                shard_name = local_cache.rsplit("/", 1)[-1]
+                                val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
+                                val_gen_gcs_paths.append(val_gen_gcs)
                         except Exception:
                             logger.exception("Failed to process shard %s", source)
                             raise
@@ -878,30 +755,21 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
                     gcs_upload(local_cache, gcs_dest)
 
                     # Upload val caches if they exist
-                    if config.visual_only:
-                        val_local = f"{local_cache}_val"
-                        if os.path.isdir(val_local):
-                            shard_name = local_cache.rsplit("/", 1)[-1]
-                            val_gcs = f"{config.output_path}/validation/{shard_name}_val"
-                            gcs_upload(val_local, val_gcs if val_gcs.startswith("gs://") else f"gs://{val_gcs}")
-                    else:
-                        val_und_local = f"{local_cache}_val_und"
-                        if os.path.isdir(val_und_local):
-                            shard_name = local_cache.rsplit("/", 1)[-1]
-                            val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
-                            gcs_upload(
-                                val_und_local,
-                                val_und_gcs if val_und_gcs.startswith("gs://") else f"gs://{val_und_gcs}",
-                            )
+                    val_und_local = f"{local_cache}_val_und"
+                    if os.path.isdir(val_und_local):
+                        shard_name = local_cache.rsplit("/", 1)[-1]
+                        val_und_gcs = f"{config.output_path}/val_understanding/validation/{shard_name}_val_und"
+                        gcs_upload(
+                            val_und_local, val_und_gcs if val_und_gcs.startswith("gs://") else f"gs://{val_und_gcs}"
+                        )
 
-                        val_gen_local = f"{local_cache}_val_gen"
-                        if os.path.isdir(val_gen_local):
-                            shard_name = local_cache.rsplit("/", 1)[-1]
-                            val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
-                            gcs_upload(
-                                val_gen_local,
-                                val_gen_gcs if val_gen_gcs.startswith("gs://") else f"gs://{val_gen_gcs}",
-                            )
+                    val_gen_local = f"{local_cache}_val_gen"
+                    if os.path.isdir(val_gen_local):
+                        shard_name = local_cache.rsplit("/", 1)[-1]
+                        val_gen_gcs = f"{config.output_path}/val_generation/validation/{shard_name}_val_gen"
+                        gcs_upload(
+                            val_gen_local, val_gen_gcs if val_gen_gcs.startswith("gs://") else f"gs://{val_gen_gcs}"
+                        )
 
                 # Step 4: Clean up local files for this chunk
                 shutil.rmtree(parquet_work_dir)
@@ -913,38 +781,33 @@ def _main_sequential(config: TokenizeVLMConfig, shard_paths: list[str]):
     _consolidate(all_train_paths, f"{config.output_path}/train", "train")
 
     if config.val_fraction > 0:
-        if config.visual_only:
-            _consolidate(val_gcs_paths, f"{config.output_path}/validation", "validation")
-        else:
-            need_und = config.dual_ordering or config.generation_ratio < 1.0
-            need_gen = config.dual_ordering or config.generation_ratio > 0.0
+        need_und = config.dual_ordering or config.generation_ratio < 1.0
+        need_gen = config.dual_ordering or config.generation_ratio > 0.0
 
-            if need_und:
-                _consolidate(
-                    val_und_gcs_paths,
-                    f"{config.output_path}/val_understanding/validation",
-                    "val_understanding",
-                )
-            if need_gen:
-                _consolidate(
-                    val_gen_gcs_paths,
-                    f"{config.output_path}/val_generation/validation",
-                    "val_generation",
-                )
+        if need_und:
+            _consolidate(
+                val_und_gcs_paths,
+                f"{config.output_path}/val_understanding/validation",
+                "val_understanding",
+            )
+        if need_gen:
+            _consolidate(
+                val_gen_gcs_paths,
+                f"{config.output_path}/val_generation/validation",
+                "val_generation",
+            )
 
-    stats = {
-        "mode": "sequential",
-        "total_shards": len(shard_paths),
-        "train_records": total_train_records,
-        "train_tokens": total_train_tokens,
-    }
-    if config.visual_only:
-        stats["val_records"] = total_val_records
-    else:
-        stats["val_understanding_records"] = total_val_und_records
-        stats["val_generation_records"] = total_val_gen_records
-
-    _write_metadata(config, stats)
+    _write_metadata(
+        config,
+        {
+            "mode": "sequential",
+            "total_shards": len(shard_paths),
+            "train_records": total_train_records,
+            "train_tokens": total_train_tokens,
+            "val_understanding_records": total_val_und_records,
+            "val_generation_records": total_val_gen_records,
+        },
+    )
 
 
 def _load_checkpoint(output_path: str) -> dict | None:
@@ -1045,8 +908,8 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     }
 
     num_workers = min(config.num_workers, len(shard_paths))
-    need_und = not config.visual_only and (config.dual_ordering or config.generation_ratio < 1.0)
-    need_gen = not config.visual_only and (config.dual_ordering or config.generation_ratio > 0.0)
+    need_und = config.dual_ordering or config.generation_ratio < 1.0
+    need_gen = config.dual_ordering or config.generation_ratio > 0.0
 
     # --- Resume from checkpoint ---
     ckpt = _load_checkpoint(config.output_path)
@@ -1128,7 +991,6 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
                             config.dual_ordering,
                             config.generation_ratio,
                             config.val_fraction,
-                            config.visual_only,
                         ): lp
                         for lp in local_parquets
                     }
@@ -1207,30 +1069,17 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
             if config.val_fraction > 0 and (batch_val_und or batch_val_gen):
                 staging_val_dir = tempfile.mkdtemp(prefix=f"vlm_val_batch{batch_idx}_", dir=config.staging_dir)
 
-                if config.visual_only and batch_val_und:
-                    # visual_only: val records are in batch_val_und (reused slot)
-                    local_val = os.path.join(staging_val_dir, "val")
-                    write_levanter_cache(iter(batch_val_und), local_val, {**metadata, "split": "validation"})
-                    gcs_val = f"{config.output_path}/validation/batch-{batch_idx:06d}"
-                    gcs_upload(local_val, gcs_val if gcs_val.startswith("gs://") else f"gs://{gcs_val}")
-                else:
-                    if batch_val_und and need_und:
-                        local_val_und = os.path.join(staging_val_dir, "val_und")
-                        write_levanter_cache(
-                            iter(batch_val_und), local_val_und, {**metadata, "split": "val_understanding"}
-                        )
-                        gcs_val_und = f"{config.output_path}/val_understanding/validation/batch-{batch_idx:06d}"
-                        gcs_upload(
-                            local_val_und, gcs_val_und if gcs_val_und.startswith("gs://") else f"gs://{gcs_val_und}"
-                        )
+                if batch_val_und and need_und:
+                    local_val_und = os.path.join(staging_val_dir, "val_und")
+                    write_levanter_cache(iter(batch_val_und), local_val_und, {**metadata, "split": "val_understanding"})
+                    gcs_val_und = f"{config.output_path}/val_understanding/validation/batch-{batch_idx:06d}"
+                    gcs_upload(local_val_und, gcs_val_und if gcs_val_und.startswith("gs://") else f"gs://{gcs_val_und}")
 
-                    if batch_val_gen and need_gen:
-                        local_val_gen = os.path.join(staging_val_dir, "val_gen")
-                        write_levanter_cache(iter(batch_val_gen), local_val_gen, {**metadata, "split": "val_generation"})
-                        gcs_val_gen = f"{config.output_path}/val_generation/validation/batch-{batch_idx:06d}"
-                        gcs_upload(
-                            local_val_gen, gcs_val_gen if gcs_val_gen.startswith("gs://") else f"gs://{gcs_val_gen}"
-                        )
+                if batch_val_gen and need_gen:
+                    local_val_gen = os.path.join(staging_val_dir, "val_gen")
+                    write_levanter_cache(iter(batch_val_gen), local_val_gen, {**metadata, "split": "val_generation"})
+                    gcs_val_gen = f"{config.output_path}/val_generation/validation/batch-{batch_idx:06d}"
+                    gcs_upload(local_val_gen, gcs_val_gen if gcs_val_gen.startswith("gs://") else f"gs://{gcs_val_gen}")
 
                 shutil.rmtree(staging_val_dir)
 
@@ -1259,59 +1108,43 @@ def _main_shuffled(config: TokenizeVLMConfig, shard_paths: list[str]):
     # --- Collect per-batch val cache paths for consolidation ---
     val_und_gcs_paths: list[str] = []
     val_gen_gcs_paths: list[str] = []
-    val_gcs_paths: list[str] = []
     total_val_und = 0
     total_val_gen = 0
-    total_val = 0
 
     if config.val_fraction > 0:
-        if config.visual_only:
-            for bi in range(len(batches)):
-                val_path = f"{config.output_path}/validation/batch-{bi:06d}"
-                if fsspec_exists(f"{val_path}/.success"):
-                    val_gcs_paths.append(val_path)
-            total_val = len(val_gcs_paths)
-        else:
-            for bi in range(len(batches)):
-                if need_und:
-                    und_path = f"{config.output_path}/val_understanding/validation/batch-{bi:06d}"
-                    if fsspec_exists(f"{und_path}/.success"):
-                        val_und_gcs_paths.append(und_path)
-                if need_gen:
-                    gen_path = f"{config.output_path}/val_generation/validation/batch-{bi:06d}"
-                    if fsspec_exists(f"{gen_path}/.success"):
-                        val_gen_gcs_paths.append(gen_path)
-            total_val_und = len(val_und_gcs_paths)
-            total_val_gen = len(val_gen_gcs_paths)
+        for bi in range(len(batches)):
+            if need_und:
+                und_path = f"{config.output_path}/val_understanding/validation/batch-{bi:06d}"
+                if fsspec_exists(f"{und_path}/.success"):
+                    val_und_gcs_paths.append(und_path)
+            if need_gen:
+                gen_path = f"{config.output_path}/val_generation/validation/batch-{bi:06d}"
+                if fsspec_exists(f"{gen_path}/.success"):
+                    val_gen_gcs_paths.append(gen_path)
+        total_val_und = len(val_und_gcs_paths)
+        total_val_gen = len(val_gen_gcs_paths)
 
     # Consolidate all shard caches
     _consolidate(all_output_paths, f"{config.output_path}/train", "train")
 
     if config.val_fraction > 0:
-        if config.visual_only:
-            _consolidate(val_gcs_paths, f"{config.output_path}/validation", "validation")
-        else:
-            if need_und:
-                _consolidate(
-                    val_und_gcs_paths, f"{config.output_path}/val_understanding/validation", "val_understanding"
-                )
-            if need_gen:
-                _consolidate(val_gen_gcs_paths, f"{config.output_path}/val_generation/validation", "val_generation")
+        if need_und:
+            _consolidate(val_und_gcs_paths, f"{config.output_path}/val_understanding/validation", "val_understanding")
+        if need_gen:
+            _consolidate(val_gen_gcs_paths, f"{config.output_path}/val_generation/validation", "val_generation")
 
-    stats = {
-        "mode": "shuffled",
-        "total_input_files": len(shard_paths),
-        "total_batches": len(batches),
-        "train_records": total_records,
-        "train_shards": len(all_output_paths),
-    }
-    if config.visual_only:
-        stats["val_shards"] = total_val
-    else:
-        stats["val_understanding_shards"] = total_val_und
-        stats["val_generation_shards"] = total_val_gen
-
-    _write_metadata(config, stats)
+    _write_metadata(
+        config,
+        {
+            "mode": "shuffled",
+            "total_input_files": len(shard_paths),
+            "total_batches": len(batches),
+            "train_records": total_records,
+            "train_shards": len(all_output_paths),
+            "val_understanding_shards": total_val_und,
+            "val_generation_shards": total_val_gen,
+        },
+    )
 
 
 if __name__ == "__main__":

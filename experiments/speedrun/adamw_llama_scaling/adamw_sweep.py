@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Speedruns using the AdamW optimizer for various Llama model sizes (Chinchilla optimal steps).
@@ -19,7 +19,7 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(name="William Held", affiliation="Georgia Tech", url="https://WilliamHeld.com")
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 def get_num_train_steps(param_count, batch_size, max_seq_len):

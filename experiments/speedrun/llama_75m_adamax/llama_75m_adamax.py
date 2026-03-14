@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -62,7 +62,7 @@ class AdamaxConfig(OptimizerConfig):
 
 # --------------------- speedrun Using Adamax ------------------------
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 speedrun_config = SpeedrunConfig(
     author=Author(
