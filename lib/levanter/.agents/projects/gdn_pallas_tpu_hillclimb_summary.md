@@ -44,6 +44,10 @@ Current mainline target order:
 - `D1`: completed as a partial diagnostic lead
   - narrower head-first branch layout handling slightly improved AD/layout behavior and step time
   - but it did not reduce `dispatch_shard_shell_delta_ms`, and xprof `IDLE` worsened
+- `D2`: immediate kernel-entry branch-core cut attempted and rejected
+  - summary-side `dispatch_shard_shell_delta_ms` dropped, but `ad_wrapper_shell_delta_ms`, `layout_shell_delta_ms`, total hybrid shell, and full-step time all worsened
+  - matched xprof kept `dispatch_shard_shell` nearly flat while `ad_wrapper_shell`, `layout_shell`, and `IDLE` all grew
+  - `D2` remains open for an even smaller branch-core cut with less AD/layout spillover
 
 ## D2 Definition
 

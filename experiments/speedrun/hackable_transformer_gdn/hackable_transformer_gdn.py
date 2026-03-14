@@ -131,6 +131,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
     gdn_segment_size: int = 16
+    gdn_use_kernel_entry_branch_core_sharding_diagnostic: bool = False
     gdn_use_branch_boundary_prototype: bool = False
     gdn_use_decoder_block_boundary_prototype: bool = False
 
@@ -340,6 +341,7 @@ class HackableDecoderLayer(eqx.Module):
     use_gdn: bool = eqx.field(static=True, default=False)
     gdn_chunk_size: int = eqx.field(static=True, default=64)
     gdn_segment_size: int = eqx.field(static=True, default=8)
+    gdn_use_kernel_entry_branch_core_sharding_diagnostic: bool = eqx.field(static=True, default=False)
     gdn_use_branch_boundary_prototype: bool = eqx.field(static=True, default=False)
 
     @staticmethod
@@ -373,6 +375,9 @@ class HackableDecoderLayer(eqx.Module):
             use_gdn=use_gdn,
             gdn_chunk_size=config.gdn_chunk_size,
             gdn_segment_size=config.gdn_segment_size,
+            gdn_use_kernel_entry_branch_core_sharding_diagnostic=(
+                config.gdn_use_kernel_entry_branch_core_sharding_diagnostic
+            ),
             gdn_use_branch_boundary_prototype=config.gdn_use_branch_boundary_prototype,
         )
 
@@ -404,6 +409,9 @@ class HackableDecoderLayer(eqx.Module):
                 chunk_size=self.gdn_chunk_size,
                 segment_size=self.gdn_segment_size,
                 attention_mask=attn_mask,
+                train_kernel_entry_branch_core_sharding_diagnostic=(
+                    self.gdn_use_kernel_entry_branch_core_sharding_diagnostic
+                ),
                 decode_state=None,
             )
         if _GDN_DEBUG:
@@ -481,8 +489,16 @@ class HackableTransformer(eqx.Module):
     def init(config: HackableTransformerConfig, *, key):
         checkpoint_policy = ScanCheckpointPolicy._mk(config.gradient_checkpointing)
         if config.use_gated_deltanet and config.num_gdn_layers > 0:
-            if config.gdn_use_branch_boundary_prototype and config.gdn_use_decoder_block_boundary_prototype:
-                raise ValueError("branch-boundary and decoder-block prototypes are mutually exclusive.")
+            enabled_gdn_experiments = sum(
+                int(flag)
+                for flag in (
+                    config.gdn_use_kernel_entry_branch_core_sharding_diagnostic,
+                    config.gdn_use_branch_boundary_prototype,
+                    config.gdn_use_decoder_block_boundary_prototype,
+                )
+            )
+            if enabled_gdn_experiments > 1:
+                raise ValueError("GDN diagnostic/prototype flags are mutually exclusive.")
             if config.gdn_use_decoder_block_boundary_prototype and (
                 config.gdn_layers_per_block != 3 or config.gdn_block_size != 4
             ):
