@@ -521,3 +521,65 @@
 - Next action:
   - Update `#3641` with the confirmed `runs` comparison table and the new `hybrid_ep_permute` status.
   - Seal a fresh snapshot of the branch artifacts.
+
+### 2026-03-14 10:48 - Longer-window random follow-up confirms `topk=2`, but `random, topk=8` is repeat-sensitive for plain `hybrid_ep`
+- Hypothesis: after the `runs` cleanup, the same longer-window same-pod method should either confirm the `random` slice or reveal whether one of the kernels has a distribution-specific stability problem.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel all \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution random \
+    --topk 2 \
+    --warmup 5 \
+    --iters 20
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel all \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution random \
+    --topk 8 \
+    --warmup 5 \
+    --iters 20
+  ```
+- Config:
+  - pod IDs: `iris-task-290f51ed3fe3`, `iris-task-bd691fe20be7`, `iris-task-30defe6ca1d8`, `iris-task-0a7a7c151d72`
+  - shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `distribution=random`, `world_size=8`
+  - longer timing window: `warmup=5`, `iters=20`
+- Result:
+  - `random, topk=2` long-window confirmation:
+
+    | kernel | tokens_per_s |
+    | --- | ---: |
+    | `deep_ep` | 73,257,870.37 |
+    | patched `hybrid_ep` | 90,777,677.24 |
+    | patched `hybrid_ep_permute` | 91,250,614.89 |
+
+  - `random, topk=8` long-window repeats:
+
+    | pod ID | deep_ep tokens_per_s | patched hybrid_ep tokens_per_s | patched hybrid_ep_permute tokens_per_s |
+    | --- | ---: | ---: | ---: |
+    | `iris-task-bd691fe20be7` | 34,442,870.69 | 25,409,362.29 | 38,541,941.24 |
+    | `iris-task-30defe6ca1d8` | 34,379,952.19 | 42,567,832.25 | 39,170,413.95 |
+    | `iris-task-0a7a7c151d72` | 34,383,801.42 | 41,951,223.51 | 39,252,724.81 |
+
+  - `random, topk=8` median-of-three summary:
+
+    | kernel | median tokens_per_s | vs deep |
+    | --- | ---: | ---: |
+    | `deep_ep` | 34,383,801.42 | 1.00x |
+    | patched `hybrid_ep` | 41,951,223.51 | 1.22x |
+    | patched `hybrid_ep_permute` | 39,170,413.95 | 1.14x |
+- Interpretation:
+  - `random, topk=2` cleanly confirms the earlier exploratory result: both patched Hybrid-EP paths are about `1.24x` faster than DeepEP.
+  - `random, topk=8` is not cleanly stable for plain `hybrid_ep`: DeepEP and `hybrid_ep_permute` stay tightly clustered across the three longer-window runs, while plain `hybrid_ep` has one slow outlier and two faster repeats.
+  - Using the median-of-three summary, both patched Hybrid-EP paths still beat DeepEP at `random, topk=8`, but only `hybrid_ep_permute` currently looks stable on that cell.
+- Next action:
+  - Update `#3641` to note that the `runs` slice is replicated, `random, topk=2` is confirmed, and `random, topk=8` is repeat-sensitive for plain `hybrid_ep`.
+  - Snapshot the branch again so the public issue can link to the revised interpretation.

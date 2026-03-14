@@ -24,8 +24,9 @@ The failure is caused by the runtime JIT targeting `sm_90` instead of a Hopper-s
 - [ ] Reduce the launcher workaround to the minimal required callsite changes and decide whether to upstream it.
 - [x] Test whether `hybrid_ep_permute` needs the same rewrite or a different fix.
 - [x] Recheck the noisy `runs, topk=2` point with more repeats if we want stronger confidence.
-- [ ] Extend the longer-window confirmation pass to the `random` slice if we want a replicated full mini-matrix.
+- [x] Extend the longer-window confirmation pass to the `random` slice if we want a replicated full mini-matrix.
 - [ ] Understand why `hybrid_ep_permute` trails plain `hybrid_ep` at `runs, topk=8` while slightly leading at `runs, topk=2`.
+- [ ] Understand why plain `hybrid_ep` is repeat-sensitive at `random, topk=8` while `deep_ep` and `hybrid_ep_permute` stay stable on the same shape.
 
 ## Results
 
@@ -80,3 +81,34 @@ The large swings on the `runs` cells are mostly caused by the very short timing 
   - The earlier outliers were mostly a short-window measurement problem.
   - DeepEP remains close to its original exploratory `runs` values, while both patched Hybrid-EP paths remain materially faster.
   - The original “can Hybrid-EP run on our H100 machine?” question is now answered yes for both plain and permute paths under the current launcher-applied rewrite.
+
+## Hypothesis 4
+
+The remaining ambiguity is now performance stability, not functionality. If the longer-window method is applied to the `random` slice, we should either confirm the earlier `random` wins or isolate a cell where one patched Hybrid-EP path is genuinely repeat-sensitive.
+
+## Changes to make
+
+- Run the same `--kernel all --warmup 5 --iters 20` confirmation method on `distribution=random`.
+- Repeat `random, topk=8` if the first longer-window pass disagrees with the earlier exploratory result.
+
+## Results
+
+- `random, topk=2` longer-window confirmation stays clean:
+  - `deep_ep`: `73,257,870.37`
+  - patched `hybrid_ep`: `90,777,677.24`
+  - patched `hybrid_ep_permute`: `91,250,614.89`
+- `random, topk=8` longer-window repeats:
+
+  | run | deep_ep tokens_per_s | patched hybrid_ep tokens_per_s | patched hybrid_ep_permute tokens_per_s |
+  | --- | ---: | ---: | ---: |
+  | 1 | 34,442,870.69 | 25,409,362.29 | 38,541,941.24 |
+  | 2 | 34,379,952.19 | 42,567,832.25 | 39,170,413.95 |
+  | 3 | 34,383,801.42 | 41,951,223.51 | 39,252,724.81 |
+
+- Interpretation:
+  - DeepEP and `hybrid_ep_permute` are stable on `random, topk=8`.
+  - Plain `hybrid_ep` is repeat-sensitive on that cell: one slow outlier, then two faster clustered repeats.
+  - So the current performance story is nuanced:
+    - `runs` slice: replicated wins for both patched Hybrid-EP paths
+    - `random, topk=2`: confirmed win for both patched Hybrid-EP paths
+    - `random, topk=8`: `hybrid_ep_permute` looks stably ahead, while plain `hybrid_ep` is ahead by median but not yet stable

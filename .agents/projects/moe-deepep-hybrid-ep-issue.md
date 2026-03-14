@@ -86,6 +86,27 @@ Current state:
   - DeepEP stays close to the original exploratory table once measured over a longer window.
   - Both patched Hybrid-EP paths remain ahead of DeepEP.
   - `hybrid_ep_permute` is competitive with plain `hybrid_ep`: slightly faster at `topk=2`, slightly slower at `topk=8`.
+- Longer-window `random` follow-up:
+  - `random, topk=2` longer-window confirmation:
+
+    | kernel | tokens_per_s |
+    | --- | ---: |
+    | `deep_ep` | `73,257,870.37` |
+    | patched `hybrid_ep` | `90,777,677.24` |
+    | patched `hybrid_ep_permute` | `91,250,614.89` |
+
+  - `random, topk=8` longer-window repeats:
+
+    | run | deep_ep tokens_per_s | patched hybrid_ep tokens_per_s | patched hybrid_ep_permute tokens_per_s |
+    | --- | ---: | ---: | ---: |
+    | 1 | `34,442,870.69` | `25,409,362.29` | `38,541,941.24` |
+    | 2 | `34,379,952.19` | `42,567,832.25` | `39,170,413.95` |
+    | 3 | `34,383,801.42` | `41,951,223.51` | `39,252,724.81` |
+
+  - Interpretation of the `random` follow-up:
+    - `random, topk=2` confirms the earlier exploratory result; both patched Hybrid-EP paths are about `1.24x` faster than DeepEP.
+    - `random, topk=8` is repeat-sensitive for plain `hybrid_ep`: DeepEP and `hybrid_ep_permute` stay tightly clustered, while plain `hybrid_ep` has one slow outlier and two faster repeats.
+    - Using the longer-window median-of-three summary at `random, topk=8`, both patched Hybrid-EP paths still beat DeepEP (`1.22x` for `hybrid_ep`, `1.14x` for `hybrid_ep_permute`), but only `hybrid_ep_permute` currently looks stable on that cell.
 
 ## Decision Log
 
@@ -94,6 +115,7 @@ Current state:
 - 2026-03-14: Accept a harness-side intranode RDMA hint skip for exploratory DeepEP bring-up on `world_size <= 8`; keep Hybrid-EP blocked until the runtime JIT compiles on Hopper.
 - 2026-03-14: Use a launcher-applied `space_cluster` rewrite as the current experimental workaround for Hybrid-EP on H100 / CUDA 12.8.
 - 2026-03-14: Treat short-window `runs` cells as noisy and use longer `warmup=5`, `iters=20`, same-pod `kernel=all` runs before drawing conclusions on the patched Hybrid-EP paths.
+- 2026-03-14: Treat `random, topk=8` for plain patched `hybrid_ep` as repeat-sensitive; use repeated longer-window runs and summarize by distribution, not by a single number.
 
 ## Negative Results
 
@@ -103,7 +125,8 @@ Current state:
 - 2026-03-14: `DISABLE_AGGRESSIVE_PTX_INSTRS=1` and `DISABLE_SM90_FEATURES=1` do not change the Hybrid-EP JIT failure on H100 / CUDA 12.8.
 - 2026-03-14: `TORCH_CUDA_ARCH_LIST=9.0a` changes the JIT target to `sm_90a`, but does not change the Hybrid-EP overload failure.
 - 2026-03-14: Short-window (`warmup=1`, `iters=3`) `runs` measurements for the patched Hybrid-EP paths are noisy enough to produce misleading outliers; use the longer-window confirmation table for conclusions on that slice.
+- 2026-03-14: Plain patched `hybrid_ep` is repeat-sensitive at `random, topk=8`; do not treat a single run on that cell as authoritative.
 
 ## Conclusion
 
-Partial success with a local workaround. Unmodified Hybrid-EP is still broken on H100 / CUDA 12.8, but a minimal launcher-applied `space_cluster` rewrite gets both `hybrid_ep` and `hybrid_ep_permute` compiling and running on the CoreWeave H100 machine. On the replicated fixed-shape `runs` slice, patched `hybrid_ep` beats DeepEP by `1.35x` to `1.82x`, and patched `hybrid_ep_permute` beats DeepEP by `1.23x` to `1.88x`. Confidence outside that longer-window `runs` slice remains exploratory, and all positive results still depend on the local launcher-applied rewrite rather than an upstream fix.
+Partial success with a local workaround. Unmodified Hybrid-EP is still broken on H100 / CUDA 12.8, but a minimal launcher-applied `space_cluster` rewrite gets both `hybrid_ep` and `hybrid_ep_permute` compiling and running on the CoreWeave H100 machine. The strongest current result is the replicated fixed-shape `runs` slice, where patched `hybrid_ep` beats DeepEP by `1.35x` to `1.82x` and patched `hybrid_ep_permute` beats DeepEP by `1.23x` to `1.88x`. `random, topk=2` also confirms a win for both patched Hybrid-EP paths, while `random, topk=8` is repeat-sensitive for plain `hybrid_ep` but stably favorable for `hybrid_ep_permute`. All positive results still depend on the local launcher-applied rewrite rather than an upstream fix.
