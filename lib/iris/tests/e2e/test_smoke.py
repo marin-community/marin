@@ -416,7 +416,14 @@ def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screen
     """Scheduling diagnostic shows pending reason for oversized job."""
     smoke_cluster.wait_for_workers(1, timeout=smoke_cluster.job_timeout)
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-diag-cpu", cpu=999_999) as job:
-        status = smoke_cluster.status(job)
+        # Poll until the scheduler has evaluated the job and produced a
+        # CPU-specific pending reason (avoids racing the scheduler loop).
+        deadline = time.monotonic() + smoke_cluster.job_timeout
+        while time.monotonic() < deadline:
+            status = smoke_cluster.status(job)
+            if "cpu" in status.pending_reason.lower():
+                break
+            time.sleep(0.2)
         assert status.state == cluster_pb2.JOB_STATE_PENDING
         assert "cpu" in status.pending_reason.lower()
 
