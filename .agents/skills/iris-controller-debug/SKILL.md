@@ -5,17 +5,21 @@ description: Debug Iris controller state using offline checkpoint snapshots and 
 
 # Skill: Iris Controller Debug
 
-Debug Iris controller issues by downloading a checkpoint snapshot and querying it offline. Use the `/system/process` RPC (via `iris process`) for profiling — no SSH required.
+Debug Iris controller issues by triggering a fresh checkpoint, downloading it, and querying offline. Use the `/system/process` RPC (via `iris process`) for profiling; SSH is acceptable as a fallback when RPC doesn't cover your needs.
 
 Read first: @lib/iris/AGENTS.md
 
 ## Access Pattern
 
 **Always debug offline against a checkpoint copy — never run queries against the live controller DB.**
-The controller writes hourly SQLite checkpoints to remote storage. Download the latest checkpoint and query it locally:
+Trigger a fresh checkpoint on-demand and download it:
 
 ```bash
-# Download the latest checkpoint (production Marin cluster)
+# Trigger a fresh checkpoint (uses the BeginCheckpoint RPC)
+uv run iris cluster checkpoint
+# Output includes the checkpoint path, job/task/worker counts
+
+# Download the checkpoint (production Marin cluster)
 gcloud storage cp gs://marin-us-central2/iris/marin/state/controller-state/latest.sqlite3 /tmp/controller.sqlite3
 
 # Query offline
@@ -27,7 +31,7 @@ conn.row_factory = sqlite3.Row
 "
 ```
 
-If you need a fresher snapshot, ask the user to trigger a checkpoint via the controller API or wait for the next hourly cycle. **Do not SSH into the controller VM to run scripts against the live database** — a slow query can stall the controller and break other users.
+If the state has changed and you need another snapshot, trigger another checkpoint with `uv run iris cluster checkpoint` and re-download. **Do not SSH into the controller VM to run scripts against the live database** — a slow query can stall the controller and break other users.
 
 **Production defaults** (verify at session start):
 - Checkpoint location: `gs://marin-us-central2/iris/marin/state/controller-state/latest.sqlite3`
@@ -35,7 +39,7 @@ If you need a fresher snapshot, ask the user to trigger a checkpoint via the con
 
 ## Profiling
 
-Use the `iris process` CLI which talks to the controller via the `/system/process` RPC — no SSH required:
+Prefer the `iris process` CLI which talks to the controller via the `/system/process` RPC. If the RPC endpoints don't cover what you need, SSH is acceptable as a fallback:
 
 ```bash
 # Thread dump (instant snapshot of all threads)
@@ -119,6 +123,6 @@ These are real issues in the codebase that will mislead you if you don't know ab
 ## Rules
 
 - **NEVER run scripts or queries against the live controller DB.** Always work offline against a downloaded checkpoint. A slow or locking query on the live DB can stall the controller and break other users.
-- **NEVER SSH into the controller VM to profile.** Use `iris process profile` which talks to the controller via the `/system/process` RPC.
+- **Prefer `iris process profile` over SSH for profiling.** It uses the `/system/process` RPC and avoids direct access to the controller VM. SSH is acceptable as a fallback when the RPC endpoints don't cover what you need.
 - **NEVER modify the database without explicit user approval.** Read-only queries on the local checkpoint copy only; writes only as a last resort with user consent on a fresh checkpoint.
 - **NEVER restart the controller or Docker container** — this kills all running jobs cluster-wide.
