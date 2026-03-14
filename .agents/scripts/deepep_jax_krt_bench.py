@@ -174,7 +174,8 @@ fi
 cd /app
 export DEEPEP_SRC_ROOT=/tmp/DeepEP
 export JAX_PLATFORMS=cuda
-env | grep -E '^(DEEPEP_SRC_ROOT|JAX_PLATFORMS)=' | sort
+export JAX_ENABLE_X64=1
+env | grep -E '^(DEEPEP_SRC_ROOT|JAX_ENABLE_X64|JAX_PLATFORMS)=' | sort
 uv sync --quiet --frozen --link-mode symlink --python 3.11 --package levanter --no-group dev --extra gpu
 .venv/bin/python - <<'PY'
 import jax
