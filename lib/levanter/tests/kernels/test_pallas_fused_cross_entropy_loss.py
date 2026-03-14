@@ -974,54 +974,47 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     assert seen_block_sizes == [inferred]
 
 
-def test_pallas_tpu_autotune_mosaic_partitioning_error_uses_inferred_block_sizes(monkeypatch: pytest.MonkeyPatch):
+def test_pallas_tpu_autotune_benchmark_wraps_in_shard_map_when_named_sharding_present(
+    monkeypatch: pytest.MonkeyPatch,
+):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
     y = jnp.zeros((4,), dtype=jnp.int32)
 
-    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
-    candidate = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
-    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+    mesh = object()
+    x_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": ("data", None)})()
+    y_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": ("data",)})()
+    w_sharding = type("FakeNamedSharding", (), {"mesh": mesh, "spec": (None, "model")})()
 
-    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
-        del labels_raw, w_raw
-        seen_block_sizes.append(block_sizes)
-        batch = x_raw.shape[0]
-        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+    def fake_named_sharding_of(value):
+        if value is x:
+            return x_sharding
+        if value is y:
+            return y_sharding
+        if value is w:
+            return w_sharding
+        return None
 
-    def raise_mosaic_partition_error(**_kwargs):
-        raise NotImplementedError(
-            "Mosaic kernels cannot be automatically partitioned. Please wrap the call in a shard_map."
-        )
+    calls: list[tuple[object, tuple[object, ...], object, bool]] = []
 
-    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
-    monkeypatch.setattr(
-        fused_api,
-        "infer_block_sizes_with_tuned_match",
-        lambda *args, **kwargs: (inferred, False),
-    )
-    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
-    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
-    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
-    monkeypatch.setattr(
-        fused_api,
-        "_candidate_block_sizes",
-        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, candidate],
-    )
-    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", raise_mosaic_partition_error)
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+    def fake_shard_map(fn, *, mesh, in_specs, out_specs, check_vma):
+        calls.append((mesh, in_specs, out_specs, check_vma))
+        return fn
 
-    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
-        x,
-        y,
-        w,
-        reduction=None,
-        implementation="pallas_tpu",
+    monkeypatch.setattr(fused_api.jax, "default_backend", lambda: "tpu")
+    monkeypatch.setattr(fused_api, "_named_sharding_of", fake_named_sharding_of)
+    monkeypatch.setattr(fused_api.jax, "shard_map", fake_shard_map)
+
+    wrapped = fused_api._maybe_wrap_loss_in_shard_map_for_benchmark(
+        lambda x_value, labels_value, w_value: x_value[:, 0] + labels_value.astype(x_value.dtype) + w_value[0, 0],
+        x=x,
+        labels=y,
+        w=w,
     )
 
-    assert jnp.array_equal(loss, jnp.zeros((4,), dtype=jnp.float32))
-    assert seen_block_sizes
-    assert all(block == inferred for block in seen_block_sizes)
+    out = wrapped(x, y, w)
+    assert out.shape == (4,)
+    assert calls == [(mesh, (x_sharding.spec, y_sharding.spec, w_sharding.spec), y_sharding.spec, False)]
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
