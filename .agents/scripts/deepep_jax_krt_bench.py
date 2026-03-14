@@ -53,14 +53,24 @@ download_path = Path(tempfile.mkdtemp(dir="/tmp")) / "archive.tar.gz"
 target_dir = Path("{target_dir}")
 
 if target_dir.exists():
-    shutil.rmtree(target_dir)
+    if target_dir.is_dir():
+        for child in target_dir.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    else:
+        target_dir.unlink()
+else:
+    target_dir.mkdir(parents=True)
 
 urllib.request.urlretrieve(archive_url, download_path)
 with tarfile.open(download_path, "r:gz") as archive:
     temp_dir = Path(tempfile.mkdtemp(dir="/tmp"))
     archive.extractall(temp_dir)
     extracted_root = next(temp_dir.iterdir())
-    extracted_root.rename(target_dir)
+    for child in extracted_root.iterdir():
+        shutil.move(str(child), target_dir / child.name)
 print("UNPACKED", target_dir)
 PY
 """
