@@ -44,6 +44,10 @@ Current mainline target order:
 - `D1`: completed as a partial diagnostic lead
   - narrower head-first branch layout handling slightly improved AD/layout behavior and step time
   - but it did not reduce `dispatch_shard_shell_delta_ms`, and xprof `IDLE` worsened
+- `D2`: one gate-owned post-conv branch-core sharding cut is now validated as the strongest partial lead
+  - it reduced `step_duration_ms`, `dispatch_shard_shell_delta_ms`, `xprof_dispatch_shard_shell_delta_ms`, `interaction_remainder_ms`, and `xprof_idle_attributed_ms`
+  - but summary-side `ad_wrapper_shell_delta_ms`, `hybrid_generic_shell_delta_budget_ms`, and layout shell still grew
+  - keep `D2` on the same inward cut; `A2` and `G2` are not unlocked yet
 
 ## D2 Definition
 
