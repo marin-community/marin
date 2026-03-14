@@ -106,7 +106,7 @@ def _register_target() -> None:
     jax.ffi.register_ffi_target(
         _TARGET_NAME,
         jax.ffi.pycapsule(handler),
-        platform="cuda",
+        platform="CUDA",
         api_version=1,
     )
     jax.ffi.register_ffi_target_as_batch_partitionable(_TARGET_NAME)
