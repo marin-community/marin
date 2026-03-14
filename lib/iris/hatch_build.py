@@ -3,10 +3,13 @@
 
 """Hatchling custom build hook for Iris.
 
-Regenerates protobuf files from .proto sources and rebuilds the Vue dashboard
-when source files are newer than their generated outputs. This runs automatically
-during ``uv sync`` / ``pip install -e .`` / wheel builds, eliminating the need
-to check generated files into git or manually run build steps.
+Regenerates protobuf files from .proto sources when source files are newer
+than their generated outputs. This runs automatically during ``uv sync`` /
+``pip install -e .`` / wheel builds, eliminating the need to check generated
+files into git or manually run build steps.
+
+Dashboard assets are built separately via ``iris build dashboard`` or
+``_ensure_dashboard_dist()`` in the Docker image build pipeline.
 """
 
 import logging
@@ -22,9 +25,6 @@ logger = logging.getLogger(__name__)
 # Glob patterns for source and generated files, relative to the iris package root.
 _PROTO_SOURCE_GLOBS = ["src/iris/rpc/*.proto"]
 _PROTO_OUTPUT_GLOBS = ["src/iris/rpc/*_pb2.py", "src/iris/rpc/*_pb2.pyi", "src/iris/rpc/*_connect.py"]
-
-_DASHBOARD_SOURCE_GLOBS = ["dashboard/src/**/*", "dashboard/package.json", "dashboard/rsbuild.config.ts"]
-_DASHBOARD_OUTPUT_DIR = "dashboard/dist"
 
 
 def _newest_mtime(root: Path, globs: list[str]) -> float:
@@ -58,10 +58,15 @@ def _outputs_exist(root: Path, output_globs: list[str]) -> bool:
 
 
 def _needs_rebuild(root: Path, source_globs: list[str], output_globs: list[str]) -> bool:
-    """Return True if any source file is newer than the oldest output file."""
+    """Return True if any source file is strictly newer than the oldest output file.
+
+    Uses a 60-second tolerance because zip archives (used by task bundles)
+    can extract files with slightly different timestamps, causing spurious
+    rebuilds.
+    """
     source_newest = _newest_mtime(root, source_globs)
     output_oldest = _oldest_mtime(root, output_globs)
-    return source_newest > output_oldest
+    return source_newest > output_oldest + 60.0
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -70,7 +75,6 @@ class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict) -> None:
         root = Path(self.root)
         self._maybe_generate_protos(root)
-        self._maybe_build_dashboard(root)
 
     def _maybe_generate_protos(self, root: Path) -> None:
         outputs_present = _outputs_exist(root, _PROTO_OUTPUT_GLOBS)
@@ -109,37 +113,3 @@ class CustomBuildHook(BuildHookInterface):
         if result.returncode != 0:
             raise RuntimeError(f"Protobuf generation failed:\n{result.stdout}\n{result.stderr}")
         logger.info("Protobuf generation complete")
-
-    def _maybe_build_dashboard(self, root: Path) -> None:
-        dashboard_dir = root / "dashboard"
-        if not (dashboard_dir / "package.json").exists():
-            logger.info("Dashboard source not found, skipping build")
-            return
-
-        dist_dir = root / _DASHBOARD_OUTPUT_DIR
-        dist_present = dist_dir.exists() and any(dist_dir.iterdir())
-
-        if shutil.which("npm") is None:
-            if not dist_present:
-                logger.warning(
-                    "npm not found and dashboard/dist is missing. "
-                    "Dashboard will not be available. Install Node.js to build it."
-                )
-            return
-
-        source_newest = _newest_mtime(root, _DASHBOARD_SOURCE_GLOBS)
-        if dist_present and source_newest > 0:
-            output_oldest = _oldest_mtime(root, [f"{_DASHBOARD_OUTPUT_DIR}/**/*"])
-            if output_oldest > 0 and source_newest <= output_oldest:
-                logger.info("Dashboard assets are up-to-date, skipping build")
-                return
-
-        logger.info("Building dashboard assets...")
-        result = subprocess.run(["npm", "ci"], cwd=dashboard_dir, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"npm ci failed:\n{result.stdout}\n{result.stderr}")
-
-        result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Dashboard build failed:\n{result.stdout}\n{result.stderr}")
-        logger.info("Dashboard build complete")

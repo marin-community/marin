@@ -127,6 +127,15 @@ def _make_smoke_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
+def _clear_remote_state(remote_state_dir: str) -> None:
+    """Remove all files under the remote state dir so the controller starts fresh."""
+    import fsspec
+
+    fs, path = fsspec.core.url_to_fs(remote_state_dir)
+    if fs.exists(path):
+        fs.rm(path, recursive=True)
+
+
 def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None = None):
     """Manage full cloud cluster lifecycle: stop old → build images → start → test → stop.
 
@@ -154,6 +163,13 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
         platform.stop_all(config)
     except Exception:
         logger.info("No existing cluster to stop (or stop failed), continuing")
+
+    # Wipe remote state so the new controller doesn't restore a stale checkpoint
+    # (old bundle IDs, finished jobs from a previous run).
+    remote_state_dir = config.storage.remote_state_dir
+    if remote_state_dir:
+        logger.info("Clearing remote state dir: %s", remote_state_dir)
+        _clear_remote_state(remote_state_dir)
 
     logger.info("Starting fresh controller...")
     address = platform.start_controller(config)
@@ -582,7 +598,10 @@ def test_cancel_job_releases_resources(smoke_cluster):
 
     Regression test for #3553.
     """
-    heavy_cpu = 900  # close to the 1000-core local worker capacity (ResourceSpec.cpu is in cores)
+    # Use most of a single worker's CPU so the followup job can't schedule
+    # until the heavy job is cancelled. Local workers have 1000 cores, cloud
+    # TPU VMs have 128 — pick a value that works in both modes.
+    heavy_cpu = 8 if smoke_cluster.is_cloud else 900
 
     job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
     smoke_cluster.wait_for_state(job, cluster_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
