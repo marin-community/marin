@@ -490,7 +490,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               </td>
               <td class="px-3 py-2 text-[13px]">
                 <StatusBadge :status="task.state" size="sm" />
-                <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate">
+                <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate" :title="task.pendingReason">
                   {{ task.pendingReason }}
                 </div>
               </td>
