@@ -9986,3 +9986,202 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
 - Next bold hypothesis:
   - Another mainline `G1` turn is only justified if the next cut can eliminate the generic `HackableDecoderLayer/jvp()/closed_call/shard_map` shell family rather than merely removing branch-local closed calls.
   - If that smaller cut is not available, the next justified follow-up is an isolated `D1` sharding/collective ownership diagnostic on this branch-local contract or a `G2` lower-primitive attempt only if the surviving payload is const-clean enough to lower as one primitive.
+
+### Iteration 101 - Coverage Slot D2 / fixed-`3/4` kernel-branch-core sharding diagnostic (validated, rejected)
+
+- Coverage slot: `D2`
+- Change class: `branch-core sharding diagnostic`
+- Why this is the required next slot now:
+  - The validated shell evidence still ranks `dispatch_shard_shell_delta_ms` first and `ad_wrapper_shell_delta_ms` second on the fixed-`3/4` head.
+  - Same-boundary GDN kernel work, outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries, and the broad `G1` branch-wrapper family were already demoted or rejected.
+  - The remaining unanswered mainline question was whether a smaller branch-core sharding/layout cut could move `dispatch_shard_shell_delta_ms` without introducing another broad wrapper or a new AD boundary.
+
+- Codex loop iteration: `3 / 10`
+- Date: `2026-03-14T13:35:09Z`
+- Starting commit: `d4559ac84d77d33282c3cab33bef3520dc321ec6`
+
+- Current validated baseline carried in:
+  - Governance champion from `.agents/logs/gdn_codex_loop/perf_state.json`:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration_ms=166.307253`
+  - Latest validated current-head `S3` matched pair from Iteration 93:
+    - hybrid `throughput/mfu=6.036753`
+    - hybrid `throughput/tokens_per_second=195287.805612`
+    - hybrid `throughput/duration=0.167793375 s`
+    - hybrid `step_duration_ms=167.793375`
+    - control `throughput/duration=0.057256827 s`
+    - `train_path_budget_ms=42.682894`
+    - `decoder_layer_shell_budget_ms=20.388593`
+    - `hybrid_generic_shell_delta_budget_ms=20.103367`
+    - `dispatch_shard_shell_delta_ms=9.771419`
+    - `ad_wrapper_shell_delta_ms=6.178290`
+    - `interaction_remainder_ms=47.750288`
+    - `xprof_dispatch_shard_shell_delta_ms=31.572807`
+    - `xprof_ad_wrapper_shell_delta_ms=11.057602`
+    - `xprof_idle_attributed_ms=38.362912`
+  - Diagnostic state carried from the current summary/perf-state:
+    - `D1` head-first layout ownership was a partial lead only because `dispatch_shard_shell_delta_ms` stayed flat/up and xprof `IDLE` worsened.
+    - The broader post-conv `D2` retry also failed promotion and was reverted, so the next admissible move still had to be a smaller branch-core sharding cut.
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot D2 (selected):** add a training-only branch-core sharding/layout contract only around the head-first kernel island `{q, k, v, g, b} -> chunk_gated_delta_rule -> restore`, leaving `z`, branch RMSNorm, and out-projection on the default path (`highest chance to cut summary-side `dispatch/shard` without creating a new AD boundary`, `medium risk that xprof still charges waiting/shell to the cut`).
+  2. **Coverage slot D2 (post-kernel extension):** carry the same contract through `z` multiply and branch RMSNorm before returning to the default path (`more upside if the shell sits just after the kernel`, `higher risk of re-emitting layout / AD shell under a slightly larger wrapper`).
+  3. **Coverage slot D2 (prekernel-only):** contract only the `q/k/v` inputs before the kernel and leave the kernel call site unchanged (`lowest correctness risk`, `low upside because the main collective shell likely survives at the kernel boundary itself`).
+
+- Selected slot rationale:
+  - `D2` was mandatory and this was the smallest executable cut that still owned an explicit branch-core sharding contract plus the head-first layout contract.
+  - `A2` remained disallowed because there was not yet a positive `D2` on the same cut.
+  - `G2` remained premature because this cut was not yet proven const-clean enough for a lower primitive.
+  - `U` remained unjustified because CE stayed bounded and did not re-emerge as the mainline explanation.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - This was not a CE side-arm, so CE stayed fixed across correctness and both profiles.
+
+- Expected effect on `step_duration_ms`:
+  - decrease
+- Expected effect on `dispatch_shard_shell_delta_ms`:
+  - material decrease
+- Expected effect on `ad_wrapper_shell_delta_ms`:
+  - flat to slight decrease
+- Expected effect on `hybrid_generic_shell_delta_budget_ms`:
+  - decrease
+- Expected effect on `interaction_remainder_ms`:
+  - flat to decrease
+- Expected effect on `xprof_idle_attributed_ms`:
+  - flat to decrease
+- Reject if `step_duration_ms` does not improve? **Yes.**
+  - A `D2` sharding diagnostic still has to help the real step to count as a useful mainline cut.
+- Reject if `dispatch_shard_shell_delta_ms` stays flat / grows? **Yes.**
+  - `dispatch/shard` remained the immediate target budget.
+- Reject if `ad_wrapper_shell_delta_ms` grows? **Yes.**
+  - A smaller sharding cut is not promotable if it simply moves more cost into wrapper/AD shell.
+- Reject if `hybrid_generic_shell_delta_budget_ms` stays flat / grows? **Yes.**
+  - Promotion still targets canonical shell budgets, not a narrower namespace.
+- Reject if `interaction_remainder_ms` grows? **Yes.**
+  - Waiting / serialization growth would still mean the smaller cut missed the critical path.
+- Reject if `xprof_idle_attributed_ms` stays flat / grows when an XPlane pair is available? **Yes.**
+  - `D2` only graduates if the matched XPlane view confirms the smaller cut is not just renaming shell tax.
+
+- Change summary:
+  - Added a training-only `GatedDeltaNet._train_kernel_branch_core(...)` path in `lib/levanter/src/levanter/layers/gated_deltanet.py` that owns only the kernel-island sharding/layout contract, rearranges `{q, k, v, g, b}` into head-first layout under an explicit sharding contract, calls `chunk_gated_delta_rule(...)`, and returns to the default path before `z`, RMSNorm, and output projection.
+  - Added the opt-in model/profile switch `gdn_use_kernel_branch_core_sharding_diagnostic` / `GDN_PROFILE_GDN_KERNEL_BRANCH_CORE_SHARDING_DIAGNOSTIC` so the diagnostic path stays default-off.
+  - Added a parity test in `lib/levanter/tests/test_gdn_layer.py` that checks forward output parity and input-gradient parity between the ordinary training path and the kernel-branch-core diagnostic path.
+
+- Correctness checks:
+  - Local smoke check:
+    - `uv run pytest lib/levanter/tests/test_gdn_layer.py -k train_kernel_branch_core_matches_default_training_path`
+    - result: `1 passed, 14 deselected`
+  - Preferred TPU correctness command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
+    - result: `92 passed, 2 skipped in 286.08s (0:04:46)`
+  - Inventory note:
+    - the current tree now carries both the earlier branch-boundary parity coverage and this new kernel-branch-core parity test, so the full TPU slice is `92 passed, 2 skipped`
+
+- Profile runs:
+  - Hybrid `D2` candidate:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_d2_i03_kernel --profile-env GDN_PROFILE_GDN_KERNEL_BRANCH_CORE_SHARDING_DIAGNOSTIC=1 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_d2_i03_kernel_gdn3of4_130m_ch128_seg16_20steps-d968c6`
+    - selected CE backend: `pallas_tpu`
+    - selected CE bwd mode: `pallas`
+    - `gdn_layer_fraction=0.833333`
+  - Attention-only matched control:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_d2_i03_attn --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_d2_i03_attn_attnonly_130m_ch128_seg16_20steps-765711`
+    - selected CE backend: `pallas_tpu`
+    - selected CE bwd mode: `pallas`
+    - `gdn_layer_fraction=0.0`
+  - Summary and xprof attribution:
+    - `uv run python lib/marin/tools/profile_summary.py summarize --run-target https://wandb.ai/marin-community/marin/runs/gdn_d2_i03_kernel_gdn3of4_130m_ch128_seg16_20steps-d968c6 --download-root scratch/gdn_d2_i03/profiles_hybrid --breakdown-mode exclusive_global --hot-op-limit 200 --output scratch/gdn_d2_i03/hybrid_summary_200.json`
+    - `uv run python lib/marin/tools/profile_summary.py summarize --run-target https://wandb.ai/marin-community/marin/runs/gdn_d2_i03_attn_attnonly_130m_ch128_seg16_20steps-765711 --download-root scratch/gdn_d2_i03/profiles_attn --breakdown-mode exclusive_global --hot-op-limit 200 --output scratch/gdn_d2_i03/attn_summary_200.json`
+    - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_d2_i03/hybrid_summary_200.json --baseline-summary scratch/gdn_d2_i03/attn_summary_200.json --step-duration-ms 165.26034900016384 --baseline-step-duration-ms 57.03759800235275 --upper-bound-step-ms 57.03759800235275 --gdn-layer-fraction 0.833333 --baseline-gdn-layer-fraction 0.0 --gdn-layers-per-block 3 --baseline-gdn-layers-per-block 0 --gdn-block-size 4 --baseline-gdn-block-size 4 --output scratch/gdn_d2_i03/attribution_pre_xprof.json`
+    - `uv run python scripts/gdn/gdnctl.py xprof-compare-runs --cluster us-east5-a --tpu-name "$USER-gdn" --before-run-target https://wandb.ai/marin-community/marin/runs/gdn_d2_i03_attn_attnonly_130m_ch128_seg16_20steps-765711 --after-run-target https://wandb.ai/marin-community/marin/runs/gdn_d2_i03_kernel_gdn3of4_130m_ch128_seg16_20steps-d968c6 --normalize-positive-deltas-ms 63.98920571581091 --output scratch/gdn_d2_i03/xprof_compare.json`
+    - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_d2_i03/hybrid_summary_200.json --baseline-summary scratch/gdn_d2_i03/attn_summary_200.json --step-duration-ms 165.26034900016384 --baseline-step-duration-ms 57.03759800235275 --upper-bound-step-ms 57.03759800235275 --gdn-layer-fraction 0.833333 --baseline-gdn-layer-fraction 0.0 --gdn-layers-per-block 3 --baseline-gdn-layers-per-block 0 --gdn-block-size 4 --baseline-gdn-block-size 4 --xprof-compare-json scratch/gdn_d2_i03/xprof_compare.json --output scratch/gdn_d2_i03/attribution.json`
+  - Throughput metrics use the required history-window median over steps `10-18` (`9` points).
+
+- Measured metrics (Iteration 93 carried current-head `S3` baseline -> kernel-branch-core `D2` candidate):
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - `gdn_layer_fraction: 0.833333`
+  - `forward_closed_call_ms: 20.663477 -> 20.315156`
+  - `backward_closed_call_ms: 13.128558 -> 12.955472`
+  - `while: 8.889455 -> 8.648052 ms`
+  - `conditional: 0.001404 -> 0.001219 ms`
+  - `CE-attributed while: 8.889455 -> 8.648052 ms`
+  - `Kernel budget: 33.792035 -> 33.270629 ms`
+  - `Control budget: 8.890858 -> 8.649272 ms`
+  - `Train-path budget: 42.682894 -> 41.919900 ms`
+  - `Decoder-layer shell budget: 20.388593 -> 22.541527 ms`
+  - `Hybrid generic shell delta budget: 20.103367 -> 20.899780 ms`
+  - `Dispatch/shard shell delta budget: 9.771419 -> 5.271980 ms`
+  - `AD/wrapper shell delta budget: 6.178290 -> 8.831200 ms`
+  - `layout_shell_delta_ms: 4.472767 ms`
+  - `residual_add_shell_delta_ms: 2.323834 ms`
+  - `AD shell budget: 6.978173 -> 9.750866 ms`
+  - `Sharding shell budget: 13.241332 -> 7.556122 ms`
+  - `Layout shell budget: 2.177870 -> 4.819343 ms`
+  - `Residual/add shell budget: 2.322353 -> 2.323834 ms`
+  - `xprof hybrid generic shell delta budget: 47.750288 -> 63.989206 ms`
+  - `xprof dispatch/shard shell delta budget: 31.572807 -> 38.220022 ms`
+  - `xprof AD/wrapper shell delta budget: 11.057602 -> 15.827114 ms`
+  - `xprof layout shell delta budget: 2.583071 -> 6.427746 ms`
+  - `xprof residual/add shell delta budget: 2.536807 -> 3.514323 ms`
+  - `xprof IDLE attributed remainder: 38.362912 -> 51.062485 ms`
+  - `step_duration_ms: 167.793375 -> 165.260349`
+  - `remainder_budget_ms: 125.110481 -> 123.340449`
+  - `interaction_remainder_ms: 47.750288 -> 45.403071`
+  - `upper_bound_gap_ms: 110.536548 -> 108.222751`
+  - `gap_explained_by_train_path: 38.61% -> 38.73%`
+  - `gap_explained_by_decoder_layer_shell: 18.45% -> 20.83%`
+  - `gap_explained_by_hybrid_generic_shell_delta: 18.19% -> 19.31%`
+  - `throughput/mfu: 6.036753 -> 6.129281`
+  - `throughput/tokens_per_second: 195287.805612 -> 198281.077090`
+  - `throughput/duration: 0.167793375 -> 0.165260349`
+  - `hybrid_generic_shell_delta_topk: dispatch_shard_shell HackableDecoderLayer/shard_map/pallas_call: +5.271980 ms; ad_wrapper_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/convert_element_type: +2.360093 ms; layout_shell HackableDecoderLayer/reshape: +2.332432 ms; layout_shell HackableDecoderLayer/transpose: +2.140334 ms; residual_add_shell transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: +1.791185 ms`
+  - `decoder_layer_shell_topk: HackableDecoderLayer/shard_map/pallas_call: 5.271980 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/convert_element_type: 2.360093 ms; HackableDecoderLayer/reshape: 2.332432 ms; HackableDecoderLayer/transpose: 2.140334 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/add_any: 1.791185 ms`
+  - `remainder_topk: HackableDecoderLayer/shard_map/pallas_call: 5.271980 ms; CE forward pallas_call: 2.703519 ms; transpose(jvp(HackableTransformer))/HackableDecoderLayer/convert_element_type: 2.360093 ms; HackableDecoderLayer/reshape: 2.332432 ms; HackableDecoderLayer/transpose: 2.140334 ms`
+
+- Governance / rejection rationale:
+  - The candidate is a mild speedup versus the latest validated current-head `S3` pair:
+    - `throughput/mfu: 6.036753 -> 6.129281` (`+1.533%`)
+    - `step_duration_ms: 167.793375 -> 165.260349` (`-2.533026 ms`)
+    - `dispatch_shard_shell_delta_ms: 9.771419 -> 5.271980` (`-4.499439 ms`)
+    - `interaction_remainder_ms: 47.750288 -> 45.403071` (`-2.347217 ms`)
+  - But it still fails the `D2` acceptance bar on the canonical shell checks:
+    - `ad_wrapper_shell_delta_ms` grew by `+2.652910 ms`
+    - `hybrid_generic_shell_delta_budget_ms` grew by `+0.796413 ms`
+    - `xprof_dispatch_shard_shell_delta_ms` grew by `+6.647215 ms`
+    - `xprof_ad_wrapper_shell_delta_ms` grew by `+4.769512 ms`
+    - `xprof_idle_attributed_ms` grew by `+12.699573 ms`
+  - This is not CE progress:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: 8.889455 -> 8.648052 ms`
+  - Interpretation:
+    - the smaller kernel-island cut does look like a real summary-side `dispatch/shard` lead,
+    - but the matched XPlane pair still says the surviving shell/waiting picture got worse overall,
+    - so this cut does not count as a positive `D2` and does not unlock `A2`.
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both` -> `92 passed, 2 skipped in 286.08s (0:04:46)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `step_duration_ms: 167.793375 -> 165.260349`
+    - `dispatch_shard_shell_delta_ms: 9.771419 -> 5.271980`
+    - `ad_wrapper_shell_delta_ms: 6.178290 -> 8.831200`
+    - `hybrid_generic_shell_delta_budget_ms: 20.103367 -> 20.899780`
+    - `interaction_remainder_ms: 47.750288 -> 45.403071`
+    - `xprof_idle_attributed_ms: 38.362912 -> 51.062485`
+  - Governance:
+    - rejected
+    - no promotion; the champion remains `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - the diagnostic remains default-off behind `gdn_use_kernel_branch_core_sharding_diagnostic=False`
+
+- Assessment: **validated, rejected**. This smaller `D2` cut finally moved the real step and the summary-side `dispatch/shard` budget in the right direction without adding a new AD boundary, which makes it a useful branch-core sharding lead. It still failed the promotion bar because `ad_wrapper` shell grew and the matched XPlane pair attributed substantially more hybrid shell and `IDLE` remainder to the candidate. The next justified move is therefore still another narrower / cleaner `D2`, not `A2`, `G2`, or a CE side-arm.

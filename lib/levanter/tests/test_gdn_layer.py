@@ -285,6 +285,65 @@ def test_train_branch_boundary_matches_default_training_path(use_flash: bool):
     np.testing.assert_allclose(grad_boundary, grad_default, rtol=2e-5, atol=2e-5)
 
 
+@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
+def test_train_kernel_branch_core_matches_default_training_path(use_flash: bool):
+    key = jax.random.PRNGKey(321)
+    B, L = 2, 21
+    cfg = GatedDeltaNetConfig(
+        Embed=Axis("embed", 48),
+        num_k_heads=2,
+        num_v_heads=4,
+        head_k_dim=8,
+        head_v_dim=8,
+        conv_kernel_size=4,
+        rms_norm_eps=1e-6,
+    )
+    layer = GatedDeltaNet.init(cfg, key=key, use_flash=use_flash)
+
+    Batch, Pos, Embed = Axis("batch", B), Axis("position", L), cfg.Embed
+    x = hax.named(jax.random.normal(key, (B, L, Embed.size), dtype=jnp.float32), (Batch, Pos, Embed))
+    mask = hax.named(
+        jnp.concatenate([jnp.ones((B, L - 3)), jnp.zeros((B, 3))], axis=1).astype(jnp.float32),
+        (Batch.name, Pos.name),
+    )
+
+    y_default, _ = layer(x, inference=False, chunk_size=8, segment_size=4, attention_mask=mask)
+    y_diag, _ = layer(
+        x,
+        inference=False,
+        chunk_size=8,
+        segment_size=4,
+        attention_mask=mask,
+        train_kernel_branch_core_sharding_diagnostic=True,
+    )
+    np.testing.assert_allclose(y_diag.array, y_default.array, rtol=1e-5, atol=1e-5)
+
+    def loss_default(x_arr):
+        y, _ = layer(
+            hax.named(x_arr, x.axes),
+            inference=False,
+            chunk_size=8,
+            segment_size=4,
+            attention_mask=mask,
+        )
+        return jnp.sum(y.array)
+
+    def loss_diag(x_arr):
+        y, _ = layer(
+            hax.named(x_arr, x.axes),
+            inference=False,
+            chunk_size=8,
+            segment_size=4,
+            attention_mask=mask,
+            train_kernel_branch_core_sharding_diagnostic=True,
+        )
+        return jnp.sum(y.array)
+
+    grad_default = jax.grad(loss_default)(x.array)
+    grad_diag = jax.grad(loss_diag)(x.array)
+    np.testing.assert_allclose(grad_diag, grad_default, rtol=2e-5, atol=2e-5)
+
+
 @skip_if_no_torch
 @pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_gdn_layer_backward_matches_hf(use_flash: bool):

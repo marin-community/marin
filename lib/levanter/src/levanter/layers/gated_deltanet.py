@@ -41,7 +41,7 @@ from jax import lax
 from jax import shard_map as jax_shard_map
 from jax.experimental import pallas as pl
 from jax._src.state.indexing import dslice
-from jax.sharding import PartitionSpec as P
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 import haliax as hax
 import haliax.nn as hnn
@@ -684,6 +684,37 @@ def _preserve_sharding_like(x: jnp.ndarray, like: jnp.ndarray) -> jnp.ndarray:
         return jax.lax.with_sharding_constraint(x, like.sharding)
     except Exception:
         return x
+
+
+def _permute_partition_spec(
+    spec: P | tuple | None,
+    *,
+    source_axes: tuple[str, ...],
+    target_axes: tuple[str, ...],
+) -> P:
+    spec_tuple = tuple(spec) if spec is not None else ()
+    if len(spec_tuple) < len(source_axes):
+        spec_tuple = spec_tuple + (None,) * (len(source_axes) - len(spec_tuple))
+    axis_to_spec = {axis_name: spec_tuple[idx] for idx, axis_name in enumerate(source_axes)}
+    return P(*(axis_to_spec.get(axis_name) for axis_name in target_axes))
+
+
+def _rearrange_with_sharding_contract(
+    x: NamedArray,
+    target_axes: tuple[Axis | str, ...],
+) -> NamedArray:
+    source_axis_names = tuple(ax.name for ax in x.axes)
+    target = hax.rearrange(x, target_axes)
+    target_axis_names = tuple(ax.name for ax in target.axes)
+    mesh, spec = _get_mesh_and_spec(x.array)
+    if _mesh_size(mesh) <= 1:
+        return target
+    sharding = NamedSharding(
+        mesh,
+        _permute_partition_spec(spec, source_axes=source_axis_names, target_axes=target_axis_names),
+    )
+    constrained = jax.lax.with_sharding_constraint(target.array, sharding)
+    return hax.named(constrained, target.axes)
 
 
 def _apply_linear_weight(
@@ -4548,6 +4579,50 @@ class GatedDeltaNet(eqx.Module):
         )
         return hax.named(y_arr, x.axes)
 
+    def _train_kernel_branch_core(
+        self,
+        *,
+        q: NamedArray,
+        k: NamedArray,
+        v: NamedArray,
+        g: NamedArray,
+        beta: NamedArray,
+        chunk_size: int,
+        segment_size: int,
+    ) -> NamedArray:
+        """Own only the train kernel's layout/sharding contract for the D2 diagnostic."""
+        cfg = self.config
+        Batch = q.resolve_axis("batch")
+        Pos = q.resolve_axis("position")
+
+        q_h = q.rename({cfg.Heads.name: "heads"})
+        k_h = k.rename({cfg.Heads.name: "heads"})
+        v_h = v.rename({cfg.Heads.name: "heads"})
+        g_h = g.rename({cfg.Heads.name: "heads"})
+        b_h = beta.rename({cfg.Heads.name: "heads"})
+
+        q_kernel = _rearrange_with_sharding_contract(q_h, (Batch, cfg.Heads, Pos, cfg.KHeadDim))
+        k_kernel = _rearrange_with_sharding_contract(k_h, (Batch, cfg.Heads, Pos, cfg.KHeadDim))
+        v_kernel = _rearrange_with_sharding_contract(v_h, (Batch, cfg.Heads, Pos, cfg.VHeadDim))
+        g_kernel = _rearrange_with_sharding_contract(g_h, (Batch, cfg.Heads, Pos))
+        b_kernel = _rearrange_with_sharding_contract(b_h, (Batch, cfg.Heads, Pos))
+
+        out, _ = chunk_gated_delta_rule(
+            q_kernel,
+            k_kernel,
+            v_kernel,
+            g_kernel,
+            b_kernel,
+            chunk_size=chunk_size,
+            segment_size=segment_size,
+            initial_state=None,
+            output_final_state=False,
+            use_qk_l2norm_in_kernel=True,
+            use_flash=self.use_flash,
+            head_first=True,
+        )
+        return out
+
     def __call__(
         self,
         x: NamedArray,
@@ -4556,6 +4631,7 @@ class GatedDeltaNet(eqx.Module):
         chunk_size: int = 64,
         segment_size: int = 8,
         attention_mask: Optional[NamedArray] = None,
+        train_kernel_branch_core_sharding_diagnostic: bool = False,
         decode_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None,  # (conv_state, S_state)
     ) -> Tuple[NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
         """Run the full GDN token mixer.
@@ -4565,6 +4641,8 @@ class GatedDeltaNet(eqx.Module):
           inference: if True, returns and expects state for streaming decode.
           chunk_size: chunk length for the parallel kernel (prefill/train).
           attention_mask: optional [B, Pos] (1 for real tokens, 0 for pad).
+          train_kernel_branch_core_sharding_diagnostic: if True, run the training-only
+              branch-core sharding/layout contract only around the leaf train kernel.
           decode_state: optional tuple (conv_state, S_state) for streaming decode:
               conv_state: (N, Channels, K)
               S_state:    (B, VHeads, d_k, d_v)
@@ -4669,51 +4747,62 @@ class GatedDeltaNet(eqx.Module):
         A_exp = hax.exp(self.A_log.astype(jnp.float32))
         g = -(A_exp * hnn.softplus(a32 + dt_bias_na)).astype(x.dtype)  # log-decay on Heads
 
-        # 4) Kernels expect [batch, position, heads, dim] (axis name "heads")
-        q_h = q.rename({cfg.Heads.name: "heads"})
-        k_h = k.rename({cfg.Heads.name: "heads"})
-        v_kern = v_h.rename({cfg.Heads.name: "heads"})
-        g_h = g.rename({cfg.Heads.name: "heads"})
-        b_h = beta.rename({cfg.Heads.name: "heads"})
-
-        q_bphd = hax.rearrange(q_h, ("batch", "position", "heads", cfg.KHeadDim.name))
-        k_bphd = hax.rearrange(k_h, ("batch", "position", "heads", cfg.KHeadDim.name))
-        v_bphd = hax.rearrange(v_kern, ("batch", "position", "heads", cfg.VHeadDim.name))
-        _dbg("kernel/q_bphd", q_bphd.array)
-        _dbg("kernel/k_bphd", k_bphd.array)
-        _dbg("kernel/v_bphd", v_bphd.array)
-
-        # Choose the kernel:
-        if decode_state is not None and x.axis_size("position") == 1 and S_state is not None:
-            out_bphd, S_new = recurrent_gated_delta_rule(
-                q_bphd,
-                k_bphd,
-                v_bphd,
-                g_h,
-                b_h,
-                initial_state=S_state,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=True,
-                use_flash=self.use_flash,
-            )
-        else:
-            out_bphd, S_new = chunk_gated_delta_rule(
-                q_bphd,
-                k_bphd,
-                v_bphd,
-                g_h,
-                b_h,
+        if train_kernel_branch_core_sharding_diagnostic and not inference and decode_state is None:
+            out = self._train_kernel_branch_core(
+                q=q,
+                k=k,
+                v=v_h,
+                g=g,
+                beta=beta,
                 chunk_size=chunk_size,
                 segment_size=segment_size,
-                initial_state=None,
-                output_final_state=inference,
-                use_qk_l2norm_in_kernel=True,
-                use_flash=self.use_flash,
             )
+            S_new = None
+        else:
+            # 4) Kernels expect [batch, position, heads, dim] (axis name "heads")
+            q_h = q.rename({cfg.Heads.name: "heads"})
+            k_h = k.rename({cfg.Heads.name: "heads"})
+            v_kern = v_h.rename({cfg.Heads.name: "heads"})
+            g_h = g.rename({cfg.Heads.name: "heads"})
+            b_h = beta.rename({cfg.Heads.name: "heads"})
+
+            q_bphd = hax.rearrange(q_h, ("batch", "position", "heads", cfg.KHeadDim.name))
+            k_bphd = hax.rearrange(k_h, ("batch", "position", "heads", cfg.KHeadDim.name))
+            v_bphd = hax.rearrange(v_kern, ("batch", "position", "heads", cfg.VHeadDim.name))
+            _dbg("kernel/q_bphd", q_bphd.array)
+            _dbg("kernel/k_bphd", k_bphd.array)
+            _dbg("kernel/v_bphd", v_bphd.array)
+
+            # Choose the kernel:
+            if decode_state is not None and x.axis_size("position") == 1 and S_state is not None:
+                out, S_new = recurrent_gated_delta_rule(
+                    q_bphd,
+                    k_bphd,
+                    v_bphd,
+                    g_h,
+                    b_h,
+                    initial_state=S_state,
+                    output_final_state=True,
+                    use_qk_l2norm_in_kernel=True,
+                    use_flash=self.use_flash,
+                )
+            else:
+                out, S_new = chunk_gated_delta_rule(
+                    q_bphd,
+                    k_bphd,
+                    v_bphd,
+                    g_h,
+                    b_h,
+                    chunk_size=chunk_size,
+                    segment_size=segment_size,
+                    initial_state=None,
+                    output_final_state=inference,
+                    use_qk_l2norm_in_kernel=True,
+                    use_flash=self.use_flash,
+                )
 
         # Keep the kernel output on "heads" so TP can shard the out-projection.
-        out = out_bphd  # [B, Pos, heads, VHeadDim]
-        _dbg("kernel/out_bphd", out.array)
+        _dbg("kernel/out", out.array)
 
         # 5) Gated RMSNorm with Z (rename Z to "heads" to match)
         z_gate = z_h.rename({cfg.Heads.name: "heads"})

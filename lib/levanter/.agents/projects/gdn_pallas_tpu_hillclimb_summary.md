@@ -44,6 +44,9 @@ Current mainline target order:
 - `D1`: completed as a partial diagnostic lead
   - narrower head-first branch layout handling slightly improved AD/layout behavior and step time
   - but it did not reduce `dispatch_shard_shell_delta_ms`, and xprof `IDLE` worsened
+- `D2`: first smaller branch-core sharding diagnostic completed as a partial lead
+  - a kernel-branch-core cut around the head-first `chunk_gated_delta_rule` inputs improved full-step time and reduced summary-side `dispatch_shard_shell_delta_ms`
+  - but `ad_wrapper_shell_delta_ms`, xprof `dispatch/shard`, and xprof `IDLE` all worsened, so it does not unlock `A2`
 
 ## D2 Definition
 
@@ -65,6 +68,10 @@ Only after a positive `D2` on the same cut:
 - keep the `D2` forward/sharding cut fixed
 - move AD/manual-backward ownership onto that already-proven cut
 - reject immediately if dispatch/shard regresses
+
+The next required mainline slot therefore remains:
+
+- another narrower / cleaner `D2`
 
 ## Anti-Goals
 
