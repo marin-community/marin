@@ -695,16 +695,15 @@ class CoreweavePlatform:
 
         except Exception as e:
             logger.error("Slice %s monitoring failed: %s", handle.slice_id, e)
-            try:
-                for pod_name in handle._pod_names:
+            for pod_name in handle._pod_names:
+                try:
                     self._kubectl.delete("pod", pod_name, force=True)
+                except Exception:
+                    logger.warning("Failed to clean up pod %s for slice %s", pod_name, handle.slice_id)
+            try:
                 self._kubectl.delete("configmap", _worker_config_cm_name(handle.slice_id))
-            except Exception as cleanup_err:
-                logger.warning(
-                    "Cleanup after failure also failed for slice %s: %s",
-                    handle.slice_id,
-                    cleanup_err,
-                )
+            except Exception:
+                logger.warning("Failed to clean up ConfigMap for slice %s", handle.slice_id)
             handle._set_state(CloudSliceState.FAILED, error_message=str(e))
 
     def _create_worker_pod(
