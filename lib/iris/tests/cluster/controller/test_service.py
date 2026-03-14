@@ -304,6 +304,101 @@ def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_requ
     assert "SUCCEEDED" in exc_info.value.message
 
 
+def test_existing_job_policy_keep_running(service, state, job_request):
+    """KEEP policy on a running job returns the existing handle without re-creating."""
+    request = job_request("keep-job")
+    job_id = JobName.root("test-user", "keep-job")
+
+    service.launch_job(request, None)
+
+    # Job is still running (PENDING). Submit again with KEEP policy.
+    request_keep = job_request("keep-job")
+    request_keep.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP
+    response = service.launch_job(request_keep, None)
+
+    assert response.job_id == job_id.to_wire()
+    # Job should still be in its original PENDING state (not replaced).
+    job = _query_job(state, job_id)
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_existing_job_policy_recreate_running(service, state, job_request):
+    """RECREATE policy cancels a running job and replaces it."""
+    request = job_request("recreate-job")
+    job_id = JobName.root("test-user", "recreate-job")
+
+    service.launch_job(request, None)
+    # Confirm job exists and is pending
+    job = _query_job(state, job_id)
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+    request_recreate = job_request("recreate-job")
+    request_recreate.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_RECREATE
+    response = service.launch_job(request_recreate, None)
+
+    assert response.job_id == job_id.to_wire()
+    # New job should be pending (the old one was cancelled and removed).
+    job = _query_job(state, job_id)
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_existing_job_policy_error_any_state(service, state, job_request):
+    """ERROR policy rejects submission regardless of job state."""
+    request = job_request("error-policy-job")
+    job_id = JobName.root("test-user", "error-policy-job")
+
+    service.launch_job(request, None)
+
+    # Running job with ERROR policy -> error
+    request_err = job_request("error-policy-job")
+    request_err.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_ERROR
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request_err, None)
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+
+    # Mark job as finished, ERROR policy should still reject
+    _set_job_state(state, job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request_err, None)
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+
+
+def test_existing_job_policy_unspecified_preserves_current_behavior(service, state, job_request):
+    """Default (UNSPECIFIED) policy replaces finished jobs and errors on running ones."""
+    request = job_request("default-policy-job")
+    job_id = JobName.root("test-user", "default-policy-job")
+
+    service.launch_job(request, None)
+
+    # Running job -> error (same as before)
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+    assert "still running" in exc_info.value.message
+
+    # Finished job -> replaced
+    _set_job_state(state, job_id, cluster_pb2.JOB_STATE_FAILED)
+    response = service.launch_job(request, None)
+    assert response.job_id == job_id.to_wire()
+    job = _query_job(state, job_id)
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_fail_if_exists_backward_compat(service, state, job_request):
+    """Legacy fail_if_exists=true is equivalent to EXISTING_JOB_POLICY_ERROR."""
+    request = job_request("compat-job")
+    job_id = JobName.root("test-user", "compat-job")
+
+    service.launch_job(request, None)
+    _set_job_state(state, job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
+
+    request_legacy = job_request("compat-job")
+    request_legacy.fail_if_exists = True
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request_legacy, None)
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+
+
 def test_launch_job_rejects_empty_name(service, state):
     """Verify launch_job rejects empty job names."""
     request = cluster_pb2.Controller.LaunchJobRequest(
