@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
@@ -73,6 +73,16 @@ const taskColumns: Column[] = [
 useAutoRefresh(fetchWorker, 5_000)
 onMounted(fetchWorker)
 
+const copiedAddress = ref(false)
+
+async function copyAddress(addr: string) {
+  if (!addr) return
+  const ip = addr.replace(/^https?:\/\//, '').replace(/:\d+$/, '')
+  await navigator.clipboard.writeText(ip)
+  copiedAddress.value = true
+  setTimeout(() => { copiedAddress.value = false }, 1500)
+}
+
 function attributeDisplay(val: { stringValue?: string; intValue?: string; floatValue?: string }): string {
   if (val.stringValue !== undefined) return val.stringValue
   if (val.intValue !== undefined) return val.intValue
@@ -118,8 +128,21 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           />
           {{ worker?.healthy ? 'Healthy' : 'Unhealthy' }}
         </span>
-        <span v-if="worker?.address" class="text-sm text-text-muted font-mono">
+        <span v-if="worker?.address" class="group/addr text-sm text-text-muted font-mono inline-flex items-center gap-1">
           {{ worker.address }}
+          <button
+            class="text-text-muted hover:text-text opacity-0 group-hover/addr:opacity-100 transition-opacity"
+            title="Copy IP"
+            @click="copyAddress(worker.address)"
+          >
+            <svg v-if="copiedAddress" class="w-3.5 h-3.5 text-status-success" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+            </svg>
+            <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+            </svg>
+          </button>
         </span>
         <button
           class="ml-auto px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-sunken"
@@ -148,7 +171,23 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             <span class="font-mono">{{ worker?.workerId }}</span>
           </InfoRow>
           <InfoRow label="Address">
-            <span class="font-mono">{{ worker?.address ?? '-' }}</span>
+            <span v-if="worker?.address" class="group/addr inline-flex items-center gap-1">
+              <button
+                class="text-text-muted hover:text-text opacity-0 group-hover/addr:opacity-100 transition-opacity"
+                title="Copy IP"
+                @click="copyAddress(worker.address)"
+              >
+                <svg v-if="copiedAddress" class="w-3.5 h-3.5 text-status-success" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                </svg>
+                <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                </svg>
+              </button>
+              <span class="font-mono">{{ worker.address }}</span>
+            </span>
+            <span v-else class="font-mono">-</span>
           </InfoRow>
           <InfoRow v-if="worker?.metadata?.attributes?.zone" label="Zone">
             <span class="font-mono">{{ worker.metadata.attributes.zone.stringValue }}</span>
