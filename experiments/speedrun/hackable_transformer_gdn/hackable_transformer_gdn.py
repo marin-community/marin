@@ -131,6 +131,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
     gdn_segment_size: int = 16
+    gdn_use_branch_boundary_prototype: bool = False
     gdn_use_decoder_block_boundary_prototype: bool = False
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
@@ -339,6 +340,7 @@ class HackableDecoderLayer(eqx.Module):
     use_gdn: bool = eqx.field(static=True, default=False)
     gdn_chunk_size: int = eqx.field(static=True, default=64)
     gdn_segment_size: int = eqx.field(static=True, default=8)
+    gdn_use_branch_boundary_prototype: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(config: HackableTransformerConfig, *, key, layer_index: int = 0) -> "HackableDecoderLayer":
@@ -371,6 +373,7 @@ class HackableDecoderLayer(eqx.Module):
             use_gdn=use_gdn,
             gdn_chunk_size=config.gdn_chunk_size,
             gdn_segment_size=config.gdn_segment_size,
+            gdn_use_branch_boundary_prototype=config.gdn_use_branch_boundary_prototype,
         )
 
     @named_call
@@ -387,13 +390,22 @@ class HackableDecoderLayer(eqx.Module):
                 _dbg_sharding("layer_in/x", x.array if hasattr(x, "array") else x)
             except Exception:
                 pass
-        y, _ = self.gdn(
-            x,
-            inference=False,
-            chunk_size=self.gdn_chunk_size,
-            attention_mask=attn_mask,
-            decode_state=None,
-        )
+        if self.gdn_use_branch_boundary_prototype:
+            y = self.gdn.train_branch_boundary(
+                x,
+                chunk_size=self.gdn_chunk_size,
+                segment_size=self.gdn_segment_size,
+                attention_mask=attn_mask,
+            )
+        else:
+            y, _ = self.gdn(
+                x,
+                inference=False,
+                chunk_size=self.gdn_chunk_size,
+                segment_size=self.gdn_segment_size,
+                attention_mask=attn_mask,
+                decode_state=None,
+            )
         if _GDN_DEBUG:
             try:
                 _dbg_sharding("layer_out/y", y.array if hasattr(y, "array") else y)
@@ -469,6 +481,8 @@ class HackableTransformer(eqx.Module):
     def init(config: HackableTransformerConfig, *, key):
         checkpoint_policy = ScanCheckpointPolicy._mk(config.gradient_checkpointing)
         if config.use_gated_deltanet and config.num_gdn_layers > 0:
+            if config.gdn_use_branch_boundary_prototype and config.gdn_use_decoder_block_boundary_prototype:
+                raise ValueError("branch-boundary and decoder-block prototypes are mutually exclusive.")
             if config.gdn_use_decoder_block_boundary_prototype and (
                 config.gdn_layers_per_block != 3 or config.gdn_block_size != 4
             ):
@@ -495,7 +509,12 @@ class HackableTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key=None, pos_ids: NamedArray | None = None
+        self,
+        x: NamedArray,
+        attn_mask: NamedArray | AttentionMask | None,
+        *,
+        key=None,
+        pos_ids: NamedArray | None = None,
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.layers.Block.size) if key is not None else None
         x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)

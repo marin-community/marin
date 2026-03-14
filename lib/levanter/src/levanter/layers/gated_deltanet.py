@@ -486,6 +486,42 @@ class GatedDeltaNetConfig:
         return Axis("ba", self.num_v_heads * 2)
 
 
+def _split_gdn_mixed_qkvz(
+    cfg: GatedDeltaNetConfig,
+    mixed_qkvz: NamedArray,
+    mixed_ba: NamedArray,
+) -> tuple[NamedArray, NamedArray, NamedArray, NamedArray, NamedArray, NamedArray]:
+    """Split packed branch projections into HF-compatible per-head tensors."""
+    ratio = cfg.num_v_heads // cfg.num_k_heads
+
+    per_head = Axis("per_head", 2 * cfg.head_k_dim + 2 * ratio * cfg.head_v_dim)
+    x = mixed_qkvz.unflatten_axis("qkvz", (cfg.KHeads, per_head))
+
+    def sl(start, size):
+        return hax.ds(start, size)
+
+    q = x["per_head", sl(0, cfg.head_k_dim)].rename({"per_head": cfg.KHeadDim.name})
+    k = x["per_head", sl(cfg.head_k_dim, cfg.head_k_dim)].rename({"per_head": cfg.KHeadDim.name})
+    v_chunk = x["per_head", sl(2 * cfg.head_k_dim, ratio * cfg.head_v_dim)]
+    z_chunk = x["per_head", sl(2 * cfg.head_k_dim + ratio * cfg.head_v_dim, ratio * cfg.head_v_dim)]
+
+    v = v_chunk.unflatten_axis(v_chunk.resolve_axis("per_head"), (Axis("v_group", ratio), cfg.VHeadDim)).flatten_axes(
+        ("k_heads", "v_group"), cfg.VHeads
+    )
+    z = z_chunk.unflatten_axis(z_chunk.resolve_axis("per_head"), (Axis("v_group", ratio), cfg.VHeadDim)).flatten_axes(
+        ("k_heads", "v_group"), cfg.VHeads
+    )
+
+    per_ba = Axis("per_ba", 2 * ratio)
+    ba = mixed_ba.unflatten_axis("ba", (cfg.KHeads, per_ba))
+    b_chunk = ba["per_ba", hax.ds(0, ratio)]
+    a_chunk = ba["per_ba", hax.ds(ratio, ratio)]
+    b = b_chunk.flatten_axes(("k_heads", "per_ba"), cfg.VHeads)
+    a = a_chunk.flatten_axes(("k_heads", "per_ba"), cfg.VHeads)
+
+    return q, k, v, z, b, a
+
+
 # ---------- Kernels ----------
 
 
@@ -648,6 +684,46 @@ def _preserve_sharding_like(x: jnp.ndarray, like: jnp.ndarray) -> jnp.ndarray:
         return jax.lax.with_sharding_constraint(x, like.sharding)
     except Exception:
         return x
+
+
+def _apply_linear_weight(
+    inputs: NamedArray,
+    weight_arr: jnp.ndarray,
+    *,
+    weight_axes: Axis | tuple[Axis, ...],
+    axis: hax.AxisSelector | tuple[hax.AxisSelector, ...],
+) -> NamedArray:
+    weight = hax.named(weight_arr, weight_axes)
+    return hax.auto_sharded(inputs.dot(weight, axis=axis))
+
+
+def _apply_fused_rmsnorm_gated_weight(
+    x: NamedArray,
+    gate: NamedArray,
+    weight_arr: jnp.ndarray,
+    *,
+    axis: Axis,
+    eps: float,
+    use_flash: bool,
+) -> NamedArray:
+    if x.resolve_axis(axis.name) != gate.resolve_axis(axis.name):
+        raise ValueError("x and gate must share the normalization axis")
+
+    other_axes = tuple(ax for ax in x.axes if ax.name != axis.name)
+    permuted_axes = other_axes + (axis,)
+    x_perm = hax.rearrange(x, permuted_axes)
+    gate_perm = hax.rearrange(gate, permuted_axes)
+
+    x_arr = x_perm.array.reshape(-1, axis.size)
+    gate_arr = gate_perm.array.reshape(-1, axis.size)
+    if use_flash:
+        out_arr = _rmsnorm_gated_flash(x_arr, gate_arr, weight_arr, eps)
+    else:
+        out_arr = _rmsnorm_gated_reference(x_arr, gate_arr, weight_arr, eps)
+
+    out_perm = out_arr.reshape(x_perm.array.shape)
+    out_named = hax.named(out_perm, permuted_axes)
+    return hax.rearrange(out_named, x.axes)
 
 
 # --- TPU recurrent: BlockSpecs and kernel ---
@@ -4440,6 +4516,38 @@ class GatedDeltaNet(eqx.Module):
 
         return q, k, v, z, b, a
 
+    def train_branch_boundary(
+        self,
+        x: NamedArray,
+        *,
+        chunk_size: int = 64,
+        segment_size: int = 8,
+        attention_mask: Optional[NamedArray] = None,
+    ) -> NamedArray:
+        """Run the training-only branch through one array-level custom-VJP boundary."""
+        if self.conv_bias is not None:
+            raise ValueError("train_branch_boundary only supports bias-free depthwise conv.")
+
+        y_arr = _gdn_train_branch_boundary(
+            (
+                x.array,
+                self.in_proj_qkvz.weight.array,
+                self.in_proj_ba.weight.array,
+                self.conv_weight.array,
+                self.A_log.array,
+                self.dt_bias.array,
+                self.o_norm.weight.array,
+                self.out_proj.weight.array,
+            ),
+            None if attention_mask is None else attention_mask.array,
+            self.config,
+            self.use_flash,
+            self.o_norm.eps,
+            chunk_size,
+            segment_size,
+        )
+        return hax.named(y_arr, x.axes)
+
     def __call__(
         self,
         x: NamedArray,
@@ -4684,3 +4792,210 @@ class GatedDeltaNet(eqx.Module):
     ) -> "GatedDeltaNet":
         layer = cls.init(config, key=key, use_flash=use_flash)
         return layer.load_state_dict(state)
+
+
+def _gdn_train_branch_array_impl(
+    vjp_arg,
+    attention_mask_arr,
+    *,
+    cfg: GatedDeltaNetConfig,
+    use_flash: bool,
+    rms_norm_eps: float,
+    chunk_size: int,
+    segment_size: int,
+) -> jnp.ndarray:
+    (
+        x_arr,
+        in_proj_qkvz_weight_arr,
+        in_proj_ba_weight_arr,
+        conv_weight_arr,
+        A_log_arr,
+        dt_bias_arr,
+        o_norm_weight_arr,
+        out_proj_weight_arr,
+    ) = vjp_arg
+
+    x_arr = _preserve_sharding_like(x_arr, x_arr)
+    Batch = Axis("batch", x_arr.shape[0])
+    Pos = Axis("position", x_arr.shape[1])
+    x = hax.named(x_arr, (Batch, Pos, cfg.Embed))
+
+    if attention_mask_arr is not None:
+        attention_mask_arr = _preserve_sharding_like(attention_mask_arr, attention_mask_arr)
+        attention_mask = hax.named(attention_mask_arr, (Batch, Pos))
+        x = x * attention_mask.astype(x.dtype).broadcast_axis(cfg.Embed)
+
+    mixed_qkvz = _apply_linear_weight(
+        x,
+        in_proj_qkvz_weight_arr,
+        weight_axes=(cfg.mix_qkvz_axis, cfg.Embed),
+        axis=cfg.Embed,
+    )
+    mixed_ba = _apply_linear_weight(
+        x,
+        in_proj_ba_weight_arr,
+        weight_axes=(cfg.ba_axis, cfg.Embed),
+        axis=cfg.Embed,
+    )
+
+    q, k, v, z, b, a = _split_gdn_mixed_qkvz(cfg, mixed_qkvz, mixed_ba)
+
+    q_ch = q.flatten_axes((cfg.KHeads, cfg.KHeadDim), Axis("channels", cfg.key_dim))
+    k_ch = k.flatten_axes((cfg.KHeads, cfg.KHeadDim), Axis("channels", cfg.key_dim))
+    v_ch = v.flatten_axes((cfg.VHeads, cfg.VHeadDim), Axis("channels", cfg.value_dim))
+    qkv_ch = hax.concatenate("channels", [q_ch, k_ch, v_ch])
+    qkv_ncl = hax.rearrange(qkv_ch, ("batch", "channels", "position")).array
+    y_ncl = _causal_depthwise_conv1d_full(qkv_ncl, conv_weight_arr, None)
+
+    y_bpc = hax.rearrange(hax.named(y_ncl, ("batch", "channels", "position")), ("batch", "position", "channels"))
+    q_y = y_bpc["channels", hax.ds(0, cfg.key_dim)]
+    k_y = y_bpc["channels", hax.ds(cfg.key_dim, cfg.key_dim)]
+    v_y = y_bpc["channels", hax.ds(2 * cfg.key_dim, cfg.value_dim)]
+    q = q_y.unflatten_axis("channels", (cfg.KHeads, cfg.KHeadDim))
+    k = k_y.unflatten_axis("channels", (cfg.KHeads, cfg.KHeadDim))
+    v = v_y.unflatten_axis("channels", (cfg.VHeads, cfg.VHeadDim))
+
+    ratio = cfg.num_v_heads // cfg.num_k_heads
+    if ratio > 1:
+        v_group = Axis("v_group", ratio)
+        q = q.broadcast_axis(v_group).flatten_axes((cfg.KHeads, v_group), cfg.Heads)
+        k = k.broadcast_axis(v_group).flatten_axes((cfg.KHeads, v_group), cfg.Heads)
+        v_h = v.rename({cfg.VHeads.name: cfg.Heads.name})
+        z_h = z.rename({cfg.VHeads.name: cfg.Heads.name})
+        b_hparam = b.rename({cfg.VHeads.name: cfg.Heads.name})
+        a_hparam = a.rename({cfg.VHeads.name: cfg.Heads.name})
+    else:
+        q = q.rename({cfg.KHeads.name: cfg.Heads.name})
+        k = k.rename({cfg.KHeads.name: cfg.Heads.name})
+        v_h = v.rename({cfg.VHeads.name: cfg.Heads.name})
+        z_h = z.rename({cfg.VHeads.name: cfg.Heads.name})
+        b_hparam = b.rename({cfg.VHeads.name: cfg.Heads.name})
+        a_hparam = a.rename({cfg.VHeads.name: cfg.Heads.name})
+
+    beta = hnn.sigmoid(b_hparam)
+    a32 = a_hparam.astype(jnp.float32)
+    dt_bias = hax.named(dt_bias_arr, (cfg.Heads.name,)).astype(jnp.float32)
+    A_exp = hax.exp(hax.named(A_log_arr, (cfg.Heads.name,)).astype(jnp.float32))
+    g = -(A_exp * hnn.softplus(a32 + dt_bias)).astype(x.dtype)
+
+    q_h = q.rename({cfg.Heads.name: "heads"})
+    k_h = k.rename({cfg.Heads.name: "heads"})
+    v_h = v_h.rename({cfg.Heads.name: "heads"})
+    g_h = g.rename({cfg.Heads.name: "heads"})
+    b_h = beta.rename({cfg.Heads.name: "heads"})
+
+    q_bphd = hax.rearrange(q_h, ("batch", "position", "heads", cfg.KHeadDim.name))
+    k_bphd = hax.rearrange(k_h, ("batch", "position", "heads", cfg.KHeadDim.name))
+    v_bphd = hax.rearrange(v_h, ("batch", "position", "heads", cfg.VHeadDim.name))
+    out_bphd, _ = chunk_gated_delta_rule(
+        q_bphd,
+        k_bphd,
+        v_bphd,
+        g_h,
+        b_h,
+        chunk_size=chunk_size,
+        segment_size=segment_size,
+        initial_state=None,
+        output_final_state=False,
+        use_qk_l2norm_in_kernel=True,
+        use_flash=use_flash,
+    )
+
+    z_gate = z_h.rename({cfg.Heads.name: "heads"})
+    y_norm = _apply_fused_rmsnorm_gated_weight(
+        out_bphd,
+        z_gate,
+        o_norm_weight_arr,
+        axis=cfg.VHeadDim,
+        eps=rms_norm_eps,
+        use_flash=use_flash,
+    )
+    y_out = _apply_linear_weight(
+        y_norm.astype(x.dtype),
+        out_proj_weight_arr,
+        weight_axes=(cfg.Embed, cfg.Heads, cfg.VHeadDim),
+        axis=(cfg.Heads, cfg.VHeadDim),
+    )
+    return _preserve_sharding_like(y_out.array, x_arr)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4, 5, 6))
+def _gdn_train_branch_boundary(
+    vjp_arg,
+    attention_mask_arr,
+    cfg: GatedDeltaNetConfig,
+    use_flash: bool,
+    rms_norm_eps: float,
+    chunk_size: int,
+    segment_size: int,
+) -> jnp.ndarray:
+    return _gdn_train_branch_array_impl(
+        vjp_arg,
+        attention_mask_arr,
+        cfg=cfg,
+        use_flash=use_flash,
+        rms_norm_eps=rms_norm_eps,
+        chunk_size=chunk_size,
+        segment_size=segment_size,
+    )
+
+
+def _gdn_train_branch_boundary_fwd(
+    vjp_arg,
+    attention_mask_arr,
+    cfg: GatedDeltaNetConfig,
+    use_flash: bool,
+    rms_norm_eps: float,
+    chunk_size: int,
+    segment_size: int,
+):
+    y = _gdn_train_branch_array_impl(
+        vjp_arg,
+        attention_mask_arr,
+        cfg=cfg,
+        use_flash=use_flash,
+        rms_norm_eps=rms_norm_eps,
+        chunk_size=chunk_size,
+        segment_size=segment_size,
+    )
+    return y, (vjp_arg, attention_mask_arr)
+
+
+def _gdn_train_branch_boundary_bwd(
+    cfg: GatedDeltaNetConfig,
+    use_flash: bool,
+    rms_norm_eps: float,
+    chunk_size: int,
+    segment_size: int,
+    residuals,
+    grad_y,
+):
+    vjp_arg, attention_mask_arr = residuals
+    mask_grad = None if attention_mask_arr is None else jnp.zeros_like(attention_mask_arr)
+    if grad_y is None:
+        return tuple(None for _ in vjp_arg), mask_grad
+
+    grad_y = _preserve_sharding_like(grad_y, vjp_arg[0])
+    _, pullback = jax.vjp(
+        lambda local_vjp_arg: _gdn_train_branch_array_impl(
+            local_vjp_arg,
+            attention_mask_arr,
+            cfg=cfg,
+            use_flash=use_flash,
+            rms_norm_eps=rms_norm_eps,
+            chunk_size=chunk_size,
+            segment_size=segment_size,
+        ),
+        vjp_arg,
+    )
+    (grad_vjp_arg,) = pullback(grad_y)
+    grad_vjp_list = list(grad_vjp_arg)
+    if grad_vjp_list[0] is not None:
+        grad_vjp_list[0] = _preserve_sharding_like(grad_vjp_list[0], vjp_arg[0])
+    return tuple(grad_vjp_list), mask_grad
+
+
+_gdn_train_branch_boundary.defvjp(
+    _gdn_train_branch_boundary_fwd,
+    _gdn_train_branch_boundary_bwd,
+)
