@@ -251,15 +251,15 @@ def _kill_non_terminal_tasks(
     return tasks_to_kill
 
 
-def _cascade_terminal_job(
+def _cascade_children(
     cur: Any,
     job_id: JobName,
     now_ms: int,
     reason: str,
 ) -> set[JobName]:
-    """Kill remaining tasks and descendant jobs when a job reaches a terminal state."""
+    """Kill descendant jobs (not the job itself) when a parent reaches terminal state or is preempted."""
     proto_cache: dict[str, cluster_pb2.Controller.LaunchJobRequest] = {}
-    tasks_to_kill = _kill_non_terminal_tasks(cur, job_id.to_wire(), reason, now_ms, proto_cache)
+    tasks_to_kill: set[JobName] = set()
 
     descendants = cur.execute(
         "WITH RECURSIVE subtree(job_id) AS ("
@@ -271,13 +271,13 @@ def _cascade_terminal_job(
     ).fetchall()
     for child_row in descendants:
         child_job_id = str(child_row["job_id"])
-        tasks_to_kill.update(_kill_non_terminal_tasks(cur, child_job_id, "Parent job terminated", now_ms, proto_cache))
+        tasks_to_kill.update(_kill_non_terminal_tasks(cur, child_job_id, reason, now_ms, proto_cache))
         cur.execute(
             "UPDATE jobs SET state = ?, error = ?, finished_at_ms = COALESCE(finished_at_ms, ?) "
             "WHERE job_id = ? AND state NOT IN (?, ?, ?, ?)",
             (
                 cluster_pb2.JOB_STATE_KILLED,
-                "Parent job terminated",
+                reason,
                 now_ms,
                 child_job_id,
                 cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -287,6 +287,36 @@ def _cascade_terminal_job(
             ),
         )
     return tasks_to_kill
+
+
+def _cascade_terminal_job(
+    cur: Any,
+    job_id: JobName,
+    now_ms: int,
+    reason: str,
+) -> set[JobName]:
+    """Kill remaining tasks and descendant jobs when a job reaches a terminal state."""
+    proto_cache: dict[str, cluster_pb2.Controller.LaunchJobRequest] = {}
+    tasks_to_kill = _kill_non_terminal_tasks(cur, job_id.to_wire(), reason, now_ms, proto_cache)
+    tasks_to_kill.update(_cascade_children(cur, job_id, now_ms, reason))
+    return tasks_to_kill
+
+
+def _resolve_preemption_policy(cur: Any, job_id: JobName) -> int:
+    """Resolve the effective preemption policy for a job.
+
+    Defaults: single-task jobs → TERMINATE_CHILDREN, multi-task → PRESERVE_CHILDREN.
+    """
+    row = cur.execute("SELECT request_proto FROM jobs WHERE job_id = ?", (job_id.to_wire(),)).fetchone()
+    if row is None:
+        return cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
+    req = cluster_pb2.Controller.LaunchJobRequest()
+    req.ParseFromString(row["request_proto"])
+    if req.preemption_policy != cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED:
+        return req.preemption_policy
+    if req.replicas <= 1:
+        return cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
+    return cluster_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN
 
 
 # =============================================================================
@@ -364,6 +394,12 @@ class ControllerTransitions:
         elif counts.get(cluster_pb2.TASK_STATE_KILLED, 0) > 0:
             new_state = cluster_pb2.JOB_STATE_KILLED
         elif (
+            total > 0
+            and counts.get(cluster_pb2.TASK_STATE_WORKER_FAILED, 0) > 0
+            and all(s in TERMINAL_TASK_STATES for s in counts)
+        ):
+            new_state = cluster_pb2.JOB_STATE_WORKER_FAILED
+        elif (
             counts.get(cluster_pb2.TASK_STATE_ASSIGNED, 0) > 0
             or counts.get(cluster_pb2.TASK_STATE_BUILDING, 0) > 0
             or counts.get(cluster_pb2.TASK_STATE_RUNNING, 0) > 0
@@ -386,7 +422,7 @@ class ControllerTransitions:
             "UPDATE jobs SET state = ?, "
             "started_at_ms = CASE WHEN ? = ? THEN COALESCE(started_at_ms, ?) ELSE started_at_ms END, "
             f"finished_at_ms = CASE WHEN ? IN ({terminal_placeholders}) THEN ? ELSE finished_at_ms END, "
-            "error = CASE WHEN ? IN (?, ?, ?) THEN ? ELSE error END "
+            "error = CASE WHEN ? IN (?, ?, ?, ?) THEN ? ELSE error END "
             "WHERE job_id = ?",
             (
                 new_state,
@@ -400,6 +436,7 @@ class ControllerTransitions:
                 cluster_pb2.JOB_STATE_FAILED,
                 cluster_pb2.JOB_STATE_KILLED,
                 cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+                cluster_pb2.JOB_STATE_WORKER_FAILED,
                 error,
                 job_id.to_wire(),
             ),
@@ -1067,8 +1104,23 @@ class ControllerTransitions:
                             reason = "Job was terminated."
                         elif new_job_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
                             reason = "Job could not be scheduled."
-                        cascade_kills = _cascade_terminal_job(cur, task.job_id, now_ms, reason)
-                        tasks_to_kill.update(cascade_kills)
+                        # Always kill the job's own remaining tasks
+                        proto_cache: dict[str, cluster_pb2.Controller.LaunchJobRequest] = {}
+                        tasks_to_kill.update(
+                            _kill_non_terminal_tasks(cur, task.job_id.to_wire(), reason, now_ms, proto_cache)
+                        )
+                        # Gate child cascading on preemption policy for failure states;
+                        # SUCCESS always cascades (clean up children when parent finishes).
+                        should_cascade_children = True
+                        if new_job_state in (
+                            cluster_pb2.JOB_STATE_FAILED,
+                            cluster_pb2.JOB_STATE_KILLED,
+                            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+                        ):
+                            policy = _resolve_preemption_policy(cur, task.job_id)
+                            should_cascade_children = policy == cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
+                        if should_cascade_children:
+                            tasks_to_kill.update(_cascade_children(cur, task.job_id, now_ms, reason))
                         cascaded_jobs.add(task.job_id)
             if tasks_to_kill or cascaded_jobs:
                 actions: list[tuple[str, str, dict[str, object]]] = [("heartbeat_applied", str(req.worker_id), {})]
@@ -1181,7 +1233,15 @@ class ControllerTransitions:
                         )
                     task_id = JobName.from_wire(tid)
                     parent_job_id, _ = task_id.require_task()
-                    self._recompute_job_state(cur, parent_job_id)
+                    new_job_state = self._recompute_job_state(cur, parent_job_id)
+                    if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
+                        tasks_to_kill.update(
+                            _cascade_terminal_job(cur, parent_job_id, now_ms, f"Worker {worker_id} failed")
+                        )
+                    elif new_task_state == cluster_pb2.TASK_STATE_PENDING:
+                        policy = _resolve_preemption_policy(cur, parent_job_id)
+                        if policy == cluster_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
+                            tasks_to_kill.update(_cascade_children(cur, parent_job_id, now_ms, "Parent task preempted"))
                     if new_task_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
                         tasks_to_kill.add(task_id)
                 cur.execute(
