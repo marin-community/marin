@@ -65,7 +65,27 @@ Current state:
   | random | 8 | `32,637,536.88` | `38,288,395.31` | `1.17x` |
   | runs   | 8 | `31,285,893.37` | `37,512,463.91` | `1.20x` |
 
-- Caveat: the first patched `runs, topk=2` Hybrid-EP measurement landed at `15,809,521.51 tokens_per_s`, but an immediate rerun produced `75,096,827.43`; treat that cell as exploratory and keep the outlier in mind.
+- The same workaround also unblocks `patched hybrid_ep_permute`, which exercises `dispatch_with_permute(...)` / `combine_with_unpermute(...)` rather than plain dispatch/combine.
+- Short-window (`warmup=1`, `iters=3`) `hybrid_ep_permute` results on H100x8 (`exploratory`):
+
+  | distribution | topk | patched hybrid_ep_permute tokens_per_s |
+  | --- | ---: | ---: |
+  | random | 2 | `80,927,091.96` |
+  | runs   | 2 | `29,307,925.82` then rerun `80,190,884.10` |
+  | random | 8 | `37,527,342.70` |
+  | runs   | 8 | `25,826,479.39` then rerun `18,091,692.99` |
+
+- Because the short-window `runs` cells were noisy for both Hybrid-EP paths, a longer-window confirmation run now exists on the same fixed-shape `runs` slice (`warmup=5`, `iters=20`, `kernel=all` in the same pod), moving those points to `replicated` confidence:
+
+  | topk | deep_ep tokens_per_s | patched hybrid_ep tokens_per_s | patched hybrid_ep_permute tokens_per_s | hybrid / deep | permute / deep |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | 2 | `46,681,271.18` | `85,139,043.38` | `87,689,861.36` | `1.82x` | `1.88x` |
+  | 8 | `31,639,255.33` | `42,557,723.33` | `39,033,396.91` | `1.35x` | `1.23x` |
+
+- Interpretation of the confirmed `runs` slice:
+  - DeepEP stays close to the original exploratory table once measured over a longer window.
+  - Both patched Hybrid-EP paths remain ahead of DeepEP.
+  - `hybrid_ep_permute` is competitive with plain `hybrid_ep`: slightly faster at `topk=2`, slightly slower at `topk=8`.
 
 ## Decision Log
 
@@ -73,6 +93,7 @@ Current state:
 - 2026-03-13: Start with intranode H100x8 DeepEP / Hybrid-EP measurements before any multi-node or JAX-bridge work.
 - 2026-03-14: Accept a harness-side intranode RDMA hint skip for exploratory DeepEP bring-up on `world_size <= 8`; keep Hybrid-EP blocked until the runtime JIT compiles on Hopper.
 - 2026-03-14: Use a launcher-applied `space_cluster` rewrite as the current experimental workaround for Hybrid-EP on H100 / CUDA 12.8.
+- 2026-03-14: Treat short-window `runs` cells as noisy and use longer `warmup=5`, `iters=20`, same-pod `kernel=all` runs before drawing conclusions on the patched Hybrid-EP paths.
 
 ## Negative Results
 
@@ -81,7 +102,8 @@ Current state:
 - 2026-03-14: `HybridEPBuffer` runtime JIT on H100 / CUDA 12.8 fails with `cuda::ptx::cp_async_bulk` overload mismatches before any timing loop runs.
 - 2026-03-14: `DISABLE_AGGRESSIVE_PTX_INSTRS=1` and `DISABLE_SM90_FEATURES=1` do not change the Hybrid-EP JIT failure on H100 / CUDA 12.8.
 - 2026-03-14: `TORCH_CUDA_ARCH_LIST=9.0a` changes the JIT target to `sm_90a`, but does not change the Hybrid-EP overload failure.
+- 2026-03-14: Short-window (`warmup=1`, `iters=3`) `runs` measurements for the patched Hybrid-EP paths are noisy enough to produce misleading outliers; use the longer-window confirmation table for conclusions on that slice.
 
 ## Conclusion
 
-Partial success with a local workaround. Unmodified Hybrid-EP is still broken on H100 / CUDA 12.8, but a minimal launcher-applied `space_cluster` rewrite gets Hybrid-EP compiling and running on the CoreWeave H100 machine. On the current exploratory fixed-shape `random/runs x topk {2,8}` slice, the patched Hybrid-EP path beats DeepEP on all four points, though one `runs, topk=2` outlier means the current table should still be treated as exploratory.
+Partial success with a local workaround. Unmodified Hybrid-EP is still broken on H100 / CUDA 12.8, but a minimal launcher-applied `space_cluster` rewrite gets both `hybrid_ep` and `hybrid_ep_permute` compiling and running on the CoreWeave H100 machine. On the replicated fixed-shape `runs` slice, patched `hybrid_ep` beats DeepEP by `1.35x` to `1.82x`, and patched `hybrid_ep_permute` beats DeepEP by `1.23x` to `1.88x`. Confidence outside that longer-window `runs` slice remains exploratory, and all positive results still depend on the local launcher-applied rewrite rather than an upstream fix.

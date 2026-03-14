@@ -22,8 +22,10 @@ The failure is caused by the runtime JIT targeting `sm_90` instead of a Hopper-s
 
 - [ ] Verify whether the CUDA 12.8 `cp_async_bulk` header overload set differs from newer CCCL docs.
 - [ ] Reduce the launcher workaround to the minimal required callsite changes and decide whether to upstream it.
-- [ ] Test whether `hybrid_ep_permute` needs the same rewrite or a different fix.
-- [ ] Recheck the noisy `runs, topk=2` point with more repeats if we want stronger confidence.
+- [x] Test whether `hybrid_ep_permute` needs the same rewrite or a different fix.
+- [x] Recheck the noisy `runs, topk=2` point with more repeats if we want stronger confidence.
+- [ ] Extend the longer-window confirmation pass to the `random` slice if we want a replicated full mini-matrix.
+- [ ] Understand why `hybrid_ep_permute` trails plain `hybrid_ep` at `runs, topk=8` while slightly leading at `runs, topk=2`.
 
 ## Results
 
@@ -51,3 +53,30 @@ The failing Hybrid-EP source is using the wrong PTX API overload for the six-arg
   - `runs, topk=2`: first run `time_s=0.002073`, rerun `time_s=0.000436`, `tokens_per_s=75,096,827.43`
 - Conclusion:
   - The H100 blocker is broken. The remaining question is not “can Hybrid-EP run?” but “how much of the apparent speedup is stable once the outlier is resolved and the workaround is reduced to a principled patch?”
+
+## Hypothesis 3
+
+The large swings on the `runs` cells are mostly caused by the very short timing window (`warmup=1`, `iters=3`), not by an unstable kernel implementation. If so, a longer-window same-pod run should keep DeepEP near its earlier numbers and collapse the spread on `hybrid_ep` / `hybrid_ep_permute`.
+
+## Changes to make
+
+- Run `bench_deepep_torch.py` with `--kernel all --warmup 5 --iters 20` so `deep_ep`, `hybrid_ep`, and `hybrid_ep_permute` are measured sequentially in the same pod.
+- Limit the confirmation pass to the noisy `distribution=runs`, `topk in {2, 8}` slice.
+
+## Results
+
+- The same launcher-side `space_cluster` rewrite also unblocks `hybrid_ep_permute`.
+- Short-window `hybrid_ep_permute` points were noisy on `runs`:
+  - `runs, topk=2`: first run `29,307,925.82`, immediate rerun `80,190,884.10`
+  - `runs, topk=8`: first run `25,826,479.39`, immediate rerun `18,091,692.99`
+- Longer-window same-pod confirmation (`warmup=5`, `iters=20`) stabilizes the `runs` slice:
+
+  | topk | deep_ep tokens_per_s | patched hybrid_ep tokens_per_s | patched hybrid_ep_permute tokens_per_s |
+  | --- | ---: | ---: | ---: |
+  | 2 | 46,681,271.18 | 85,139,043.38 | 87,689,861.36 |
+  | 8 | 31,639,255.33 | 42,557,723.33 | 39,033,396.91 |
+
+- Interpretation:
+  - The earlier outliers were mostly a short-window measurement problem.
+  - DeepEP remains close to its original exploratory `runs` values, while both patched Hybrid-EP paths remain materially faster.
+  - The original “can Hybrid-EP run on our H100 machine?” question is now answered yes for both plain and permute paths under the current launcher-applied rewrite.

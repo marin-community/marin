@@ -407,3 +407,117 @@
 - Next action:
   - Publish the workaround and the Hybrid-EP comparison table on `#3641`.
   - Decide whether to upstream the minimal `space_cluster` fix and whether to test `hybrid_ep_permute` next.
+
+### 2026-03-14 10:20 - Patched `hybrid_ep_permute` also runs on H100x8, but short-window `runs` points are noisy
+- Hypothesis: the same launcher-side `space_cluster` rewrite should also unblock `HybridEPBuffer.dispatch_with_permute(...)` / `combine_with_unpermute(...)`, which is closer to a real MoE integration path than plain dispatch/combine.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep_permute \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution random \
+    --topk 2 \
+    --warmup 1 \
+    --iters 3
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep_permute \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution runs \
+    --topk 2 \
+    --warmup 1 \
+    --iters 3
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep_permute \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution random \
+    --topk 8 \
+    --warmup 1 \
+    --iters 3
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep_permute \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution runs \
+    --topk 8 \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - pod IDs: `iris-task-77e5374617ae`, `iris-task-b31c8555c78d`, `iris-task-26bfc8dad676`, `iris-task-e66c619bef5e`
+  - short-window reruns for noisy `runs` cells: `iris-task-dd8657b1f37c`, `iris-task-6f3824a8731f`
+  - shared shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `world_size=8`
+- Result:
+  - Initial patched `hybrid_ep_permute` timings:
+    - `random, topk=2`: `time_s=0.000405`, `tokens_per_s=80,927,091.96`
+    - `runs, topk=2`: `time_s=0.001118`, `tokens_per_s=29,307,925.82`
+    - `random, topk=8`: `time_s=0.000873`, `tokens_per_s=37,527,342.70`
+    - `runs, topk=8`: `time_s=0.001269`, `tokens_per_s=25,826,479.39`
+  - Immediate short-window reruns of the noisy `runs` cells:
+    - `runs, topk=2`: `time_s=0.000409`, `tokens_per_s=80,190,884.10`
+    - `runs, topk=8`: `time_s=0.001811`, `tokens_per_s=18,091,692.99`
+- Interpretation:
+  - The same launcher-side workaround unblocks the permute/unpermute path on H100x8.
+  - The `random` points land close to the plain patched `hybrid_ep` numbers.
+  - The `runs` points are too noisy under `warmup=1`, `iters=3` to support a stable claim, so the right next step is a longer-window confirmation run rather than more short-window spot checks.
+- Next action:
+  - Rerun the noisy `runs` slice with a longer timing window and `kernel=all` so `deep_ep`, `hybrid_ep`, and `hybrid_ep_permute` are measured in the same pod.
+
+### 2026-03-14 10:35 - Longer-window same-pod confirmation stabilizes the `runs` slice
+- Hypothesis: the earlier `runs` instability is mainly a measurement-window problem; using `warmup=5`, `iters=20`, and `kernel=all` in the same pod should stabilize the comparison without changing the kernel code.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel all \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution runs \
+    --topk 2 \
+    --warmup 5 \
+    --iters 20
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel all \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution runs \
+    --topk 8 \
+    --warmup 5 \
+    --iters 20
+  ```
+- Config:
+  - pod IDs: `iris-task-d499797ee9a4`, `iris-task-84450598e5db`
+  - shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `distribution=runs`, `world_size=8`
+  - longer timing window: `warmup=5`, `iters=20`
+- Result:
+  - Confirmed comparison table on the `runs` slice:
+
+    | topk | deep_ep tokens_per_s | patched hybrid_ep tokens_per_s | patched hybrid_ep_permute tokens_per_s | hybrid / deep | permute / deep |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | 2 | 46,681,271.18 | 85,139,043.38 | 87,689,861.36 | 1.82x | 1.88x |
+    | 8 | 31,639,255.33 | 42,557,723.33 | 39,033,396.91 | 1.35x | 1.23x |
+- Interpretation:
+  - The longer timing window leaves the DeepEP `runs` numbers very close to the original exploratory table (`45.03M -> 46.68M` at `topk=2`, `31.29M -> 31.64M` at `topk=8`), so the baseline is stable.
+  - Both patched Hybrid-EP paths remain ahead of DeepEP on the `runs` slice once the measurement window is long enough.
+  - `hybrid_ep_permute` is competitive with plain `hybrid_ep`: slightly faster at `topk=2`, slightly slower at `topk=8`.
+  - Confidence for the fixed-shape `runs` slice is now `replicated`; the broader `random/runs x topk {2,8}` table remains exploratory until rerun with the same longer window.
+- Next action:
+  - Update `#3641` with the confirmed `runs` comparison table and the new `hybrid_ep_permute` status.
+  - Seal a fresh snapshot of the branch artifacts.
