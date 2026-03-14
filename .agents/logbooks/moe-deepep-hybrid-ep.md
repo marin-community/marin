@@ -234,3 +234,49 @@
 - Next action:
   - Commit and push the harness update and launcher knobs.
   - Update `#3641` with the first working timing table and the Hybrid-EP failure status.
+
+### 2026-03-14 07:39 - DeepEP completes the remaining fixed-shape mini-matrix points
+- Hypothesis: if the torch-side DeepEP path is genuinely usable for follow-up comparison work, it should continue to run on the two missing `#3633`-style fixed-shape combinations rather than only the first two smoke points.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel deep_ep \
+    --torch-cuda-arch-list '9.0' \
+    --distribution runs \
+    --topk 2 \
+    --warmup 1 \
+    --iters 3
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel deep_ep \
+    --torch-cuda-arch-list '9.0' \
+    --distribution random \
+    --topk 8 \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - pod IDs: `iris-task-81c2b5015ad2`, `iris-task-434064bf9f0f`
+  - shared shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `world_size=8`
+- Result:
+  - `RESULT kernel=deep_ep ep=8 distribution=runs topk=2 pass=dispatch_combine time_s=0.000728 tokens_per_s=45030617.74`
+  - `RESULT kernel=deep_ep ep=8 distribution=random topk=8 pass=dispatch_combine time_s=0.001004 tokens_per_s=32637536.88`
+  - The current fixed-shape DeepEP mini-matrix is now:
+
+    | distribution | topk | time_s   | tokens_per_s |
+    | --- | ---: | ---: | ---: |
+    | random | 2 | 0.000463 | 70,742,659.76 |
+    | runs   | 2 | 0.000728 | 45,030,617.74 |
+    | random | 8 | 0.001004 | 32,637,536.88 |
+    | runs   | 8 | 0.001047 | 31,285,893.37 |
+- Interpretation:
+  - `topk=8` is materially slower than `topk=2` for this fixed-shape DeepEP path on H100x8.
+  - Once `topk` is fixed, `random` is modestly faster than `runs`, but the dominant effect in this small table is the larger `topk`.
+  - The experiment now has a reproducible DeepEP GPU measurement slice even though Hybrid-EP remains blocked.
+- Next action:
+  - Publish the completed DeepEP mini-matrix to `#3641`.
+  - Decide whether the next best spend is a wider DeepEP table or a different toolchain attempt for Hybrid-EP.

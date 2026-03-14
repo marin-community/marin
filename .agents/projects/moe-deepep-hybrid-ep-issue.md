@@ -38,9 +38,16 @@ Current state:
   - `pip install --no-build-isolation /tmp/DeepEP` succeeds
   - `import deep_ep` succeeds and `HybridEPBuffer` is available
 - The repo-local harness now has a narrow intranode fallback for `deep_ep.Buffer`: when `world_size <= 8` and the build was compiled without NVSHMEM, it skips the RDMA size hint instead of treating that assertion as fatal.
-- That change produces the first steady-state DeepEP timings on H100x8 (`exploratory` confidence):
-  - `deep_ep`, `distribution=random`, `topk=2`: `time_s=0.000463`, `tokens_per_s=70,742,659.76`
-  - `deep_ep`, `distribution=runs`, `topk=8`: `time_s=0.001047`, `tokens_per_s=31,285,893.37`
+- That change now produces a complete fixed-shape DeepEP mini-matrix on H100x8 (`exploratory` confidence):
+
+  | distribution | topk | time_s   | tokens_per_s |
+  | --- | ---: | ---: | ---: |
+  | random | 2 | `0.000463` | `70,742,659.76` |
+  | runs   | 2 | `0.000728` | `45,030,617.74` |
+  | random | 8 | `0.001004` | `32,637,536.88` |
+  | runs   | 8 | `0.001047` | `31,285,893.37` |
+
+- In this small table, `topk=8` is the dominant slowdown and `random` is modestly faster than `runs` once `topk` is fixed.
 - Hybrid-EP is still blocked before any timing loop runs:
   - baseline H100 / CUDA 12.8 runtime JIT fails with `cuda::ptx::cp_async_bulk` overload mismatches in `hybrid_ep_backend.cuh`
   - `DISABLE_AGGRESSIVE_PTX_INSTRS=1` does not change the failure
@@ -62,4 +69,4 @@ Current state:
 
 ## Conclusion
 
-Partial success. The torch-side benchmark path is now validated for DeepEP on CoreWeave H100x8 and yields real dispatch/combine timings, but Hybrid-EP remains blocked by an upstream/runtime JIT compile incompatibility on Hopper that is not resolved by the documented compatibility flags.
+Partial success. The torch-side benchmark path is now validated for DeepEP on CoreWeave H100x8 and yields a complete fixed-shape `random/runs x topk {2,8}` dispatch/combine mini-matrix, but Hybrid-EP remains blocked by an upstream/runtime JIT compile incompatibility on Hopper that is not resolved by the documented compatibility flags.
