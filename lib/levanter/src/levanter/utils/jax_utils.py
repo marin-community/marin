@@ -126,9 +126,15 @@ def move_tree_to_memory_kind(tree: T, *, memory_kind: str) -> T:
 
     def _move_leaf(leaf):
         if isinstance(leaf, jax.Array):
-            if leaf.sharding.memory_kind == memory_kind:
+            sharding = getattr(leaf, "sharding", None)
+            if sharding is None:
+                # Traced leaves inside jit do not expose concrete sharding metadata.
+                # Treat as no-op and rely on explicit `device_put(..., out_shardings=...)`
+                # at jit boundaries when memory-kind transfers are required.
                 return leaf
-            return jax.device_put(leaf, leaf.sharding.with_memory_kind(memory_kind))
+            if sharding.memory_kind == memory_kind:
+                return leaf
+            return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
         return leaf
 
     return jax.tree.map(_move_leaf, tree)

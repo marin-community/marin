@@ -75,11 +75,11 @@ opt_state = move_tree_to_memory_kind(opt_state, memory_kind="pinned_host")
 
 @jax.jit(donate_argnums=(0,), out_shardings=(s_dev, s_host))
 def train_step(params, opt_state, batch):
-    opt_state = move_tree_to_memory_kind(opt_state, memory_kind="device")
+    opt_state = jax.device_put(opt_state, s_dev)
     grads = jax.grad(loss_fn)(params, batch)
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
-    return params, move_tree_to_memory_kind(opt_state, memory_kind="pinned_host")
+    return params, jax.device_put(opt_state, s_host)
 ```
 
 This usually buys substantial HBM headroom, at the cost of transfer bandwidth/latency.

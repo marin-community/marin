@@ -267,3 +267,14 @@ def test_move_tree_to_memory_kind():
 
     moved_again = move_tree_to_memory_kind(moved, memory_kind="pinned_host")
     assert moved_again["a"] is moved["a"]
+
+
+def test_move_tree_to_memory_kind_is_noop_inside_jit():
+    @jax.jit
+    def move_inside_jit(x):
+        return move_tree_to_memory_kind(x, memory_kind="pinned_host")
+
+    x = jnp.arange(4)
+    y = move_inside_jit(x)
+    np.testing.assert_array_equal(np.asarray(y), np.asarray(x))
+    assert y.sharding.memory_kind == x.sharding.memory_kind
