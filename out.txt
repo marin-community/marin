@@ -1,649 +1,223 @@
-(run_on_pod_ray pid=3660, ip=10.164.0.106)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=3660, ip=10.164.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=3660, ip=10.164.0.106)     return func(*args, **kwargs)
-(run_on_pod_ray pid=3660, ip=10.164.0.106)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=3660, ip=10.164.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=3660, ip=10.164.0.106)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=3660, ip=10.164.0.106)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=3660, ip=10.164.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=3660, ip=10.164.0.106)     raise value
-(run_on_pod_ray pid=3660, ip=10.164.0.106) ray.exceptions.RuntimeEnvSetupError: Failed to set up runtime environment.
-(run_on_pod_ray pid=3660, ip=10.164.0.106) Could not create the actor because its associated runtime env failed to be created.
-(run_on_pod_ray pid=3660, ip=10.164.0.106) [Node 10.164.2.111] Traceback (most recent call last):
-(run_on_pod_ray pid=3660, ip=10.164.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 396, in _create_runtime_env_with_retry
-(run_on_pod_ray pid=3660, ip=10.164.0.106)     runtime_env_context = await asyncio.wait_for(
-(run_on_pod_ray pid=3660, ip=10.164.0.106)                           ^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=3660, ip=10.164.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/tasks.py", line 489, in wait_for
-(run_on_pod_ray pid=3660, ip=10.164.0.106)     return fut.result()
-(run_on_pod_ray pid=3660, ip=10.164.0.106)            ^^^^^^^^^^^^
-(run_on_pod_ray pid=3660, ip=10.164.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/runtime_env/agent/runtime_env_agent.py", line 336, in _setup_runtime_env
-(run_on_pod_ray pid=3660, ip=10.164.0.106)     await create_for_plugin_if_needed(
-(run_on_pod_ray pid=3660, ip=10.164.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/runtime_env/plugin.py", line 265, in create_for_plugin_if_needed
-(run_on_pod_ray pid=3660, ip=10.164.0.106)     plugin.modify_context(uris, runtime_env, context, logger)
-(run_on_pod_ray pid=3660, ip=10.164.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/runtime_env/working_dir.py", line 192, in modify_context
-(run_on_pod_ray pid=3660, ip=10.164.0.106)     raise ValueError(
-2026-03-13 21:37:33,765 - INFO - Job tracking cancelled by user.
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ ^C
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ ^C
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ ^C
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ ^C
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ ^C
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ ^C
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ ^C
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true 
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run iris
 Uninstalled 1 package in 1ms
-Installed 1 package in 90ms
-2026-03-13 21:37:38,697 - INFO - Creating SSH proxy chain through marin-eu-west4
-2026-03-13 21:37:38,697 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-eu-west4': RayPortMapping(dashboard_port=8283, gcs_port=6397, api_port=10019)}
-2026-03-13 21:37:38,702 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '34.13.248.136' (ED25519) to the list of known hosts.
-2026-03-13 21:37:39,704 - INFO - SSH tunnel not ready, retrying in 1s... (2/3)
-2026-03-13 21:37:40,998 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-13 21:37:41,597 - INFO - Submitting job with entrypoint:  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-2026-03-13 21:37:41,597 - INFO - Extras: 
-2026-03-13 21:37:41,597 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "EXP_NAME": "vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0",
-    "HF_DATASETS_TRUST_REMOTE_CODE": "true",
-    "TPU_TYPE": "v5litepod-256",
-    "GIT_COMMIT": "53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 393 packages in 22ms
-2026-03-13 21:37:41,660 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "EXP_NAME": "vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0", "HF_DATASETS_TRUST_REMOTE_CODE": "true", "TPU_TYPE": "v5litepod-256", "GIT_COMMIT": "53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_a49a633c4ec46bb8.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_private3", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-213736  -- pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-2026-03-13 21:37:41,668 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:37:41,779 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:37:41,786 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:37:41,866 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:37:41,923 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:37:41,965 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:37:41,972 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:37:41,989 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:37:42,099 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:37:42,105 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:37:42,185 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:37:42,242 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:37:42,283 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:37:42,289 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:37:42,601 INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_929c82f7f1dc001f.zip.
-2026-03-13 21:37:42,601 INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_private3'.
-2026-03-13 21:37:42,603 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:37:42,765 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:37:42,773 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:37:42,876 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:37:42,950 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:37:43,013 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:37:43,024 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:37:43,025 WARNING packaging.py:516 -- File /home/ruili/marin_private3/file-3.txt is very large (18.50MiB). Consider adding this file to the 'excludes' list to skip uploading it: `ray.init(..., runtime_env={'excludes': ['/home/ruili/marin_private3/file-3.txt']})`
-2026-03-13 21:37:47,889 - INFO - Job submitted with ID: ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-213736
-2026-03-13 21:37:47,889 - INFO - Job URL: http://localhost:8283/#/jobs/ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-213736
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true 
-Uninstalled 1 package in 1ms
-Installed 1 package in 98ms
-2026-03-13 21:42:04,052 - INFO - Creating SSH proxy chain through marin-eu-west4
-2026-03-13 21:42:04,052 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-eu-west4': RayPortMapping(dashboard_port=8284, gcs_port=6398, api_port=10020)}
-2026-03-13 21:42:04,058 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '34.13.248.136' (ED25519) to the list of known hosts.
-2026-03-13 21:42:05,060 - INFO - SSH tunnel not ready, retrying in 1s... (2/3)
-2026-03-13 21:42:06,357 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-13 21:42:06,959 - INFO - Submitting job with entrypoint:  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-2026-03-13 21:42:06,960 - INFO - Extras: 
-2026-03-13 21:42:06,960 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "EXP_NAME": "vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0",
-    "HF_DATASETS_TRUST_REMOTE_CODE": "true",
-    "TPU_TYPE": "v5litepod-256",
-    "GIT_COMMIT": "53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 393 packages in 22ms
-2026-03-13 21:42:07,022 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "EXP_NAME": "vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0", "HF_DATASETS_TRUST_REMOTE_CODE": "true", "TPU_TYPE": "v5litepod-256", "GIT_COMMIT": "53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_a49a633c4ec46bb8.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_private3", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-214201  -- pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-2026-03-13 21:42:07,030 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:42:07,140 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:42:07,147 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:42:07,227 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:42:07,284 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:42:07,325 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:42:07,332 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:42:07,449 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:42:07,558 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:42:07,565 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:42:07,644 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:42:07,700 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:42:07,741 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:42:07,748 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:42:08,158 INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_a106f72e12adfb40.zip.
-2026-03-13 21:42:08,159 INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_private3'.
-2026-03-13 21:42:08,160 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:42:08,320 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:42:08,328 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:42:08,430 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:42:08,505 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:42:08,567 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:42:08,578 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:42:08,579 WARNING packaging.py:516 -- File /home/ruili/marin_private3/file-3.txt is very large (145.27MiB). Consider adding this file to the 'excludes' list to skip uploading it: `ray.init(..., runtime_env={'excludes': ['/home/ruili/marin_private3/file-3.txt']})`
-2026-03-13 21:42:22,062 - ERROR - Error submitting or tracking job: Request failed with status code 413: Maximum request body size 104857600 exceeded, actual body size 104890314.
-2026-03-13 21:42:22,067 - ERROR - Failed to run job
-Traceback (most recent call last):
-  File "/home/ruili/marin_private3/lib/marin/src/marin/run/ray_run.py", line 356, in main
-    asyncio.run(run_job())
-  File "/usr/lib/python3.11/asyncio/runners.py", line 190, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.11/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
-    return future.result()
-           ^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/lib/marin/src/marin/run/ray_run.py", line 333, in run_job
-    await submit_and_track_job(
-  File "/home/ruili/marin_private3/lib/marin/src/marin/run/ray_run.py", line 166, in submit_and_track_job
-    submission_id = client.submit_job(
-                    ^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/dashboard/modules/job/sdk.py", line 211, in submit_job
-    self._upload_working_dir_if_needed(runtime_env)
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 428, in _upload_working_dir_if_needed
-    upload_working_dir_if_needed(
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/_private/runtime_env/working_dir.py", line 106, in upload_working_dir_if_needed
-    upload_fn(working_dir, excludes=excludes)
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 420, in _upload_fn
-    self._upload_package_if_needed(
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 399, in _upload_package_if_needed
-    self._upload_package(
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 377, in _upload_package
-    self._raise_error(r)
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/ray/dashboard/modules/dashboard_sdk.py", line 290, in _raise_error
-    raise RuntimeError(
-RuntimeError: Request failed with status code 413: Maximum request body size 104857600 exceeded, actual body size 104890314.
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true 
-Uninstalled 1 package in 1ms
-Installed 1 package in 89ms
-2026-03-13 21:42:36,707 - INFO - Creating SSH proxy chain through marin-eu-west4
-2026-03-13 21:42:36,707 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-eu-west4': RayPortMapping(dashboard_port=8283, gcs_port=6397, api_port=10019)}
-2026-03-13 21:42:36,712 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '34.13.248.136' (ED25519) to the list of known hosts.
-2026-03-13 21:42:37,715 - INFO - SSH tunnel not ready, retrying in 1s... (2/3)
-2026-03-13 21:42:39,011 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-13 21:42:39,612 - INFO - Submitting job with entrypoint:  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-2026-03-13 21:42:39,612 - INFO - Extras: 
-2026-03-13 21:42:39,612 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "EXP_NAME": "vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0",
-    "HF_DATASETS_TRUST_REMOTE_CODE": "true",
-    "TPU_TYPE": "v5litepod-256",
-    "GIT_COMMIT": "53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 393 packages in 22ms
-2026-03-13 21:42:39,675 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "EXP_NAME": "vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0", "HF_DATASETS_TRUST_REMOTE_CODE": "true", "TPU_TYPE": "v5litepod-256", "GIT_COMMIT": "53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_a49a633c4ec46bb8.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_private3", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-214233  -- pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-2026-03-13 21:42:39,683 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:42:39,794 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:42:39,801 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:42:39,880 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:42:39,938 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:42:39,980 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:42:39,986 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:42:39,991 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:42:40,100 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:42:40,107 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:42:40,186 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:42:40,243 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:42:40,284 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:42:40,291 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:42:40,591 INFO dashboard_sdk.py:356 -- Uploading package gcs://_ray_pkg_c5157e049ef53d34.zip.
-2026-03-13 21:42:40,591 INFO packaging.py:691 -- Creating a file package for local module '/home/ruili/marin_private3'.
-2026-03-13 21:42:40,592 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 21:42:40,754 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 21:42:40,762 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 21:42:40,865 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 21:42:40,940 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 21:42:41,002 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 21:42:41,013 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 21:42:44,314 - INFO - Job submitted with ID: ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-214233
-2026-03-13 21:42:44,314 - INFO - Job URL: http://localhost:8283/#/jobs/ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-214233
-2026-03-13 14:42:44,238 INFO job_manager.py:579 -- Runtime env is setting up.
-Running entrypoint for job ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-214233: pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-Found existing installation: opencv-python 4.13.0.92
-Uninstalling opencv-python-4.13.0.92:
-  Successfully uninstalled opencv-python-4.13.0.92
-Found existing installation: opencv-python-headless 4.13.0.90
-Uninstalling opencv-python-headless-4.13.0.90:
-  Successfully uninstalled opencv-python-headless-4.13.0.90
-Collecting opencv-python-headless
-  Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl.metadata (19 kB)
-Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl (60.4 MB)
-Installing collected packages: opencv-python-headless
-Successfully installed opencv-python-headless-4.13.0.92
+Installed 1 package in 87ms
+error: Failed to spawn: `iris`
+  Caused by: No such file or directory (os error 2)
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --region europe-west4 --tpu v5litepod-256  -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-2  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true 
+warning: `wandb==0.24.0` is yanked
+  × Failed to build `iris @ file:///home/ruili/marin_private3/lib/iris`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `hatchling.build.build_editable` failed (exit status: 1)
 
-[notice] A new release of pip is available: 24.3.1 -> 26.0.1
-[notice] To update, run: pip install --upgrade pip
-2026-03-13 14:46:16,233 - INFO - Using cluster from FRAY_CLUSTER_SPEC=ray
-2026-03-13 14:46:16,357 INFO cluster.py:103 -- Created new namespace: fray_abfe8ca1
-2026-03-13 14:46:16,357 INFO cluster.py:114 -- Set default job context to RayContext
-2026-03-13 14:46:16,357 INFO executor.py:719 -- ### Inspecting the 1 provided steps ###
-2026-03-13 14:46:16,360 INFO executor.py:727 -- ### Reading 1 statuses ###
-2026-03-13 14:46:16,360 INFO executor.py:737 -- ### Writing metadata ###
-2026-03-13 14:46:16,361 INFO executor.py:1104 -- Writing executor info to gs://marin-eu-west4/experiments/demo_vlm_train_round3_eu_west4_4b-e66be2.json
-2026-03-13 14:46:16,361 INFO executor.py:1107 -- To view the experiment page, go to:
-2026-03-13 14:46:16,361 INFO executor.py:1108 -- 
-2026-03-13 14:46:16,361 INFO executor.py:1109 -- https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/demo_vlm_train_round3_eu_west4_4b-e66be2.json
-2026-03-13 14:46:16,361 INFO executor.py:1110 -- 
-2026-03-13 14:46:16,648 INFO executor.py:740 -- ### Launching 1 steps ###
-2026-03-13 14:46:16,648 INFO executor.py:810 -- checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x70b8fb26c7c0>
-2026-03-13 14:46:16,648 INFO executor.py:811 --   output_path = gs://marin-eu-west4/checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0-ffbcd7
-2026-03-13 14:46:16,649 INFO executor.py:812 --   config = {}
-2026-03-13 14:46:16,740 INFO executor.py:1142 -- [ray-marin-eu-west4-head-113957a0-compute-123942426048320] Status checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x70b8fb26c7c0>: FAILED
-2026-03-13 14:46:16,740 INFO executor.py:1151 -- [ray-marin-eu-west4-head-113957a0-compute-123942426048320] Force running checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x70b8fb26c7c0>, previous status: FAILED
-2026-03-13 14:46:16,740 INFO executor.py:1163 -- [ray-marin-eu-west4-head-113957a0-compute-123942426048320] Attempting to acquire lock for checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x70b8fb26c7c0>
-2026-03-13 14:46:16,968 INFO executor.py:1166 -- [ray-marin-eu-west4-head-113957a0-compute-123942426048320] Acquired lock for checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x70b8fb26c7c0>
-2026-03-13 14:46:17,114 INFO cluster.py:149 -- Launching job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0
-2026-03-13 14:46:17,114 INFO cluster.py:278 -- Building environment for device: cpu/cpu
-2026-03-13 14:46:17,114 INFO cluster.py:283 -- Building environment with [], extras [] for job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0
-2026-03-13 14:46:17,114 INFO cluster.py:298 -- Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'JAX_PLATFORMS': 'cpu', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1'}}
-2026-03-13 14:46:17,115 INFO worker.py:1680 -- Using address 10.164.0.104:6379 set in the environment variable RAY_ADDRESS
-2026-03-13 14:46:17,118 INFO worker.py:1821 -- Connecting to existing Ray cluster at address: 10.164.0.104:6379...
-2026-03-13 14:46:17,130 INFO worker.py:1998 -- Connected to Ray cluster. View the dashboard at http://10.164.0.104:8265 
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Using provided namespace: fray_abfe8ca1
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Set default job context to RayContext
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Launching job: train_vlm
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Building environment for device: tpu/v5litepod-256
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Building environment with [], extras ['tpu'] for job: train_vlm
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Resolved 393 packages in 5ms
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Launching TPU job train_vlm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
-(raylet) There are tasks with infeasible resource requests that cannot be scheduled. See https://docs.ray.io/en/latest/ray-core/scheduling/index.html#ray-scheduling-resources for more details. Possible solutions: 1. Updating the ray cluster to include nodes with all required resources 2. To cause the tasks with infeasible requests to raise an error instead of hanging, set the 'RAY_enable_infeasible_task_early_exit=true'. This feature will be turned on by default in a future release of Ray.
-(autoscaler +5m2s) Tip: use `ray status` to view detailed cluster status. To disable these messages, set RAY_SCHEDULER_EVENTS=0.
-(autoscaler +5m2s) Adding 8 node(s) of type tpu_slice_v5e_8.
-(autoscaler +5m2s) Adding 4 node(s) of type tpu_slice_v5e_32.
-(autoscaler +5m2s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +5m2s) Adding 4 node(s) of type tpu_slice_v5e_128.
-(autoscaler +5m2s) Adding 6 node(s) of type tpu_slice_v5e_256.
-(autoscaler +5m2s) Resized to 11040 CPUs, 400 TPUs.
-(autoscaler +5m2s) No available node types can fulfill resource requests {'ray-marin-eu-west4-worker-c6ef968d-tpu': 1.0}*6, {'ray-marin-eu-west4-worker-243fd007-tpu': 1.0}*3. Add suitable node types to this cluster to resolve this issue.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) v5litepod-256 slices actor pool actor Actor(SliceActor, 58d90cb0aa7b8b783def02a309000000) failed to start: The actor died unexpectedly before finishing this task.
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       class_name: SliceActor
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       actor_id: 58d90cb0aa7b8b783def02a309000000
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       namespace: df870c4d-f3c8-4620-b402-ae94b3dde182
-(run_on_pod_ray pid=6123, ip=10.164.0.15) The actor is dead because its owner has died. Owner Id: a6268a1adbf3ea42f39e8ad0fe5c2ea937ecf963176eb60cbd66d091 Owner Ip address: 10.164.0.15 Owner worker exit type: SYSTEM_ERROR Worker exit detail: Owner's node has crashed.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) The actor never ran - it was cancelled before it started running.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) Traceback (most recent call last):
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 429, in _add_members_to_actor_pool
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     actor_info = ray.get(actor_info_awaitable, timeout=0)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     return func(*args, **kwargs)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=6123, ip=10.164.0.15)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     raise value
-(run_on_pod_ray pid=6123, ip=10.164.0.15) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       class_name: SliceActor
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       actor_id: 58d90cb0aa7b8b783def02a309000000
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       namespace: df870c4d-f3c8-4620-b402-ae94b3dde182
-(run_on_pod_ray pid=6123, ip=10.164.0.15) The actor is dead because its owner has died. Owner Id: a6268a1adbf3ea42f39e8ad0fe5c2ea937ecf963176eb60cbd66d091 Owner Ip address: 10.164.0.15 Owner worker exit type: SYSTEM_ERROR Worker exit detail: Owner's node has crashed.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) The actor never ran - it was cancelled before it started running.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) Failed to prune dead slices or create new actors
-(run_on_pod_ray pid=6123, ip=10.164.0.15) Traceback (most recent call last):
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 806, in run_on_pod_ray
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     slice_pool_manager.scale_multislice(num_slices)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 510, in scale_multislice
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     self._scale_actor_pool(num_slices)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 482, in _scale_actor_pool
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     raise Exception(msg)
-(run_on_pod_ray pid=6123, ip=10.164.0.15) Exception: v5litepod-256 slices actor pool wanted to scale to 1 actors, but scaled to 0 actors instead
-(raylet) Task run_levanter_train_vlm failed. There are 2 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.0.15, node ID: c2a0258b42d00c9a3691f20d7a12bcaded0397faeb242350a51b527d. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=c2a0258b42d00c9a3691f20d7a12bcaded0397faeb242350a51b527d`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.0.15`.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) v5litepod-256 slices actor pool actor Actor(SliceActor, 58d90cb0aa7b8b783def02a309000000) failed to start: The actor died unexpectedly before finishing this task.
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       class_name: SliceActor
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       actor_id: 58d90cb0aa7b8b783def02a309000000
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       namespace: df870c4d-f3c8-4620-b402-ae94b3dde182
-(run_on_pod_ray pid=6123, ip=10.164.0.15) The actor is dead because its owner has died. Owner Id: a6268a1adbf3ea42f39e8ad0fe5c2ea937ecf963176eb60cbd66d091 Owner Ip address: 10.164.0.15 Owner worker exit type: SYSTEM_ERROR Worker exit detail: Owner's node has crashed.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) The actor never ran - it was cancelled before it started running.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) Traceback (most recent call last):
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 429, in _add_members_to_actor_pool
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     actor_info = ray.get(actor_info_awaitable, timeout=0)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     return func(*args, **kwargs)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=6123, ip=10.164.0.15)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     raise value
-(run_on_pod_ray pid=6123, ip=10.164.0.15) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       class_name: SliceActor
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       actor_id: 58d90cb0aa7b8b783def02a309000000
-(run_on_pod_ray pid=6123, ip=10.164.0.15)       namespace: df870c4d-f3c8-4620-b402-ae94b3dde182
-(run_on_pod_ray pid=6123, ip=10.164.0.15) The actor is dead because its owner has died. Owner Id: a6268a1adbf3ea42f39e8ad0fe5c2ea937ecf963176eb60cbd66d091 Owner Ip address: 10.164.0.15 Owner worker exit type: SYSTEM_ERROR Worker exit detail: Owner's node has crashed.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) The actor never ran - it was cancelled before it started running.
-(run_on_pod_ray pid=6123, ip=10.164.0.15) Failed to prune dead slices or create new actors
-(run_on_pod_ray pid=6123, ip=10.164.0.15) Traceback (most recent call last):
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 806, in run_on_pod_ray
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     slice_pool_manager.scale_multislice(num_slices)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 510, in scale_multislice
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     self._scale_actor_pool(num_slices)
-(run_on_pod_ray pid=6123, ip=10.164.0.15)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 482, in _scale_actor_pool
-(run_on_pod_ray pid=6123, ip=10.164.0.15)     raise Exception(msg)
-(run_on_pod_ray pid=6123, ip=10.164.0.15) Exception: v5litepod-256 slices actor pool wanted to scale to 1 actors, but scaled to 0 actors instead
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Using provided namespace: fray_abfe8ca1
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Set default job context to RayContext
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Launching job: train_vlm
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Building environment for device: tpu/v5litepod-256
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Building environment with [], extras ['tpu'] for job: train_vlm
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Resolved 393 packages in 5ms
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
-(run_levanter_train_vlm pid=6122, ip=10.164.0.15) Launching TPU job train_vlm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Using provided namespace: fray_abfe8ca1
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Set default job context to RayContext
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Launching job: train_vlm
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Building environment for device: tpu/v5litepod-256
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Building environment with [], extras ['tpu'] for job: train_vlm
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Resolved 393 packages in 4ms
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
-(run_levanter_train_vlm pid=2983, ip=10.164.0.98) Launching TPU job train_vlm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
-(autoscaler +16m47s) No available node types can fulfill resource requests {'ray-marin-eu-west4-worker-eb57cba3-tpu': 1.0}*1, {'ray-marin-eu-west4-worker-c6ef968d-tpu': 1.0}*11, {'ray-marin-eu-west4-worker-243fd007-tpu': 1.0}*3. Add suitable node types to this cluster to resolve this issue.
-(raylet) There are tasks with infeasible resource requests that cannot be scheduled. See https://docs.ray.io/en/latest/ray-core/scheduling/index.html#ray-scheduling-resources for more details. Possible solutions: 1. Updating the ray cluster to include nodes with all required resources 2. To cause the tasks with infeasible requests to raise an error instead of hanging, set the 'RAY_enable_infeasible_task_early_exit=true'. This feature will be turned on by default in a future release of Ray.
-(run_on_pod_ray pid=2984, ip=10.164.0.98) v5litepod-256 slices actor pool actor Actor(SliceActor, 4d89997e87117d6257f32a6509000000) failed to start: The actor died unexpectedly before finishing this task.
-(run_on_pod_ray pid=2984, ip=10.164.0.98)       class_name: SliceActor
-(run_on_pod_ray pid=2984, ip=10.164.0.98)       actor_id: 4d89997e87117d6257f32a6509000000
-(run_on_pod_ray pid=2984, ip=10.164.0.98)       namespace: df870c4d-f3c8-4620-b402-ae94b3dde182
-(run_on_pod_ray pid=2984, ip=10.164.0.98) The actor is dead because its owner has died. Owner Id: d5576ada870b488bc4cdd3d47ef6244bb5fe67879e75e5e17a0b8315 Owner Ip address: 10.164.0.98 Owner worker exit type: SYSTEM_ERROR Worker exit detail: Owner's node has crashed.
-(run_on_pod_ray pid=2984, ip=10.164.0.98) The actor never ran - it was cancelled before it started running.
-(run_on_pod_ray pid=2984, ip=10.164.0.98) Traceback (most recent call last):
-(run_on_pod_ray pid=2984, ip=10.164.0.98)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 429, in _add_members_to_actor_pool
-(run_on_pod_ray pid=2984, ip=10.164.0.98)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=2984, ip=10.164.0.98)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=2984, ip=10.164.0.98)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2984, ip=10.164.0.98)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=2984, ip=10.164.0.98)     return func(*args, **kwargs)
-(run_on_pod_ray pid=2984, ip=10.164.0.98)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2984, ip=10.164.0.98)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=2984, ip=10.164.0.98)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=2984, ip=10.164.0.98)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=2984, ip=10.164.0.98)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(run_on_pod_ray pid=2984, ip=10.164.0.98)     raise value
-(run_on_pod_ray pid=2984, ip=10.164.0.98) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
-(run_on_pod_ray pid=2984, ip=10.164.0.98)       class_name: SliceActor
-(run_on_pod_ray pid=2984, ip=10.164.0.98)       actor_id: 4d89997e87117d6257f32a6509000000
-(run_on_pod_ray pid=2984, ip=10.164.0.98)       namespace: df870c4d-f3c8-4620-b402-ae94b3dde182
-(run_on_pod_ray pid=2984, ip=10.164.0.98) The actor is dead because its owner has died. Owner Id: d5576ada870b488bc4cdd3d47ef6244bb5fe67879e75e5e17a0b8315 Owner Ip address: 10.164.0.98 Owner worker exit type: SYSTEM_ERROR Worker exit detail: Owner's node has crashed.
-(run_on_pod_ray pid=2984, ip=10.164.0.98) The actor never ran - it was cancelled before it started running.
-(run_on_pod_ray pid=2984, ip=10.164.0.98) Failed to prune dead slices or create new actors
-(run_on_pod_ray pid=2984, ip=10.164.0.98) Traceback (most recent call last):
-(run_on_pod_ray pid=2984, ip=10.164.0.98)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 806, in run_on_pod_ray
-(run_on_pod_ray pid=2984, ip=10.164.0.98)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 510, in scale_multislice
-(run_on_pod_ray pid=2984, ip=10.164.0.98)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 482, in _scale_actor_pool
-(run_on_pod_ray pid=2984, ip=10.164.0.98) Exception: v5litepod-256 slices actor pool wanted to scale to 1 actors, but scaled to 0 actors instead
-(raylet) Task run_levanter_train_vlm failed. There are 1 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.0.98, node ID: f10b90c56d3d9e59bfaccf9d6c4f6c3c4c0fda16c3f73271e3c38bd3. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=f10b90c56d3d9e59bfaccf9d6c4f6c3c4c0fda16c3f73271e3c38bd3`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.0.98`.
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Using provided namespace: fray_abfe8ca1
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Set default job context to RayContext
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Launching job: train_vlm
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Building environment for device: tpu/v5litepod-256
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Building environment with [], extras ['tpu'] for job: train_vlm
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Resolved 393 packages in 4ms
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Launching TPU job train_vlm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_abfe8ca1', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
-(run_on_pod_ray pid=7755, ip=10.164.2.8) [Errno 2] No such file or directory
-(run_on_pod_ray pid=7755, ip=10.164.2.8) Traceback (most recent call last):
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/serialization.py", line 595, in deserialize_objects
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     obj = self._deserialize_object(
-(run_on_pod_ray pid=7755, ip=10.164.2.8)           ^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/serialization.py", line 432, in _deserialize_object
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     return self._deserialize_msgpack_data(
-(run_on_pod_ray pid=7755, ip=10.164.2.8)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/serialization.py", line 379, in _deserialize_msgpack_data
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     python_objects = self._deserialize_pickle5_data(
-(run_on_pod_ray pid=7755, ip=10.164.2.8)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/serialization.py", line 361, in _deserialize_pickle5_data
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     obj = pickle.loads(in_band)
-(run_on_pod_ray pid=7755, ip=10.164.2.8)           ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/__init__.py", line 22, in <module>
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/analysis/__init__.py", line 17, in <module>
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/analysis/visualization.py", line 18, in <module>
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/utils/hf_utils.py", line 8, in <module>
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/__init__.py", line 27, in <module>
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     from . import dependency_versions_check
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/dependency_versions_check.py", line 16, in <module>
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     from .utils.versions import require_version, require_version_core
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/__init__.py", line 24, in <module>
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     from .auto_docstring import (
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/auto_docstring.py", line 33, in <module>
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     PATH_TO_TRANSFORMERS = Path("src").resolve() / "transformers"
-(run_on_pod_ray pid=7755, ip=10.164.2.8)                            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/pathlib.py", line 993, in resolve
-(run_on_pod_ray pid=7755, ip=10.164.2.8)     s = os.path.realpath(self, strict=strict)
-(run_on_pod_ray pid=7755, ip=10.164.2.8)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "<frozen posixpath>", line 417, in realpath
-(run_on_pod_ray pid=7755, ip=10.164.2.8)   File "<frozen posixpath>", line 404, in abspath
-(run_on_pod_ray pid=7755, ip=10.164.2.8) FileNotFoundError: [Errno 2] No such file or directory
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) Job 139601779389616 failed with message: ray::run_on_pod_ray() (pid=7755, ip=10.164.2.8)
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)   At least one of the input arguments for this task could not be computed:
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) ray.exceptions.RaySystemError: System error: [Errno 2] No such file or directory
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) traceback: Traceback (most recent call last):
-2026-03-13 15:04:09,517 WARNING cluster.py:350 -- Job 123939744509712 failed with message: ray::run_levanter_train_vlm() (pid=7754, ip=10.164.2.8)
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/base.py", line 631, in wait
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-RuntimeError: Job 139601779389616 failed with status failed and error: ray::run_on_pod_ray() (pid=7755, ip=10.164.2.8)
-  At least one of the input arguments for this task could not be computed:
-ray.exceptions.RaySystemError: System error: [Errno 2] No such file or directory
-traceback: Traceback (most recent call last):
-          ^^^^^^^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-          ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/__init__.py", line 22, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/analysis/__init__.py", line 17, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/analysis/visualization.py", line 18, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/utils/hf_utils.py", line 8, in <module>
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/__init__.py", line 27, in <module>
-    from . import dependency_versions_check
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/dependency_versions_check.py", line 16, in <module>
-    from .utils.versions import require_version, require_version_core
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/__init__.py", line 24, in <module>
-    from .auto_docstring import (
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/auto_docstring.py", line 33, in <module>
-    PATH_TO_TRANSFORMERS = Path("src").resolve() / "transformers"
-                           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/pathlib.py", line 993, in resolve
-    s = os.path.realpath(self, strict=strict)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<frozen posixpath>", line 417, in realpath
-  File "<frozen posixpath>", line 404, in abspath
-FileNotFoundError: [Errno 2] No such file or directory
-2026-03-13 15:04:09,517 INFO executor.py:796 -- Waiting for 123939744509712 to finish for step checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0
-2026-03-13 15:04:09,517 - INFO - Starting wait for job 123939744509712
-2026-03-13 15:04:09,518 WARNING cluster.py:350 -- Job 123939744509712 failed with message: ray::run_levanter_train_vlm() (pid=7754, ip=10.164.2.8)
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/base.py", line 631, in wait
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-RuntimeError: Job 139601779389616 failed with status failed and error: ray::run_on_pod_ray() (pid=7755, ip=10.164.2.8)
-  At least one of the input arguments for this task could not be computed:
-ray.exceptions.RaySystemError: System error: [Errno 2] No such file or directory
-traceback: Traceback (most recent call last):
-          ^^^^^^^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-          ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/__init__.py", line 22, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/analysis/__init__.py", line 17, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/analysis/visualization.py", line 18, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/utils/hf_utils.py", line 8, in <module>
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/__init__.py", line 27, in <module>
-    from . import dependency_versions_check
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/dependency_versions_check.py", line 16, in <module>
-    from .utils.versions import require_version, require_version_core
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/__init__.py", line 24, in <module>
-    from .auto_docstring import (
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/auto_docstring.py", line 33, in <module>
-    PATH_TO_TRANSFORMERS = Path("src").resolve() / "transformers"
-                           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/pathlib.py", line 993, in resolve
-    s = os.path.realpath(self, strict=strict)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<frozen posixpath>", line 417, in realpath
-  File "<frozen posixpath>", line 404, in abspath
-FileNotFoundError: [Errno 2] No such file or directory
-2026-03-13 15:04:09,518 - INFO - Job 123939744509712 completed with status failed
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py", line 262, in <module>
-    executor_main(steps=[vlm_training])
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
-    response = fn(cfg, *args, **kwargs)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/marin/src/marin/execution/executor.py", line 743, in run
-    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
-    runner.wait()
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/marin/src/marin/execution/executor.py", line 207, in wait
-    raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-RuntimeError: Job 123939744509712 failed: ray::run_levanter_train_vlm() (pid=7754, ip=10.164.2.8)
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/marin/src/marin/training/training.py", line 317, in run_levanter_train_vlm
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/base.py", line 631, in wait
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/fray/src/fray/cluster/base.py", line 653, in _wait_single
-RuntimeError: Job 139601779389616 failed with status failed and error: ray::run_on_pod_ray() (pid=7755, ip=10.164.2.8)
-  At least one of the input arguments for this task could not be computed:
-ray.exceptions.RaySystemError: System error: [Errno 2] No such file or directory
-traceback: Traceback (most recent call last):
-          ^^^^^^^^^^^^^^^^^^^^^^^^^
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-          ^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/__init__.py", line 22, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/analysis/__init__.py", line 17, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/analysis/visualization.py", line 18, in <module>
-  File "/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34/lib/levanter/src/levanter/utils/hf_utils.py", line 8, in <module>
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/__init__.py", line 27, in <module>
-    from . import dependency_versions_check
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/dependency_versions_check.py", line 16, in <module>
-    from .utils.versions import require_version, require_version_core
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/__init__.py", line 24, in <module>
-    from .auto_docstring import (
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/auto_docstring.py", line 33, in <module>
-    PATH_TO_TRANSFORMERS = Path("src").resolve() / "transformers"
-                           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/pathlib.py", line 993, in resolve
-    s = os.path.realpath(self, strict=strict)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<frozen posixpath>", line 417, in realpath
-  File "<frozen posixpath>", line 404, in abspath
-FileNotFoundError: [Errno 2] No such file or directory
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)           ^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)                            ^^^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/utils/auto_docstring.py", line 33, in <module> [repeated 8x across cluster]
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)     from . import dependency_versions_check
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)     from .utils.versions import require_version, require_version_core
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)     from .auto_docstring import (
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)     PATH_TO_TRANSFORMERS = Path("src").resolve() / "transformers"
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)   File "/home/ray/anaconda3/lib/python3.11/pathlib.py", line 993, in resolve
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)     s = os.path.realpath(self, strict=strict)
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)   File "<frozen posixpath>", line 417, in realpath
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8)   File "<frozen posixpath>", line 404, in abspath
-(run_levanter_train_vlm pid=7754, ip=10.164.2.8) FileNotFoundError: [Errno 2] No such file or directory
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true 
+      [stderr]
+      Traceback (most recent call last):
+        File "<string>", line 11, in <module>
+        File "/home/ruili/.cache/uv/builds-v0/.tmpkPDfwl/lib/python3.11/site-packages/hatchling/build.py", line 83, in build_editable
+          return os.path.basename(next(builder.build(directory=wheel_directory, versions=["editable"])))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        File "/home/ruili/.cache/uv/builds-v0/.tmpkPDfwl/lib/python3.11/site-packages/hatchling/builders/plugin/interface.py", line 149,
+      in build
+          build_hook.initialize(version, build_data)
+        File "/home/ruili/marin_private3/lib/iris/hatch_build.py", line 77, in initialize
+          self._maybe_generate_protos(root)
+        File "/home/ruili/marin_private3/lib/iris/hatch_build.py", line 98, in _maybe_generate_protos
+          raise RuntimeError(
+      RuntimeError: Protobuf outputs are missing and npx is not installed. Install Node.js (which provides npx) to generate protobuf files:
+      https://nodejs.org/ or run `make install_node`
+
+      hint: This usually indicates a problem with the package or the build environment.
+  help: `iris` was included because `marin-root` (v0.1.0) depends on `iris`
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --region europe-west4 --tpu v5litepod-256  -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-2  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-256 -- python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true 
+      Built marin-root @ file:///home/ruili/marin_private3
+      Built iris @ file:///home/ruili/marin_private3/lib/iris
+Uninstalled 2 packages in 2ms
+Installed 6 packages in 2ms
+I20260314 10:13:20 140338006231040 iris.cluster.config Loading config from lib/iris/examples/marin.yaml
+I20260314 10:13:23 140338006231040 iris.cli.main Establishing tunnel to controller...
+I20260314 10:13:25 140338006231040 iris.cluster.platform.gcp Establishing SSH tunnel to iris-controller-marin (zone=us-central1-a)...
+I20260314 10:13:29 140338006231040 iris.cluster.platform.gcp Tunnel ready: 127.0.0.1:55463 -> iris-controller-marin:10000
+I20260314 10:13:29 140338006231040 iris.cli.job Multinode TPU 'v5litepod-256' detected (vm_count=64). Auto-setting replicas=64 and coscheduling by tpu-name.
+I20260314 10:13:29 140338006231040 iris.cli.job Submitting job: iris-run-demo_vlm_train_round3_eu_west4_4b-20260314-101329
+I20260314 10:13:29 140338006231040 iris.cli.job Command: EXP_NAME vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-2 python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
+I20260314 10:13:29 140338006231040 iris.cli.job Resources: cpu=0.5, memory=1GB, disk=5GB
+I20260314 10:13:29 140338006231040 iris.cli.job TPU: v5litepod-256
+I20260314 10:13:29 140338006231040 iris.cli.job Replicas: 64
+I20260314 10:13:29 140338006231040 iris.cli.job Coscheduling: group_by=tpu-name
+I20260314 10:13:29 140338006231040 iris.cli.job Region constraint: europe-west4
+I20260314 10:13:29 140338006231040 iris.cli.job Using controller: http://127.0.0.1:55463
+I20260314 10:13:30 140338006231040 iris.client.client Workspace bundle size: 10.9 MB
+I20260314 10:13:32 140338006231040 iris.cli.job Job submitted: /ruili/iris-run-demo_vlm_train_round3_eu_west4_4b-20260314-101329
+/ruili/iris-run-demo_vlm_train_round3_eu_west4_4b-20260314-101329
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --region europe-west4 --tpu v5litepod-128  -e WANDB_API_KEY ${WANDB_API_KEY}  -e EXP_NAME  vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-3  -e HF_DATASETS_TRUST_REMOTE_CODE true -e TPU_TYPE v5litepod-128 -- python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true 
+Uninstalled 1 package in 1ms
+Installed 1 package in 92ms
+I20260314 10:14:21 139805579069440 iris.cluster.config Loading config from lib/iris/examples/marin.yaml
+I20260314 10:14:23 139805579069440 iris.cli.main Establishing tunnel to controller...
+I20260314 10:14:26 139805579069440 iris.cluster.platform.gcp Establishing SSH tunnel to iris-controller-marin (zone=us-central1-a)...
+I20260314 10:14:30 139805579069440 iris.cluster.platform.gcp Tunnel ready: 127.0.0.1:56585 -> iris-controller-marin:10000
+I20260314 10:14:30 139805579069440 iris.cli.job Multinode TPU 'v5litepod-128' detected (vm_count=32). Auto-setting replicas=32 and coscheduling by tpu-name.
+I20260314 10:14:30 139805579069440 iris.cli.job Submitting job: iris-run-demo_vlm_train_round3_eu_west4_4b-20260314-101430
+I20260314 10:14:30 139805579069440 iris.cli.job Command: EXP_NAME vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-3 python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
+I20260314 10:14:30 139805579069440 iris.cli.job Resources: cpu=0.5, memory=1GB, disk=5GB
+I20260314 10:14:30 139805579069440 iris.cli.job TPU: v5litepod-128
+I20260314 10:14:30 139805579069440 iris.cli.job Replicas: 32
+I20260314 10:14:30 139805579069440 iris.cli.job Coscheduling: group_by=tpu-name
+I20260314 10:14:30 139805579069440 iris.cli.job Region constraint: europe-west4
+I20260314 10:14:30 139805579069440 iris.cli.job Using controller: http://127.0.0.1:56585
+I20260314 10:14:31 139805579069440 iris.client.client Workspace bundle size: 10.9 MB
+I20260314 10:14:32 139805579069440 iris.cli.job Job submitted: /ruili/iris-run-demo_vlm_train_round3_eu_west4_4b-20260314-101430
+/ruili/iris-run-demo_vlm_train_round3_eu_west4_4b-20260314-101430
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$  echo  ${WANDB_API_KEY} 
+
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ export WANDB_API_KEY=REDACTED_WANDB_KEY
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --region europe-west4 --tpu v5litepod-64   -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-64  -e EXP_NAME unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e3-linear-10k-correct-demo0 -e TEXT_STEPS 5000 -e UND_STEPS  0 -e GEN_STEPS 5000  -e W_VISUAL 0.5  -e MUON_LR 0.008 -e ADAM_LR 0.0024   -e LR_SCHEDULE   linear  -- python experiments/unified/unified_pretrain_demo_eu.py
+Uninstalled 1 package in 1ms
+Installed 1 package in 88ms
+I20260314 18:47:36 139913362216960 iris.cluster.config Loading config from lib/iris/examples/marin.yaml
+I20260314 18:47:39 139913362216960 iris.cli.main Establishing tunnel to controller...
+I20260314 18:47:41 139913362216960 iris.cluster.platform.gcp Establishing SSH tunnel to iris-controller-marin (zone=us-central1-a)...
+I20260314 18:47:44 139913362216960 iris.cluster.platform.gcp Tunnel ready: 127.0.0.1:54097 -> iris-controller-marin:10000
+I20260314 18:47:44 139913362216960 iris.cli.job Multinode TPU 'v5litepod-64' detected (vm_count=16). Auto-setting replicas=16 and coscheduling by tpu-name.
+I20260314 18:47:44 139913362216960 iris.cli.job Submitting job: iris-run-unified_pretrain_demo_eu-20260314-184744
+I20260314 18:47:44 139913362216960 iris.cli.job Command: python experiments/unified/unified_pretrain_demo_eu.py
+I20260314 18:47:44 139913362216960 iris.cli.job Resources: cpu=0.5, memory=1GB, disk=5GB
+I20260314 18:47:44 139913362216960 iris.cli.job TPU: v5litepod-64
+I20260314 18:47:44 139913362216960 iris.cli.job Replicas: 16
+I20260314 18:47:44 139913362216960 iris.cli.job Coscheduling: group_by=tpu-name
+I20260314 18:47:44 139913362216960 iris.cli.job Region constraint: europe-west4
+I20260314 18:47:44 139913362216960 iris.cli.job Using controller: http://127.0.0.1:54097
+I20260314 18:47:45 139913362216960 iris.client.client Workspace bundle size: 10.9 MB
+I20260314 18:47:47 139913362216960 iris.cli.job Job submitted: /ruili/iris-run-unified_pretrain_demo_eu-20260314-184744
+/ruili/iris-run-unified_pretrain_demo_eu-20260314-184744
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ uv run iris --config lib/iris/examples/marin.yaml job run  --extra marin:tpu --region europe
+-west4 --tpu v5litepod-64   -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-64  -e EXP_NAME unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e
+3-linear-10k-correct-demo0 -e TEXT_STEPS 5000 -e UND_STEPS  0 -e GEN_STEPS 5000  -e W_VISUAL 0.5  -e MUON_LR 0.008 -e ADAM_LR 0.0024   -e LR_S
+CHEDULE   linear  -- python experiments/unified/unified_pretrain_demo_eu.py
 Uninstalled 1 package in 1ms
 Installed 1 package in 91ms
-2026-03-13 22:28:25,527 - INFO - Creating SSH proxy chain through marin-eu-west4
-2026-03-13 22:28:25,527 - INFO - Tunneling to 1 clusters. Port mapping: {'marin-eu-west4': RayPortMapping(dashboard_port=8283, gcs_port=6397, api_port=10019)}
-2026-03-13 22:28:25,533 - INFO - SSH tunnel not ready, retrying in 1s... (1/3)
-Warning: Permanently added '34.13.248.136' (ED25519) to the list of known hosts.
-2026-03-13 22:28:26,535 - INFO - SSH tunnel not ready, retrying in 1s... (2/3)
-2026-03-13 22:28:27,833 - INFO - SSH tunnel is ready - all dashboards accessible
-2026-03-13 22:28:28,440 - INFO - Submitting job with entrypoint:  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-2026-03-13 22:28:28,440 - INFO - Extras: 
-2026-03-13 22:28:28,440 - INFO - env_vars: {
-    "WANDB_API_KEY": "REDACTED_WANDB_KEY",
-    "EXP_NAME": "vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0",
-    "HF_DATASETS_TRUST_REMOTE_CODE": "true",
-    "TPU_TYPE": "v5litepod-256",
-    "GIT_COMMIT": "53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b",
-    "FRAY_CLUSTER_SPEC": "ray"
-}
-Resolved 393 packages in 22ms
-2026-03-13 22:28:28,504 - INFO - Terminal command: 
-ray job submit --runtime-env-json '{"env_vars": {"WANDB_API_KEY": "REDACTED_WANDB_KEY", "EXP_NAME": "vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0", "HF_DATASETS_TRUST_REMOTE_CODE": "true", "TPU_TYPE": "v5litepod-256", "GIT_COMMIT": "53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b", "FRAY_CLUSTER_SPEC": "ray", "PYTHONPATH": "experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src"}, "pip": {"packages": "/tmp/ray_reqs_a49a633c4ec46bb8.txt"}, "pip_check": false, "working_dir": "/home/ruili/marin_private3", "config": {"setup_timeout_seconds": 1800}, "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"]}' --submission-id 'ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-222822  -- pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-2026-03-13 22:28:28,512 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 22:28:28,626 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 22:28:28,633 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 22:28:28,716 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 22:28:28,774 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 22:28:28,817 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 22:28:28,824 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 22:28:28,829 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.gitignore')]
-2026-03-13 22:28:28,938 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.gitignore')]
-2026-03-13 22:28:28,944 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.idea/.gitignore')]
-2026-03-13 22:28:29,024 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/levanter/.pytest_cache/.gitignore')]
-2026-03-13 22:28:29,081 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/lib/haliax/.gitignore')]
-2026-03-13 22:28:29,122 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/data_browser/.gitignore')]
-2026-03-13 22:28:29,129 INFO packaging.py:392 -- Ignoring upload to cluster for these files: [PosixPath('/home/ruili/marin_private3/.venv/.gitignore')]
-2026-03-13 22:28:29,432 INFO dashboard_sdk.py:408 -- Package gcs://_ray_pkg_c5157e049ef53d34.zip already exists, skipping upload.
-2026-03-13 22:28:29,738 - INFO - Job submitted with ID: ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-222822
-2026-03-13 22:28:29,738 - INFO - Job URL: http://localhost:8283/#/jobs/ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-222822
-2026-03-13 15:28:29,660 INFO job_manager.py:579 -- Runtime env is setting up.
-Running entrypoint for job ray-run-ruili-demo_vlm_train_round3_eu_west4_4b-20260313-222822: pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && pip install --no-deps opencv-python-headless &&  python experiments/VLM/demo_vlm_train_round3_eu_west4_4b.py --force_run_failed true
-Found existing installation: opencv-python-headless 4.13.0.92
-Uninstalling opencv-python-headless-4.13.0.92:
-  Successfully uninstalled opencv-python-headless-4.13.0.92
-Collecting opencv-python-headless
-  Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl.metadata (19 kB)
-Using cached opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl (60.4 MB)
-Installing collected packages: opencv-python-headless
-Successfully installed opencv-python-headless-4.13.0.92
-
-[notice] A new release of pip is available: 24.3.1 -> 26.0.1
-[notice] To update, run: pip install --upgrade pip
-2026-03-13 15:28:40,365 - INFO - Using cluster from FRAY_CLUSTER_SPEC=ray
-2026-03-13 15:28:40,493 INFO cluster.py:103 -- Created new namespace: fray_e5f773c9
-2026-03-13 15:28:40,493 INFO cluster.py:114 -- Set default job context to RayContext
-2026-03-13 15:28:40,493 INFO executor.py:719 -- ### Inspecting the 1 provided steps ###
-2026-03-13 15:28:40,497 INFO executor.py:727 -- ### Reading 1 statuses ###
-2026-03-13 15:28:40,497 INFO executor.py:737 -- ### Writing metadata ###
-2026-03-13 15:28:40,497 INFO executor.py:1104 -- Writing executor info to gs://marin-eu-west4/experiments/demo_vlm_train_round3_eu_west4_4b-73280e.json
-2026-03-13 15:28:40,498 INFO executor.py:1107 -- To view the experiment page, go to:
-2026-03-13 15:28:40,498 INFO executor.py:1108 -- 
-2026-03-13 15:28:40,498 INFO executor.py:1109 -- https://marin.community/data-browser/experiment?path=gs%3A//marin-eu-west4/experiments/demo_vlm_train_round3_eu_west4_4b-73280e.json
-2026-03-13 15:28:40,498 INFO executor.py:1110 -- 
-2026-03-13 15:28:40,799 INFO executor.py:740 -- ### Launching 1 steps ###
-2026-03-13 15:28:40,799 INFO executor.py:810 -- checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x7927f5f5c7c0>
-2026-03-13 15:28:40,799 INFO executor.py:811 --   output_path = gs://marin-eu-west4/checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0-ffbcd7
-2026-03-13 15:28:40,799 INFO executor.py:812 --   config = {}
-2026-03-13 15:28:40,905 INFO executor.py:1142 -- [ray-marin-eu-west4-head-113957a0-compute-133215175374656] Status checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x7927f5f5c7c0>: FAILED
-2026-03-13 15:28:40,905 INFO executor.py:1151 -- [ray-marin-eu-west4-head-113957a0-compute-133215175374656] Force running checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x7927f5f5c7c0>, previous status: FAILED
-2026-03-13 15:28:40,905 INFO executor.py:1163 -- [ray-marin-eu-west4-head-113957a0-compute-133215175374656] Attempting to acquire lock for checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x7927f5f5c7c0>
-2026-03-13 15:28:41,135 INFO executor.py:1166 -- [ray-marin-eu-west4-head-113957a0-compute-133215175374656] Acquired lock for checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0: <function run_levanter_train_vlm at 0x7927f5f5c7c0>
-2026-03-13 15:28:41,279 INFO cluster.py:149 -- Launching job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0
-2026-03-13 15:28:41,279 INFO cluster.py:278 -- Building environment for device: cpu/cpu
-2026-03-13 15:28:41,280 INFO cluster.py:283 -- Building environment with [], extras [] for job: run_levanter_train_vlm:checkpoints/vlm-official-qwen3-stage3_4b_4096-correct-50M-mixed-0
-2026-03-13 15:28:41,280 INFO cluster.py:298 -- Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'JAX_PLATFORMS': 'cpu', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_e5f773c9'}}
-2026-03-13 15:28:41,281 INFO worker.py:1680 -- Using address 10.164.0.104:6379 set in the environment variable RAY_ADDRESS
-2026-03-13 15:28:41,285 INFO worker.py:1821 -- Connecting to existing Ray cluster at address: 10.164.0.104:6379...
-2026-03-13 15:28:41,301 INFO worker.py:1998 -- Connected to Ray cluster. View the dashboard at http://10.164.0.104:8265 
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Using provided namespace: fray_e5f773c9
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Set default job context to RayContext
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Launching job: train_vlm
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Building environment for device: tpu/v5litepod-256
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Building environment with [], extras ['tpu'] for job: train_vlm
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Resolved 393 packages in 4ms
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Ray runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_e5f773c9', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False, 'working_dir': '/tmp/ray/session_2026-03-13_12-52-33_580276_657/runtime_resources/working_dir_files/_ray_pkg_c5157e049ef53d34', 'excludes': ['.git', 'tests/', 'docs/', '**/*.pack'], 'config': {'setup_timeout_seconds': 1800}}
-(run_levanter_train_vlm pid=3978, ip=10.164.0.128) Launching TPU job train_vlm with runtime env: {'env_vars': {'HF_DATASETS_TRUST_REMOTE_CODE': '1', 'TOKENIZERS_PARALLELISM': 'false', 'WANDB_API_KEY': 'REDACTED_WANDB_KEY', 'GIT_COMMIT': '53c3a8fa4ee39c4e15015b4f3f1a7cd599be037b', 'TPU_MIN_LOG_LEVEL': '2', 'TPU_STDERR_LOG_LEVEL': '2', 'JAX_COMPILATION_CACHE_DIR': 'gs://marin-eu-west4/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_e5f773c9', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_a49a633c4ec46bb8.txt'}, 'pip_check': False}
+I20260314 19:07:49 140218211067904 iris.cluster.config Loading config from lib/iris/examples/marin.yaml
+I20260314 19:07:51 140218211067904 iris.cli.main Establishing tunnel to controller...
+I20260314 19:07:54 140218211067904 iris.cluster.platform.gcp Establishing SSH tunnel to iris-controller-marin (zone=us-central1-a)...
+I20260314 19:07:57 140218211067904 iris.cluster.platform.gcp Tunnel ready: 127.0.0.1:42529 -> iris-controller-marin:10000
+I20260314 19:07:57 140218211067904 iris.cli.job Multinode TPU 'v5litepod-64' detected (vm_count=16). Auto-setting replicas=16 and coscheduling by tpu-name.
+I20260314 19:07:57 140218211067904 iris.cli.job Submitting job: iris-run-unified_pretrain_demo_eu-20260314-190757
+I20260314 19:07:57 140218211067904 iris.cli.job Command: python experiments/unified/unified_pretrain_demo_eu.py
+I20260314 19:07:57 140218211067904 iris.cli.job Resources: cpu=0.5, memory=1GB, disk=5GB
+I20260314 19:07:57 140218211067904 iris.cli.job TPU: v5litepod-64
+I20260314 19:07:57 140218211067904 iris.cli.job Replicas: 16
+I20260314 19:07:57 140218211067904 iris.cli.job Coscheduling: group_by=tpu-name
+I20260314 19:07:57 140218211067904 iris.cli.job Region constraint: europe-west4
+I20260314 19:07:57 140218211067904 iris.cli.job Using controller: http://127.0.0.1:42529
+I20260314 19:07:58 140218211067904 iris.client.client Workspace bundle size: 10.9 MB
+I20260314 19:08:00 140218211067904 iris.cli.job Job submitted: /ruili/iris-run-unified_pretrain_demo_eu-20260314-190757
+/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757
+I20260314 19:08:00 140218211067904 iris.cli.job Streaming logs (Ctrl+C to stop). If disconnected, reconnect with: iris job logs -f /ruili/iris-run-unified_pretrain_demo_eu-20260314-190757
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | syncing deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | installing pip deps
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | activating venv
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/levanter/src']
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | running user command
+I20260314 19:10:46 140218211067904 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 attempt=0 | python: can't open file '/app/experiments/unified/unified_pretrain_demo_eu.py': [Errno 2] No such file or directory
+I20260314 19:10:46 140218211067904 iris.cluster.client.remote_client job=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 finished with state=JOB_STATE_FAILED, draining logs (total_lines=105)
+I20260314 19:10:47 140218211067904 iris.cluster.client.remote_client job=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 finished with state=JOB_STATE_FAILED, draining logs (total_lines=0)
+E20260314 19:10:47 140218211067904 iris.cli.job Job failed: Job /ruili/iris-run-unified_pretrain_demo_eu-20260314-190757 JOB_STATE_FAILED: Coscheduled sibling /ruili/iris-run-unified_pretrain_demo_eu-20260314-190757/15 failed
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_private3$ 
