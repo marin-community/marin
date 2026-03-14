@@ -127,6 +127,15 @@ def _make_smoke_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
+def _clear_remote_state(remote_state_dir: str) -> None:
+    """Remove all files under the remote state dir so the controller starts fresh."""
+    import fsspec
+
+    fs, path = fsspec.core.url_to_fs(remote_state_dir)
+    if fs.exists(path):
+        fs.rm(path, recursive=True)
+
+
 def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None = None):
     """Manage full cloud cluster lifecycle: stop old → build images → start → test → stop.
 
@@ -154,6 +163,13 @@ def _cloud_smoke_cluster(config_path: str, mode: str, label_prefix: str | None =
         platform.stop_all(config)
     except Exception:
         logger.info("No existing cluster to stop (or stop failed), continuing")
+
+    # Wipe remote state so the new controller doesn't restore a stale checkpoint
+    # (old bundle IDs, finished jobs from a previous run).
+    remote_state_dir = config.storage.remote_state_dir
+    if remote_state_dir:
+        logger.info("Clearing remote state dir: %s", remote_state_dir)
+        _clear_remote_state(remote_state_dir)
 
     logger.info("Starting fresh controller...")
     address = platform.start_controller(config)
