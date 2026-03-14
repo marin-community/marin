@@ -98,9 +98,22 @@ def _qwen_case_specs() -> dict[str, ModelSpec]:
         num_attention_heads=64,
         layers=94,
     )
+    marin3633 = ModelSpec(
+        name="marin_3633_topk_8",
+        seq_length=4096,
+        micro_batch_size=1,
+        hidden_size=2048,
+        moe_ffn_hidden_size=768,
+        num_experts=128,
+        router_topk=8,
+        num_attention_heads=32,
+        layers=1,
+    )
     cases = {
         qwen30.name: qwen30,
         qwen235.name: qwen235,
+        marin3633.name: marin3633,
+        "marin_3633_topk_2": replace(marin3633, name="marin_3633_topk_2", router_topk=2),
         "qwen3_batch_mb2": replace(qwen30, name="qwen3_batch_mb2", micro_batch_size=2),
         "qwen3_batch_mb4": replace(qwen30, name="qwen3_batch_mb4", micro_batch_size=4),
         "qwen3_hidden_3072": replace(qwen30, name="qwen3_hidden_3072", hidden_size=3072),
