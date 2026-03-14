@@ -22,8 +22,6 @@ Environment overrides:
 - GDN_PROFILE_SEGMENT_SIZE: optional GDN segment size override
 - GDN_PROFILE_GDN_LAYERS_PER_BLOCK: optional GDN layer-count-per-block override
 - GDN_PROFILE_GDN_BLOCK_SIZE: optional GDN block-size override
-- GDN_PROFILE_GDN_KERNEL_BRANCH_CORE_SHARDING_DIAGNOSTIC: if `1`, enable the
-  opt-in leaf-kernel branch-core sharding/layout diagnostic
 - GDN_PROFILE_GDN_BRANCH_BOUNDARY_PROTOTYPE: if `1`, enable the opt-in array-only GDN branch boundary prototype
 - GDN_PROFILE_DECODER_BLOCK_BOUNDARY_PROTOTYPE: if `1`, enable the opt-in fixed-`3/4` decoder-block boundary prototype
 - GDN_PROFILE_GRADIENT_CHECKPOINTING: optional transformer-layer checkpointing override
@@ -116,7 +114,6 @@ if __name__ == "__main__":
     segment_size_override = _env_optional_int("GDN_PROFILE_SEGMENT_SIZE")
     gdn_layers_per_block_override = _env_optional_int("GDN_PROFILE_GDN_LAYERS_PER_BLOCK")
     gdn_block_size_override = _env_optional_int("GDN_PROFILE_GDN_BLOCK_SIZE")
-    gdn_kernel_branch_core_sharding_diagnostic = _env_flag("GDN_PROFILE_GDN_KERNEL_BRANCH_CORE_SHARDING_DIAGNOSTIC")
     gdn_branch_boundary_prototype = _env_flag("GDN_PROFILE_GDN_BRANCH_BOUNDARY_PROTOTYPE")
     decoder_block_boundary_prototype = _env_flag("GDN_PROFILE_DECODER_BLOCK_BOUNDARY_PROTOTYPE")
     gradient_checkpointing_override = _env_optional_gradient_checkpointing("GDN_PROFILE_GRADIENT_CHECKPOINTING")
@@ -136,8 +133,6 @@ if __name__ == "__main__":
         model_cfg = dataclasses.replace(model_cfg, gdn_layers_per_block=gdn_layers_per_block_override)
     if gdn_block_size_override is not None:
         model_cfg = dataclasses.replace(model_cfg, gdn_block_size=gdn_block_size_override)
-    if gdn_kernel_branch_core_sharding_diagnostic:
-        model_cfg = dataclasses.replace(model_cfg, gdn_use_kernel_branch_core_sharding_diagnostic=True)
     if gdn_branch_boundary_prototype:
         model_cfg = dataclasses.replace(model_cfg, gdn_use_branch_boundary_prototype=True)
     if decoder_block_boundary_prototype:
@@ -200,8 +195,6 @@ if __name__ == "__main__":
         f"all_transformer={resolved_all_transformer} "
         f"gdn_layers_per_block={model_cfg.gdn_layers_per_block} "
         f"gdn_block_size={model_cfg.gdn_block_size} "
-        f"kernel_branch_core_sharding_diagnostic="
-        f"{int(model_cfg.gdn_use_kernel_branch_core_sharding_diagnostic)} "
         f"branch_boundary_prototype={int(model_cfg.gdn_use_branch_boundary_prototype)} "
         f"decoder_block_boundary_prototype={int(model_cfg.gdn_use_decoder_block_boundary_prototype)} "
         f"gradient_checkpointing={model_cfg.gradient_checkpointing} "
