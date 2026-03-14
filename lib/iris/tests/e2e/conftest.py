@@ -47,6 +47,22 @@ IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_dashboard_built():
+    """Build dashboard assets once per session so dashboard tests have content to render."""
+    dashboard_dir = IRIS_ROOT / "dashboard"
+    dist_dir = dashboard_dir / "dist"
+    if dist_dir.exists() and any(dist_dir.iterdir()):
+        return
+    if not (dashboard_dir / "package.json").exists():
+        return
+    if shutil.which("npm") is None:
+        logging.getLogger(__name__).warning("npm not found, skipping dashboard build for tests")
+        return
+    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
+    subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+
+
 def pytest_addoption(parser):
     """Cloud mode CLI options for running smoke tests against remote clusters."""
     parser.addoption("--iris-config", default=None, help="Path to cluster config YAML for cloud mode")
