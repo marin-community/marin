@@ -165,6 +165,10 @@ command -v nvcc
 nvcc --version
 nvidia-smi --query-gpu=name --format=csv,noheader
 /opt/conda/bin/python -m pip install --no-cache-dir uv
+if ! command -v git >/dev/null 2>&1; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y git
+fi
 {_download_unpack_block(repo_archive_url, "/app")}
 {_download_unpack_block(deepep_archive_url, "/tmp/DeepEP")}
 cd /app
