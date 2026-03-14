@@ -1,19 +1,5 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Two-phase starcoder experiment for sanity-checking RegMix.
 
@@ -42,8 +28,11 @@ Usage:
 import json
 import logging
 import os
+from dataclasses import dataclass, replace
 
 import fsspec
+from levanter.optim import MuonHConfig
+from fray.cluster import ResourceConfig
 
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
@@ -56,7 +45,7 @@ from experiments.domain_phase_mix.domains import (
     NEMOTRON_FULL_DOMAIN,
     STARCODER_DOMAIN,
 )
-from experiments.domain_phase_mix.experiment import MixtureExperiment
+from experiments.domain_phase_mix.experiment import DEFAULT_MUON_CONFIG, MixtureExperiment
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, SamplingStrategy, compute_unimax_weights
 from experiments.evals.task_configs import CORE_TASKS, CODE_TASKS, convert_to_task_metrics
@@ -146,6 +135,19 @@ SAMPLING_PARAMS = DirichletSamplingParams(
     temp=0.5,
     # min_phase_change=0.15,
 )
+
+WSD_BOUNDARY_ALIGNED_WARMUP = 0.01
+WSD_BOUNDARY_ALIGNED_REWARMUP = 0.0
+
+
+@dataclass(frozen=True)
+class TwoPhaseWsdBoundarySchedule:
+    """Resolved single-cycle WSD schedule aligned to the phase transition."""
+
+    total_steps: int
+    boundary_step: int
+    warmup_steps: int
+    decay_steps: int
 
 
 # ============================================================================
@@ -275,6 +277,9 @@ def create_two_phase_experiment(
     target_budget: int = TARGET_BUDGET,
     batch_size: int = BATCH_SIZE,
     seq_len: int = SEQ_LEN,
+    eval_datasets_cache_path: str = EVAL_DATASETS_CACHE_PATH,
+    optimizer_config: MuonHConfig | None = None,
+    resources: ResourceConfig | None = None,
 ) -> MixtureExperiment:
     """Create the two-phase starcoder experiment.
 
@@ -290,6 +295,9 @@ def create_two_phase_experiment(
         target_budget: Target budget for simulated epoching.
         batch_size: Training batch size.
         seq_len: Sequence length.
+        eval_datasets_cache_path: GCS path for cached eval datasets.
+        optimizer_config: Optional optimizer override.
+        resources: Optional execution resources override.
 
     Returns:
         MixtureExperiment configured for two-phase starcoder experiment.
@@ -314,7 +322,99 @@ def create_two_phase_experiment(
         target_budget=target_budget,
         eval_harness_tasks=EVAL_TASKS,
         sampling_params=SAMPLING_PARAMS,
-        eval_datasets_cache_path=EVAL_DATASETS_CACHE_PATH,
+        eval_datasets_cache_path=eval_datasets_cache_path,
+        optimizer_config=optimizer_config,
+        resources=resources,
+    )
+
+
+def resolve_two_phase_wsd_boundary_schedule(
+    *,
+    experiment_budget: int = EXPERIMENT_BUDGET,
+    batch_size: int = BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
+    phase_schedule: PhaseSchedule | None = None,
+    warmup_fraction: float = WSD_BOUNDARY_ALIGNED_WARMUP,
+    mixture_block_size: int = 2048,
+) -> TwoPhaseWsdBoundarySchedule:
+    """Resolve one continuous WSD schedule aligned to the phase transition."""
+    schedule = phase_schedule or PhaseSchedule.from_boundaries(boundaries=PHASE_BOUNDARIES, names=["phase_0", "phase_1"])
+    total_steps = experiment_budget // (batch_size * seq_len)
+    boundary_step = schedule.phases[1].get_start_step_aligned(total_steps, batch_size, mixture_block_size)
+    warmup_steps = int(total_steps * warmup_fraction)
+    decay_steps = total_steps - boundary_step
+
+    if decay_steps <= 0:
+        raise ValueError(f"Invalid WSD decay length: total_steps={total_steps}, boundary_step={boundary_step}")
+    if warmup_steps >= boundary_step:
+        raise ValueError(
+            "Warmup must end before the phase boundary for boundary-aligned WSD: "
+            f"warmup_steps={warmup_steps}, boundary_step={boundary_step}"
+        )
+
+    return TwoPhaseWsdBoundarySchedule(
+        total_steps=total_steps,
+        boundary_step=boundary_step,
+        warmup_steps=warmup_steps,
+        decay_steps=decay_steps,
+    )
+
+
+def create_two_phase_wsd_boundary_aligned_optimizer_config(
+    *,
+    experiment_budget: int = EXPERIMENT_BUDGET,
+    batch_size: int = BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
+    phase_schedule: PhaseSchedule | None = None,
+) -> MuonHConfig:
+    """Create a single-cycle WSD optimizer aligned to the phase transition."""
+    schedule = resolve_two_phase_wsd_boundary_schedule(
+        experiment_budget=experiment_budget,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        phase_schedule=phase_schedule,
+    )
+    return replace(
+        DEFAULT_MUON_CONFIG,
+        warmup=schedule.warmup_steps,
+        decay=schedule.decay_steps,
+        rewarmup=WSD_BOUNDARY_ALIGNED_REWARMUP,
+        lr_schedule="cosine",
+        cycles=None,
+        cycle_length=None,
+        haps=None,
+    )
+
+
+def create_two_phase_wsd_boundary_aligned_experiment(
+    name: str = NAME,
+    experiment_budget: int = EXPERIMENT_BUDGET,
+    target_budget: int = TARGET_BUDGET,
+    batch_size: int = BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
+    eval_datasets_cache_path: str = EVAL_DATASETS_CACHE_PATH,
+    resources: ResourceConfig | None = None,
+) -> MixtureExperiment:
+    """Create the two-phase StarCoder experiment with boundary-aligned WSD."""
+    phase_schedule = PhaseSchedule.from_boundaries(
+        boundaries=PHASE_BOUNDARIES,
+        names=["phase_0", "phase_1"],
+    )
+    optimizer_config = create_two_phase_wsd_boundary_aligned_optimizer_config(
+        experiment_budget=experiment_budget,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        phase_schedule=phase_schedule,
+    )
+    return create_two_phase_experiment(
+        name=name,
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        eval_datasets_cache_path=eval_datasets_cache_path,
+        optimizer_config=optimizer_config,
+        resources=resources,
     )
 
 

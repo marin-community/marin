@@ -1,19 +1,5 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Three-phase starcoder experiment extending the two-phase setup.
 
@@ -40,8 +26,10 @@ Usage:
 import json
 import logging
 import os
+from dataclasses import replace
 
 import fsspec
+from levanter.optim import MuonHConfig
 
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
@@ -54,7 +42,9 @@ from experiments.domain_phase_mix.domains import (
     NEMOTRON_FULL_DOMAIN,
     STARCODER_DOMAIN,
 )
-from experiments.domain_phase_mix.experiment import MixtureExperiment
+from fray.cluster import ResourceConfig
+
+from experiments.domain_phase_mix.experiment import DEFAULT_MUON_CONFIG, MixtureExperiment
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, SamplingStrategy, compute_unimax_weights
 from experiments.evals.task_configs import CORE_TASKS, CODE_TASKS, convert_to_task_metrics
@@ -138,6 +128,10 @@ SAMPLING_PARAMS = DirichletSamplingParams(
     temp=0.5,
 )
 
+WSDS_WARMUP = 0.01
+WSDS_DECAY = 0.1
+WSDS_REWARMUP = 0.0
+
 
 # ============================================================================
 # BASELINE CONFIGURATIONS
@@ -204,6 +198,8 @@ def create_three_phase_experiment(
     batch_size: int = BATCH_SIZE,
     seq_len: int = SEQ_LEN,
     eval_datasets_cache_path: str = EVAL_DATASETS_CACHE_PATH,
+    optimizer_config: MuonHConfig | None = None,
+    resources: ResourceConfig | None = None,
 ) -> MixtureExperiment:
     """Create the three-phase starcoder experiment.
 
@@ -232,6 +228,78 @@ def create_three_phase_experiment(
         eval_harness_tasks=EVAL_TASKS,
         sampling_params=SAMPLING_PARAMS,
         eval_datasets_cache_path=eval_datasets_cache_path,
+        optimizer_config=optimizer_config,
+        resources=resources,
+    )
+
+
+def resolve_three_phase_wsds_cycle_points(
+    *,
+    experiment_budget: int = EXPERIMENT_BUDGET,
+    batch_size: int = BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
+    phase_schedule: PhaseSchedule | None = None,
+    mixture_block_size: int = 2048,
+) -> list[int]:
+    """Resolve aligned cycle points for the native three-phase WSDS schedule."""
+    schedule = phase_schedule or PhaseSchedule.from_boundaries(boundaries=PHASE_BOUNDARIES, names=PHASE_NAMES)
+    total_steps = experiment_budget // (batch_size * seq_len)
+    return [phase.get_start_step_aligned(total_steps, batch_size, mixture_block_size) for phase in schedule.phases[1:]]
+
+
+def create_three_phase_wsds_optimizer_config(
+    *,
+    experiment_budget: int = EXPERIMENT_BUDGET,
+    batch_size: int = BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
+    phase_schedule: PhaseSchedule | None = None,
+) -> MuonHConfig:
+    """Create the native WSDS optimizer config for the three-phase StarCoder setup."""
+    cycle_points = resolve_three_phase_wsds_cycle_points(
+        experiment_budget=experiment_budget,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        phase_schedule=phase_schedule,
+    )
+    return replace(
+        DEFAULT_MUON_CONFIG,
+        warmup=WSDS_WARMUP,
+        decay=WSDS_DECAY,
+        rewarmup=WSDS_REWARMUP,
+        lr_schedule="cosine",
+        cycles=cycle_points,
+    )
+
+
+def create_three_phase_wsds_experiment(
+    name: str = NAME,
+    experiment_budget: int = EXPERIMENT_BUDGET,
+    target_budget: int = TARGET_BUDGET,
+    batch_size: int = BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
+    eval_datasets_cache_path: str = EVAL_DATASETS_CACHE_PATH,
+    resources: ResourceConfig | None = None,
+) -> MixtureExperiment:
+    """Create the three-phase StarCoder experiment with a native WSDS LR schedule."""
+    phase_schedule = PhaseSchedule.from_boundaries(
+        boundaries=PHASE_BOUNDARIES,
+        names=PHASE_NAMES,
+    )
+    optimizer_config = create_three_phase_wsds_optimizer_config(
+        experiment_budget=experiment_budget,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        phase_schedule=phase_schedule,
+    )
+    return create_three_phase_experiment(
+        name=name,
+        experiment_budget=experiment_budget,
+        target_budget=target_budget,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        eval_datasets_cache_path=eval_datasets_cache_path,
+        optimizer_config=optimizer_config,
+        resources=resources,
     )
 
 

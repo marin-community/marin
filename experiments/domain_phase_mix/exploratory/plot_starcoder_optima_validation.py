@@ -1,4 +1,4 @@
-# Copyright 2025 The Marin Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
@@ -62,6 +62,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--metric-key", type=str, default=OBJECTIVE_METRIC)
     parser.add_argument("--wandb-entity", type=str, default="marin-community")
     parser.add_argument("--wandb-project", type=str, default="marin")
+    parser.add_argument("--skip-wandb", action="store_true")
     parser.add_argument("--rl-rollout-report", type=Path, default=None)
     parser.add_argument("--observed-reference-csv", type=Path, default=None)
     parser.add_argument("--output-path", type=Path, default=None)
@@ -188,6 +189,13 @@ def _load_rl_rollout_summary(report_path: Path) -> dict[str, Any]:
     }
 
 
+def _run_name_regex(run_names: list[str]) -> str:
+    suffixes = sorted({re.escape(name.rsplit("/", 1)[-1]) for name in run_names})
+    if not suffixes:
+        raise ValueError("run_names must be non-empty")
+    return rf"(?:{'|'.join(suffixes)})$"
+
+
 def _fetch_actual_metric_map(
     *,
     dataset: str,
@@ -199,7 +207,7 @@ def _fetch_actual_metric_map(
     api = wandb.Api(overrides={"entity": wandb_entity, "project": wandb_project})
     runs = api.runs(
         f"{wandb_entity}/{wandb_project}",
-        filters={"display_name": {"$regex": r"feature_bayes_linear_k.*_optimum$"}},
+        filters={"display_name": {"$regex": _run_name_regex(run_names)}},
     )
     target_suffixes = {name.rsplit("/", 1)[-1]: name for name in run_names}
     exact_candidates: dict[str, list[dict[str, Any]]] = {name: [] for name in run_names}
@@ -451,12 +459,16 @@ def main() -> None:
         policy=args.policy,
     )
     run_names = [f"{launch_plan['name_prefix']}/{run['run_name']}" for run in launch_plan["runs"]]
-    actual_metric_map = _fetch_actual_metric_map(
-        dataset=args.dataset,
-        run_names=run_names,
-        metric_key=args.metric_key,
-        wandb_entity=args.wandb_entity,
-        wandb_project=args.wandb_project,
+    actual_metric_map = (
+        {}
+        if args.skip_wandb
+        else _fetch_actual_metric_map(
+            dataset=args.dataset,
+            run_names=run_names,
+            metric_key=args.metric_key,
+            wandb_entity=args.wandb_entity,
+            wandb_project=args.wandb_project,
+        )
     )
     frame = build_validation_plot_frame(
         launch_plan=launch_plan,

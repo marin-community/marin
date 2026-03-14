@@ -155,3 +155,33 @@
 - Result: emitted benchmark artifacts and plots under /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/starcoder_generic_selector_outputs/full_20260308_rerun2.
 - Interpretation: harness is runnable; full results depend on the actual benchmark budget used.
 - Next action: run the full benchmark configuration and review selector_summary.csv / predicted_optima exports.
+
+### 2026-03-11 15:32 - three-phase WSDS repeat implementation smoke
+- Hypothesis: the dedicated WSDS repeat pipeline can reuse the three-phase StarCoder schedule pool, enforce a strict Feature-Bayes-Linear prefix chain, emit WSDS proxy/validation plans, fit DS-RE-CEQ on contiguous prefixes, and regenerate the predicted-vs-actual BPB plot without touching the cosine benchmark outputs.
+- Command: `uv run python experiments/domain_phase_mix/exploratory/three_phase_starcoder_feature_bayes_linear_wsds_repeat.py --output-dir /tmp/wsds_repeat_smoke_workers2 --stage all --row-limit 16 --subset-sizes 4,8 --workers 2 --dry-run-launches --skip-wandb --collect-from-source-observed --dsre-fit-seeds 1 --dsre-restarts 2 --dsre-maxiter 40 --opt-search-points 128 --opt-restarts 2 --opt-maxiter 40`
+- Output dir: `/tmp/wsds_repeat_smoke_workers2`
+- Result:
+  - Emitted `proxy_selection_plan.csv`, `proxy_launch_plan.json`, `proxy_results.csv`, `fit_status.json`, `curve_points.csv`, `predicted_optima.csv`, `predicted_optima.jsonl`, `three_phase_starcoder_validation_launch_plan.json`, and `plots/three_phase_starcoder_feature_bayes_linear_wsds_predicted_vs_actual_bpb.png`
+  - Ready subset sizes: `[4, 8]`
+  - Validation launch-plan size: `2`
+- Interpretation:
+  - The WSDS pipeline is wired end to end and supports strict-prefix reuse of a single `k=128` Feature-Bayes-Linear ranking.
+  - Plot lookup now derives from launch-plan run names, so cosine and WSDS validations can coexist in W&B without suffix collisions.
+  - The `--workers` flag now parallelizes local DS-RE-CEQ subset fitting during `fit_predict`.
+- Next action: run the real three-phase WSDS proxy sweep and validation stages on cluster, then compare the resulting WSDS predicted-vs-actual BPB curve against the existing cosine curve.
+
+### 2026-03-13 12:02 - pivot to two-phase boundary-aligned WSD repeat
+- Hypothesis: the earlier three-phase WSDS learning-rate shape was a specification mistake rather than a scheduler bug; the intended comparison is a single continuous WSD schedule in the two-phase StarCoder setting, with the phase transition aligned to the WSD stable-to-decay boundary.
+- Command:
+  - implementation/tests: `uv run pytest tests/test_domain_phase_mix_two_phase_wsd_boundary_aligned_repeat.py tests/test_domain_phase_mix_starcoder_optima_validation_plot.py -q`
+  - dry-run smoke: `uv run python experiments/domain_phase_mix/exploratory/two_phase_starcoder_feature_bayes_linear_wsd_boundary_aligned_repeat.py --output-dir /tmp/t2s-wsd-boundary-pyTX4d --stage all --subset-sizes 4,8 --row-limit 16 --workers 2 --dry-run-launches --skip-wandb --collect-from-source-observed --dsre-fit-seeds 1 --dsre-restarts 2 --dsre-maxiter 40 --opt-search-points 128 --opt-restarts 2 --opt-maxiter 40`
+- Result:
+  - Added `create_two_phase_wsd_boundary_aligned_optimizer_config(...)` and `create_two_phase_wsd_boundary_aligned_experiment(...)` in `experiments/domain_phase_mix/two_phase_starcoder_experiment.py`
+  - Resolved schedule values are `total_steps=3814`, `warmup_steps=38`, `boundary_step=1904`, `decay_steps=1910`
+  - Direct LR samples confirm a single plateau through the phase boundary and then monotone decay: `step 38 -> 0.02`, `step 1903 -> 0.02`, `step 1904 -> 0.02`, `step 1968 -> 0.019944644`, `step 3813 -> 1.3709068e-08`
+  - Added dedicated repeat pipeline `experiments/domain_phase_mix/exploratory/two_phase_starcoder_feature_bayes_linear_wsd_boundary_aligned_repeat.py`
+  - Smoke emitted `proxy_selection_plan.csv`, `proxy_launch_plan.json`, `proxy_results.csv`, `fit_status.json`, `curve_points.csv`, `predicted_optima.csv`, `predicted_optima.jsonl`, `two_phase_starcoder_validation_launch_plan.json`, and `plots/two_phase_starcoder_feature_bayes_linear_wsd_boundary_aligned_predicted_vs_actual_bpb.png`
+- Interpretation:
+  - The intended WSD semantics are now implemented as one continuous schedule with no cycle restarts.
+  - The repeat pipeline reuses the existing `feature_bayes_linear` coordinate ranking as a strict prefix chain, so subset-size comparisons stay nested.
+- Next action: submit the real two-phase WSD boundary-aligned proxy sweep and validation jobs, then compare the resulting predicted-vs-actual BPB curve against the existing cosine result.
