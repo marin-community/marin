@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -11,14 +11,10 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
+from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import (
-    CoefficientType,
-    label_linear_like_module,
-    map_flattened_linear_layers,
-    zeropower_via_newtonschulz5,
-)
+from levanter.optim.util import CoefficientType, map_flattened_linear_layers, zeropower_via_newtonschulz5
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -92,13 +88,13 @@ class ScionConfig(OptimizerConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             if "Embedding" in path_str or "lm_head" in path_str:
                 return "signum"
-            elif isinstance(param, haliax.nn.Linear):
+            elif isinstance(param, Linear):
                 # scion for linear layers
-                return label_linear_like_module(param, weight_label="scion", bias_label="signum")
+                return dataclasses.replace(param, weight="scion", bias="signum" if param.bias is not None else None)
             else:
                 return "signum"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, haliax.nn.Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
 
 
 class ScaleByScionState(NamedTuple):

@@ -185,7 +185,6 @@ Direct datasets are expected to yield `LmExample` instances that already include
 ## Overall Configs
 
 ::: levanter.data.text.LmDataConfig
-::: levanter.data.text.BlockShuffleConfig
 ::: levanter.data.text.DatasetComponent
 ::: levanter.data.text.DatasetComponentBase
 ::: levanter.data.text.DirectDatasetComponent

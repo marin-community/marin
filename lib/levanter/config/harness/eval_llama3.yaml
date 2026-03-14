@@ -10,8 +10,7 @@ checkpoint_path: meta-llama/Meta-Llama-3-8B
 checkpoint_is_hf: true
 trainer:
   mp: f32
-  profiler:
-    enabled: true
+  profiler: true
   per_device_parallelism: -1
   train_batch_size: 512
   ray:

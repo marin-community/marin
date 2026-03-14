@@ -283,16 +283,16 @@ trainer:
 
 ## Ray Config
 
-Levanter does not automatically start a Ray cluster by default. You can enable
-this behavior using `auto_start_cluster: true`, which will start a Ray cluster
-with all the machines being used for training for distributed preprocessing.
+Levanter will by default automatically start a Ray cluster with all
+the machines being used for training. This is useful for distributed
+preprocessing. You can disable this behavior using `auto_start_cluster: false`.
 
 
 | Parameter            | Description                                                             | Default |
 |----------------------|-------------------------------------------------------------------------|---------|
 | `address`            | The address of the Ray cluster to connect to.                           | `None`  |
 | `start_workers`      | Whether to start Ray workers. If `False`, you must start them yourself. | `True`  |
-| `auto_start_cluster` | Whether to start a Ray cluster automatically.                           | `False` |
+| `auto_start_cluster` | Whether to start a Ray cluster automatically.                           | `True`  |
 
 
 ## Distributed Config

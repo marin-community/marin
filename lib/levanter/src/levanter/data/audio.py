@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -13,8 +13,8 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 import braceexpand
 import datasets
 import equinox as eqx
+import fsspec
 import haliax as hax
-from iris.marin_fs import url_to_fs
 import jax
 import numpy as np
 from draccus import field
@@ -213,7 +213,7 @@ class AudioDatasetSourceConfig:
 
         def fsspec_expand_glob(url):
             if "*" in url:
-                fs = url_to_fs(url)[0]
+                fs = fsspec.core.url_to_fs(url)[0]
                 return fs.glob(url)
             else:
                 return [url]

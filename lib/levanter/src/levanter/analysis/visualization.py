@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import html
@@ -7,8 +7,8 @@ import re
 from functools import partial
 from typing import Any, List, Optional
 
+import fsspec
 import jax
-from iris.marin_fs import open_url
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental import multihost_utils
@@ -67,7 +67,7 @@ def visualize_log_probs(
         "</body></html>"
     )
 
-    with open_url(output_path, "w") as f:
+    with fsspec.open(output_path, "w") as f:
         f.write(html)
 
 
@@ -244,7 +244,7 @@ def visualize_log_prob_diff(
         "</body></html>"
     )
 
-    with open_url(output_path, "w") as f:
+    with fsspec.open(output_path, "w") as f:
         f.write(html_str)
 
 

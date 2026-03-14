@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
@@ -10,8 +10,8 @@ from functools import cached_property
 from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
 
 import datasets
+import fsspec
 import numpy as np
-from iris.marin_fs import open_url
 import pyarrow.parquet as pq
 
 from levanter.utils import fsspec_utils
@@ -242,7 +242,7 @@ class TextUrlDataSource(ShardedDataSource[str]):
 
         # special case for txt files
         if format == ".txt":
-            with open_url(url, "r", compression=compression) as f:
+            with fsspec.open(url, "r", compression=compression) as f:
                 for line in f:
                     if i >= row:
                         yield line
@@ -271,7 +271,7 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
         format = _sniff_format_for_dataset(url)
         match format:
             case ".jsonl":
-                with open_url(url, "r", compression=compression) as f:
+                with fsspec.open(url, "r", compression=compression) as f:
                     # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
                     # which is not nothing, but not ideal.
                     for line in f:
@@ -283,7 +283,7 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
                                 yield obj
                         i += 1
             case ".json":
-                with open_url(url, "r", compression=compression) as f:
+                with fsspec.open(url, "r", compression=compression) as f:
                     data = json.load(f)
                     for doc in data[row:]:
                         if self.columns:
@@ -292,7 +292,7 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
                             yield doc
             case ".parquet":
                 # TODO: fix this duplication
-                with open_url(url, "rb", compression=compression) as f:
+                with fsspec.open(url, "rb", compression=compression) as f:
                     parquet_file = pq.ParquetFile(f)
                     total_rows = parquet_file.metadata.num_rows
                     if row >= total_rows:
@@ -339,7 +339,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
         import librosa  # noqa F401
 
         def _load_audio_file(file_name, sampling_rate):
-            with open_url(audio_pointer, "rb", compression="infer") as f:
+            with fsspec.open(audio_pointer, "rb", compression="infer") as f:
                 array, sr = librosa.load(f, sr=sampling_rate)
             return {"array": array, "sampling_rate": sr}
 
@@ -365,7 +365,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[Tuple[np.ndarray, int, str]]:
         url = self._shard_name_to_url_mapping[shard_name]
         i = 0
-        with open_url(url, "r", compression="infer") as f:
+        with fsspec.open(url, "r", compression="infer") as f:
             format = _sniff_format_for_dataset(url)
             match format:
                 case ".jsonl":
@@ -412,7 +412,7 @@ def _sniff_format_for_dataset(url):
         # (You can't actually distinguish between jsonl and json in a file with one line,
         #  which we'll just declare to be json and not jsonl, since that seems more likely)
         # (1) is cheating a bit, but it's fast and works in most cases we care about. (2) is more robust, but slower.
-        with open_url(url, "r", compression="infer") as f:
+        with fsspec.open(url, "r", compression="infer") as f:
             first_two = f.read(2)
 
             if first_two[0] == "[" or first_two == "{\n" or first_two == "{\r":
@@ -443,7 +443,7 @@ class JsonlDataSource(UrlBackedShardedDataSource[dict]):
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
         i = 0
-        with open_url(url, "r", compression="infer") as f:
+        with fsspec.open(url, "r", compression="infer") as f:
             # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
             # which is not nothing, but not ideal.
             for line in f:
@@ -462,7 +462,7 @@ class JsonDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        with open_url(url, "r", compression="infer") as f:
+        with fsspec.open(url, "r", compression="infer") as f:
             # TODO: would be nice if we could seek faster than this. Can't even skip json parsing
             data = json.load(f)
             return iter(data[row:])
@@ -475,7 +475,7 @@ class ParquetDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        with open_url(url, "rb", compression="infer") as f:
+        with fsspec.open(url, "rb", compression="infer") as f:
             parquet_file = pq.ParquetFile(f)
             total_rows = parquet_file.metadata.num_rows
             if row >= total_rows:

@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -64,7 +64,7 @@ def main(config: VizLmConfig):
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
 
-    with config.trainer.use_device_mesh():
+    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
         key = jax.random.PRNGKey(0)
 
         vocab_size = len(tokenizer)
@@ -76,28 +76,29 @@ def main(config: VizLmConfig):
 
         # don't want to compute the mask w.r.t. the final token
 
-        @hax.named_jit(axis_resources=compute_axis_mapping)
+        @hax.named_jit
         def compute_log_probs(model: LmHeadModel, example: LmExample):
-            model = inference_mode(model, True)
-            model = mp.cast_to_compute(model)
+            with hax.axis_mapping(config.trainer.compute_axis_mapping):
+                model = inference_mode(model, True)
+                model = mp.cast_to_compute(model)
 
-            activations = model.activations(example.tokens, example.attn_mask, key=key)
-            logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
+                activations = model.activations(example.tokens, example.attn_mask, key=key)
+                logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
 
-            loss = next_token_loss(
-                model.Pos,
-                model.Vocab,
-                logits=logits,
-                true_ids=example.tokens,
-                loss_weight=example.loss_weight,
-                reduction=None,
-            )
-            logprobs = -loss
-            # roll forward to get the loss for each predicted token
-            logprobs = hax.roll(logprobs, 1, Pos)
-            logits = hax.roll(logits, 1, Pos)
-            argmaxes = hax.argmax(logits, axis=Vocab)
-            return logprobs.rearrange((EvalBatch, Pos)).array, argmaxes.rearrange((EvalBatch, Pos)).array
+                loss = next_token_loss(
+                    model.Pos,
+                    model.Vocab,
+                    logits=logits,
+                    true_ids=example.tokens,
+                    loss_weight=example.loss_weight,
+                    reduction=None,
+                )
+                logprobs = -loss
+                # roll forward to get the loss for each predicted token
+                logprobs = hax.roll(logprobs, 1, Pos)
+                logits = hax.roll(logits, 1, Pos)
+                argmaxes = hax.argmax(logits, axis=Vocab)
+                return logprobs.rearrange((EvalBatch, Pos)).array, argmaxes.rearrange((EvalBatch, Pos)).array
 
         model: LmHeadModel
 
@@ -107,10 +108,7 @@ def main(config: VizLmConfig):
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
             model = converter.load_pretrained(
-                model_config.model_type,
-                ref=config.checkpoint_path,
-                axis_mapping=parameter_axis_mapping,
-                dtype=config.trainer.mp.compute_dtype,  # type: ignore
+                model_config.model_type, ref=config.checkpoint_path, dtype=config.trainer.mp.compute_dtype  # type: ignore
             )
         else:
             with use_cpu_device():
@@ -126,10 +124,7 @@ def main(config: VizLmConfig):
                 converter = model_config.hf_checkpoint_converter()
                 converter = converter.replaced(reference_checkpoint=config.comparison_model_path, tokenizer=tokenizer)
                 comparison_model = converter.load_pretrained(
-                    model_config.model_type,
-                    ref=config.comparison_model_path,
-                    axis_mapping=parameter_axis_mapping,
-                    dtype=config.trainer.mp.compute_dtype,  # type: ignore
+                    model_config.model_type, ref=config.comparison_model_path, dtype=config.trainer.mp.compute_dtype  # type: ignore
                 )
             else:
                 with use_cpu_device():

@@ -16,8 +16,7 @@ model:
 trainer:
   mp: p=bfloat16,c=bfloat16
   num_train_steps: 100
-  profiler:
-    enabled: true
+  profiler: true
   checkpointer:
     keep:
     - every: 50

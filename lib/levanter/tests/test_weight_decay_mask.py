@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import equinox as eqx
@@ -10,19 +10,8 @@ from levanter.models.gpt2 import Gpt2Config
 from levanter.optim import AdamConfig
 
 
-def _small_gpt2_config() -> Gpt2Config:
-    return Gpt2Config(
-        max_seq_len=64,
-        hidden_dim=32,
-        num_layers=2,
-        num_heads=4,
-        gradient_checkpointing=False,
-        use_flash_attention=False,
-    )
-
-
 def test_weight_decay_masking():
-    gpt_config = _small_gpt2_config()
+    gpt_config = Gpt2Config()
     Vocab = hax.Axis("vocab", 100)
     model = gpt_config.build(Vocab, key=jrandom.PRNGKey(0))
     string_list_config = AdamConfig(
@@ -50,7 +39,7 @@ def test_weight_decay_masking():
 
 
 def test_weight_decay_masking_with_class_names():
-    gpt_config = _small_gpt2_config()
+    gpt_config = Gpt2Config()
     Vocab = hax.Axis("vocab", 100)
     model = gpt_config.build(Vocab, key=jrandom.PRNGKey(0))
     string_list_config = AdamConfig(
@@ -69,7 +58,7 @@ def test_weight_decay_masking_with_class_names():
 
 
 def test_default_weight_decay_masking():
-    gpt_config = _small_gpt2_config()
+    gpt_config = Gpt2Config()
     Vocab = hax.Axis("vocab", 100)
     model = gpt_config.build(Vocab, key=jrandom.PRNGKey(0))
     default_config = AdamConfig(default_weight_decay_mask=True)

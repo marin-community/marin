@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -54,11 +54,6 @@ def _dummy_step_info(step):
     )
 
 
-def _on_step(checkpointer: Checkpointer, step: int, *, force: bool = False):
-    info = _dummy_step_info(step)
-    checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
-
-
 def _get_checkpoint_steps(checkpoint_dir):
     paths = list(pathlib.Path(checkpoint_dir).iterdir())
     return sorted([_load_metadata(f)["step"] for f in paths])
@@ -77,7 +72,7 @@ def test_checkpointer_changing_policy():
         )
 
         for step in range(1, 50):
-            _on_step(checkpointer, step)
+            checkpointer.on_step(_dummy_step_info(step))
 
         checkpointer.wait_until_finished()
 
@@ -97,18 +92,18 @@ def test_checkpointer_temporal_policy():
     with tempfile.TemporaryDirectory(prefix="checkpoints") as tmpdir:
         checkpointer = Checkpointer(tmpdir, timedelta(seconds=tick), [], dt_now_injection=lambda: fake_now)
 
-        _on_step(checkpointer, 0)
+        checkpointer.on_step(_dummy_step_info(0))
         advance_time(tick)
-        _on_step(checkpointer, 1)
+        checkpointer.on_step(_dummy_step_info(1))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [1]
 
         advance_time(tick - 1)
-        _on_step(checkpointer, 2)
+        checkpointer.on_step(_dummy_step_info(2))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [1]
         advance_time(1)
-        _on_step(checkpointer, 3)
+        checkpointer.on_step(_dummy_step_info(3))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [3]
 
@@ -134,39 +129,39 @@ def test_checkpointer_mixed_policy():
             dt_now_injection=lambda: fake_now,
         )
 
-        _on_step(checkpointer, 0)
+        checkpointer.on_step(_dummy_step_info(0))
         advance_time(tick)
-        _on_step(checkpointer, 1)
+        checkpointer.on_step(_dummy_step_info(1))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [1]
 
         advance_time(tick - 1)
         # time hasn't advanced enough, so we wouldn't save a checkpoint, but we do because of the interval
-        _on_step(checkpointer, 2)
+        checkpointer.on_step(_dummy_step_info(2))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [2]
 
         advance_time(1)
         # time has advanced enough now from last temporal save, but we don't save a checkpoint because we just saved one
-        _on_step(checkpointer, 3)
+        checkpointer.on_step(_dummy_step_info(3))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [2]
 
         for step in range(4, 11):
             advance_time(tick)
-            _on_step(checkpointer, step)
+            checkpointer.on_step(_dummy_step_info(step))
             # we need this to stop a race condition
 
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [2, 4, 6, 8, 10]
 
         advance_time(tick - 1)
-        _on_step(checkpointer, 11)
+        checkpointer.on_step(_dummy_step_info(11))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [2, 4, 6, 8, 10]
 
         for step in range(12, 50):
-            _on_step(checkpointer, step)
+            checkpointer.on_step(_dummy_step_info(step))
             advance_time(tick)
 
         # ensure we saved the right checkpoints
@@ -279,14 +274,14 @@ def test_checkpointer_deletes_previous_checkpoints():
             dt_now_injection=lambda: fake_now,
         )
 
-        _on_step(checkpointer, 0)
+        checkpointer.on_step(_dummy_step_info(0))
         advance_time(tick)
         for i in range(1, 6):
-            _on_step(checkpointer, i)
+            checkpointer.on_step(_dummy_step_info(i))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [5]
         advance_time(tick)
-        _on_step(checkpointer, 6)
+        checkpointer.on_step(_dummy_step_info(6))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [5, 6]
 
@@ -301,9 +296,9 @@ def test_checkpointer_deletes_previous_checkpoints():
             dt_now_injection=lambda: fake_now,
         )
 
-        _on_step(checkpointer, 7)
+        checkpointer.on_step(_dummy_step_info(7))
         advance_time(tick)
-        _on_step(checkpointer, 8)
+        checkpointer.on_step(_dummy_step_info(8))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [5, 8]
 
@@ -318,9 +313,9 @@ def test_checkpointer_deletes_previous_checkpoints():
             delete_old_temp_checkpoints=False,
         )
 
-        _on_step(checkpointer, 9)
+        checkpointer.on_step(_dummy_step_info(9))
         advance_time(tick)
-        _on_step(checkpointer, 10)
+        checkpointer.on_step(_dummy_step_info(10))
         checkpointer.wait_until_finished()
         assert _get_checkpoint_steps(tmpdir) == [5, 8, 10]
 
@@ -346,16 +341,16 @@ def test_checkpointer_deletes_previous_checkpoints_under_relative_base_paths():
         )
 
         # step 0 doesn't save a checkpoint
-        _on_step(checkpointer, 0)
+        checkpointer.on_step(_dummy_step_info(0))
 
         advance_time(tick)
-        _on_step(checkpointer, 1)
+        checkpointer.on_step(_dummy_step_info(1))
         checkpointer.wait_until_finished()
         # step 1 should save a checkpoint
         assert _get_checkpoint_steps(tmpdir) == [1]
 
         advance_time(tick)
-        _on_step(checkpointer, 2)
+        checkpointer.on_step(_dummy_step_info(2))
         checkpointer.wait_until_finished()
         # step 2 should delete step 1 if we're handling relative paths properly
         assert _get_checkpoint_steps(tmpdir) == [2]

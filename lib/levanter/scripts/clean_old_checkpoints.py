@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 ## Script to aid in cleaning up old checkpoints from a directory of runs. just prints directories that can be deleted.
@@ -9,21 +9,21 @@ import os
 import sys
 from datetime import datetime, timezone
 
-from iris.marin_fs import filesystem as marin_filesystem
+import fsspec
 
 
 AGE = 30  # days
 
 
 def is_dir_of_checkpoints(path):
-    fs = marin_filesystem("gcs")
+    fs = fsspec.filesystem("gcs")
     # if the children are named like step-XXXXX, then it's a checkpoint directory
     children = fs.ls(path)
     return any("step-" in child for child in children)
 
 
 def list_deletable_directories(base_dir, age):
-    fs = marin_filesystem("gcs")
+    fs = fsspec.filesystem("gcs")
     run_ids = fs.ls(base_dir)
 
     for run_id in run_ids:

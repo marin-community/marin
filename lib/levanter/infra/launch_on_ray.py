@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # Similar to launch.py, but this instead launches on a Ray cluster configured with auto-scaling TPUs

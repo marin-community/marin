@@ -1,8 +1,8 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grug shared primitives.
+"""Grug: a grug-simple explicit-sharding transformer trainer.
 
-This package contains lightweight array-first building blocks shared across
-grug templates (for example attention/loss/sharding helpers).
+This package intentionally exposes only the "grug core" (raw-array model + kernels).
+Levanter integration adapters live under `levanter.models`.
 """

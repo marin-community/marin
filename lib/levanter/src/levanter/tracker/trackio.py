@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ class TrackioTracker(Tracker):
 
         if run is None:
             logger.warning("Trackio run is not initialized. Initializing a new run.")
-            self.run = trackio.init(project="levanter", embed=False)
+            self.run = trackio.init(project="levanter")
         else:
             self.run = run
 
@@ -145,6 +145,5 @@ class TrackioConfig(TrackerConfig):
             dataset_id=self.dataset_id,
             config=cfg or None,
             resume=resume,
-            embed=False,
         )
         return TrackioTracker(r)

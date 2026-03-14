@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
 import deepdiff
+import fsspec.core
 import jax
-from iris.marin_fs import open_url, url_to_fs
 import numpy as np
 import pyarrow as pa
 import tensorstore as ts
@@ -183,7 +183,7 @@ class CacheLedger:
         ledger_path = os.path.join(cache_dir, LEDGER_FILE_NAME)
         try:
             logger.info(f"Attempting to load cache ledger from {ledger_path}")
-            with open_url(ledger_path) as file:
+            with fsspec.open(ledger_path) as file:
                 cache_ledger = CacheLedger.from_json(file.read())  # type: ignore[arg-type]
             if metadata:
                 diff = cache_ledger.metadata.compare_to(metadata)
@@ -267,14 +267,14 @@ class SerialCacheWriter:
 
 
 def _serialize_json_and_commit(path: str, obj):
-    fs: AbstractFileSystem = url_to_fs(path)[0]
+    fs: AbstractFileSystem = fsspec.core.url_to_fs(path)[0]
     fs.mkdirs(os.path.dirname(path), exist_ok=True)
     if fs.exists(path):
         fs.copy(path, f"{path}.bak")
 
     for _ in range(10):
         try:
-            with open_url(path, "w") as file:
+            with fsspec.open(path, "w") as file:
                 file.write(obj.to_json())
             break
         except FileNotFoundError:
@@ -321,12 +321,12 @@ def build_cache(
             metadata=metadata,
         )
 
-    ctx = ZephyrContext(
+    with ZephyrContext(
         resources=ResourceConfig(ram="32g", disk="16g"),
-        max_workers=min(128, len(shard_jobs)),
+        num_workers=min(128, len(shard_jobs)),
         name="levanter-cache-build",
-    )
-    shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
+    ) as ctx:
+        shard_results = ctx.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
     shard_cache_paths = [s["path"] for s in shard_results]
@@ -456,15 +456,15 @@ def consolidate_shard_caches(
             )
         )
 
-    ctx = ZephyrContext(
+    with ZephyrContext(
         resources=ResourceConfig(ram="32g", disk="16g"),
-        max_workers=min(128, len(shard_info)),
+        num_workers=min(128, len(shard_info)),
         name="levanter-cache-copy",
-    )
-    ctx.execute(
-        Dataset.from_list(shard_info).map(_copy_shard),
-        verbose=False,
-    )
+    ) as ctx:
+        ctx.execute(
+            Dataset.from_list(shard_info).map(_copy_shard),
+            verbose=False,
+        )
 
     # do metadata serially b/c of write amplification concerns
     for info in shard_info:

@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -256,10 +256,7 @@ class InferenceContext:
             ):
                 self.model = weight_callback(self.model)
                 self.engine = InferenceEngine.from_model_with_config(
-                    model=self.model,
-                    tokenizer=self.tokenizer,
-                    config=self.config.service,
-                    axis_resources=self.config.trainer.compute_axis_mapping,
+                    model=self.model, tokenizer=self.tokenizer, config=self.config.service
                 )
                 elapsed = time.time() - start
             logger.info(f"Model reloaded in {elapsed:.2f}s")
@@ -712,12 +709,7 @@ class InferenceServer:
         This factory method loads the model, tokenizer, and creates all necessary
         components for the inference server.
         """
-        service = InferenceEngine.from_model_with_config(
-            model=model,
-            tokenizer=tokenizer,
-            config=config.service,
-            axis_resources=config.trainer.compute_axis_mapping,
-        )
+        service = InferenceEngine.from_model_with_config(model=model, tokenizer=tokenizer, config=config.service)
 
         # Create and start inference thread
         inference_context = InferenceContext(model, tokenizer, service, config)

@@ -1,6 +1,7 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -11,9 +12,9 @@ import optax
 from optax import tree_utils as otu
 
 import haliax
+from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import is_linear_like_module, label_linear_like_module
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -97,12 +98,12 @@ class MiniConfig(OptimizerConfig):
                 return "output"
             elif "lm_head" in path_str:
                 return "lm_head"
-            elif is_linear_like_module(param):
-                return label_linear_like_module(param, weight_label="linear", bias_label="adamw")
+            elif isinstance(param, Linear):
+                return dataclasses.replace(param, weight="linear", bias="adamw" if param.bias is not None else None)
             else:
                 return "adamw"
 
-        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=is_linear_like_module)
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
 
 
 class ScaleByMiniState(NamedTuple):

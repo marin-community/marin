@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
@@ -29,17 +29,8 @@ logger = logging.getLogger(__name__)
 
 _should_use_callback = True
 _global_tracker: Optional["Tracker"] = None
-_has_logged_missing_tracker = False
 
 LoggableValue: typing.TypeAlias = Scalar | jax.Array | str | dict | Histogram
-
-
-def _log_missing_tracker_once() -> None:
-    global _has_logged_missing_tracker
-    if _has_logged_missing_tracker:
-        return
-    _has_logged_missing_tracker = True
-    logger.info("No global tracker set; tracker logs are being dropped.")
 
 
 def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int], commit: Optional[bool] = None):
@@ -54,8 +45,7 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
     """
     global _global_tracker
     if _global_tracker is None:
-        _log_missing_tracker_once()
-        return
+        raise RuntimeError("No global tracker set")
 
     if is_inside_jit():
         # we're inside a jit, so we need to log from the host
@@ -81,7 +71,7 @@ def log_metrics(
 def _do_jit_log(metrics, *, step=None):
     try:
         if _global_tracker is None:
-            _log_missing_tracker_once()
+            warnings.warn("No global tracker set")
         else:
             _global_tracker.log(metrics, step=step, commit=False)
     except Exception:
@@ -101,7 +91,7 @@ def jit_log(metrics, *, step=None):
     We strongly recommend using the first method, as it is much more performant.
     """
     if _global_tracker is None:
-        _log_missing_tracker_once()
+        warnings.warn("No global tracker set")
         return
     if not _should_use_callback:
         # we're not using the callback, so we assume we're inside a defer_tracker_for_jit context manager
@@ -164,7 +154,7 @@ def log_summary(metrics: dict[str, Any]):
     """
     global _global_tracker
     if _global_tracker is None:
-        _log_missing_tracker_once()
+        warnings.warn("No global tracker set")
         return
 
     _global_tracker.log_summary(metrics)
@@ -179,7 +169,7 @@ def log_hyperparameters(hparams: dict[str, Any]):
     """
     global _global_tracker
     if _global_tracker is None:
-        _log_missing_tracker_once()
+        warnings.warn("No global tracker set")
         return
 
     _global_tracker.log_hyperparameters(hparams)
@@ -195,7 +185,7 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
     """
     global _global_tracker
     if _global_tracker is None:
-        _log_missing_tracker_once()
+        warnings.warn("No global tracker set")
         return
 
     hparams_dict = hparams_to_dict(hparams)

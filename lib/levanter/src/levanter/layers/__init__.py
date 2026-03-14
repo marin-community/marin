@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 __all__ = [
@@ -8,7 +8,6 @@ __all__ = [
     "AttentionBackend",
     "AttentionConfig",
     "AttentionMask",
-    "GatedAttention",
     "dot_product_attention",
     # normalization
     "LayerNormConfig",
@@ -22,7 +21,6 @@ from .attention import (
     AttentionConfig,
     AttentionMask,
     AttentionWithSink,
-    GatedAttention,
     dot_product_attention,
 )
 from .normalization import LayerNormConfig, LayerNormConfigBase, RmsNormConfig

@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 __all__ = [
@@ -24,9 +24,6 @@ __all__ = [
     "MuonConfig",
     "MuonHConfig",
     "ScaleByMuonState",
-    "GrugMuonConfig",
-    "NamoConfig",
-    "NamoDConfig",
     # rmsprop
     "RMSPropMomentumConfig",
     "ScaleByRMSPropMomState",
@@ -50,9 +47,7 @@ from .adamh import AdamHConfig
 from .kron import KronConfig
 from .mars import MarsConfig, ScaleByMarsState
 from .muon import MuonConfig, ScaleByMuonState
-from .grugmuon import GrugMuonConfig
 from .muonh import MuonHConfig
-from .namo import NamoConfig, NamoDConfig
 from .rmsprop import RMSPropMomentumConfig, ScaleByRMSPropMomState
 from .scion import ScaleByScionState, ScionConfig
 from .soap import SoapConfig

@@ -1,4 +1,4 @@
-# Copyright The Levanter Authors
+# Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import chex
@@ -17,11 +17,10 @@ def test_causality():
     """
     # Create a test config that matches the PyTorch example
     config = HyenaConfig(
-        # Keep this modest so TPU CI spends time on backend coverage rather than huge test tensors.
-        max_seq_len=128,
-        hidden_dim=64,
+        max_seq_len=1024,
+        hidden_dim=512,
         order=2,
-        filter_order=16,
+        filter_order=64,
         activation=ActivationFunctionEnum.gelu_new,
     )
 
