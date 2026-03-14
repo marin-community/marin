@@ -1064,16 +1064,20 @@ def _evaluate_control_flow_gate(
     baseline_generic_shell = _coerce_float(baseline_hotspots.get("hybrid_generic_shell_delta_budget_ms"))
     candidate_dispatch_shell = _coerce_float(candidate_hotspots.get("dispatch_shard_shell_delta_ms"))
     baseline_dispatch_shell = _coerce_float(baseline_hotspots.get("dispatch_shard_shell_delta_ms"))
+    candidate_xprof_dispatch_shell = _coerce_float(candidate_hotspots.get("xprof_dispatch_shard_shell_delta_ms"))
+    baseline_xprof_dispatch_shell = _coerce_float(baseline_hotspots.get("xprof_dispatch_shard_shell_delta_ms"))
     if candidate_dispatch_shell is None:
-        candidate_dispatch_shell = _coerce_float(candidate_hotspots.get("xprof_dispatch_shard_shell_delta_ms"))
+        candidate_dispatch_shell = candidate_xprof_dispatch_shell
     if baseline_dispatch_shell is None:
-        baseline_dispatch_shell = _coerce_float(baseline_hotspots.get("xprof_dispatch_shard_shell_delta_ms"))
+        baseline_dispatch_shell = baseline_xprof_dispatch_shell
     candidate_ad_wrapper_shell = _coerce_float(candidate_hotspots.get("ad_wrapper_shell_delta_ms"))
     baseline_ad_wrapper_shell = _coerce_float(baseline_hotspots.get("ad_wrapper_shell_delta_ms"))
+    candidate_xprof_ad_wrapper_shell = _coerce_float(candidate_hotspots.get("xprof_ad_wrapper_shell_delta_ms"))
+    baseline_xprof_ad_wrapper_shell = _coerce_float(baseline_hotspots.get("xprof_ad_wrapper_shell_delta_ms"))
     if candidate_ad_wrapper_shell is None:
-        candidate_ad_wrapper_shell = _coerce_float(candidate_hotspots.get("xprof_ad_wrapper_shell_delta_ms"))
+        candidate_ad_wrapper_shell = candidate_xprof_ad_wrapper_shell
     if baseline_ad_wrapper_shell is None:
-        baseline_ad_wrapper_shell = _coerce_float(baseline_hotspots.get("xprof_ad_wrapper_shell_delta_ms"))
+        baseline_ad_wrapper_shell = baseline_xprof_ad_wrapper_shell
     candidate_xprof_idle = _coerce_float(candidate_hotspots.get("xprof_idle_attributed_ms"))
     baseline_xprof_idle = _coerce_float(baseline_hotspots.get("xprof_idle_attributed_ms"))
     candidate_interaction_remainder = _coerce_float(candidate_hotspots.get("interaction_remainder_ms"))
@@ -1101,6 +1105,23 @@ def _evaluate_control_flow_gate(
             reasons.append(
                 f"`xprof_idle_attributed_ms` increased by {idle_increase:.3f} ms "
                 f"({baseline_xprof_idle:.3f} -> {candidate_xprof_idle:.3f})"
+            )
+
+    if candidate_xprof_dispatch_shell is not None and baseline_xprof_dispatch_shell is not None:
+        xprof_dispatch_drop = baseline_xprof_dispatch_shell - candidate_xprof_dispatch_shell
+        if xprof_dispatch_drop < args.perf_min_xprof_dispatch_shard_shell_drop_ms:
+            reasons.append(
+                f"matched xprof `dispatch_shard_shell_delta_ms` did not improve materially "
+                f"({baseline_xprof_dispatch_shell:.3f} -> {candidate_xprof_dispatch_shell:.3f}); "
+                "summary-side shell wins are only a prefilter"
+            )
+
+    if candidate_xprof_ad_wrapper_shell is not None and baseline_xprof_ad_wrapper_shell is not None:
+        xprof_ad_increase = candidate_xprof_ad_wrapper_shell - baseline_xprof_ad_wrapper_shell
+        if xprof_ad_increase > args.perf_max_xprof_ad_wrapper_shell_increase_ms:
+            reasons.append(
+                f"matched xprof `ad_wrapper_shell_delta_ms` increased by {xprof_ad_increase:.3f} ms "
+                f"({baseline_xprof_ad_wrapper_shell:.3f} -> {candidate_xprof_ad_wrapper_shell:.3f})"
             )
 
     if candidate_train is not None and baseline_train is not None:
@@ -2183,6 +2204,8 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - Mainline promotion metrics now prioritize:\n"
         "    `step_duration_ms`, `dispatch_shard_shell_delta_ms`, `ad_wrapper_shell_delta_ms`,\n"
         "    `interaction_remainder_ms`, and `xprof_idle_attributed_ms` when available.\n"
+        "  - Treat summary-side shell wins as a prefilter only; for sharding-envelope candidates,\n"
+        "    matched xprof must confirm dispatch improvement and no new idle/waiting tax.\n"
         "  - `train_path_budget_ms` and coarse `decoder_layer_shell_budget_ms` remain required,\n"
         "    but only as secondary diagnostics.\n"
         "  - `Forward closed-call ...`\n"
@@ -2227,7 +2250,7 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         "  - `decoder_layer_shell_topk: ...`\n"
         "  - `remainder_topk: ...`\n"
         "- Classification is mandatory in the iteration writeup:\n"
-        "  - `Change class: branch-core sharding diagnostic | branch-core AD diagnostic | CE backend |\n"
+        "  - `Change class: branch-core sharding envelope | branch-core AD diagnostic | CE backend |\n"
         "    branch-core primitive | diagnostic side-arm | inner kernel math`\n"
         "  - `Expected effect on step_duration_ms: ...`\n"
         "  - `Reject if hybrid_generic_shell_delta_budget_ms stays flat/up? yes/no + why`\n"
@@ -2243,6 +2266,10 @@ def _performance_policy_session_directive(args: argparse.Namespace, *, perf_stat
         f"{args.perf_max_ad_wrapper_shell_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
         "- Reject candidates when `xprof_idle_attributed_ms` grows by > "
         f"{args.perf_max_xprof_idle_increase_ms:.3f} ms unless the primary metric overrides the gate.\n"
+        "- Reject sharding-envelope candidates when matched xprof `dispatch_shard_shell_delta_ms` "
+        f"fails to drop by at least {args.perf_min_xprof_dispatch_shard_shell_drop_ms:.3f} ms.\n"
+        "- Reject sharding-envelope candidates when matched xprof `ad_wrapper_shell_delta_ms` grows by > "
+        f"{args.perf_max_xprof_ad_wrapper_shell_increase_ms:.3f} ms.\n"
         f"- Reject candidates when a new `conditional_ms` bucket >= {args.perf_new_conditional_ms:.3f} ms appears, "
         f"unless `{args.perf_metric}` improves by at least {args.perf_control_gate_override_pct:.3f}%.\n"
         "- Reject candidates as off-critical-path / overlap-loss when `train_path_budget_ms` drops by >= "
@@ -5639,7 +5666,7 @@ def build_parser() -> argparse.ArgumentParser:
     codex_loop.add_argument(
         "--perf-step-duration-improvement-margin-ms",
         type=float,
-        default=0.25,
+        default=0.2,
         help="Minimum `step_duration_ms` improvement required to avoid off-critical-path classification.",
     )
     codex_loop.add_argument(
@@ -5663,7 +5690,7 @@ def build_parser() -> argparse.ArgumentParser:
     codex_loop.add_argument(
         "--perf-max-xprof-idle-increase-ms",
         type=float,
-        default=2.0,
+        default=0.5,
         help="Reject candidates when `xprof_idle_attributed_ms` grows by more than this unless overridden.",
     )
     codex_loop.add_argument(
@@ -5671,6 +5698,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Minimum `dispatch_shard_shell_delta_ms` improvement required to avoid waiting-dominant classification.",
+    )
+    codex_loop.add_argument(
+        "--perf-min-xprof-dispatch-shard-shell-drop-ms",
+        type=float,
+        default=2.0,
+        help=(
+            "Minimum matched xprof `dispatch_shard_shell_delta_ms` improvement "
+            "required for sharding-envelope candidates."
+        ),
+    )
+    codex_loop.add_argument(
+        "--perf-max-xprof-ad-wrapper-shell-increase-ms",
+        type=float,
+        default=1.0,
+        help=(
+            "Reject candidates when matched xprof `ad_wrapper_shell_delta_ms` "
+            "grows by more than this unless overridden."
+        ),
     )
     codex_loop.add_argument(
         "--perf-max-decoder-layer-shell-budget-increase-ms",

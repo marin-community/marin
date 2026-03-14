@@ -25,10 +25,11 @@ Within the shell/remainder story:
 The mainline is no longer same-boundary GDN kernel work.
 
 Current mainline target order:
-1. `dispatch_shard_shell_delta_ms`
-2. `ad_wrapper_shell_delta_ms`
-3. `interaction_remainder_ms`
-4. `xprof_idle_attributed_ms`
+1. matched xprof `dispatch_shard_shell_delta_ms`
+2. matched xprof `xprof_idle_attributed_ms`
+3. summary-side `dispatch_shard_shell_delta_ms`
+4. `ad_wrapper_shell_delta_ms`
+5. `interaction_remainder_ms`
 
 ## Coverage Status
 
@@ -48,28 +49,28 @@ Current mainline target order:
   - immediate kernel-entry cut: summary-side `dispatch_shard_shell_delta_ms` dropped, but `ad_wrapper_shell_delta_ms`, `layout_shell_delta_ms`, total hybrid shell, and full-step time all worsened
   - direct array-entry cut: summary-side and xprof `dispatch_shard_shell_delta_ms` both improved, but `ad_wrapper_shell_delta_ms`, `layout_shell_delta_ms`, total hybrid shell, `interaction_remainder_ms`, and xprof `IDLE` still grew and the full step slowed
   - prepared-array leaf-call cut: summary-side `step_duration_ms`, `hybrid_generic_shell_delta_budget_ms`, and `dispatch_shard_shell_delta_ms` all improved, but `ad_wrapper_shell_delta_ms` and `interaction_remainder_ms` still grew, matched xprof `dispatch_shard_shell_delta_ms` stayed flat/up, and xprof `IDLE` worsened sharply
-  - `D2` remains open only for a smaller cut that improves matched xprof `dispatch/shard` and `IDLE`, not just summary-side shell budgets
+  - `D2` established the right subgraph but not the right ownership model
 
-## D2 Definition
+## W1 Definition
 
-Use a smaller branch-core island inside the hybrid-specific GDN branch as the optimization unit.
+Use the prepared-array leaf-call subgraph from Iteration 109 as the optimization unit, but change the ownership model.
 
 Required properties:
 
-- explicit branch-core sharding contract
-- explicit branch-core layout contract
+- one explicit sharding envelope at the prepared-array leaf-call boundary
+- one explicit layout contract inside the island
 - reuse current GDN leaf kernels initially
-- smaller cut than the rejected broad `G1` wrappers
-- no new custom VJP on the first `D2` attempt
-- the cut should begin below the generic branch wrapper and end before the generic decoder shell resumes
+- keep AD/backward unchanged on the first `W1` pass
+- avoid nested inner `shard_map` / `closed_call/shard_map` wrappers inside the island
+- summary-side wins are only prefilter; matched xprof dispatch + idle are the real gate
 
 ## A2 Definition
 
-Only after a positive `D2` on the same cut:
+Only after a positive `W1` on the same cut:
 
-- keep the `D2` forward/sharding cut fixed
+- keep the `W1` forward/sharding envelope fixed
 - move AD/manual-backward ownership onto that already-proven cut
-- reject immediately if dispatch/shard regresses
+- reject immediately if matched xprof dispatch or idle regresses
 
 ## Anti-Goals
 
@@ -78,6 +79,7 @@ Do not spend mainline budget on:
 - another `S3` refresh without tooling changes
 - another outward `A3`/`P3` retry
 - another broad `G1` wrapper that owns forward/backward/sharding all at once
+- another pure cut-size `D2` chase without a scheduling/sharding-envelope hypothesis
 - same-boundary GDN solver/tape/kernel tweaks
 - CE side-arms unless attribution points back to CE again
 - checkpoint/remat toggles as a mainline strategy

@@ -64,12 +64,14 @@ def _perf_args(*, regression_policy: str = "revert-count-failure") -> argparse.N
         perf_new_conditional_ms=5.0,
         perf_max_train_path_budget_increase_ms=5.0,
         perf_min_train_path_drop_ms=1.0,
-        perf_step_duration_improvement_margin_ms=0.25,
+        perf_step_duration_improvement_margin_ms=0.2,
         perf_max_remainder_budget_increase_ms=2.0,
         perf_max_dispatch_shard_shell_increase_ms=2.0,
         perf_max_ad_wrapper_shell_increase_ms=1.0,
-        perf_max_xprof_idle_increase_ms=2.0,
+        perf_max_xprof_idle_increase_ms=0.5,
         perf_min_dispatch_shard_shell_drop_ms=1.0,
+        perf_min_xprof_dispatch_shard_shell_drop_ms=2.0,
+        perf_max_xprof_ad_wrapper_shell_increase_ms=1.0,
         perf_max_decoder_layer_shell_budget_increase_ms=2.0,
         perf_min_decoder_layer_shell_drop_ms=1.0,
         perf_control_gate_override_pct=5.0,
@@ -831,6 +833,140 @@ def test_perf_policy_rejects_waiting_dominant_candidate(tmp_path: Path) -> None:
     state = _read_state(state_path)
     reasons = state["history"][-1]["control_gate_reasons"]
     assert any("waiting/serialization still dominant" in reason for reason in reasons)
+
+
+def test_perf_policy_rejects_missing_xprof_dispatch_confirmation(tmp_path: Path) -> None:
+    repo, baseline_commit = _init_repo(tmp_path)
+    state_path = tmp_path / "perf_state.json"
+    args = _perf_args(regression_policy="revert-count-failure")
+
+    baseline_hotspots = {
+        "dispatch_shard_shell_delta_ms": 9.8,
+        "ad_wrapper_shell_delta_ms": 6.1,
+        "hybrid_generic_shell_delta_budget_ms": 20.1,
+        "interaction_remainder_ms": 47.8,
+        "xprof_dispatch_shard_shell_delta_ms": 31.6,
+        "xprof_ad_wrapper_shell_delta_ms": 11.1,
+        "xprof_idle_attributed_ms": 38.3,
+        "step_duration_ms": 167.8,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=1,
+        commit_sha=baseline_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.03, "throughput/duration": 0.1678},
+            "warnings": [],
+            "hotspot_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert not count_failure
+    assert rc == 0
+
+    candidate_commit = _commit_change(repo, "candidate\n", "candidate")
+    candidate_hotspots = {
+        "dispatch_shard_shell_delta_ms": 5.2,
+        "ad_wrapper_shell_delta_ms": 8.2,
+        "hybrid_generic_shell_delta_budget_ms": 17.6,
+        "interaction_remainder_ms": 49.7,
+        "xprof_dispatch_shard_shell_delta_ms": 31.63,
+        "xprof_ad_wrapper_shell_delta_ms": 12.0,
+        "xprof_idle_attributed_ms": 44.06,
+        "step_duration_ms": 167.59,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=2,
+        commit_sha=candidate_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.04, "throughput/duration": 0.16759},
+            "warnings": [],
+            "hotspot_metrics": candidate_hotspots,
+            "hotspot_baseline_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert count_failure
+    assert rc == 0
+    state = _read_state(state_path)
+    reasons = state["history"][-1]["control_gate_reasons"]
+    assert any(
+        "matched xprof `dispatch_shard_shell_delta_ms` did not improve materially" in reason
+        for reason in reasons
+    )
+    assert any("xprof_idle_attributed_ms" in reason for reason in reasons)
+
+
+def test_perf_policy_rejects_xprof_ad_wrapper_regression(tmp_path: Path) -> None:
+    repo, baseline_commit = _init_repo(tmp_path)
+    state_path = tmp_path / "perf_state.json"
+    args = _perf_args(regression_policy="revert-count-failure")
+
+    baseline_hotspots = {
+        "dispatch_shard_shell_delta_ms": 9.8,
+        "ad_wrapper_shell_delta_ms": 6.1,
+        "hybrid_generic_shell_delta_budget_ms": 19.5,
+        "interaction_remainder_ms": 46.5,
+        "xprof_dispatch_shard_shell_delta_ms": 31.6,
+        "xprof_ad_wrapper_shell_delta_ms": 11.0,
+        "xprof_idle_attributed_ms": 38.0,
+        "step_duration_ms": 167.7,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=1,
+        commit_sha=baseline_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.03, "throughput/duration": 0.1677},
+            "warnings": [],
+            "hotspot_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert not count_failure
+    assert rc == 0
+
+    candidate_commit = _commit_change(repo, "candidate\n", "candidate")
+    candidate_hotspots = {
+        "dispatch_shard_shell_delta_ms": 8.4,
+        "ad_wrapper_shell_delta_ms": 6.1,
+        "hybrid_generic_shell_delta_budget_ms": 19.3,
+        "interaction_remainder_ms": 46.4,
+        "xprof_dispatch_shard_shell_delta_ms": 28.9,
+        "xprof_ad_wrapper_shell_delta_ms": 12.3,
+        "xprof_idle_attributed_ms": 38.1,
+        "step_duration_ms": 167.4,
+    }
+
+    ok, count_failure, rc = gdnctl._apply_performance_policy(
+        args,
+        workdir=repo,
+        perf_state_path=state_path,
+        iteration=2,
+        commit_sha=candidate_commit,
+        validation_info={
+            "metrics": {"throughput/mfu": 6.05, "throughput/duration": 0.1674},
+            "warnings": [],
+            "hotspot_metrics": candidate_hotspots,
+            "hotspot_baseline_metrics": baseline_hotspots,
+        },
+    )
+    assert ok
+    assert count_failure
+    assert rc == 0
+    state = _read_state(state_path)
+    reasons = state["history"][-1]["control_gate_reasons"]
+    assert any("matched xprof `ad_wrapper_shell_delta_ms` increased" in reason for reason in reasons)
 
 
 def test_extract_wandb_run_url_supports_slug_with_underscore() -> None:

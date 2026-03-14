@@ -15,17 +15,21 @@ Primary objective:
 
 Current regime:
 - same-boundary GDN kernel hillclimbing is demoted
-- the obvious outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries are demoted
-- the first broad lower `G1` branch-wrapper family is also demoted
-- `dispatch_shard_shell_delta_ms` is the mainline budget
-- `ad_wrapper_shell_delta_ms` is the second budget
+- outward `HackableDecoderLayer` / `HackableDecoderBlock` boundaries are demoted
+- the broad `G1` branch-wrapper family is demoted
+- pure cut-size `D2` chasing is demoted
+- `dispatch_shard_shell_delta_ms` is still the mainline budget
+- `ad_wrapper_shell_delta_ms` is still the second budget
 - `interaction_remainder_ms` and `xprof_idle_attributed_ms` are safety checks
+- summary-side shell wins are only a prefilter
+- matched xprof dispatch + idle are the real confirmation gate
 - `S3` is complete
 - `A3` is complete and rejected
 - outward `P3` block-boundary variants are complete and rejected
-- the first broad `G1` family is complete and rejected
+- broad `G1` branch-wrapper variants are complete and rejected
 - `D1` is complete as a partial diagnostic lead only
-- the next required optimization slot is `D2`
+- the `D2` family is complete as a diagnostic family and not yet positive
+- the next required optimization slot is `W1`
 
 Repo context:
 - GDN implementation: `lib/levanter/src/levanter/layers/gated_deltanet.py`
@@ -38,12 +42,12 @@ Required behavior:
 1. Read the current summary and latest log entries.
 2. Generate a shortlist of 2-3 candidates with upside and risk.
 3. Pick exactly one slot:
-   - `D2` branch-core sharding diagnostic with no new AD boundary
-   - `A2` branch-core AD-boundary diagnostic only if there is already a positive `D2` on the same cut
-   - `G2` lower primitive / `custom_partitioning` branch-core attempt only if the chosen `D2` cut is const-clean enough and a prior `D2` proved the sharding cut helps
+   - `W1` prepared-array leaf-call cut with one true sharding envelope and no new AD boundary
+   - `A2` branch-core AD-boundary diagnostic only if there is already a positive `W1` on the same cut
+   - `G2` lower primitive / `custom_partitioning` branch-core attempt only if the chosen `W1` cut is const-clean enough and a prior `W1` proved the sharding envelope helps
    - `U` bounded CE side-arm only if fresh attribution re-implicates CE
 4. Classify the change as exactly one of:
-   - `branch-core sharding diagnostic`
+   - `branch-core sharding envelope`
    - `branch-core AD diagnostic`
    - `branch-core primitive`
    - `CE backend`
@@ -57,7 +61,7 @@ Required behavior:
    - `hybrid_generic_shell_delta_budget_ms`
    - `interaction_remainder_ms`
    - `xprof_idle_attributed_ms`
-7. Reject the candidate unless it improves the step and the shell budgets, unless the run is explicitly diagnostic.
+7. Treat summary-side shell wins as prefilter only. Reject the candidate unless it improves the step and then survives matched xprof confirmation, unless the run is explicitly diagnostic.
 8. Implement the smallest change needed for the chosen slot.
 9. Run TPU correctness if code changed.
 10. Run the required profile(s).
@@ -65,32 +69,35 @@ Required behavior:
 
 Slots:
 
-### D2) Mainline sharding diagnostic
-- Optimize a smaller branch-core island inside the hybrid-specific GDN branch.
-- This cut must be smaller than the rejected broad `G1` wrappers.
-- It should own only:
-  - branch-core sharding contract
-  - branch-core layout contract
-  - the existing GDN leaf-kernel island or the smallest deterministic subgraph around it
-- Do not introduce a new custom VJP or broad branch wrapper in `D2`.
-- Carry forward the `D1` head-first layout idea where applicable.
-- Reject the prototype if:
-  - `dispatch_shard_shell_delta_ms` stays flat/up,
-  - or `interaction_remainder_ms` grows,
-  - or `xprof_idle_attributed_ms` stays flat/up when available,
-  - even if `ad_wrapper_shell_delta_ms` improves.
+### W1) Mainline sharding-envelope prototype
+- Reuse the best `D2` subgraph: the prepared-array leaf-call cut immediately before the existing leaf train-kernel call.
+- Upgrade that cut from a diagnostic wrapper into one true branch-core sharding envelope.
+- Own only:
+  - the prepared `(B,H,L,*)` branch-core arrays
+  - one explicit sharding contract at that boundary
+  - one explicit head-first/prepared-array layout contract inside the island
+  - the existing leaf kernel island
+- Do not introduce a new custom VJP or broad branch wrapper in `W1`.
+- Hoist or consolidate collectives needed by the island to the boundary instead of leaving nested inner `shard_map` / `closed_call/shard_map` wrappers.
+- Reject `W1` if:
+  - `step_duration_ms` does not improve by at least a small margin
+  - summary-side `dispatch_shard_shell_delta_ms` fails to improve materially
+  - `hybrid_generic_shell_delta_budget_ms` grows
+  - `interaction_remainder_ms` grows materially
+  - matched xprof `dispatch_shard_shell_delta_ms` fails to improve materially
+  - or matched xprof `IDLE` grows
 
 ### A2) AD-boundary diagnostic
-- Only after a positive `D2` on the same branch-core cut.
-- Keep the `D2` forward/sharding cut fixed.
+- Only after a positive `W1` on the same prepared-array cut.
+- Keep the `W1` forward/sharding cut fixed.
 - Change only the AD/manual-backward ownership on that already-proven cut.
 - Reject if:
-  - `dispatch_shard_shell_delta_ms` regresses versus the winning `D2`,
-  - or `ad_wrapper_shell_delta_ms` stays flat/up,
-  - or `xprof_idle_attributed_ms` grows.
+  - matched xprof `dispatch_shard_shell_delta_ms` regresses versus the winning `W1`
+  - or matched xprof `ad_wrapper_shell_delta_ms` stays flat/up materially
+  - or `xprof_idle_attributed_ms` grows
 
 ### G2) Lower primitive / custom-partitioned branch-core cut
-- Only after `D2` proves the smaller sharding cut helps and the chosen cut is const-clean enough.
+- Only after `W1` proves the prepared-array sharding envelope helps and the chosen cut is const-clean enough.
 - Do not spend the iteration here if the cut still closes over const arrays or would simply rebuild wrapper shell under a new name.
 
 ### U) CE side-arm
@@ -100,6 +107,7 @@ Hard anti-goals:
 - do not propose another outward `HackableDecoderLayer` boundary
 - do not propose another outward `HackableDecoderBlock` wrapper
 - do not propose another broad `G1` branch wrapper that owns forward + backward + sharding all at once
+- do not propose another pure cut-size `D2` variant without a scheduling/sharding-envelope hypothesis
 - do not spend a mainline pass on attribution refresh unless tooling changed
 - do not spend mainline budget on checkpoint/remat toggles
 
@@ -147,7 +155,7 @@ Preferred commands:
 - `uv run python scripts/gdn/gdnctl.py lint-log`
 
 Definition of done:
-- one validated `D2` result, or
+- one validated `W1` result, or
 - one explicitly diagnostic `A2` / `G2` / `U` run that is justified by the current shell evidence,
 - plus TPU correctness when code changed,
 - plus profiling,
