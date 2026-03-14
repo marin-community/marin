@@ -32,9 +32,6 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
-MOE_DISPATCH_INPUT_CKPT = "grug_moe_dispatch_input"
-MOE_EXPERT_HIDDEN_CKPT = "grug_moe_expert_hidden"
-MOE_DISPATCH_OUTPUT_CKPT = "grug_moe_dispatch_output"
 
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 
@@ -103,15 +100,15 @@ def _moe_mlp_local(
         combine_weights,
         num_experts=num_experts,
     )
-    x_dispatch = tree_checkpoint_name(x_dispatch, MOE_DISPATCH_INPUT_CKPT)
+    x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), MOE_EXPERT_HIDDEN_CKPT)
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
         moe_dim = moe_w2.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
             ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
-            MOE_DISPATCH_OUTPUT_CKPT,
+            "grug_moe_dispatch_output",
         )
 
     with jax.named_scope("scatter"):
@@ -207,7 +204,7 @@ def _moe_mlp_ep_ring_local(
 
         x_take = jnp.take(x_global, token_local, axis=0)
         x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
-        x_dispatch = tree_checkpoint_name(x_dispatch, MOE_DISPATCH_INPUT_CKPT)
+        x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
     group_sizes = accepted_counts
     # `local_idx` pads by appending invalid rows at the end; keep GMM segment
@@ -215,12 +212,12 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), MOE_EXPERT_HIDDEN_CKPT)
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), "grug_moe_expert_hidden")
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
             ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
-            MOE_DISPATCH_OUTPUT_CKPT,
+            "grug_moe_dispatch_output",
         )
 
     with jax.named_scope("scatter"):
@@ -357,9 +354,6 @@ def moe_mlp(
 
 
 __all__ = [
-    "MOE_DISPATCH_INPUT_CKPT",
-    "MOE_DISPATCH_OUTPUT_CKPT",
-    "MOE_EXPERT_HIDDEN_CKPT",
     "MoeActivation",
     "moe_mlp",
 ]

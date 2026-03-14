@@ -477,6 +477,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
+                state = dataclasses.replace(
+                    state,
+                    opt_state=move_tree_to_memory_kind(state.opt_state, memory_kind="device"),
+                )
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 state = dataclasses.replace(
                     state,

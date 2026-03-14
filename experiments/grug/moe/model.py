@@ -26,9 +26,6 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import (
-    MOE_DISPATCH_INPUT_CKPT,
-    MOE_DISPATCH_OUTPUT_CKPT,
-    MOE_EXPERT_HIDDEN_CKPT,
     MoeActivation,
     moe_mlp,
 )
@@ -38,12 +35,6 @@ from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
-_BLOCK_MLP_INPUT_CKPT = "grug_moe_block_mlp_input"
-_BLOCK_MLP_OUTPUT_CKPT = "grug_moe_block_mlp_output"
-_MOE_ROUTER_LOGITS_CKPT = "grug_moe_router_logits"
-_MOE_ROUTER_PROBS_CKPT = "grug_moe_router_probs"
-_MOE_TOPK_LOGITS_CKPT = "grug_moe_topk_logits"
-_MOE_COMBINE_WEIGHTS_CKPT = "grug_moe_combine_weights"
 BlockRematMode = Literal["full", "off", "save_moe", "offload_moe"]
 _VALID_BLOCK_REMAT_MODES: set[BlockRematMode] = {"full", "off", "save_moe", "offload_moe"}
 
@@ -69,15 +60,15 @@ def _checkpointed_block_call(block: "Block", cfg: "GrugModelConfig"):
         return eqx.filter_checkpoint(block)
 
     names = (
-        MOE_DISPATCH_INPUT_CKPT,
-        MOE_EXPERT_HIDDEN_CKPT,
-        MOE_DISPATCH_OUTPUT_CKPT,
-        _BLOCK_MLP_INPUT_CKPT,
-        _BLOCK_MLP_OUTPUT_CKPT,
-        _MOE_ROUTER_LOGITS_CKPT,
-        _MOE_ROUTER_PROBS_CKPT,
-        _MOE_TOPK_LOGITS_CKPT,
-        _MOE_COMBINE_WEIGHTS_CKPT,
+        "grug_moe_dispatch_input",
+        "grug_moe_expert_hidden",
+        "grug_moe_dispatch_output",
+        "grug_moe_block_mlp_input",
+        "grug_moe_block_mlp_output",
+        "grug_moe_router_logits",
+        "grug_moe_router_probs",
+        "grug_moe_topk_logits",
+        "grug_moe_combine_weights",
     )
     if cfg.block_remat == "offload_moe":
         policy = jax.checkpoint_policies.save_and_offload_only_these_names(
@@ -358,13 +349,13 @@ class MoEMLP(eqx.Module):
             reshard(self.router, P(None, None)),
             out_sharding=_token_batch_spec(),
         )
-        router_logits = tree_checkpoint_name(router_logits, _MOE_ROUTER_LOGITS_CKPT)
-        router_probs = tree_checkpoint_name(jax.nn.softmax(router_logits, axis=-1), _MOE_ROUTER_PROBS_CKPT)
+        router_logits = tree_checkpoint_name(router_logits, "grug_moe_router_logits")
+        router_probs = tree_checkpoint_name(jax.nn.softmax(router_logits, axis=-1), "grug_moe_router_probs")
         topk_logits, selected_experts = jax.lax.top_k(router_logits, self.cfg.num_experts_per_token)
-        topk_logits = tree_checkpoint_name(topk_logits, _MOE_TOPK_LOGITS_CKPT)
+        topk_logits = tree_checkpoint_name(topk_logits, "grug_moe_topk_logits")
         combine_weights = tree_checkpoint_name(
             jax.nn.softmax(topk_logits, axis=-1).astype(x.dtype),
-            _MOE_COMBINE_WEIGHTS_CKPT,
+            "grug_moe_combine_weights",
         )
         router_stats = _routing_stats(
             selected_experts,
@@ -422,9 +413,9 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = x + self.attn(self.rms_attn(x), mask)
-        mlp_in = tree_checkpoint_name(self.rms_mlp(x), _BLOCK_MLP_INPUT_CKPT)
+        mlp_in = tree_checkpoint_name(self.rms_mlp(x), "grug_moe_block_mlp_input")
         mlp_out, router_stats = self.mlp(mlp_in)
-        mlp_out = tree_checkpoint_name(mlp_out, _BLOCK_MLP_OUTPUT_CKPT)
+        mlp_out = tree_checkpoint_name(mlp_out, "grug_moe_block_mlp_output")
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
