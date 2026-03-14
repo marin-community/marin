@@ -74,10 +74,10 @@ auto DeepepGetDispatchLayoutBinding() {
       .Ret<ffi::Buffer<ffi::PRED, 2>>();
 }
 
+}  // namespace
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_deepep_get_dispatch_layout,
     DeepepGetDispatchLayout,
     DeepepGetDispatchLayoutBinding(),
     {ffi::Traits::kCmdBufferCompatible});
-
-}  // namespace
