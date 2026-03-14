@@ -97,6 +97,7 @@ nav:
       - Executor API: references/executor-api.md
       - Default Steps: references/default-steps.md
       - Training Configuration: references/train-config.md
+      - HBM Optimization: references/hbm-optimization.md
 
 markdown_extensions:
   - markdown.extensions.footnotes

@@ -62,6 +62,8 @@ If you are using a DGX Spark or similar machine with unified memory, you may nee
     echo 'export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5' >> ~/.bashrc
     ```
 
+    For broader JAX/Levanter memory tuning (sharding, checkpointing, offloading), see [Making Things Fit in HBM](../references/hbm-optimization.md).
+
 ## Running an Experiment
 
 Now you can run an experiment.
