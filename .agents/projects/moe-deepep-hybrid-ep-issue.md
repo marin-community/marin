@@ -28,7 +28,7 @@ The first goal is execution and benchmarking, not production integration. A true
 
 ## Results
 
-In progress as of 2026-03-14.
+Completed as of 2026-03-14.
 
 Current state:
 - The direct `KubernetesRuntime` path on CoreWeave H100x8 now works end-to-end for environment bring-up:
@@ -130,3 +130,9 @@ Current state:
 ## Conclusion
 
 Partial success with a local workaround. Unmodified Hybrid-EP is still broken on H100 / CUDA 12.8, but a minimal launcher-applied `space_cluster` rewrite gets both `hybrid_ep` and `hybrid_ep_permute` compiling and running on the CoreWeave H100 machine. The strongest current result is the replicated fixed-shape `runs` slice, where patched `hybrid_ep` beats DeepEP by `1.35x` to `1.82x` and patched `hybrid_ep_permute` beats DeepEP by `1.23x` to `1.88x`. `random, topk=2` also confirms a win for both patched Hybrid-EP paths, while `random, topk=8` is repeat-sensitive for plain `hybrid_ep` but stably favorable for `hybrid_ep_permute`. All positive results still depend on the local launcher-applied rewrite rather than an upstream fix.
+
+## Next Steps
+
+1. Start a new experiment focused on a JAX custom-call integration rather than the torch-side benchmark path.
+2. Reuse the sealed `#3633` fixed-shape matrix as the direct comparison target for the JAX custom-call path.
+3. Investigate the remaining stability gap on `random, topk=8` for plain patched `hybrid_ep` only if that torch-side behavior still matters after the JAX custom-call path exists.
