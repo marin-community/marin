@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for deduplicate and group_by operations."""
+import pyarrow as pa
 
 import hashlib
 
@@ -326,3 +327,58 @@ def test_group_by_with_none_and_filter(zephyr_ctx):
     # Should only have duplicate keys: "a" and "foo"
     assert len(results) == 2
     assert sorted(results) == ["a", "foo"]
+
+
+def test_group_by_non_vortex_serializable(zephyr_ctx):
+    """Shuffle with items that Vortex/Arrow cannot serialize falls back to pickle.
+
+    Uses SimpleNamespace (not a dict) so Arrow conversion fails and the pickle
+    fallback is exercised.  SimpleNamespace is a stdlib type importable by any
+    worker process, avoiding module-resolution issues with test-local classes.
+    """
+
+    from zephyr.writers import infer_arrow_schema
+
+    # NOTE: confirm frozenset is not arrow-serializable type to trigger the fallback path
+    with pytest.raises(pa.lib.ArrowInvalid, match="Could not convert frozenset"):
+        infer_arrow_schema([{"foo": frozenset([1, 2, 3])}])
+
+    data = [
+        {"key": "a", "values": frozenset([1, 2, 3])},
+        {"key": "b", "values": frozenset([2])},
+        {"key": "a", "values": frozenset([3, 4])},
+    ]
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["key"],
+        reducer=lambda key, items: {"key": key, "value": frozenset().union(*(item["values"] for item in items))},
+    )
+
+    results = list(zephyr_ctx.execute(ds))
+    results = sorted(results, key=lambda x: x["key"])
+    assert len(results) == 2
+    assert results[0] == {"key": "a", "value": frozenset([1, 2, 3, 4])}
+    assert results[1] == {"key": "b", "value": frozenset([2])}
+
+
+def test_group_by_schema_evolution(zephyr_ctx):
+    """Schema evolution: a field that is null in some chunks gains a type in others."""
+    data = []
+    # First batch of items: score is None (Arrow infers Null type)
+    for i in range(20):
+        data.append({"id": i, "cat": f"g{i % 5}", "score": None})
+    # Second batch: score is int (Arrow infers int64)
+    for i in range(20, 40):
+        data.append({"id": i, "cat": f"g{i % 5}", "score": i})
+
+    ds = Dataset.from_list(data).group_by(
+        key=lambda x: x["cat"],
+        reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)},
+    )
+
+    results = list(zephyr_ctx.execute(ds))
+    results = sorted(results, key=lambda x: x["cat"])
+
+    assert len(results) == 5
+    for r in results:
+        assert r["count"] == 8  # 4 with None score + 4 with int score
