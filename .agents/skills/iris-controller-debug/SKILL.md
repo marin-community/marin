@@ -11,23 +11,41 @@ Read first: @lib/iris/AGENTS.md
 
 ## Access Pattern
 
-The DB is inside a Docker container on a GCP VM. Pipe a Python script through SSH:
+The DB is inside a Docker container on a GCP VM. Write a Python script locally and pipe it via stdin:
 
 ```bash
-cat <<'PYEOF' | gcloud compute ssh <VM> --zone=<ZONE> --project=<PROJECT> \
-  --command="cat > /tmp/query.py && docker cp /tmp/query.py <CONTAINER>:/tmp/ && docker exec <CONTAINER> python3 /tmp/query.py"
+cat /tmp/query.py | uv run ./scripts/gcp-ssh <VM_IP> -- docker exec -i <CONTAINER> python3 -
+```
+
+where `query.py` opens the DB:
+
+```python
 import sqlite3
-conn = sqlite3.connect("/tmp/iris/controller-logs/controller.sqlite3")
+conn = sqlite3.connect("/var/cache/iris/controller/controller.sqlite3")
 conn.row_factory = sqlite3.Row
 # ... queries ...
-PYEOF
 ```
 
 **Find the container ID** with `docker ps` on the VM — look for the iris controller container.
 
 **Production defaults** (verify at session start):
 - VM: `iris-controller-marin`, zone `us-central1-a`, project `hai-gcp-models`
-- DB path: `/tmp/iris/controller-logs/controller.sqlite3`
+- Controller DB: `/var/cache/iris/controller/controller.sqlite3`
+- Log store DB: `/var/cache/iris/controller/logs.sqlite3` (can be multi-GB)
+
+## Profiling
+
+Use `py-spy` for live thread dumps and CPU profiling:
+
+```bash
+# Stack dump (instant snapshot of all threads)
+uv run ./scripts/gcp-ssh <VM_IP> -- docker exec <CONTAINER> uvx py-spy dump --pid 1
+
+# CPU profile (writes speedscope JSON)
+uv run ./scripts/gcp-ssh <VM_IP> -- docker exec <CONTAINER> uvx py-spy record --pid 1 --duration 5 --format speedscope --output /tmp/profile.json
+```
+
+Controller logs are on stderr of the container (`docker logs <CONTAINER>`). Grep for `Slow ` to find timing warnings emitted by the `slow_log` helper.
 
 ## Schema
 
@@ -78,6 +96,8 @@ These are real issues in the codebase that will mislead you if you don't know ab
 2. **Diagnostic masking**: The scheduler returns a detailed rejection reason when a task can't be placed — but `service.py:654` unconditionally replaces it with the autoscaler hint, which is often the useless "Waiting for workers to become ready". The real failure reason (constraint mismatch, insufficient resources) is hidden. Don't trust the pending reason shown in the UI; query the scheduler state directly.
 
 3. **Fleet view zone display**: `FleetTab.vue:82` reads `metadata.gceZone` (never populated) instead of `metadata.attributes["zone"]`. The dashboard shows blank zones even when workers have zone attributes.
+
+4. **Heartbeat thread stall on gcloud subprocess**: The heartbeat loop calls `notify_worker_failed` → `scale_down` → `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete` (`gcp.py:591`). If the gcloud API hangs, **all task dispatch stops** because dispatches are delivered via heartbeats. Symptoms: `dispatch_queue` growing, tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms` across all workers. The autoscaler thread has the same exposure independently. Check with `py-spy dump` — look for `subprocess.run` → `terminate` on the heartbeat or autoscaler thread. The stuck gcloud process can be killed to unblock (#3678).
 
 ## Rules
 
