@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Utility functions for evaluating RL environments."""
@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import fsspec
 import haliax as hax
-from iris.marin_fs import open_url
 import jax
 import jax.random as jrandom
 import jmp
@@ -40,9 +40,8 @@ from marin.rl.types import RolloutGroup
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 from transformers import AutoTokenizer
-from iris.logging import configure_logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 def _to_list(arr) -> list:
@@ -130,8 +129,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
         tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
 
         with remove_tpu_lockfile_on_exit():
-
-            configure_logging(level=logging.INFO)
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
 
             env_name = config.env_config.env_class.split(".")[-1]
             trainer_config.id = f"eval-rollout-{env_name}"
@@ -229,13 +227,13 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
             # Save rollout groups as JSON
             rollout_file = f"{config.output_path}/rollout_groups.json"
-            with open_url(rollout_file, "w") as f:
+            with fsspec.open(rollout_file, "w") as f:
                 json.dump([rollout_group_to_dict(g) for g in rollout_groups], f, indent=2)
             logger.info(f"Saved rollout groups to {rollout_file}")
 
             # Save metrics as JSON
             metrics_file = f"{config.output_path}/metrics.json"
-            with open_url(metrics_file, "w") as f:
+            with fsspec.open(metrics_file, "w") as f:
                 json.dump(metrics, f, indent=2)
             logger.info(f"Saved metrics to {metrics_file}")
 

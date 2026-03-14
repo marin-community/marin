@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -37,7 +37,6 @@ from dataclasses import dataclass, field
 from google.cloud import storage
 from google.cloud.storage import transfer_manager
 from huggingface_hub import HfApi, create_repo
-from iris.logging import configure_logging
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -228,8 +227,8 @@ def upload_to_huggingface(local_path: str, repo_id: str, step: int, version_name
 
 def upload_gcs_to_hf(cfg: UploadConfig) -> None:
     """Main function to upload model checkpoints from GCS to Hugging Face."""
-
-    configure_logging(level=logging.INFO)
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
 
     # Collect all step directories
     all_step_dirs = []

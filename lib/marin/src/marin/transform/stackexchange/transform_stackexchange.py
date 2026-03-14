@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -24,7 +24,7 @@ from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 @dataclass
@@ -152,5 +152,5 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
         .filter(lambda record: record is not None)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
-    ctx = ZephyrContext(name="transform-stackexchange")
-    ctx.execute(pipeline)
+    with ZephyrContext(name="transform-stackexchange") as ctx:
+        ctx.execute(pipeline)

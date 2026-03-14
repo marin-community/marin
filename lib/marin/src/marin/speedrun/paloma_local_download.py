@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -32,4 +32,4 @@ def speedrun_paloma_tokenized(tokenizer: str = llama3_tokenizer):
 
 
 if __name__ == "__main__":
-    executor_main(steps=[paloma_speedrun, *speedrun_paloma_tokenized().values()])
+    executor_main(steps=[paloma_speedrun, *speedrun_paloma_tokenized])

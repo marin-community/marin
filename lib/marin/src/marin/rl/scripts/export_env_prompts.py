@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Export prompts from any MarinEnv as OpenAI-compatible chat completion requests.
@@ -25,10 +25,9 @@ import jax.random as jrandom
 from levanter.inference.openai import ChatCompletionRequest, ChatMessage
 from transformers import AutoTokenizer
 
-from iris.logging import configure_logging
 from marin.rl.environments import EnvConfig, load_environment_from_spec
 
-configure_logging(level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

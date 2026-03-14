@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
@@ -127,6 +127,7 @@ def convert_checkpoint_to_hf_step(
     save_tokenizer: bool = True,
     use_cpu: bool = False,
     override_output_path: str | None = None,
+    pip_dependency_groups: list[str] | None = None,
     discover_latest: bool = False,
 ) -> ExecutorStep:
     """
@@ -147,6 +148,7 @@ def convert_checkpoint_to_hf_step(
         use_cpu: Force conversion to run on CPU instead of the configured device mesh. When False, CPU mode is enabled
             automatically if the provided resources do not expose an accelerator.
         override_output_path: Explicit output path override. Useful when aligning with pre-existing directories.
+        pip_dependency_groups: Optional executor dependency groups.
         discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
     """
 
@@ -175,4 +177,5 @@ def convert_checkpoint_to_hf_step(
         fn=convert_checkpoint_to_hf,
         config=config,
         override_output_path=override_output_path,
+        pip_dependency_groups=pip_dependency_groups,
     )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
@@ -29,9 +29,7 @@ from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from iris.logging import configure_logging
-
-configure_logging(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Test configuration
@@ -201,7 +199,7 @@ def cleanup():
 
 def run_inference_mode(args):
     """Run in inference worker mode."""
-    configure_logging(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     logger = logging.getLogger("rollout_worker")
 
     logger.info("Starting inference worker mode...")
@@ -218,7 +216,7 @@ def run_inference_mode(args):
 
 def run_training_mode(args):
     """Run in training worker mode."""
-    configure_logging(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     logger = logging.getLogger("training_worker")
 
     logger.info("Starting training worker mode...")
@@ -234,7 +232,7 @@ def run_training_mode(args):
 
 
 def main():
-    configure_logging(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",

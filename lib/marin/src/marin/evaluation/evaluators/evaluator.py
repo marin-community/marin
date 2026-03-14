@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
@@ -11,7 +11,6 @@ from fray.v1.cluster.ray import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.utils import remove_tpu_lockfile_on_exit
-from iris.logging import configure_logging as _init_logging
 
 
 @dataclass(frozen=True)
@@ -52,9 +51,6 @@ class ModelConfig:
     """
     Whether or not this model was trained with a Chat Template in the tokenizer
     """
-
-    base_eval_run_name: str | None = None
-    """Custom base name for wandb runs."""
 
 
 class Evaluator(ABC):
@@ -113,8 +109,6 @@ def launch_evaluate_with_ray(
     pip_packages: Sequence[str] = (),
     env_vars: dict[str, str] | None = None,
     configure_logging: bool = True,
-    max_retries_failure: int = 0,
-    max_retries_preemption: int = 100,
 ) -> None:
     """Launch an evaluator on the Ray/Fray cluster."""
 
@@ -128,7 +122,7 @@ def launch_evaluate_with_ray(
         if configure_logging:
             import logging
 
-            _init_logging(level=logging.INFO)
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
         evaluator.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
     def _run() -> None:
@@ -147,8 +141,6 @@ def launch_evaluate_with_ray(
             pip_packages=list(pip_packages),
             env_vars=env_vars,
         ),
-        max_retries_failure=max_retries_failure,
-        max_retries_preemption=max_retries_preemption,
     )
 
     cluster = current_cluster()

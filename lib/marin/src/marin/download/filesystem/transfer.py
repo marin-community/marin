@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -6,7 +6,7 @@ import random
 import time
 from dataclasses import dataclass
 
-from iris.marin_fs import url_to_fs
+import fsspec
 from zephyr import Dataset, ZephyrContext
 
 from marin.utils import fsspec_exists, fsspec_glob
@@ -36,7 +36,7 @@ def transfer_files(config: TransferConfig) -> None:
 
     print(f"Downloading {input_path} from GCS.")
     start_time: float = time.time()
-    fs, _ = url_to_fs(input_path)
+    fs, _ = fsspec.core.url_to_fs(input_path)
     if not fs.exists(input_path):
         raise FileNotFoundError(f"{input_path} does not exist.")
 
@@ -61,8 +61,8 @@ def transfer_files(config: TransferConfig) -> None:
 
     # Always use parallel copying via zephyr
     pipeline = Dataset.from_list(selected_files).map(copy_file)
-    ctx = ZephyrContext(name="fs-transfer")
-    ctx.execute(pipeline)
+    with ZephyrContext(name="fs-transfer") as ctx:
+        ctx.execute(pipeline)
 
     elapsed_time_seconds: float = time.time() - start_time
     print(f"Downloaded {input_path} to {config.output_path} ({elapsed_time_seconds}s).")

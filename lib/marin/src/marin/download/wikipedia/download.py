@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -33,13 +33,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 import draccus
+import fsspec
 import requests
-from iris.marin_fs import open_url
 from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm
 from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 @dataclass
@@ -58,7 +58,7 @@ def download_tar(url: str, output_prefix) -> str:
         total_size = fsspec_size(url)
         pbar = tqdm(total=total_size, desc="Downloading File", unit="B", unit_scale=True)
 
-        with atomic_rename(output_filename) as tmp_filename, open_url(tmp_filename, "wb") as f:
+        with atomic_rename(output_filename) as tmp_filename, fsspec.open(tmp_filename, "wb") as f:
             r = requests.get(url, stream=True)
 
             for chunk in r.raw.stream(20 * 1024 * 1024, decode_content=False):
@@ -79,7 +79,7 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
     logger.info(f"Output path: {output_path}")
 
     try:
-        with open_url(input_file) as f:
+        with fsspec.open(input_file) as f:
             with tarfile.open(fileobj=f, mode="r:gz") as tr:
                 for info in tr:
                     with tr.extractfile(info) as file:
@@ -90,7 +90,7 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
                     # per file with size ranging from 200MB to 300MB
                     with (
                         atomic_rename(file_path) as tmpfile_path,
-                        open_url(tmpfile_path, "wb", compression="gzip") as output_f,
+                        fsspec.open(tmpfile_path, "wb", compression="gzip") as output_f,
                     ):
                         output_f.write(file_content)
                         yield file_path
@@ -106,20 +106,20 @@ def download(cfg: DownloadConfig) -> None:
     logger.info("Starting transfer of Wikipedia dump...")
     output_base = os.path.join(cfg.output_path, cfg.revision)
 
-    ctx = ZephyrContext(name="download-wikipedia")
-    download_metrics = ctx.execute(
-        Dataset.from_list(cfg.input_urls)
-        .map(lambda url: download_tar(url, output_base))
-        .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
-    )
+    with ZephyrContext(name="download-wikipedia") as ctx:
+        download_metrics = ctx.execute(
+            Dataset.from_list(cfg.input_urls)
+            .map(lambda url: download_tar(url, output_base))
+            .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
+        )
 
-    # load all of the output filenames to process
-    downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
+        # load all of the output filenames to process
+        downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
 
-    extracted = ctx.execute(
-        Dataset.from_list(downloads)
-        .flat_map(lambda file: process_file(file, output_base))
-        .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
-    )
+        extracted = ctx.execute(
+            Dataset.from_list(downloads)
+            .flat_map(lambda file: process_file(file, output_base))
+            .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
+        )
 
     logger.info("Wikipedia dump transfer complete, wrote: %s", list(extracted))

@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -22,8 +22,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import draccus
+import fsspec
 import numpy as np
-from iris.marin_fs import open_url
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
@@ -136,7 +136,7 @@ def aggregate_and_write_metadata(shard_metadata_iter: Iterator[list[dict]], outp
         "examples": examples,
     }
 
-    with open_url(output_path, "wt") as f:
+    with fsspec.open(output_path, "wt") as f:
         json.dump(metadata, f, indent=2)
 
     return {
@@ -159,8 +159,8 @@ def main(cfg: ValidationConfig) -> None:
         )
     )
 
-    ctx = ZephyrContext(name="validate")
-    result = list(ctx.execute(pipeline))
+    with ZephyrContext(name="validate") as ctx:
+        result = list(ctx.execute(pipeline))
     print(f"Validation complete: {result[0]}")
 
 

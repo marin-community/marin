@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
@@ -7,10 +7,10 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from iris.marin_fs import open_url
+import fsspec
 from marin.utils import fsspec_exists
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 @dataclass
@@ -50,7 +50,7 @@ def cached_or_construct_output(success_suffix="success", verbose=True):
             datetime_end = datetime.utcnow()
 
             # Write the success file, so that we don't have to process it next time
-            with open_url(success_file, "w") as f:
+            with fsspec.open(success_file, "w") as f:
                 metadata = {
                     "input_file_path": input_file_path,
                     "output_file_path": output_file_path,

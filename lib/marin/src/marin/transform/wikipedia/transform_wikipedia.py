@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -24,7 +24,7 @@ from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 @dataclass
@@ -304,5 +304,5 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .filter(lambda record: record is not None)
         .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
-    ctx = ZephyrContext(name="transform-wikipedia")
-    list(ctx.execute(pipeline))
+    with ZephyrContext(name="transform-wikipedia") as ctx:
+        list(ctx.execute(pipeline))

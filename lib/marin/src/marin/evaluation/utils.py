@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -6,11 +6,10 @@ import os
 import subprocess
 import time
 
+import fsspec
 import psutil
 from fsspec.callbacks import TqdmCallback
 from fsspec.implementations.local import LocalFileSystem
-from iris.marin_fs import filesystem as marin_filesystem
-from iris.marin_fs import url_to_fs
 
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
 
@@ -21,7 +20,7 @@ def is_remote_path(path: str) -> bool:
     """
     Checks if the given path is a remote path, e.g., Google Cloud Storage (GCS) path.
     """
-    fs, _ = url_to_fs(path)
+    fs, _ = fsspec.core.url_to_fs(path)
     return not isinstance(fs, LocalFileSystem)
 
 
@@ -36,7 +35,7 @@ def download_from_gcs(gcs_path: str, destination_path: str) -> None:
 
     print(f"Downloading {gcs_path} from GCS to {destination_path}.")
     start_time: float = time.time()
-    fs = marin_filesystem("gcs")
+    fs = fsspec.filesystem("gcs")
 
     if not fs.exists(gcs_path):
         raise FileNotFoundError(f"{gcs_path} does not exist in GCS.")
@@ -54,7 +53,7 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     Uploads a folder `local_path` to Google Cloud Storage (GCS).
     """
     print(f"Uploading {local_path}.")
-    fs = marin_filesystem("gcs")
+    fs = fsspec.filesystem("gcs")
     # The slash is needed to upload the contents of the folder to `gcs_path`
     fs.put(local_path + "/", gcs_path, recursive=True)
     logger.info(f"Uploaded {local_path} to {gcs_path}.")

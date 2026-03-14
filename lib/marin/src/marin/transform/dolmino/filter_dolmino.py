@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -55,8 +55,8 @@ def filter_dolmino(config: FilterDolminoConfig):
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl.gz")
     )
 
-    ctx = ZephyrContext(name="filter-dolmino")
-    ctx.execute(pipeline)
+    with ZephyrContext(name="filter-dolmino") as ctx:
+        ctx.execute(pipeline)
 
 
 @draccus.wrap()

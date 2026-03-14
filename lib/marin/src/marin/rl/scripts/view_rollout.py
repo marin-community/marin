@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """View rollout batch pickle files in a human-readable format.

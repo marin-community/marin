@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Replay OpenAI chat completion requests through a Levanter inference server.
@@ -33,7 +33,6 @@ from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 from openai import AsyncOpenAI
-from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +251,7 @@ def main():
 
     args = parser.parse_args()
 
-    configure_logging(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)

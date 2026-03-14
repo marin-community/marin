@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
@@ -13,7 +13,7 @@ from marin.schemas.web.convert import (
     ResiliparseConfig,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 def extract_content_from_dom(

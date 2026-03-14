@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 from .executor import (
@@ -14,7 +14,6 @@ from .executor import (
     executor_main,
     get_executor_step,
     output_path_of,
-    resolve_executor_step,
     this_output_path,
     unwrap_versioned_value,
     versioned,

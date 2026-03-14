@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -12,7 +12,7 @@ import re
 
 from marin.execution.executor import InputName
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")  # Initialize logger
 
 
 def ckpt_path_to_step_name(path: str | InputName) -> str:

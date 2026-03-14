@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -6,7 +6,7 @@ import os.path
 from dataclasses import dataclass
 from typing import Any
 
-from iris.marin_fs import open_url
+import fsspec
 
 
 @dataclass
@@ -24,12 +24,12 @@ def merge(metrics_config: MergeConfig) -> dict[str, Any]:
 
     # Read metrics from each path and merge them
     for path in metrics_config.merge_paths:
-        with open_url(os.path.join(path, "metric.json"), "r") as f:
+        with fsspec.open(os.path.join(path, "metric.json"), "r") as f:
             metrics = json.load(f)
             merged_metrics.update(metrics)
 
     # Write the merged metrics to the output path
-    with open_url(os.path.join(metrics_config.output_path, "metric.json"), "w") as f:
+    with fsspec.open(os.path.join(metrics_config.output_path, "metric.json"), "w") as f:
         json.dump(merged_metrics, f)
 
     return merged_metrics

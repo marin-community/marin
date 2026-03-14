@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -15,8 +15,8 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+import fsspec
 import numpy as np
-from iris.marin_fs import url_to_fs
 from fray.v1.job import get_default_job_ctx
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
@@ -536,7 +536,7 @@ class Curriculum:
 
         logger.info("Saving curriculum checkpoint to %s/%s at step %d", checkpoint_dir, filename, self.current_step)
 
-        fs, _ = url_to_fs(checkpoint_dir)
+        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
         fs.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
@@ -576,7 +576,7 @@ class Curriculum:
             checkpoint_dir: Directory containing the checkpoint.
             filename: Name of the checkpoint file to load (default pattern).
         """
-        fs, _ = url_to_fs(checkpoint_dir)
+        fs, _ = fsspec.core.url_to_fs(checkpoint_dir)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         if not fs.exists(checkpoint_path):

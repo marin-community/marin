@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from iris.marin_fs import open_url
+import fsspec
 from pydantic import BaseModel
 
 
@@ -47,7 +47,7 @@ def write_provenance_json(output_path, metadata: dict[str, Any]) -> None:
     print(f"[*] Writing Dataset `provenance.json` to `{output_path}`")
     metadata["access_time"] = datetime.now(timezone.utc).isoformat()
 
-    with open_url(f"{output_path}/provenance.json", "w") as f:
+    with fsspec.open(f"{output_path}/provenance.json", "w") as f:
         json.dump(metadata, f, indent=4, sort_keys=True)
 
 

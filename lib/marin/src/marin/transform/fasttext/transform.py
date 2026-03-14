@@ -1,4 +1,4 @@
-# Copyright The Marin Authors
+# Copyright 2025 The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -17,11 +17,10 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from iris.logging import configure_logging
-from iris.marin_fs import open_url
+import fsspec
 from marin.core.runtime import cached_or_construct_output
 
-configure_logging(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("fasttext-to-dolma")
 
 
@@ -59,8 +58,8 @@ def convert_fasttext_to_dolma_format(input_path: str, output_path: str, source: 
         bool: True if the conversion was successful.
     """
     with (
-        open_url(input_path, "rt") as f,
-        open_url(output_path, "wt", compression="gzip") as output_jsonl_gz,
+        fsspec.open(input_path, "rt") as f,
+        fsspec.open(output_path, "wt", compression="gzip") as output_jsonl_gz,
     ):
         for line_number, line in enumerate(f):
             # Split the line to separate the fasttext label and text and remove trailing newline
