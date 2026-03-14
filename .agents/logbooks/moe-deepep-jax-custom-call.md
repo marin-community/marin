@@ -87,3 +87,52 @@
   - Commit and push the JAX custom-call snapshot.
   - Run `.agents/scripts/deepep_jax_krt_bench.py` on CoreWeave H100x8.
   - Update `#3665` with the pinned snapshot and the first cluster result.
+
+### 2026-03-14 18:42 - Complete the fixed-shape H100x8 matrix on CoreWeave
+- Hypothesis: if the JAX custom call materially helps the GPU path, the new `deepep_layout_ragged_a2a` kernel should separate from vanilla `ragged_a2a` on the sealed `#3633` shape.
+- Command:
+  ```bash
+  KUBECONFIG=/Users/romain/.kube/coreweave-iris \
+    uv run --package iris python .agents/scripts/deepep_jax_krt_bench.py \
+    --repo-ref moe-deepep-jax-layout-ffi-smokefix-20260314 \
+    --task-id deepep-jax-krt-bench-20260314-114210
+  ```
+- Config:
+  - CoreWeave cluster: Iris H100x8 via raw `KubernetesRuntime`
+  - task id: `deepep-jax-krt-bench-20260314-114210`
+  - pod: `iris-task-9d8747e702c3`
+  - shape: `tokens=32768 hidden=2048 mlp_dim=768 experts=128 shared_expert_dim=2048`
+  - kernels: `current`, `ragged_a2a`, `deepep_layout_ragged_a2a`
+  - sweep: `distribution in {random, runs}`, `topk in {2, 8}`, `EP in {1, 2, 4, 8}`, `bench_pass=forward_backward`
+- Result:
+  - Smoke passed before the matrix:
+    - `FFI_SMOKE_OK`
+    - `FFI_SMOKE_RANK_COUNTS [48, 48, 48, 48, 48, 48, 48, 48]`
+    - `FFI_SMOKE_EXPERT_COUNT_SUM 512`
+  - Completed matrix (`tokens/s`):
+
+    | distribution | topk | kernel | EP1 | EP2 | EP4 | EP8 |
+    | --- | --- | --- | ---: | ---: | ---: | ---: |
+    | random | 2 | current | 610333 | 892081 | 1724413 | 2966491 |
+    | random | 2 | ragged_a2a | 620045 | 553780 | 1058353 | 2001628 |
+    | random | 2 | deepep_layout_ragged_a2a | 617592 | 538626 | 1057965 | 2002620 |
+    | random | 8 | current | 151577 | 237428 | 482195 | 956226 |
+    | random | 8 | ragged_a2a | 150450 | 138256 | 279590 | 546790 |
+    | random | 8 | deepep_layout_ragged_a2a | 151781 | 132724 | 276921 | 539028 |
+    | runs | 2 | current | 616690 | 886567 | 1728405 | 2963386 |
+    | runs | 2 | ragged_a2a | 614976 | 524339 | 970674 | 1668893 |
+    | runs | 2 | deepep_layout_ragged_a2a | 619300 | 527523 | 974219 | 1665751 |
+    | runs | 8 | current | 152001 | 235254 | 489235 | 958629 |
+    | runs | 8 | ragged_a2a | 151848 | 135279 | 274323 | 526984 |
+    | runs | 8 | deepep_layout_ragged_a2a | 130124 | 138148 | 273787 | 530715 |
+- Interpretation:
+  - The layout-only DeepEP custom call does not improve distributed performance on this workload.
+  - For every completed `EP > 1` point, `current` beat `deepep_layout_ragged_a2a`; the gap ranged from about `1.48x` to `1.81x`.
+  - Across the distributed cells, `deepep_layout_ragged_a2a` stayed effectively tied with vanilla `ragged_a2a` (roughly `-4%` to `+2%`), so replacing only the layout metadata producer does not move the result.
+  - The one notable anomaly was `runs, topk=8, EP=1`, where `deepep_layout_ragged_a2a` dropped to `130124 tok/s`; since that is a single non-distributed point and the distributed cells stayed tied, it is not evidence of a win.
+- Negative results / fixes:
+  - The first raw CoreWeave submission path exposed a series of launch bugs before the successful run: mounted `/app` cleanup, Git availability in the image, NVSHMEM-disabled DeepEP compilation, CUDA FFI handler registration, and 64-bit JAX operand expectations.
+  - None of those fixes changed the final benchmark interpretation: once the smoke passed, the layout-only custom call still matched `ragged_a2a` rather than the stronger torch-side DeepEP / Hybrid-EP result from `#3641`.
+- Next action:
+  - Treat this layout-only custom call as a completed negative result.
+  - If the JAX-native DeepEP story is still worth pursuing, the next step is a deeper custom call around dispatch/combine transport rather than another round of layout-only tuning.
