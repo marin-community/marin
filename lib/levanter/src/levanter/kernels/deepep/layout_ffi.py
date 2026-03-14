@@ -75,6 +75,7 @@ def _build_shared_library(out_path: Path) -> None:
         "-Xcompiler",
         "-fPIC",
         "-O3",
+        "-DDISABLE_NVSHMEM",
         "-I",
         str(jax_include),
         "-I",
