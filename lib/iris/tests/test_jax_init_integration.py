@@ -25,6 +25,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest.importorskip("jax")
+
 from iris.actor.resolver import ResolveResult, ResolvedEndpoint
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
