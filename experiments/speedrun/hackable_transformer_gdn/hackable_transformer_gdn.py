@@ -131,7 +131,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
     gdn_segment_size: int = 16
-    gdn_use_branch_boundary_prototype: bool = False
     gdn_use_decoder_block_boundary_prototype: bool = False
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
@@ -299,124 +298,6 @@ def _prepare_gdn_mask(
     return None
 
 
-def _preserve_array_sharding_like(x, like):
-    try:
-        return jax.lax.with_sharding_constraint(x, like.sharding)
-    except Exception:
-        return x
-
-
-def _gdn_branch_boundary_impl(
-    gdn: GatedDeltaNet,
-    x_arr,
-    attention_mask_arr,
-    *,
-    x_axes: tuple[Axis, ...],
-    mask_axes: tuple[Axis, ...] | None,
-    chunk_size: int,
-    segment_size: int,
-) -> jax.Array:
-    x_arr = _preserve_array_sharding_like(x_arr, x_arr)
-    x = hax.named(x_arr, x_axes)
-    attention_mask = None
-    if attention_mask_arr is not None and mask_axes is not None:
-        attention_mask_arr = _preserve_array_sharding_like(attention_mask_arr, attention_mask_arr)
-        attention_mask = hax.named(attention_mask_arr, mask_axes)
-    y, _ = gdn(
-        x,
-        inference=False,
-        chunk_size=chunk_size,
-        segment_size=segment_size,
-        attention_mask=attention_mask,
-        decode_state=None,
-    )
-    return _preserve_array_sharding_like(y.array, x_arr)
-
-
-@eqx.filter_custom_vjp
-def _gdn_branch_boundary(
-    vjp_arg: tuple[GatedDeltaNet, jax.Array],
-    attention_mask_arr,
-    *,
-    x_axes: tuple[Axis, ...],
-    mask_axes: tuple[Axis, ...] | None,
-    chunk_size: int,
-    segment_size: int,
-) -> jax.Array:
-    gdn, x_arr = vjp_arg
-    return _gdn_branch_boundary_impl(
-        gdn,
-        x_arr,
-        attention_mask_arr,
-        x_axes=x_axes,
-        mask_axes=mask_axes,
-        chunk_size=chunk_size,
-        segment_size=segment_size,
-    )
-
-
-@_gdn_branch_boundary.def_fwd
-def _gdn_branch_boundary_fwd(
-    perturbed,
-    vjp_arg: tuple[GatedDeltaNet, jax.Array],
-    attention_mask_arr,
-    *,
-    x_axes: tuple[Axis, ...],
-    mask_axes: tuple[Axis, ...] | None,
-    chunk_size: int,
-    segment_size: int,
-):
-    del perturbed
-    gdn, x_arr = vjp_arg
-    y = _gdn_branch_boundary_impl(
-        gdn,
-        x_arr,
-        attention_mask_arr,
-        x_axes=x_axes,
-        mask_axes=mask_axes,
-        chunk_size=chunk_size,
-        segment_size=segment_size,
-    )
-    return y, y
-
-
-@_gdn_branch_boundary.def_bwd
-def _gdn_branch_boundary_bwd(
-    residuals,
-    grad_y,
-    perturbed,
-    vjp_arg: tuple[GatedDeltaNet, jax.Array],
-    attention_mask_arr,
-    *,
-    x_axes: tuple[Axis, ...],
-    mask_axes: tuple[Axis, ...] | None,
-    chunk_size: int,
-    segment_size: int,
-):
-    del perturbed
-    if grad_y is None:
-        return (None, None)
-    gdn, x_arr = vjp_arg
-    grad_y = _preserve_array_sharding_like(grad_y, residuals)
-    _, vjp_fn = eqx.filter_vjp(
-        lambda local_gdn, local_x_arr: _gdn_branch_boundary_impl(
-            local_gdn,
-            local_x_arr,
-            attention_mask_arr,
-            x_axes=x_axes,
-            mask_axes=mask_axes,
-            chunk_size=chunk_size,
-            segment_size=segment_size,
-        ),
-        gdn,
-        x_arr,
-    )
-    grad_gdn, grad_x = vjp_fn(grad_y)
-    if grad_x is not None:
-        grad_x = _preserve_array_sharding_like(grad_x, x_arr)
-    return (grad_gdn, grad_x)
-
-
 class HackableMlp(eqx.Module):
     """GLU MLP"""
 
@@ -458,7 +339,6 @@ class HackableDecoderLayer(eqx.Module):
     use_gdn: bool = eqx.field(static=True, default=False)
     gdn_chunk_size: int = eqx.field(static=True, default=64)
     gdn_segment_size: int = eqx.field(static=True, default=8)
-    gdn_use_branch_boundary_prototype: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(config: HackableTransformerConfig, *, key, layer_index: int = 0) -> "HackableDecoderLayer":
@@ -491,7 +371,6 @@ class HackableDecoderLayer(eqx.Module):
             use_gdn=use_gdn,
             gdn_chunk_size=config.gdn_chunk_size,
             gdn_segment_size=config.gdn_segment_size,
-            gdn_use_branch_boundary_prototype=config.gdn_use_branch_boundary_prototype,
         )
 
     @named_call
@@ -508,25 +387,13 @@ class HackableDecoderLayer(eqx.Module):
                 _dbg_sharding("layer_in/x", x.array if hasattr(x, "array") else x)
             except Exception:
                 pass
-        if self.gdn_use_branch_boundary_prototype:
-            y_arr = _gdn_branch_boundary(
-                (self.gdn, x.array),
-                None if attn_mask is None else attn_mask.array,
-                x_axes=x.axes,
-                mask_axes=None if attn_mask is None else attn_mask.axes,
-                chunk_size=self.gdn_chunk_size,
-                segment_size=self.gdn_segment_size,
-            )
-            y = hax.named(y_arr, x.axes)
-        else:
-            y, _ = self.gdn(
-                x,
-                inference=False,
-                chunk_size=self.gdn_chunk_size,
-                segment_size=self.gdn_segment_size,
-                attention_mask=attn_mask,
-                decode_state=None,
-            )
+        y, _ = self.gdn(
+            x,
+            inference=False,
+            chunk_size=self.gdn_chunk_size,
+            attention_mask=attn_mask,
+            decode_state=None,
+        )
         if _GDN_DEBUG:
             try:
                 _dbg_sharding("layer_out/y", y.array if hasattr(y, "array") else y)
