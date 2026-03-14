@@ -80,7 +80,7 @@ from iris.time_utils import Timestamp, Timer
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
-DEFAULT_MAX_TOTAL_LINES = 10000
+DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
