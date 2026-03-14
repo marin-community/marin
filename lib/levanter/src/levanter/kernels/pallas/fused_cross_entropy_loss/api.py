@@ -54,6 +54,7 @@ _AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, BlockSizes] = {}
 _AUTOTUNE_CACHE_LOADED = False
 _AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
 _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+_MOSAIC_AUTOPARTITION_ERROR = "mosaic kernels cannot be automatically partitioned"
 
 logger = logging.getLogger(__name__)
 _CANONICAL_PALLAS_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
@@ -111,6 +112,12 @@ def _warn_pallas_fallback_once(exc: Exception) -> None:
 def _is_tpu_vmem_compile_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "resource_exhausted" in message and "vmem" in message
+
+
+def _is_mosaic_autopartition_error(exc: Exception) -> bool:
+    if not isinstance(exc, NotImplementedError):
+        return False
+    return _MOSAIC_AUTOPARTITION_ERROR in str(exc).lower()
 
 
 def _warn_vmem_compile_fallback_once(exc: Exception, *, impl_name: str) -> None:
@@ -426,6 +433,7 @@ def _autotune_block_sizes_on_miss(
     best: BlockSizes | None = None
     best_score = float("inf")
     errors: list[Exception] = []
+    mosaic_autopartition_errors: list[Exception] = []
     for candidate in candidates:
         try:
             score = _benchmark_block_sizes_candidate(
@@ -440,6 +448,9 @@ def _autotune_block_sizes_on_miss(
                 return_argmax=return_argmax,
             )
         except Exception as exc:
+            if impl_name == "pallas_tpu" and _is_mosaic_autopartition_error(exc):
+                mosaic_autopartition_errors.append(exc)
+                continue
             errors.append(exc)
             continue
         if score < best_score:
@@ -447,9 +458,19 @@ def _autotune_block_sizes_on_miss(
             best = candidate
 
     if best is None:
+        if mosaic_autopartition_errors and not errors:
+            logger.warning(
+                "Fused CE autotune skipped %d mosaic-partition-incompatible candidate(s) for %s; "
+                "using inferred block sizes %s.",
+                len(mosaic_autopartition_errors),
+                impl_name,
+                inferred,
+            )
+            return inferred
+        all_errors = errors + mosaic_autopartition_errors
         raise ExceptionGroup(
             f"Fused CE autotune found no viable block-size candidates for {impl_name}",
-            errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
+            all_errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
         )
 
     _AUTOTUNE_BLOCK_SIZE_CACHE[cache_key] = best

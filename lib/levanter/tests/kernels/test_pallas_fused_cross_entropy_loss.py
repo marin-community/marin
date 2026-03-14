@@ -974,6 +974,56 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     assert seen_block_sizes == [inferred]
 
 
+def test_pallas_tpu_autotune_mosaic_partitioning_error_uses_inferred_block_sizes(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+    candidate = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
+    seen_block_sizes: list[fused_api.BlockSizes | None] = []
+
+    def fake_impl(x_raw, labels_raw, w_raw, *, block_sizes=None, **_kwargs):
+        del labels_raw, w_raw
+        seen_block_sizes.append(block_sizes)
+        batch = x_raw.shape[0]
+        return jnp.zeros((batch,), dtype=jnp.float32), jnp.zeros((batch,), dtype=jnp.float32)
+
+    def raise_mosaic_partition_error(**_kwargs):
+        raise NotImplementedError(
+            "Mosaic kernels cannot be automatically partitioned. Please wrap the call in a shard_map."
+        )
+
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
+    monkeypatch.setattr(
+        fused_api,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (inferred, False),
+    )
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
+    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
+    monkeypatch.setattr(
+        fused_api,
+        "_candidate_block_sizes",
+        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, candidate],
+    )
+    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", raise_mosaic_partition_error)
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+
+    loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x,
+        y,
+        w,
+        reduction=None,
+        implementation="pallas_tpu",
+    )
+
+    assert jnp.array_equal(loss, jnp.zeros((4,), dtype=jnp.float32))
+    assert seen_block_sizes
+    assert all(block == inferred for block in seen_block_sizes)
+
+
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
