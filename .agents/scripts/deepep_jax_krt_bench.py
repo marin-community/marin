@@ -100,8 +100,8 @@ rank_counts, expert_counts, is_token_in_rank = jax.jit(
 )(topk_idx)
 
 expected_expert_counts = jnp.bincount(topk_idx.reshape(-1), length=NUM_EXPERTS).astype(jnp.int32)
-expected_rank_counts = expected_expert_counts.reshape(NUM_RANKS, experts_per_rank).sum(axis=1)
 expected_is_token_in_rank = (topk_idx[..., None] // experts_per_rank == jnp.arange(NUM_RANKS)).any(axis=1)
+expected_rank_counts = expected_is_token_in_rank.astype(jnp.int32).sum(axis=0)
 
 rank_counts, expert_counts, is_token_in_rank = jax.device_get((rank_counts, expert_counts, is_token_in_rank))
 expected_expert_counts, expected_rank_counts, expected_is_token_in_rank = jax.device_get(
