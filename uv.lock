@@ -3876,6 +3876,7 @@ source = { editable = "lib/levanter" }
 dependencies = [
     { name = "async-lru" },
     { name = "braceexpand" },
+    { name = "chex" },
     { name = "dataclasses-json" },
     { name = "datasets" },
     { name = "deepdiff" },
@@ -3966,7 +3967,6 @@ docs = [
     { name = "pymdown-extensions" },
 ]
 test = [
-    { name = "chex" },
     { name = "httpx" },
     { name = "librosa" },
     { name = "numba", version = "0.62.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
@@ -3984,6 +3984,7 @@ test = [
 requires-dist = [
     { name = "async-lru", specifier = "~=2.0" },
     { name = "braceexpand", specifier = ">=0.1.7" },
+    { name = "chex", specifier = ">=0.1.86" },
     { name = "dataclasses-json", specifier = "~=0.6.4" },
     { name = "datasets", specifier = ">=3.1.0,<5.0" },
     { name = "deepdiff" },
@@ -4055,7 +4056,6 @@ docs = [
     { name = "pymdown-extensions" },
 ]
 test = [
-    { name = "chex", specifier = ">=0.1.86" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "librosa", specifier = ">=0.11.0" },
     { name = "numba", specifier = ">=0.62.1" },

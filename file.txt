@@ -1,557 +1,635 @@
-(<lambda> pid=12560, ip=10.130.0.28)     return base_func(*args, **kw)
-(<lambda> pid=12560, ip=10.130.0.28)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
-(<lambda> pid=12560, ip=10.130.0.28)     raise e
-(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 115, in encode
-(<lambda> pid=12560, ip=10.130.0.28)     return encode_choice(obj, underlying_type)
-(<lambda> pid=12560, ip=10.130.0.28)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice
-(<lambda> pid=12560, ip=10.130.0.28)     encoded = encode_dataclass(obj, declared_type)
-(<lambda> pid=12560, ip=10.130.0.28)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
-(<lambda> pid=12560, ip=10.130.0.28)     d[field.name] = encode(value, field_type)
-(<lambda> pid=12560, ip=10.130.0.28)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
-(<lambda> pid=12560, ip=10.130.0.28)     return base_func(*args, **kw)
-(<lambda> pid=12560, ip=10.130.0.28)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
-(<lambda> pid=12560, ip=10.130.0.28)     raise e
-(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 121, in encode
-(<lambda> pid=12560, ip=10.130.0.28)     raise Exception(f"No parser for object {obj} of type {type(obj)}, consider using draccus.encode.register")
-(<lambda> pid=12560, ip=10.130.0.28) Exception: No parser for object <function _make_visual_weight_transform.<locals>.transform at 0x7f45a396ee80> of type <class 'function'>, consider using draccus.encode.register
-(<lambda> pid=12560, ip=10.130.0.28) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:55 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:55 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:154 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:55 - 3 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274/checkpoints
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:57 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:57 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:55 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 7x across cluster]
-(<lambda> pid=12582, ip=10.130.0.21) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274. [repeated 2x across cluster]
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:57 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
-(<lambda> pid=12582, ip=10.130.0.21) I0314 01:13:57.761997   14213 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:58 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
-(<lambda> pid=12936, ip=10.130.0.29) wandb: Tracking run with wandb version 0.25.1 [repeated 3x across cluster]
-(<lambda> pid=13917, ip=10.130.0.32) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 2x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29) wandb: Run data is saved locally in /tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/wandb/run-20260314_011352-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 [repeated 3x across cluster]
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:58 - 3 - levanter.data.text - datasets.py:850 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:58 - 3 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_understanding, skipping
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:58 - 0 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_generation, skipping
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:13:55 - 2 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 [repeated 5x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:54 - 0 - levanter.tracker.tracker_fns - tracker_fns.py:203 - WARNING :: Failed to dump config to yaml. Skipping logging as artifact. [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29) Traceback (most recent call last): [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/tracker/tracker_fns.py", line 199, in log_configuration [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     draccus.dump(hparams, f, encoding="utf-8") [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/cfgparsing.py", line 134, in dump [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     config_dict = encode(config) [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)                   ^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper [repeated 18x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     return base_func(*args, **kw) [repeated 18x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)            ^^^^^^^^^^^^^^^^^^^^^^ [repeated 21x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 121, in encode [repeated 33x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     raise e [repeated 15x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     return encode_dataclass(obj, declared_type) [repeated 6x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 12x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass [repeated 12x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     d[field.name] = encode(value, field_type) [repeated 12x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)                     ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 12x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     return fn(obj, declared_type) [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 193, in encode_dict [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     v_ = encode(v, value_type) [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)          ^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     return encode_choice(obj, underlying_type) [repeated 6x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice [repeated 6x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     encoded = encode_dataclass(obj, declared_type) [repeated 6x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29)     raise Exception(f"No parser for object {obj} of type {type(obj)}, consider using draccus.encode.register") [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29) Exception: No parser for object <function _make_visual_weight_transform.<locals>.transform at 0x7f4457d62e80> of type <class 'function'>, consider using draccus.encode.register [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
-(<lambda> pid=12936, ip=10.130.0.29) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:59 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:59 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/hellaswag/validation
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/hellaswag/validation/shard_ledger.json
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:13:59 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'hellaswag', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/winogrande/validation
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/winogrande/validation/shard_ledger.json
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:00 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'winogrande', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_easy/validation
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_easy/validation/shard_ledger.json
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:00 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_easy', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_challenge/validation
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_challenge/validation/shard_ledger.json
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:00 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_challenge', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/mmlu/validation
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/mmlu/validation/shard_ledger.json
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:00 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'mmlu', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:55 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:154 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:- [repeated 3x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:55 - 0 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274/checkpoints [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:02 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132/validation [repeated 76x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:02 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132/validation/shard_ledger.json [repeated 76x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:02 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 20x across cluster]
-(<lambda> pid=13917, ip=10.130.0.32) I0314 01:13:57.788786   15822 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 63x across cluster]
-(<lambda> pid=12936, ip=10.130.0.29) wandb: WARNING Artifact "requirements.txt" already exists with the same content. No new version will be created.
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:13:58 - 2 - levanter.data.text - datasets.py:850 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:13:58 - 2 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_understanding, skipping [repeated 3x across cluster]
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:58 - 3 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_generation, skipping [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/hellaswag/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/hellaswag/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'hellaswag', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/winogrande/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/winogrande/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'winogrande', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_easy/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_easy/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_easy', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_challenge/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_challenge/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_challenge', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/mmlu/validation [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/mmlu/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'mmlu', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:14:07 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/github_python-00e7de/validation [repeated 57x across cluster]
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:14:07 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/github_python-00e7de/validation/shard_ledger.json [repeated 57x across cluster]
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:14:07 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 56x across cluster]
-(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:14:09 - 3 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
-(SliceActor pid=9436, ip=10.130.0.32) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=13917, ip=10.130.0.32)
-(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/backend.py", line 328, in <lambda>
-(SliceActor pid=9436, ip=10.130.0.32)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(SliceActor pid=9436, ip=10.130.0.32)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/main/train_lm.py", line 327, in main
-(SliceActor pid=9436, ip=10.130.0.32)     train_loader = trainer.data_loader(train_dataset)
-(SliceActor pid=9436, ip=10.130.0.32)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/trainer.py", line 625, in data_loader
-(SliceActor pid=9436, ip=10.130.0.32)     return DataLoader(
-(SliceActor pid=9436, ip=10.130.0.32)            ^^^^^^^^^^^
-(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
-(SliceActor pid=9436, ip=10.130.0.32)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(SliceActor pid=9436, ip=10.130.0.32)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(SliceActor pid=9436, ip=10.130.0.32)     return asyncio.run(coro)
-(SliceActor pid=9436, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^^
-(SliceActor pid=9436, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-(SliceActor pid=9436, ip=10.130.0.32)     return runner.run(main)
-(SliceActor pid=9436, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^
-(SliceActor pid=9436, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-(SliceActor pid=9436, ip=10.130.0.32)     return self._loop.run_until_complete(task)
-(SliceActor pid=9436, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=9436, ip=10.130.0.32)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/mixture.py", line 268, in getitem_async
-(SliceActor pid=9436, ip=10.130.0.32)     permuted_ids = await self._get_block(block_id)
-(SliceActor pid=9436, ip=10.130.0.32)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=9436, ip=10.130.0.32) TypeError: object numpy.ndarray can't be used in 'await' expression
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:08 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 18x across cluster]
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:08 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 18x across cluster]
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:08 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 19x across cluster]
-(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:09 - 2 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 3x across cluster]
-(<lambda> pid=13917, ip=10.130.0.32) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f14781cafc0>
-(<lambda> pid=13917, ip=10.130.0.32) Traceback (most recent call last):
-(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 73, in teardown_atexit
-(<lambda> pid=13917, ip=10.130.0.32)     conn.teardown(hooks.exit_code)
-(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 344, in teardown
-(<lambda> pid=13917, ip=10.130.0.32)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=13917, ip=10.130.0.32)     return future.result()
-(<lambda> pid=13917, ip=10.130.0.32)            ^^^^^^^^^^^^^^^
-(<lambda> pid=13917, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=13917, ip=10.130.0.32)     return self.__get_result()
-(<lambda> pid=13917, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=13917, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=13917, ip=10.130.0.32)     raise self._exception
-(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 220, in _wrap
-(<lambda> pid=13917, ip=10.130.0.32)     return await fn()
-(<lambda> pid=13917, ip=10.130.0.32)            ^^^^^^^^^^
-(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 342, in publish_teardown_and_close
-(<lambda> pid=13917, ip=10.130.0.32)     await self._client.close()
-(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 123, in close
-(<lambda> pid=13917, ip=10.130.0.32)     await self._writer.wait_closed()
-(<lambda> pid=13917, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=13917, ip=10.130.0.32)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=13917, ip=10.130.0.32) BrokenPipeError: [Errno 32] Broken pipe
-(run_on_pod_ray pid=60507, ip=10.130.0.106) Task error ray::<lambda>() (pid=13917, ip=10.130.0.32)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/tpu.py", line 789, in run_on_pod_ray
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return func(*args, **kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=60507, ip=10.130.0.106) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=13917, ip=10.130.0.32)
-(run_on_pod_ray pid=60507, ip=10.130.0.106) Failed 3 times. Continuing to retry.
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/tpu.py", line 789, in run_on_pod_ray
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return func(*args, **kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=60507, ip=10.130.0.106) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=13917, ip=10.130.0.32)
-(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.799587   14067 coordination_service.cc:681] /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted.
-(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.799901   14067 coordination_service.cc:1858] Shutdown barrier in coordination service has failed:
-(<lambda> pid=13917, ip=10.130.0.32) INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x03']. Barrier Id: Shutdown::3442310185536402597::0, Task: /job:jax_worker/replica:0/task:3 [type.googleapis.com/tensorflow.CoordinationServiceError=''] [type.googleapis.com/tensorflow.BarrierError='\n\x1dShutdown::3442310185536402597']
-(<lambda> pid=13917, ip=10.130.0.32) This suggests that the workers are out of sync. Either at least one worker (a) crashed early due to program error or scheduler events (e.g. preemption, eviction), (b) was too fast in its execution, or (c) too slow / hanging. Check the logs (both the program and scheduler events) for an earlier error to identify the root cause.
-(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.799922   14067 coordination_service.cc:1899] Use error polling to propagate the following error to all tasks: INTERNAL: Shutdown barrier has failed.
-(<lambda> pid=13917, ip=10.130.0.32) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x03']. Barrier Id: Shutdown::3442310185536402597::0, Task: /job:jax_worker/replica:0/task:3 [type.googleapis.com/tensorflow.CoordinationServiceError=''] [type.googleapis.com/tensorflow.BarrierError='\n\x1dShutdown::3442310185536402597'] [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.800235   14067 coordination_service.cc:1899] Use error polling to propagate the following error to all tasks: ABORTED: /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x03']
-(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.800359   14086 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
-(<lambda> pid=13917, ip=10.130.0.32) F0314 01:14:32.800553   14086 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: INTERNAL: Shutdown barrier has failed.
-(<lambda> pid=13917, ip=10.130.0.32) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x03']. Barrier Id: Shutdown::3442310185536402597::0, Task: /job:jax_worker/replica:0/task:3 [type.googleapis.com/tensorflow.CoordinationServiceError=''] [type.googleapis.com/tensorflow.BarrierError='\n\x1dShutdown::3442310185536402597']
-(<lambda> pid=13917, ip=10.130.0.32) 
-(<lambda> pid=13917, ip=10.130.0.32) RPC: /tensorflow.CoordinationService/PollForError [type.googleapis.com/tensorflow.CoordinationServiceError='']
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/backend.py", line 328, in <lambda> [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/main/train_lm.py", line 327, in main [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     train_loader = trainer.data_loader(train_dataset) [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/trainer.py", line 625, in data_loader [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return DataLoader( [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/loader.py", line 141, in __init__ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     initial_example = blocking_wait(self.data_store.getitem_async(0)) [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return asyncio.run(coro) [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run [repeated 7x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return runner.run(main) [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return self._loop.run_until_complete(task) [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/mixture.py", line 268, in getitem_async [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     permuted_ids = await self._get_block(block_id) [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106) TypeError: object numpy.ndarray can't be used in 'await' expression [repeated 3x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106) Traceback (most recent call last): [repeated 2x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
-(raylet, ip=10.130.1.98) [2026-03-14 01:04:59,082 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(<lambda> pid=13918, ip=10.130.0.32) 2026-03-14T01:14:39 - 2 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to .
-(<lambda> pid=14846, ip=10.130.0.29) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
-(<lambda> pid=14846, ip=10.130.0.29) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
-(<lambda> pid=12561, ip=10.130.0.28) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274.
-(<lambda> pid=13918, ip=10.130.0.32) wandb: Tracking run with wandb version 0.25.1
-(<lambda> pid=13918, ip=10.130.0.32) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-(<lambda> pid=13918, ip=10.130.0.32) wandb: Run data is saved locally in /tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/wandb/offline-run-20260314_011439-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
-(<lambda> pid=14846, ip=10.130.0.29) wandb: Run `wandb offline` to turn off syncing.
-(<lambda> pid=14846, ip=10.130.0.29) wandb: Resuming run unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
-(<lambda> pid=14846, ip=10.130.0.29) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
-(<lambda> pid=14846, ip=10.130.0.29) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:40 - 3 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:40 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:41 - 3 - levanter.tracker.tracker_fns - tracker_fns.py:203 - WARNING :: Failed to dump config to yaml. Skipping logging as artifact.
-(<lambda> pid=12583, ip=10.130.0.21) Traceback (most recent call last):
-(<lambda> pid=12583, ip=10.130.0.21)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/tracker/tracker_fns.py", line 199, in log_configuration
-(<lambda> pid=12583, ip=10.130.0.21)     draccus.dump(hparams, f, encoding="utf-8")
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/cfgparsing.py", line 134, in dump
-(<lambda> pid=12583, ip=10.130.0.21)     config_dict = encode(config)
-(<lambda> pid=12583, ip=10.130.0.21)                   ^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
-(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     raise e
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 117, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     return encode_dataclass(obj, declared_type)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
-(<lambda> pid=12583, ip=10.130.0.21)     d[field.name] = encode(value, field_type)
-(<lambda> pid=12583, ip=10.130.0.21)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
-(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     raise e
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 117, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     return encode_dataclass(obj, declared_type)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
-(<lambda> pid=12583, ip=10.130.0.21)     d[field.name] = encode(value, field_type)
-(<lambda> pid=12583, ip=10.130.0.21)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
-(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 106, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     return fn(obj, declared_type)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 193, in encode_dict
-(<lambda> pid=12583, ip=10.130.0.21)     v_ = encode(v, value_type)
-(<lambda> pid=12583, ip=10.130.0.21)          ^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
-(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     raise e
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 115, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     return encode_choice(obj, underlying_type)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice
-(<lambda> pid=12583, ip=10.130.0.21)     encoded = encode_dataclass(obj, declared_type)
-(<lambda> pid=12583, ip=10.130.0.21)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
-(<lambda> pid=12583, ip=10.130.0.21)     d[field.name] = encode(value, field_type)
-(<lambda> pid=12583, ip=10.130.0.21)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
-(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     raise e
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 115, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     return encode_choice(obj, underlying_type)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice
-(<lambda> pid=12583, ip=10.130.0.21)     encoded = encode_dataclass(obj, declared_type)
-(<lambda> pid=12583, ip=10.130.0.21)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
-(<lambda> pid=12583, ip=10.130.0.21)     d[field.name] = encode(value, field_type)
-(<lambda> pid=12583, ip=10.130.0.21)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
-(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
-(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     raise e
-(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 121, in encode
-(<lambda> pid=12583, ip=10.130.0.21)     raise Exception(f"No parser for object {obj} of type {type(obj)}, consider using draccus.encode.register")
-(<lambda> pid=12583, ip=10.130.0.21) Exception: No parser for object <function _make_visual_weight_transform.<locals>.transform at 0x7f354b0d6e80> of type <class 'function'>, consider using draccus.encode.register
-(<lambda> pid=12561, ip=10.130.0.28) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:42 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:42 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:154 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:-
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:43 - 3 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274/checkpoints
-(raylet, ip=10.130.1.97) [2026-03-14 01:14:44,647 E 8481 8481] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 12x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:44 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:44 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:42 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 7x across cluster]
-(<lambda> pid=12583, ip=10.130.0.21) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274. [repeated 2x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:45 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
-(<lambda> pid=12561, ip=10.130.0.28) I0314 01:14:45.027487   16028 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
-(<lambda> pid=14846, ip=10.130.0.29) wandb: Tracking run with wandb version 0.25.1 [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 2x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) wandb: Run data is saved locally in /tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/wandb/run-20260314_011439-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:45 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:45 - 3 - levanter.data.text - datasets.py:850 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:45 - 1 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_understanding, skipping
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:45 - 3 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_generation, skipping
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:42 - 1 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 [repeated 5x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:42 - 0 - levanter.tracker.tracker_fns - tracker_fns.py:203 - WARNING :: Failed to dump config to yaml. Skipping logging as artifact. [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) Traceback (most recent call last): [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/tracker/tracker_fns.py", line 199, in log_configuration [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     draccus.dump(hparams, f, encoding="utf-8") [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/cfgparsing.py", line 134, in dump [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     config_dict = encode(config) [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)                   ^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper [repeated 18x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     return base_func(*args, **kw) [repeated 18x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)            ^^^^^^^^^^^^^^^^^^^^^^ [repeated 21x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 121, in encode [repeated 33x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     raise e [repeated 15x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     return encode_dataclass(obj, declared_type) [repeated 6x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 12x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass [repeated 12x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     d[field.name] = encode(value, field_type) [repeated 12x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)                     ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 12x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     return fn(obj, declared_type) [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 193, in encode_dict [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     v_ = encode(v, value_type) [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)          ^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     return encode_choice(obj, underlying_type) [repeated 6x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice [repeated 6x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     encoded = encode_dataclass(obj, declared_type) [repeated 6x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29)     raise Exception(f"No parser for object {obj} of type {type(obj)}, consider using draccus.encode.register") [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) Exception: No parser for object <function _make_visual_weight_transform.<locals>.transform at 0x7fef7ef92e80> of type <class 'function'>, consider using draccus.encode.register [repeated 3x across cluster]
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
-(<lambda> pid=14846, ip=10.130.0.29) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:46 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:46 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/hellaswag/validation
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/hellaswag/validation/shard_ledger.json
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'hellaswag', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/winogrande/validation
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/winogrande/validation/shard_ledger.json
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'winogrande', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_easy/validation
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_easy/validation/shard_ledger.json
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_easy', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_challenge/validation
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_challenge/validation/shard_ledger.json
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_challenge', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/mmlu/validation
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/mmlu/validation/shard_ledger.json
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'mmlu', 'format': 'text_eval_benchmark'}}}}
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:43 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:154 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:- [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:43 - 0 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274/checkpoints [repeated 3x across cluster]
-(raylet, ip=10.130.1.97) [2026-03-14 01:14:49,451 E 8481 8481] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 17x across cluster]
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:50 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132/validation [repeated 76x across cluster]
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:50 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132/validation/shard_ledger.json [repeated 76x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:50 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 23x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) I0314 01:14:45.192793   16433 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:46 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 63x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) wandb: WARNING Artifact "requirements.txt" already exists with the same content. No new version will be created.
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:45 - 0 - levanter.data.text - datasets.py:850 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:45 - 0 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_understanding, skipping [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:45 - 0 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_generation, skipping [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/hellaswag/validation [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/hellaswag/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'hellaswag', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/winogrande/validation [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/winogrande/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'winogrande', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_easy/validation [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_easy/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_easy', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_challenge/validation [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_challenge/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_challenge', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/mmlu/validation [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/mmlu/validation/shard_ledger.json [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'mmlu', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
-(raylet, ip=10.130.1.96) [2026-03-14 01:14:50,346 E 8440 8440] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:55 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-d0da6b/validation [repeated 58x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:55 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-d0da6b/validation/shard_ledger.json [repeated 58x across cluster]
-(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:55 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 62x across cluster]
-(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:56 - 0 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
-(run_on_pod_ray pid=60507, ip=10.130.0.106) Task error ray::<lambda>() (pid=13918, ip=10.130.0.32)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/backend.py", line 328, in <lambda>
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/main/train_lm.py", line 327, in main
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     train_loader = trainer.data_loader(train_dataset)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/trainer.py", line 625, in data_loader
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return DataLoader(
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return asyncio.run(coro)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return runner.run(main)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return self._loop.run_until_complete(task)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/mixture.py", line 268, in getitem_async
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     permuted_ids = await self._get_block(block_id)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106) TypeError: object numpy.ndarray can't be used in 'await' expression
-(run_on_pod_ray pid=60507, ip=10.130.0.106) Traceback (most recent call last):
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/tpu.py", line 789, in run_on_pod_ray
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                                                  ^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return func(*args, **kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                                   ^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=60507, ip=10.130.0.106) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=13918, ip=10.130.0.32)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/backend.py", line 328, in <lambda>
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/main/train_lm.py", line 327, in main
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     train_loader = trainer.data_loader(train_dataset)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/trainer.py", line 625, in data_loader
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return DataLoader(
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     initial_example = blocking_wait(self.data_store.getitem_async(0))
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return asyncio.run(coro)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return runner.run(main)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return self._loop.run_until_complete(task)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/mixture.py", line 268, in getitem_async
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     permuted_ids = await self._get_block(block_id)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106) TypeError: object numpy.ndarray can't be used in 'await' expression
-(<lambda> pid=13918, ip=10.130.0.32) 2026-03-14T01:14:55 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 17x across cluster]
-(<lambda> pid=13918, ip=10.130.0.32) 2026-03-14T01:14:55 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 17x across cluster]
-(<lambda> pid=13918, ip=10.130.0.32) 2026-03-14T01:14:55 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 10x across cluster]
-(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:56 - 3 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 3x across cluster]
-(SliceActor pid=9436, ip=10.130.0.32) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=13918, ip=10.130.0.32)
-(<lambda> pid=13918, ip=10.130.0.32) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7fa1b02aafc0>
-(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 73, in teardown_atexit
-(<lambda> pid=13918, ip=10.130.0.32)     conn.teardown(hooks.exit_code)
-(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 344, in teardown
-(<lambda> pid=13918, ip=10.130.0.32)     self._asyncer.run(publish_teardown_and_close)
-(<lambda> pid=13918, ip=10.130.0.32)     return future.result()
-(<lambda> pid=13918, ip=10.130.0.32)            ^^^^^^^^^^^^^^^
-(<lambda> pid=13918, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
-(<lambda> pid=13918, ip=10.130.0.32)     return self.__get_result()
-(<lambda> pid=13918, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
-(<lambda> pid=13918, ip=10.130.0.32)     raise self._exception
-(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 220, in _wrap
-(<lambda> pid=13918, ip=10.130.0.32)     return await fn()
-(<lambda> pid=13918, ip=10.130.0.32)          
-(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 342, in publish_teardown_and_close
-(<lambda> pid=13918, ip=10.130.0.32)     await self._client.close()
-(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 123, in close
-(<lambda> pid=13918, ip=10.130.0.32)     await self._writer.wait_closed()
-(<lambda> pid=13918, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
-(<lambda> pid=13918, ip=10.130.0.32)     await self._protocol._get_close_waiter(self)
-(<lambda> pid=13918, ip=10.130.0.32) BrokenPipeError
-(<lambda> pid=13918, ip=10.130.0.32) : [Errno 32] Broken pipe
-(run_on_pod_ray pid=60507, ip=10.130.0.106) Failed 4 times. Continuing to retry.
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/tpu.py", line 789, in run_on_pod_ray
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return fn(*args, **kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     return func(*args, **kwargs)
-(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     values, debugger_breakpoint = worker.get_objects(
-(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
-(run_on_pod_ray pid=60507, ip=10.130.0.106)     raise value.as_instanceof_cause()
-(run_on_pod_ray pid=60507, ip=10.130.0.106) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=13918, ip=10.130.0.32)
-(autoscaler +5m35s) Adding 1 node(s) of type tpu_slice_v4_64.
-(autoscaler +5m35s) Resized to 5520 CPUs, 184 TPUs.
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | activating venv
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | running user command
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | syncing deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | installing pip deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | activating venv
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | running user command
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | syncing deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | installing pip deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | activating venv
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | running user command
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | syncing deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | installing pip deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | activating venv
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | running user command
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | syncing deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | installing pip deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | activating venv
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | running user command
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | syncing deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | installing pip deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | activating venv
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | running user command
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | syncing deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | installing pip deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | activating venv
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | running user command
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | syncing deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | installing pip deps
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | activating venv
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:09:09 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | running user command
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Configured step env XLA_FLAGS for one-shot VLM HLO dump: --xla_dump_to=/tmp/xla_dumps_vlm_once --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*(before_optimizations|after_optimizations).* --xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Traceback (most recent call last):
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/experiments/unified/unified_pretrain_demo_eu.py", line 532, in <module>
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     executor_main(
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/.venv/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     response = fn(cfg, *args, **kwargs)
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |                ^^^^^^^^^^^^^^^^^^^^^^^^
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/lib/marin/src/marin/execution/executor.py", line 1269, in executor_main
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | ValueError: Must specify a prefix or set the MARIN_PREFIX environment variable
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Configured step env XLA_FLAGS for one-shot VLM HLO dump: --xla_dump_to=/tmp/xla_dumps_vlm_once --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*(before_optimizations|after_optimizations).* --xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Configured step env XLA_FLAGS for one-shot VLM HLO dump: --xla_dump_to=/tmp/xla_dumps_vlm_once --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*(before_optimizations|after_optimizations).* --xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Traceback (most recent call last):
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/experiments/unified/unified_pretrain_demo_eu.py", line 532, in <module>
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     executor_main(
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/.venv/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     response = fn(cfg, *args, **kwargs)
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |                ^^^^^^^^^^^^^^^^^^^^^^^^
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/lib/marin/src/marin/execution/executor.py", line 1269, in executor_main
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | ValueError: Must specify a prefix or set the MARIN_PREFIX environment variable
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Configured step env XLA_FLAGS for one-shot VLM HLO dump: --xla_dump_to=/tmp/xla_dumps_vlm_once --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*(before_optimizations|after_optimizations).* --xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Traceback (most recent call last):
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/experiments/unified/unified_pretrain_demo_eu.py", line 532, in <module>
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     executor_main(
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/.venv/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     response = fn(cfg, *args, **kwargs)
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |                ^^^^^^^^^^^^^^^^^^^^^^^^
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/lib/marin/src/marin/execution/executor.py", line 1269, in executor_main
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | ValueError: Must specify a prefix or set the MARIN_PREFIX environment variable
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Configured step env XLA_FLAGS for one-shot VLM HLO dump: --xla_dump_to=/tmp/xla_dumps_vlm_once --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*(before_optimizations|after_optimizations).* --xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Traceback (most recent call last):
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/experiments/unified/unified_pretrain_demo_eu.py", line 532, in <module>
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     executor_main(
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/.venv/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     response = fn(cfg, *args, **kwargs)
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |                ^^^^^^^^^^^^^^^^^^^^^^^^
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/lib/marin/src/marin/execution/executor.py", line 1269, in executor_main
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+I20260314 19:09:41 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | ValueError: Must specify a prefix or set the MARIN_PREFIX environment variable
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Configured step env XLA_FLAGS for one-shot VLM HLO dump: --xla_dump_to=/tmp/xla_dumps_vlm_once --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*(before_optimizations|after_optimizations).* --xla_dump_hlo_module_re=.*vlm_eval_loglikelihood.*
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | Traceback (most recent call last):
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/experiments/unified/unified_pretrain_demo_eu.py", line 532, in <module>
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     executor_main(
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/.venv/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     response = fn(cfg, *args, **kwargs)
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |                ^^^^^^^^^^^^^^^^^^^^^^^^
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |   File "/app/lib/marin/src/marin/execution/executor.py", line 1269, in executor_main
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 |     raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+I20260314 19:09:49 140552811116544 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 attempt=0 | ValueError: Must specify a prefix or set the MARIN_PREFIX environment variable
+I20260314 19:09:49 140552811116544 iris.cluster.client.remote_client job=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 finished with state=JOB_STATE_FAILED, draining logs (total_lines=10)
+I20260314 19:09:50 140552811116544 iris.cluster.client.remote_client job=/ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 finished with state=JOB_STATE_FAILED, draining logs (total_lines=0)
+E20260314 19:09:50 140552811116544 iris.cli.job Job failed: Job /ruili/iris-run-unified_pretrain_demo_eu-20260314-190428 JOB_STATE_FAILED: Coscheduled sibling /ruili/iris-run-unified_pretrain_demo_eu-20260314-190428/15 failed
+(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ uv run iris --config lib/iris/examples/marin.yaml job run  --extra marin:tpu --region europe-west4 --tpu v5litepod-64   -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-64  -e EXP_NAME unified-qwen3-1.7b-1-0-1-w0.5-8e3-2.4e3-linear-10k-correct-demo0 -e TEXT_STEPS 5000 -e UND_STEPS  0 -e GEN_STEPS 5000  -e W_VISUAL 0.5  -e MUON_LR 0.008 -e ADAM_LR 0.0024   -e LR_SCHEDULE   linear -e MARIN_PREFIX gs://marin-eu-west4  -
+- python experiments/unified/unified_pretrain_demo_eu.py
+I20260314 19:12:19 139745766483968 iris.cluster.config Loading config from lib/iris/examples/marin.yaml
+I20260314 19:12:22 139745766483968 iris.cli.main Establishing tunnel to controller...
+I20260314 19:12:25 139745766483968 iris.cluster.platform.gcp Establishing SSH tunnel to iris-controller-marin (zone=us-central1-a)...
+I20260314 19:12:28 139745766483968 iris.cluster.platform.gcp Tunnel ready: 127.0.0.1:52197 -> iris-controller-marin:10000
+I20260314 19:12:28 139745766483968 iris.cli.job Multinode TPU 'v5litepod-64' detected (vm_count=16). Auto-setting replicas=16 and coscheduling by tpu-name.
+I20260314 19:12:28 139745766483968 iris.cli.job Submitting job: iris-run-unified_pretrain_demo_eu-20260314-191228
+I20260314 19:12:28 139745766483968 iris.cli.job Command: python experiments/unified/unified_pretrain_demo_eu.py
+I20260314 19:12:28 139745766483968 iris.cli.job Resources: cpu=0.5, memory=1GB, disk=5GB
+I20260314 19:12:28 139745766483968 iris.cli.job TPU: v5litepod-64
+I20260314 19:12:28 139745766483968 iris.cli.job Replicas: 16
+I20260314 19:12:28 139745766483968 iris.cli.job Coscheduling: group_by=tpu-name
+I20260314 19:12:28 139745766483968 iris.cli.job Region constraint: europe-west4
+I20260314 19:12:28 139745766483968 iris.cli.job Using controller: http://127.0.0.1:52197
+I20260314 19:12:29 139745766483968 iris.client.client Workspace bundle size: 7.1 MB
+I20260314 19:12:32 139745766483968 iris.cli.job Job submitted: /ruili/iris-run-unified_pretrain_demo_eu-20260314-191228
+/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228
+I20260314 19:12:32 139745766483968 iris.cli.job Streaming logs (Ctrl+C to stop). If disconnected, reconnect with: iris job logs -f /ruili/iris-run-unified_pretrain_demo_eu-20260314-191228
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | syncing deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | installing pip deps
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | activating venv
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | python=/app/.venv/bin/python
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | sys.path: ['', '/app', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python311.zip', '/uv/cache/python/cpython-3.11.14-linux-x86_64-gnu/lib/python3.11', '/uv/cache/python/cpython-3.11-linux-x86_64-gnu/lib/python3.11/lib-dynload', '/app/.venv/lib/python3.11/site-packages', '/app/lib/fray/src', '/app/lib/haliax/src', '/app/lib/iris/src', '/app/lib/marin/src', '/app/lib/zephyr/src', '/app/lib/dupekit', '/app/lib/levanter/src']
+I20260314 19:13:01 139745766483968 iris.client.client worker=? task=/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228 attempt=0 | running user command
+E20260314 19:13:17 139745766483968 iris.rpc.errors Operation get_job_status(/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228) failed (attempt 1/8), retrying in 0.50s: [Errno 104] Connection reset by peer
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection.py", line 103, in handle_request
+    return self._connection.handle_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 136, in handle_request
+    raise exc
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 217, in _receive_event
+    data = self._network_stream.read(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_backends/sync.py", line 126, in read
+    with map_exceptions(exc_map):
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 283, in _send_request_unary
+    resp = self._session.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1144, in post
+    return self.request(
+           ^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/errors.py", line 162, in call_with_retry
+    return call_fn()
+           ^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/cluster/client/remote_client.py", line 119, in _call
+    response = self._client.get_job_status(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/cluster_connect.py", line 1506, in get_job_status
+    return self.execute_unary(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 199, in execute_unary
+    return self._execute_unary(request, ctx)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 319, in _send_request_unary
+    raise ConnectError(Code.UNAVAILABLE, str(e)) from e
+connectrpc.errors.ConnectError: [Errno 104] Connection reset by peer
+E20260314 19:13:17 139745766483968 iris.rpc.errors Operation get_job_status(/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228) failed (attempt 2/8), retrying in 1.06s: [Errno 104] Connection reset by peer
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection.py", line 103, in handle_request
+    return self._connection.handle_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 136, in handle_request
+    raise exc
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 217, in _receive_event
+    data = self._network_stream.read(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_backends/sync.py", line 126, in read
+    with map_exceptions(exc_map):
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 283, in _send_request_unary
+    resp = self._session.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1144, in post
+    return self.request(
+           ^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/errors.py", line 162, in call_with_retry
+    return call_fn()
+           ^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/cluster/client/remote_client.py", line 119, in _call
+    response = self._client.get_job_status(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/cluster_connect.py", line 1506, in get_job_status
+    return self.execute_unary(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 199, in execute_unary
+    return self._execute_unary(request, ctx)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 319, in _send_request_unary
+    raise ConnectError(Code.UNAVAILABLE, str(e)) from e
+connectrpc.errors.ConnectError: [Errno 104] Connection reset by peer
+E20260314 19:13:19 139745766483968 iris.rpc.errors Operation get_job_status(/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228) failed (attempt 3/8), retrying in 2.13s: [Errno 104] Connection reset by peer
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection.py", line 103, in handle_request
+    return self._connection.handle_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 136, in handle_request
+    raise exc
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 217, in _receive_event
+    data = self._network_stream.read(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_backends/sync.py", line 126, in read
+    with map_exceptions(exc_map):
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 283, in _send_request_unary
+    resp = self._session.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1144, in post
+    return self.request(
+           ^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/errors.py", line 162, in call_with_retry
+    return call_fn()
+           ^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/cluster/client/remote_client.py", line 119, in _call
+    response = self._client.get_job_status(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/cluster_connect.py", line 1506, in get_job_status
+    return self.execute_unary(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 199, in execute_unary
+    return self._execute_unary(request, ctx)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 319, in _send_request_unary
+    raise ConnectError(Code.UNAVAILABLE, str(e)) from e
+connectrpc.errors.ConnectError: [Errno 104] Connection reset by peer
+E20260314 19:13:21 139745766483968 iris.rpc.errors Operation get_job_status(/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228) failed (attempt 4/8), retrying in 3.64s: [Errno 104] Connection reset by peer
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection.py", line 103, in handle_request
+    return self._connection.handle_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 136, in handle_request
+    raise exc
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 217, in _receive_event
+    data = self._network_stream.read(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_backends/sync.py", line 126, in read
+    with map_exceptions(exc_map):
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 283, in _send_request_unary
+    resp = self._session.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1144, in post
+    return self.request(
+           ^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/errors.py", line 162, in call_with_retry
+    return call_fn()
+           ^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/cluster/client/remote_client.py", line 119, in _call
+    response = self._client.get_job_status(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/cluster_connect.py", line 1506, in get_job_status
+    return self.execute_unary(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 199, in execute_unary
+    return self._execute_unary(request, ctx)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 319, in _send_request_unary
+    raise ConnectError(Code.UNAVAILABLE, str(e)) from e
+connectrpc.errors.ConnectError: [Errno 104] Connection reset by peer
+E20260314 19:13:24 139745766483968 iris.rpc.errors Operation get_job_status(/ruili/iris-run-unified_pretrain_demo_eu-20260314-191228) failed (attempt 5/8), retrying in 8.68s: [Errno 104] Connection reset by peer
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/connection.py", line 103, in handle_request
+    return self._connection.handle_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 136, in handle_request
+    raise exc
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_sync/http11.py", line 217, in _receive_event
+    data = self._network_stream.read(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_backends/sync.py", line 126, in read
+    with map_exceptions(exc_map):
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 283, in _send_request_unary
+    resp = self._session.post(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1144, in post
+    return self.request(
+           ^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+  File "/usr/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ReadError: [Errno 104] Connection reset by peer
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/errors.py", line 162, in call_with_retry
+    return call_fn()
+           ^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/cluster/client/remote_client.py", line 119, in _call
+    response = self._client.get_job_status(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/lib/iris/src/iris/rpc/cluster_connect.py", line 1506, in get_job_status
+    return self.execute_unary(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 199, in execute_unary
+    return self._execute_unary(request, ctx)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ruili/marin_scaling/.venv/lib/python3.11/site-packages/connectrpc/_client_sync.py", line 319, in _send_request_unary
+    raise ConnectError(Code.UNAVAILABLE, str(e)) from e
+connectrpc.errors.ConnectError: [Errno 104] Connection reset by peer
