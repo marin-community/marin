@@ -131,6 +131,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
     gdn_segment_size: int = 16
+    gdn_use_branch_boundary_prototype: bool = False
     gdn_use_decoder_block_boundary_prototype: bool = False
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
@@ -142,6 +143,8 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
         assert self.num_heads % self.num_kv_heads == 0, "num_heads must be divisible by num_kv_heads"
         if self.head_dim is None:
             assert self.hidden_dim % self.num_heads == 0, "hidden_dim % num_heads must be 0 when head_dim=None"
+        if self.gdn_use_branch_boundary_prototype and self.gdn_use_decoder_block_boundary_prototype:
+            raise ValueError("GDN branch and decoder-block boundary prototypes are mutually exclusive.")
 
     # ---- LmConfig API ----
     @property
@@ -298,6 +301,104 @@ def _prepare_gdn_mask(
     return None
 
 
+def _with_named_array_sharding_constraint(x: NamedArray, *, like: NamedArray | None = None) -> NamedArray:
+    target = x if like is None else like
+    try:
+        constrained = jax.lax.with_sharding_constraint(x.array, target.array.sharding)
+    except Exception:
+        return x
+    return hax.named(constrained, x.axes)
+
+
+@named_call
+def _gdn_branch_boundary_impl(
+    gdn_dynamic,
+    x: NamedArray,
+    *,
+    gdn_static: GatedDeltaNet,
+    attn_mask: NamedArray | None,
+    chunk_size: int,
+) -> NamedArray:
+    gdn = eqx.combine(gdn_dynamic, gdn_static)
+    x = _with_named_array_sharding_constraint(x)
+    if attn_mask is not None:
+        attn_mask = _with_named_array_sharding_constraint(attn_mask)
+    y, _ = gdn(
+        x,
+        inference=False,
+        chunk_size=chunk_size,
+        attention_mask=attn_mask,
+        decode_state=None,
+    )
+    return _with_named_array_sharding_constraint(y, like=x)
+
+
+@eqx.filter_custom_vjp
+def _run_gdn_branch_boundary(
+    vjp_arg,
+    *,
+    gdn_static: GatedDeltaNet,
+    attn_mask: NamedArray | None,
+    chunk_size: int,
+) -> NamedArray:
+    gdn_dynamic, x = vjp_arg
+    return _gdn_branch_boundary_impl(
+        gdn_dynamic,
+        x,
+        gdn_static=gdn_static,
+        attn_mask=attn_mask,
+        chunk_size=chunk_size,
+    )
+
+
+@_run_gdn_branch_boundary.def_fwd
+def _run_gdn_branch_boundary_fwd(
+    perturbed,
+    vjp_arg,
+    *,
+    gdn_static: GatedDeltaNet,
+    attn_mask: NamedArray | None,
+    chunk_size: int,
+):
+    del perturbed
+    gdn_dynamic, x = vjp_arg
+    y = _gdn_branch_boundary_impl(
+        gdn_dynamic,
+        x,
+        gdn_static=gdn_static,
+        attn_mask=attn_mask,
+        chunk_size=chunk_size,
+    )
+    return y, (gdn_dynamic, x)
+
+
+@_run_gdn_branch_boundary.def_bwd
+def _run_gdn_branch_boundary_bwd(
+    residuals,
+    grad_out,
+    perturbed,
+    vjp_arg,
+    *,
+    gdn_static: GatedDeltaNet,
+    attn_mask: NamedArray | None,
+    chunk_size: int,
+):
+    del perturbed, vjp_arg
+    gdn_dynamic, x = residuals
+
+    def forward(dynamic, branch_x):
+        return _gdn_branch_boundary_impl(
+            dynamic,
+            branch_x,
+            gdn_static=gdn_static,
+            attn_mask=attn_mask,
+            chunk_size=chunk_size,
+        )
+
+    _, pullback = jax.vjp(forward, gdn_dynamic, x)
+    return pullback(grad_out)
+
+
 class HackableMlp(eqx.Module):
     """GLU MLP"""
 
@@ -387,13 +488,22 @@ class HackableDecoderLayer(eqx.Module):
                 _dbg_sharding("layer_in/x", x.array if hasattr(x, "array") else x)
             except Exception:
                 pass
-        y, _ = self.gdn(
-            x,
-            inference=False,
-            chunk_size=self.gdn_chunk_size,
-            attention_mask=attn_mask,
-            decode_state=None,
-        )
+        if self.config.gdn_use_branch_boundary_prototype:
+            gdn_dynamic, gdn_static = eqx.partition(self.gdn, eqx.is_inexact_array)
+            y = _run_gdn_branch_boundary(
+                (gdn_dynamic, x),
+                gdn_static=gdn_static,
+                attn_mask=attn_mask,
+                chunk_size=self.gdn_chunk_size,
+            )
+        else:
+            y, _ = self.gdn(
+                x,
+                inference=False,
+                chunk_size=self.gdn_chunk_size,
+                attention_mask=attn_mask,
+                decode_state=None,
+            )
         if _GDN_DEBUG:
             try:
                 _dbg_sharding("layer_out/y", y.array if hasattr(y, "array") else y)
