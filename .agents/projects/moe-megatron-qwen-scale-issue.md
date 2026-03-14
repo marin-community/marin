@@ -42,49 +42,53 @@ The goal is to see how dispatcher ranking changes with scale in:
 
 ## Results
 
-In progress as of 2026-03-14.
+Complete as of 2026-03-14.
 
-Current state:
+Final state:
 - The prior JAX custom-call experiment is sealed and closed.
-- CoreWeave Iris H100x8 ops guidance is reloaded from `~/llms/cw_ops_guide.md`.
-- The methodology reference is identified: Megatron-LM `moe_perf`, not the lower-level DeepEP transport tests.
-- The repo-local Megatron-style mirror is now runnable on CoreWeave H100x8.
-- The launcher required four pod-side bring-up fixes before the Megatron path ran:
+- CoreWeave Iris H100x8 ops guidance was reloaded from `~/llms/cw_ops_guide.md`.
+- The methodology reference stayed faithful to Megatron-LM `moe_perf`: full `MoELayer`, fixed input tensor, force-balanced routing, dummy GEMM, manual GC, and `moe_router_dtype="fp32"`.
+- The repo-local Megatron-style mirror ran successfully on CoreWeave H100x8 after four pod-side bring-up fixes:
   - explicit cuDNN include/lib exports for Transformer Engine
   - explicit `NVSHMEM_DIR` export for DeepEP
   - RDMA dev packages (`libibverbs-dev`, `rdma-core`) for the NVSHMEM-enabled DeepEP build
   - an unversioned `libnvshmem_host.so` symlink for the NVSHMEM wheel layout DeepEP expects
-- The official Qwen3 MoE anchor configs are identified:
-  - `Qwen3-30B-A3B`: `hidden=2048`, `moe_ffn_hidden=768`, `num_experts=128`, `topk=8`, `layers=48`
-  - `Qwen3-235B-A22B`: `hidden=4096`, `moe_ffn_hidden=1536`, `num_experts=128`, `topk=8`, `layers=94`
+- The official Qwen3 MoE anchors remained:
+  - `Qwen3-30B-A3B`: `hidden=2048`, `moe_ffn_hidden=768`, `num_experts=128`, `topk=8`
+  - `Qwen3-235B-A22B`: `hidden=4096`, `moe_ffn_hidden=1536`, `num_experts=128`, `topk=8`
 
-Latest exploratory smoke (`qwen3_30b_a3b_anchor`, `warmup=1`, `measure=2`):
-- `alltoall`: `forward=23.48 ms`, `backward=40.26 ms`
-- `deepep`: `forward=48.13 ms`, `backward=49.11 ms`
-- `hybridep`: `forward=25.23 ms`, `backward=37.12 ms`
+Authoritative totals (`forward + backward`, milliseconds):
 
-Interpretation of the smoke:
-- The Megatron-style benchmark is operational on H100x8.
-- `deepep` is clearly behind at this smoke-level evidence.
-- `alltoall` and `hybridep` are close enough that the short smoke is not strong evidence by itself.
-- The smoke still emitted the expected HybridEP warning about float32 router probs, so the full sweep should use `moe_router_dtype=\"fp32\"` to match upstream `moe_perf` defaults.
+| Case | alltoall | deepep | hybridep | Winner |
+| --- | ---: | ---: | ---: | --- |
+| `qwen3_30b_a3b_anchor` | 34.95 | 12.41 | 18.05 | `deepep` |
+| `qwen3_235b_a22b_anchor` | 25.62 | 11.75 | 13.08 | `deepep` |
+| `qwen3_batch_mb2` | 33.77 | 12.42 | 16.61 | `deepep` |
+| `qwen3_batch_mb4` | 35.27 | 18.09 | 21.09 | `deepep` |
+| `qwen3_hidden_3072` | 45.10 | 10.55 | 19.46 | `deepep` |
+| `qwen3_hidden_4096` | 27.22 | 9.71 | 14.59 | `deepep` |
+| `qwen3_expert_1152` | 30.56 | 10.13 | 12.50 | `deepep` |
+| `qwen3_expert_1536` | 24.62 | 9.59 | 11.38 | `deepep` |
+| `qwen3_topk_2` | 31.90 | 9.04 | 14.41 | `deepep` |
+| `qwen3_topk_4` | 33.48 | 9.40 | 15.73 | `deepep` |
+| `qwen3_experts_32` | 16.12 | 22.82 | 11.91 | `hybridep` |
+| `qwen3_experts_64` | 25.38 | 15.52 | 14.55 | `hybridep` |
 
-Planned first matrix:
-- Dispatchers: `alltoall`, `deepep`, `hybridep`
-- Base sequence length: `4096`
-- Anchor cases:
-  - `qwen3_30b_a3b`
-  - `qwen3_235b_a22b`
-- One-axis sweeps:
-  - batch tokens: `micro_batch in {1, 2, 4}`
-  - hidden size: `hidden in {2048, 3072, 4096}`
-  - expert hidden size: `moe_ffn_hidden in {768, 1152, 1536}`
-  - num experts: `num_experts in {32, 64, 128}`
-  - top-k: `topk in {2, 4, 8}`
+Important interpretation notes:
+- The expert-count axis above comes from a focused rerun that supersedes the earlier rough live scrape. The original full-matrix pod auto-deleted before the raw `32/64 experts` rows could be re-scraped, so those two cases were rerun with local `tee` logging.
+- On that authoritative rerun, `deepep` showed large variance at smaller expert counts:
+  - `qwen3_experts_32`: `forward_std=29.98 ms`, `backward_std=15.24 ms`
+  - `qwen3_experts_64`: `forward_std=11.44 ms`, `backward_std=15.45 ms`
+- So the best reading is not "DeepEP always wins." The stronger statement is:
+  - `deepep` wins the `128`-expert Qwen-like regime and the batch/hidden/expert-size/top-k sweeps.
+  - `hybridep` wins the smaller-expert `32` and `64` slices on mean wall time and is materially more stable there.
 
-Implementation decision:
-- Use a faithful repo-local mirror of Megatron `moe_perf` semantics, launched directly on CoreWeave H100x8 via KubernetesRuntime.
-- Do not regress to the earlier dispatch-only benchmark methodology.
+Comparison against the sealed fixed-shape GPU benchmark in `#3633`:
+- `#3633` used a narrower dispatch-only benchmark and concluded the current path beat ragged dispatch on H100x8.
+- This Megatron-style full `MoELayer` benchmark changes the answer materially:
+  - for the Qwen-like `128`-expert path, `deepep` is strongly better than `alltoall`
+  - for smaller expert counts, `hybridep` becomes the best measured choice
+- So the `#3633` result should not be generalized to full Megatron-style MoE-layer behavior.
 
 ## Decision Log
 
@@ -94,11 +98,18 @@ Implementation decision:
 - 2026-03-14: vary one scale axis at a time for the first milestone to keep the interpretation clean.
 - 2026-03-14: use a repo-local Megatron-style harness rather than trying to run upstream pytest machinery directly in the pod.
 - 2026-03-14: enable DeepEP NVSHMEM support explicitly in the pod and add the minimal RDMA/NVSHMEM wheel workarounds needed to make Megatron `fused_a2a` runnable on H100x8.
+- 2026-03-14: rerun the expert-count slice (`32/64` experts) with local logging and treat that rerun as authoritative because the earlier live scrape was incomplete.
 
 ## Negative Results
 
 - The sealed JAX layout-only custom-call experiment (`#3665`) showed that replacing only the layout metadata producer does not move the distributed H100x8 benchmark. That negative result is the reason this new thread pivots to Megatron's full MoE-layer benchmark methodology instead of another metadata-only variant.
+- `deepep` is not uniformly dominant. On the small-expert rerun (`32` and `64` experts), it shows large mean-time variance and loses to `hybridep`.
 
 ## Conclusion
 
-Not complete yet. The Megatron-style benchmark now runs on H100x8; the next milestone is the longer fp32-router Qwen-patterned scaling sweep that turns the current smoke result into a usable comparison table.
+Complete. The Megatron-style H100x8 MoE-layer benchmark shows a different dispatcher ranking than `#3633`.
+
+Bottom line:
+- For the Qwen-like `128`-expert regime, use `deepep` as the best-performing baseline.
+- For smaller expert counts (`32` and `64` in this sweep), `hybridep` is the best measured path and `deepep` becomes variance-sensitive.
+- `alltoall` is not the preferred path for this Megatron-style workload once the benchmark is scaled and measured the way Megatron itself does.
