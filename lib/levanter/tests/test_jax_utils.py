@@ -11,6 +11,7 @@ from haliax.partitioning import ResourceAxis
 from levanter.utils.jax_utils import (
     axis_resource_is_explicit,
     best_effort_sharding,
+    move_tree_to_memory_kind,
     sharded_tree_size,
 )
 from levanter.utils.mesh import create_mesh_from_axis_specs
@@ -254,3 +255,15 @@ def test_axis_resource_is_explicit():
     assert not axis_resource_is_explicit(mesh, ("data", "model"))
     assert not axis_resource_is_explicit(mesh, None)
     assert not axis_resource_is_explicit(mesh, "unknown")
+
+
+def test_move_tree_to_memory_kind():
+    x = jnp.arange(4)
+    tree = {"a": x, "b": 3}
+
+    moved = move_tree_to_memory_kind(tree, memory_kind="pinned_host")
+    assert moved["a"].sharding.memory_kind == "pinned_host"
+    assert moved["b"] == 3
+
+    moved_again = move_tree_to_memory_kind(moved, memory_kind="pinned_host")
+    assert moved_again["a"] is moved["a"]
