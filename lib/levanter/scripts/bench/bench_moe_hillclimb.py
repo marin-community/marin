@@ -27,6 +27,7 @@ from jax import shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh
 
 from levanter.grug import grug_moe as grug_moe_lib
+from levanter.kernels.deepep import deepep_get_dispatch_layout
 from levanter.utils.activation import ActivationFunctionEnum
 
 Distribution = Literal["random", "runs"]
@@ -37,6 +38,7 @@ Kernel = Literal[
     "packed_return",
     "stream_ring",
     "ragged_a2a",
+    "deepep_layout_ragged_a2a",
     "prefix_counts",
     "vector_prefix",
     "onehot_counts",
@@ -1238,6 +1240,174 @@ def _moe_mlp_ragged_a2a(
         shard_fn = shard_map(
             partial(
                 _moe_mlp_ep_ragged_a2a_local,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    shard_fn = shard_map(
+        partial(
+            grug_moe_lib._moe_mlp_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        ),
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            local_expert_spec,
+            local_expert_spec,
+        ),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    return out
+
+
+def _moe_mlp_ep_ragged_a2a_deepep_layout_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+
+    shard_id = jax.lax.axis_index("expert")
+    ep_size = num_experts // local_experts
+    tokens_per_shard = x_local.shape[0]
+    topk = selected_experts_local.shape[1]
+    assignments_per_shard = tokens_per_shard * topk
+    recv_capacity = max(local_experts, int(np.ceil(capacity_factor * assignments_per_shard)))
+
+    with jax.named_scope("dispatch"):
+        sorted_x, sorted_indices, _, _ = _permute_by_global_expert(
+            x_local,
+            selected_experts_local,
+            num_experts=num_experts,
+        )
+        _, group_sizes, _ = deepep_get_dispatch_layout(
+            selected_experts_local,
+            num_ranks=ep_size,
+            num_experts=num_experts,
+        )
+        group_sizes = group_sizes.astype(jnp.int32)
+        # DeepEP exposes token-per-rank reachability separately, but this ragged_a2a path
+        # still dispatches repeated token assignments, so the send sizes must come from
+        # per-expert assignment counts.
+        shard_counts = jnp.sum(group_sizes.reshape(ep_size, local_experts), axis=1).astype(jnp.int32)
+        all_shard_counts = jax.lax.all_gather(shard_counts, "expert")
+        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
+        dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
+        x_dispatched = jax.lax.ragged_all_to_all(
+            sorted_x,
+            dispatch_out_shape,
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            axis_name="expert",
+        )
+        global_group_sizes = jax.lax.all_gather(group_sizes, "expert")
+        x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
+            x_dispatched,
+            global_group_sizes,
+            local_expert_size=local_experts,
+            shard_index=shard_id,
+        )
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+
+    with jax.named_scope("combine"):
+        local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
+        return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
+        return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
+            all_shard_counts.T, shard_id
+        )
+        returned = jax.lax.ragged_all_to_all(
+            local_output,
+            return_out_shape,
+            return_input_offsets,
+            return_send_sizes,
+            return_output_offsets,
+            return_recv_sizes,
+            axis_name="expert",
+        )
+        out_local = _unpermute_from_global_expert(
+            returned,
+            sorted_indices,
+            combine_weights_local,
+            tokens_per_shard=tokens_per_shard,
+            topk=topk,
+        ).astype(x_local.dtype)
+        dropped_total = jnp.array(0, dtype=jnp.int32)
+    return out_local, dropped_total
+
+
+def _moe_mlp_ragged_a2a_deepep_layout(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        out, _ = grug_moe_lib._moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
+        return out
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    if has_expert_axis and expert_axis_size > 1:
+        shard_fn = shard_map(
+            partial(
+                _moe_mlp_ep_ragged_a2a_deepep_layout_local,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
@@ -2488,6 +2658,14 @@ def _forward(
             w_up_gate,
             w_down,
         )
+    elif kernel == "deepep_layout_ragged_a2a":
+        routed = _moe_mlp_ragged_a2a_deepep_layout(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
     elif kernel == "prefix_counts":
         routed = _moe_mlp_prefix_counts(
             x,
@@ -2673,6 +2851,7 @@ def main() -> None:
             "packed_return",
             "stream_ring",
             "ragged_a2a",
+            "deepep_layout_ragged_a2a",
             "prefix_counts",
             "vector_prefix",
             "onehot_counts",
