@@ -131,7 +131,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
     gdn_segment_size: int = 16
-    gdn_use_head_first_layout_diagnostic: bool = False
     gdn_use_decoder_block_boundary_prototype: bool = False
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
@@ -340,7 +339,6 @@ class HackableDecoderLayer(eqx.Module):
     use_gdn: bool = eqx.field(static=True, default=False)
     gdn_chunk_size: int = eqx.field(static=True, default=64)
     gdn_segment_size: int = eqx.field(static=True, default=8)
-    gdn_use_head_first_layout_diagnostic: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(config: HackableTransformerConfig, *, key, layer_index: int = 0) -> "HackableDecoderLayer":
@@ -373,7 +371,6 @@ class HackableDecoderLayer(eqx.Module):
             use_gdn=use_gdn,
             gdn_chunk_size=config.gdn_chunk_size,
             gdn_segment_size=config.gdn_segment_size,
-            gdn_use_head_first_layout_diagnostic=config.gdn_use_head_first_layout_diagnostic,
         )
 
     @named_call
@@ -395,7 +392,6 @@ class HackableDecoderLayer(eqx.Module):
             inference=False,
             chunk_size=self.gdn_chunk_size,
             attention_mask=attn_mask,
-            kernel_input_layout="head_first" if self.gdn_use_head_first_layout_diagnostic else "pos_first",
             decode_state=None,
         )
         if _GDN_DEBUG:
