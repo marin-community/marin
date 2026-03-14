@@ -35,8 +35,40 @@ from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html
 
 from iris.logging import configure_logging
 
+import threading
+
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _tee_fd(original_fd: int, log_file) -> None:
+    """Replace a file descriptor with a pipe that tees to both the original fd and a log file.
+
+    Works at the OS level so child processes (Ray workers) also get captured.
+    """
+    read_fd, write_fd = os.pipe()
+    saved_fd = os.dup(original_fd)
+    os.dup2(write_fd, original_fd)
+    os.close(write_fd)
+
+    def _pump():
+        with os.fdopen(read_fd, "r", errors="replace") as reader:
+            for line in reader:
+                os.write(saved_fd, line.encode())
+                log_file.write(line)
+                log_file.flush()
+
+    threading.Thread(target=_pump, daemon=True).start()
+
+
+def _setup_log_tee(log_path: str) -> None:
+    """Tee stdout and stderr to a log file at the given path."""
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    if os.path.exists(log_path):
+        os.remove(log_path)
+    log_fh = open(log_path, "w")
+    _tee_fd(sys.stdout.fileno(), log_fh)
+    _tee_fd(sys.stderr.fileno(), log_fh)
 
 
 def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
@@ -252,6 +284,8 @@ def main(config: ExecutorMainConfig):
             bucket_prefix = config.prefix
         else:
             bucket_prefix = "/tmp"  # Default to a temporary directory
+
+        _setup_log_tee(os.path.join(bucket_prefix, "integration_test.log"))
 
         experiment_prefix = "quickstart-tests"
         config = dataclasses.replace(
