@@ -34,6 +34,7 @@ const loading = ref(true)
 const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
 const copiedName = ref(false)
+const taskSearch = ref('')
 
 async function copyJobName() {
   const name = job.value?.name
@@ -167,6 +168,16 @@ const diskDisplay = computed(() => {
   const db = job.value?.resources?.diskBytes
   if (!db) return '-'
   return formatBytes(parseInt(db, 10))
+})
+
+const filteredTasks = computed(() => {
+  const q = taskSearch.value.toLowerCase().trim()
+  if (!q) return tasks.value
+  return tasks.value.filter(t =>
+    (t.workerId?.toLowerCase().includes(q))
+    || taskIndex(t.taskId).includes(q)
+    || stateDisplayName(t.state).toLowerCase().includes(q)
+  )
 })
 
 // -- Profiling --
@@ -337,11 +348,21 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       </div>
 
       <!-- Tasks table -->
-      <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
-        Tasks
-      </h3>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">
+          Tasks
+        </h3>
+        <input
+          v-if="tasks.length > 0"
+          v-model="taskSearch"
+          type="text"
+          placeholder="Filter tasks..."
+          class="px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent w-64"
+        />
+      </div>
 
       <EmptyState v-if="tasks.length === 0" message="No tasks" />
+      <EmptyState v-else-if="filteredTasks.length === 0" message="No matching tasks" />
 
       <div v-else class="overflow-x-auto">
         <table class="w-full border-collapse table-fixed">
@@ -373,7 +394,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </thead>
           <tbody>
             <tr
-              v-for="task in tasks"
+              v-for="task in filteredTasks"
               :key="task.taskId"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
