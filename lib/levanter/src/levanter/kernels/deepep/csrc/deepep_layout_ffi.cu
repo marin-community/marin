@@ -65,15 +65,19 @@ ffi::Error DeepepGetDispatchLayout(
   return ffi::Error::Success();
 }
 
+auto DeepepGetDispatchLayoutBinding() {
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+      .Arg<ffi::Buffer<ffi::S64, 2>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::PRED, 2>>();
+}
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_deepep_get_dispatch_layout,
     DeepepGetDispatchLayout,
-    ffi::Ffi::Bind()
-        .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::S64, 2>>()
-        .Ret<ffi::Buffer<ffi::S32, 1>>()
-        .Ret<ffi::Buffer<ffi::S32, 1>>()
-        .Ret<ffi::Buffer<ffi::PRED, 2>>(),
+    DeepepGetDispatchLayoutBinding(),
     {ffi::Traits::kCmdBufferCompatible});
 
 }  // namespace
