@@ -143,8 +143,6 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     Also verifies that re-registering a worker that had an in-flight task
     requeues that task so it is not silently lost.
     """
-    from unittest.mock import MagicMock
-
     from zephyr.execution import Shard, ShardTask, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
@@ -162,7 +160,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
 
     # Register 3 workers
     for i in range(3):
-        coord.register_worker(f"worker-{i}", MagicMock())
+        coord.register_worker(f"worker-{i}")
 
     status = coord.get_status()
     assert len(status.workers) == 3
@@ -194,7 +192,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     # Simulate worker-0 re-registering while worker-2 holds the task in-flight
     # (race between heartbeat requeue and re-registration).
     # Since worker-0 has no in-flight task anymore, this is a no-op for requeueing.
-    coord.register_worker("worker-0", MagicMock())
+    coord.register_worker("worker-0")
     status = coord.get_status()
     assert status.workers["worker-0"]["state"] == "ready"
     alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
@@ -204,7 +202,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     # worker-2 dies while holding the task, and before heartbeat fires,
     # it re-registers — the in-flight task should be requeued.
     assert "worker-2" in coord._in_flight  # worker-2 has the task
-    coord.register_worker("worker-2", MagicMock())
+    coord.register_worker("worker-2")
     assert "worker-2" not in coord._in_flight  # in-flight cleared
     assert len(coord._task_queue) == 1  # task was requeued
 
@@ -370,8 +368,6 @@ def test_chunk_streaming_low_memory(tmp_path):
 def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
     """When all registered workers become dead/failed, _wait_for_stage raises
     after the no_workers_timeout instead of waiting forever."""
-    from unittest.mock import MagicMock
-
     from zephyr.execution import Shard, ShardTask, WorkerState, ZephyrCoordinator, ZephyrWorkerError
 
     coord = ZephyrCoordinator()
@@ -389,8 +385,8 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
     coord.start_stage("test", [task])
 
     # Register 2 workers
-    coord.register_worker("worker-0", MagicMock())
-    coord.register_worker("worker-1", MagicMock())
+    coord.register_worker("worker-0")
+    coord.register_worker("worker-1")
 
     # Kill all workers via heartbeat timeout
     coord._last_seen["worker-0"] = 0.0
@@ -410,8 +406,6 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     the dead timer resets and execution can continue."""
     import threading
 
-    from unittest.mock import MagicMock
-
     from zephyr.execution import Shard, ShardTask, TaskResult, WorkerState, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
@@ -429,7 +423,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     coord.start_stage("test", [task])
 
     # Register and kill a worker
-    coord.register_worker("worker-0", MagicMock())
+    coord.register_worker("worker-0")
     coord._last_seen["worker-0"] = 0.0
     coord.check_heartbeats(timeout=0.0)
     assert coord._worker_states["worker-0"] == WorkerState.FAILED
@@ -438,7 +432,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     # after a short delay (simulating recovery before timeout expires)
     def recover_and_complete():
         time.sleep(0.3)
-        coord.register_worker("worker-0", MagicMock())
+        coord.register_worker("worker-0")
         pulled = coord.pull_task("worker-0")
         assert pulled is not None and pulled != "SHUTDOWN"
         _task, attempt, _config = pulled
@@ -471,7 +465,7 @@ def test_fresh_actors_per_execute(fray_client, tmp_path):
 
     # After execute(): everything is torn down
     assert zctx._coordinator is None
-    assert zctx._worker_group is None
+    assert zctx._worker_jobs == []
     assert zctx._pipeline_id == 0
 
     # Can execute again (creates fresh coordinator + workers)
@@ -480,7 +474,7 @@ def test_fresh_actors_per_execute(fray_client, tmp_path):
     assert sorted(results2) == [20, 40]
 
     assert zctx._coordinator is None
-    assert zctx._worker_group is None
+    assert zctx._worker_jobs == []
     assert zctx._pipeline_id == 1
 
 
