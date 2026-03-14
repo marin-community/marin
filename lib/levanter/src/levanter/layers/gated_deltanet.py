@@ -718,6 +718,99 @@ def _rearrange_with_sharding_contract(
     return hax.named(constrained, target.axes)
 
 
+def _transpose_named_array_with_sharding_contract(
+    x: NamedArray,
+    target_axes: tuple[Axis | str, ...],
+    *,
+    dtype: jnp.dtype | None = None,
+) -> jnp.ndarray:
+    source_axis_names = tuple(ax.name for ax in x.axes)
+    target_axis_names = tuple(axis.name if isinstance(axis, Axis) else axis for axis in target_axes)
+    if set(source_axis_names) != set(target_axis_names):
+        raise ValueError(f"Axis mismatch for sharding-contract transpose: {source_axis_names} -> {target_axis_names}")
+
+    permutation = tuple(source_axis_names.index(axis_name) for axis_name in target_axis_names)
+    arr = x.array if permutation == tuple(range(x.array.ndim)) else jnp.transpose(x.array, permutation)
+    if dtype is not None:
+        arr = arr.astype(dtype, copy=False)
+
+    mesh, spec = _get_mesh_and_spec(x.array)
+    if _mesh_size(mesh) <= 1:
+        return arr
+
+    sharding = NamedSharding(
+        mesh,
+        _permute_partition_spec(spec, source_axes=source_axis_names, target_axes=target_axis_names),
+    )
+    return jax.lax.with_sharding_constraint(arr, sharding)
+
+
+def _l2norm_array(x: jnp.ndarray, *, eps: float = 1e-6) -> jnp.ndarray:
+    x32 = x.astype(jnp.float32)
+    inv = lax.rsqrt(jnp.sum(x32 * x32, axis=-1, keepdims=True) + jnp.asarray(eps, dtype=jnp.float32))
+    return x32 * inv
+
+
+def _chunk_gated_delta_rule_prepared_arrays(
+    q_arr: jnp.ndarray,
+    k_arr: jnp.ndarray,
+    v_arr: jnp.ndarray,
+    g_arr: jnp.ndarray,
+    b_arr: jnp.ndarray,
+    *,
+    chunk_size: int,
+    segment_size: int,
+    initial_state: Optional[jnp.ndarray],
+    use_qk_l2norm_in_kernel: bool,
+    use_flash: bool,
+    use_triangular_solve: bool = True,
+    use_checkpoint: bool = True,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    dk = q_arr.shape[-1]
+
+    q_arr = q_arr.astype(jnp.float32, copy=False)
+    k_arr = k_arr.astype(jnp.float32, copy=False)
+    v_arr = v_arr.astype(jnp.float32, copy=False)
+    g_arr = g_arr.astype(jnp.float32, copy=False)
+    b_arr = b_arr.astype(jnp.float32, copy=False)
+
+    if use_qk_l2norm_in_kernel:
+        q_arr = _preserve_sharding_like(_l2norm_array(q_arr), q_arr)
+        k_arr = _preserve_sharding_like(_l2norm_array(k_arr), k_arr)
+    q_arr = _preserve_sharding_like(q_arr * (dk**-0.5), q_arr)
+
+    backend = _resolve_chunk_flash_backend(use_flash=use_flash)
+    Ct = _round_up_to(int(chunk_size), _GDN_TPU_MULT)
+    flash_io_dtype = jnp.bfloat16 if Ct >= _MXU_TILE else jnp.float32
+    q_arr = _preserve_sharding_like(q_arr.astype(flash_io_dtype, copy=False), q_arr)
+    k_arr = _preserve_sharding_like(k_arr.astype(flash_io_dtype, copy=False), k_arr)
+    v_arr = _preserve_sharding_like(v_arr.astype(flash_io_dtype, copy=False), v_arr)
+
+    if backend == "pallas":
+        return _chunk_gated_delta_rule_flash_pallas(
+            q_arr,
+            k_arr,
+            v_arr,
+            g_arr,
+            b_arr,
+            chunk_size,
+            segment_size,
+            initial_state,
+        )
+
+    return _chunk_gated_delta_rule_fused_reference(
+        q_arr,
+        k_arr,
+        v_arr,
+        g_arr,
+        b_arr,
+        chunk_size=chunk_size,
+        initial_state=initial_state,
+        use_checkpoint=use_checkpoint,
+        use_triangular_solve=use_triangular_solve,
+    )
+
+
 def _apply_linear_weight(
     inputs: NamedArray,
     weight_arr: jnp.ndarray,
@@ -4591,31 +4684,46 @@ class GatedDeltaNet(eqx.Module):
         chunk_size: int,
         segment_size: int,
     ) -> NamedArray:
-        """Own only the immediate train-kernel sharding/layout contract."""
+        """Own only the immediate train-kernel array-entry sharding/layout contract."""
         cfg = self.config
         Batch = q.resolve_axis("batch")
         Pos = q.resolve_axis("position")
 
-        q_head = _rearrange_with_sharding_contract(q, (Batch, cfg.Heads, Pos, cfg.KHeadDim))
-        k_head = _rearrange_with_sharding_contract(k, (Batch, cfg.Heads, Pos, cfg.KHeadDim))
-        v_head = _rearrange_with_sharding_contract(v, (Batch, cfg.Heads, Pos, cfg.VHeadDim))
-        g_head = _rearrange_with_sharding_contract(g, (Batch, cfg.Heads, Pos))
-        beta_head = _rearrange_with_sharding_contract(beta, (Batch, cfg.Heads, Pos))
+        q_arr = _transpose_named_array_with_sharding_contract(
+            q,
+            (Batch, cfg.Heads, Pos, cfg.KHeadDim),
+        )
+        k_arr = _transpose_named_array_with_sharding_contract(
+            k,
+            (Batch, cfg.Heads, Pos, cfg.KHeadDim),
+        )
+        v_arr = _transpose_named_array_with_sharding_contract(
+            v,
+            (Batch, cfg.Heads, Pos, cfg.VHeadDim),
+        )
+        g_arr = _transpose_named_array_with_sharding_contract(
+            g,
+            (Batch, cfg.Heads, Pos),
+        )
+        beta_arr = _transpose_named_array_with_sharding_contract(
+            beta,
+            (Batch, cfg.Heads, Pos),
+        )
 
-        out_pos, _ = chunk_gated_delta_rule(
-            q_head,
-            k_head,
-            v_head,
-            g_head,
-            beta_head,
+        out_arr, _ = _chunk_gated_delta_rule_prepared_arrays(
+            q_arr,
+            k_arr,
+            v_arr,
+            g_arr,
+            beta_arr,
             chunk_size=chunk_size,
             segment_size=segment_size,
             initial_state=None,
-            output_final_state=False,
             use_qk_l2norm_in_kernel=True,
             use_flash=self.use_flash,
         )
-        return out_pos
+        out_head = hax.named(out_arr, (Batch, cfg.Heads, Pos, cfg.VHeadDim))
+        return hax.rearrange(out_head, (Batch, Pos, cfg.Heads, cfg.VHeadDim))
 
     def __call__(
         self,
