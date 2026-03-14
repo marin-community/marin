@@ -39,7 +39,9 @@ Current mainline target order:
   - outward layer-level manual-backward boundary increased shell tax and slowed the full step
 - outward `P3` block-boundary family: attempted and rejected
   - outward block custom-VJP / scan-switch / shard-map / custom-partitioning / no-checkpoint variants all failed
-- `G1`: next required mainline prototype
+- `G1`: first stronger branch-local ownership attempt attempted and rejected
+  - staged pre/kernel/post branch ownership removed visible old train-path buckets but massively increased the real branch-local shell budgets and slowed the full step
+  - future `G1` work needs a materially smaller, const-cleaner, and sharding-cleaner branch cut; do not spend another turn on a broad branch wrapper that just renames the shell tax
 
 ## G1 Definition
 

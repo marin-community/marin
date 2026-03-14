@@ -9402,3 +9402,374 @@ See `docs/recipes/optimize_gdn_pallas_tpu.md` for details and guardrails.
   - Keep the next mainline slot in `P3`, but only if the block owns a materially stronger backward/sharding/layout contract than a custom VJP that still internally calls generic per-layer `filter_vjp`.
   - Keep CE fixed at `pallas_tpu` + `pallas`; this iteration did not re-implicate CE.
   - Do not spend another mainline turn on `A3`. The next viable `P3` attempt needs to prevent block-scoped `jvp()/transpose()/shard_map` shell from being rebuilt at all, or it will likely repeat this rejection pattern.
+
+### Iteration 98 - Coverage Slot G1 / staged branch-local backward ownership attempt (infra-blocked, reverted)
+
+- Coverage slot: `G1`
+- Change class: `hybrid branch boundary`
+- Why this is mainline-worthy now:
+  - `G1` remains the required next ownership move after `S3` completed, `A3` was rejected, and the outward `P3` family was rejected.
+  - The carried current-head shell baseline still points first at `dispatch/shard`, second at `AD/wrapper`, with `interaction_remainder_ms` and `xprof_idle_attributed_ms` as the safety checks.
+  - The pre-existing local branch wrapper was already known to fail because it reopened `jax.vjp` across the whole branch; the next materially stronger `G1` cut was to make the branch boundary own backward in staged pre-kernel / kernel / post-kernel pieces instead of one whole-branch VJP.
+
+- Codex loop iteration: `2 / 10`
+- Date: `2026-03-14T02:30:07Z`
+- Starting commit: `84afecf4cd08872bd376b52f00baa106706cae08`
+- Commit: none
+  - Validation and profiling never completed on a remote TPU wrapper, so there is no validated result commit for this attempt.
+
+- Current validated baseline carried in:
+  - Deployable hybrid champion from `.agents/logs/gdn_codex_loop/perf_state.json`:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration=166.307253 ms`
+  - Latest validated current-head `S3`/xprof baseline from Iteration 93:
+    - hybrid `throughput/mfu=6.036753`
+    - hybrid `throughput/tokens_per_second=195287.805612`
+    - hybrid `throughput/duration=0.167793375 s`
+    - hybrid `step_duration=167.793375 ms`
+    - control `throughput/duration=0.057256827 s`
+    - `train_path_budget_ms=42.682894`
+    - `decoder_layer_shell_budget_ms=20.388593`
+    - `hybrid_generic_shell_delta_budget_ms=20.103367`
+    - `dispatch_shard_shell_delta_ms=9.771419`
+    - `ad_wrapper_shell_delta_ms=6.178290`
+    - `interaction_remainder_ms=47.750288`
+    - `xprof_dispatch_shard_shell_delta_ms=31.572807`
+    - `xprof_ad_wrapper_shell_delta_ms=11.057602`
+    - `xprof_idle_attributed_ms=38.362912`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot G1 (selected):** rewrite the pre-existing local branch wrapper so backward is staged across branch-local pre-kernel, kernel, and post-kernel ownership instead of reopening one `jax.vjp` across the whole branch (`highest direct upside on the current shell budgets`, `medium correctness risk`, `targets the known `jvp(_gdn_branch_boundary_impl)` failure mode directly`).
+  2. **Coverage slot D1:** keep the branch math fixed and change only branch-local sharding/layout ownership (`lower correctness risk`, `lower information because the saved failure mode already looked more boundary/AD-shaped than pure collective ownership`).
+  3. **Coverage slot G2:** lower/custom-partitioned branch attempt only after the branch cut is const-clean in ordinary lowered form (`potentially higher upside later`, `premature before a stronger ordinary `G1` cut is validated`).
+
+- Selected slot rationale:
+  - `G1` is still the required mainline slot on the current directives.
+  - The staged-backward cut is materially different from the saved rejected `G1` wrapper because it was designed to stop reopening a whole-branch `jax.vjp` around the mixed branch math.
+  - `D1` and `G2` both defer the first-order unanswered question of whether the branch boundary can own backward without re-emitting the same shell.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - Why CE stayed fixed:
+    - This was not a CE side-arm, and every remote validation attempt kept the fixed CE request unchanged.
+
+- Expected effect on `step_duration_ms`:
+  - decrease if the staged branch backward removed the whole-branch wrapper shell from the critical path.
+- Expected effect on `dispatch_shard_shell_delta_ms`:
+  - material decrease; this remained the primary target of the slot.
+- Expected effect on `ad_wrapper_shell_delta_ms`:
+  - decrease if the staged branch-local ownership stopped rebuilding wrapper shell outside the kernel boundary.
+- Expected effect on `hybrid_generic_shell_delta_budget_ms`:
+  - decrease if the branch boundary really owned the positive hybrid-only shell instead of renaming it.
+- Expected effect on `interaction_remainder_ms`:
+  - decrease if the shorter branch critical path stopped surfacing as waiting/serialization.
+- Expected effect on `xprof_idle_attributed_ms`:
+  - decrease when a matched XPlane pair is available.
+- Reject if `step_duration_ms` does not improve? **Yes.**
+  - This was a mainline `G1` prototype, not a diagnostic-only slot.
+- Reject if `dispatch_shard_shell_delta_ms` stays flat / grows? **Yes.**
+  - `dispatch/shard` remained the immediate shell budget.
+- Reject if `ad_wrapper_shell_delta_ms` grows? **Yes.**
+  - A stronger branch-local backward only matters if it does not recreate more wrapper shell elsewhere.
+- Reject if `hybrid_generic_shell_delta_budget_ms` stays flat / grows? **Yes.**
+  - Namespace-only movement would still be a rejection.
+- Reject if `interaction_remainder_ms` grows? **Yes.**
+  - The objective is a shorter critical path, not only moved bucket names.
+- Reject if `xprof_idle_attributed_ms` stays flat / grows when an XPlane pair is available? **Yes.**
+  - More `IDLE` would still mean waiting/serialization dominates.
+
+- Change summary:
+  - Starting from the pre-existing local branch-boundary prototype already present in `experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py` and `experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`, temporarily rewrote the candidate branch wrapper so backward ownership was staged across branch-local pre-kernel, kernel, and post-kernel phases instead of a single whole-branch `jax.vjp`.
+  - The staged candidate added explicit branch-local sharding/layout constraints around branch input, kernel I/O, and branch output while keeping CE fixed.
+  - Remote TPU correctness never started on any wrapper path, so the staged branch candidate was not profiled and was not kept. `hackable_transformer_gdn.py` was restored to the pre-existing local branch-prototype state that existed at session start, and no additional executable candidate remains beyond that already-dirty local prototype.
+
+- Correctness checks:
+  - Local syntax/import smoke:
+    - `uv run python -m py_compile experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py experiments/speedrun/hackable_transformer_gdn/tiny_profile.py`
+    - result: passed
+  - Local model-init smoke:
+    - `uv run python - <<'PY' ... HackableTransformer.init(dataclasses.replace(_size_presets()["130m"], gdn_use_branch_boundary_prototype=True), key=jrandom.PRNGKey(0)) ... PY`
+    - result: `BlockSeq`, `True`
+  - Local grad smoke attempt:
+    - attempted on CPU with and without `GDN_CHUNK_FLASH_BACKEND=xla`
+    - result: non-authoritative local limitation; the GDN train path and fused RMSNorm Pallas kernels require TPU lowering (`Only interpret mode is supported on CPU backend`)
+  - Preferred dev TPU path:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both`
+    - result: failed before remote pytest because `ssh dev-tpu-calvinxu-gdn` could not resolve the held-host alias from this machine
+  - Dev TPU recovery attempt:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-allocate --cluster us-east5-a --tpu-name "$USER-gdn"`
+    - result: failed after the full 600s readiness window with `Get timed out: some object(s) not ready.` while waiting for `actor.host_info`
+  - Ray fallback attempts:
+    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5-a --tpu auto --tests both`
+    - job `ray-run-calvinxu-levanter-20260314-014852`
+    - result: `JOB_SUPERVISOR_ACTOR_START_TIMEOUT`
+    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-central1 --tpu auto --tests both`
+    - job `ray-run-calvinxu-levanter-20260314-015453`
+    - result: `JOB_SUPERVISOR_ACTOR_START_TIMEOUT`
+    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east1 --tpu auto --tests both`
+    - result: cluster dashboard path was unusable (`Connection reset by peer` / `Failed to connect to Ray at address: http://localhost:8278`)
+    - `LEVANTER_FUSED_CE_IMPLEMENTATION=pallas_tpu LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH=0 uv run python scripts/gdn/gdnctl.py ray-test --cluster us-east5 --tpu auto --tests both`
+    - job `ray-run-calvinxu-levanter-20260314-021118`
+    - result at write time: still `PENDING` with no worker start or logs after more than fifteen minutes; treated as queue-blocked rather than a valid correctness run
+
+- Profile runs:
+  - Not executed.
+  - The required remote correctness gate never completed on any accepted TPU wrapper path, so no profile run would have satisfied the iteration gate.
+
+- Required metrics:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - `gdn_layer_fraction: unavailable (no completed profile run)`
+  - `step_duration_ms: unavailable (no completed profile run)`
+  - `forward_closed_call_ms: unavailable (no completed profile run)`
+  - `backward_closed_call_ms: unavailable (no completed profile run)`
+  - `train_path_budget_ms: unavailable (no completed profile run)`
+  - `decoder_layer_shell_budget_ms: unavailable (no completed profile run)`
+  - `hybrid_generic_shell_delta_budget_ms: unavailable (no completed profile run)`
+  - `dispatch_shard_shell_delta_ms: unavailable (no completed profile run)`
+  - `ad_wrapper_shell_delta_ms: unavailable (no completed profile run)`
+  - `layout_shell_delta_ms: unavailable (no completed profile run)`
+  - `residual_add_shell_delta_ms: unavailable (no completed profile run)`
+  - `interaction_remainder_ms: unavailable (no completed profile run)`
+  - `upper_bound_gap_ms: unavailable (no completed profile run)`
+  - `gap_explained_by_train_path: unavailable (no completed profile run)`
+  - `gap_explained_by_decoder_layer_shell: unavailable (no completed profile run)`
+  - `gap_explained_by_hybrid_generic_shell_delta: unavailable (no completed profile run)`
+  - `hybrid_generic_shell_delta_topk: unavailable (no completed profile run)`
+  - `remainder_topk: unavailable (no completed profile run)`
+  - `throughput/mfu: unavailable (no completed profile run)`
+  - `throughput/tokens_per_second: unavailable (no completed profile run)`
+  - `throughput/duration: unavailable (no completed profile run)`
+  - `xprof_dispatch_shard_shell_delta_ms: unavailable (no completed matched XPlane pair)`
+  - `xprof_ad_wrapper_shell_delta_ms: unavailable (no completed matched XPlane pair)`
+  - `xprof_layout_shell_delta_ms: unavailable (no completed matched XPlane pair)`
+  - `xprof_residual_add_shell_delta_ms: unavailable (no completed matched XPlane pair)`
+  - `xprof_idle_attributed_ms: unavailable (no completed matched XPlane pair)`
+
+- Acceptance gate checklist:
+  - Correctness:
+    - Not complete. No remote TPU wrapper path reached a completed `tests=both` result.
+  - Perf:
+    - Not complete. No hybrid or attention-only profile run completed.
+  - Governance:
+    - CE stayed fixed at `pallas_tpu` + `pallas` in every attempted remote run.
+    - No validated result exists for this candidate because the remote wrapper infrastructure failed before test execution or never scheduled the job.
+    - The staged `G1` prototype is therefore **not** promotable and **not** merged into the executable benchmark path.
+
+- Assessment: **infra-blocked and reverted**. This `G1` staged branch-local backward attempt could not be validated on the required TPU wrapper paths. The preferred dev-TPU alias was unreachable, the dev-TPU allocation recovery timed out before publishing host info, two ray clusters failed with supervisor-start timeouts, one cluster had an unusable dashboard path, and the remaining cluster never left `PENDING`. Because the hard correctness/profile gate was never met, no performance claim is made and no validated result commit was created.
+- Next bold hypothesis:
+  - Before spending another mainline `G1` turn, restore a reachable dev-TPU alias or a pre-held dev TPU so correctness and xprof can actually run on the preferred wrapper path.
+  - If validation must stay on Ray, fix the cluster availability problem first; the current `ray-test` lanes are queue-blocked enough that they cannot support an unattended hillclimb iteration.
+
+### Iteration 99 - Coverage Slot G1 / fixed-`3/4` staged branch-local pre-kernel-post ownership retry (validated, rejected, reverted)
+
+- Coverage slot: `G1`
+- Change class: `hybrid branch boundary`
+- Why this is mainline-worthy now:
+  - The current validated shell evidence still ranks `dispatch_shard_shell_delta_ms` first and `ad_wrapper_shell_delta_ms` second.
+  - Same-boundary GDN kernel work, outward `HackableDecoderLayer`, and outward `HackableDecoderBlock` wrappers were already demoted or rejected.
+  - The remaining unanswered `G1` question was whether a stronger hybrid-only branch cut could own backward, sharding, and layout without recreating the same outer shell in generic decoder space.
+
+- Codex loop iteration: `3 / 10`
+- Date: `2026-03-14T03:54:09Z`
+- Starting commit: `84afecf4cd08872bd376b52f00baa106706cae08`
+
+- Current validated baseline carried in:
+  - Governance champion from `.agents/logs/gdn_codex_loop/perf_state.json`:
+    - `70a947614d96e9c4f008e09b359e5b13409d536f`
+    - `throughput/mfu=6.090697`
+    - `throughput/tokens_per_second=197032.897899`
+    - `throughput/duration=0.166307253 s`
+    - `step_duration_ms=166.307253`
+  - Latest validated current-head `S3` matched pair from Iteration 93:
+    - hybrid `throughput/mfu=6.036753`
+    - hybrid `throughput/tokens_per_second=195287.805612`
+    - hybrid `throughput/duration=0.167793375 s`
+    - hybrid `step_duration_ms=167.793375`
+    - control `throughput/duration=0.057256827 s`
+    - `train_path_budget_ms=42.682894`
+    - `decoder_layer_shell_budget_ms=20.388593`
+    - `hybrid_generic_shell_delta_budget_ms=20.103367`
+    - `dispatch_shard_shell_delta_ms=9.771419`
+    - `ad_wrapper_shell_delta_ms=6.178290`
+    - `interaction_remainder_ms=47.750288`
+    - `xprof_dispatch_shard_shell_delta_ms=31.572807`
+    - `xprof_ad_wrapper_shell_delta_ms=11.057602`
+    - `xprof_idle_attributed_ms=38.362912`
+
+- Candidate shortlist (estimated upside / risk):
+  1. **Coverage slot G1 (selected):** keep the prototype strictly inside the hybrid-specific GDN branch, but split backward ownership across branch-local pre-kernel, kernel, and post-kernel stages with one explicit branch-local sharding/layout contract (`highest upside on the current shell budgets`, `medium correctness risk`, `direct test of whether the saved whole-branch VJP was the wrong branch boundary`).
+  2. **Coverage slot D1:** keep forward math fixed and only move sharding/layout ownership inside the branch (`lower correctness risk`, `weaker information than a real `G1` cut because the standing evidence still implicated the backward boundary too`).
+  3. **Coverage slot G2:** lower the branch as one primitive only if the chosen `G1` cut proved const-clean in ordinary lowered form (`possible later upside`, `premature before a stronger non-lowered `G1` cut clears the shell budgets`).
+
+- Selected slot rationale:
+  - `G1` remained the required mainline slot.
+  - The staged pre/kernel/post ownership cut was materially different from the saved whole-branch wrapper because it stopped reopening one `jax.vjp` across the entire mixed branch.
+  - `D1` and `G2` both defer the first-order question of whether the branch-local ownership boundary itself is viable.
+
+- CE hygiene:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - This was not a CE side-arm, so CE stayed fixed across correctness and both profiles.
+
+- Expected effect on `step_duration_ms`:
+  - decrease
+- Expected effect on `dispatch_shard_shell_delta_ms`:
+  - material decrease
+- Expected effect on `ad_wrapper_shell_delta_ms`:
+  - decrease
+- Expected effect on `hybrid_generic_shell_delta_budget_ms`:
+  - decrease
+- Expected effect on `interaction_remainder_ms`:
+  - decrease
+- Expected effect on `xprof_idle_attributed_ms`:
+  - decrease
+- Reject if `step_duration_ms` does not improve? **Yes.**
+  - This was a mainline `G1` prototype.
+- Reject if `dispatch_shard_shell_delta_ms` stays flat / grows? **Yes.**
+  - `dispatch/shard` remained the immediate budget.
+- Reject if `ad_wrapper_shell_delta_ms` grows? **Yes.**
+  - A branch-local backward cut only matters if it does not emit even more wrapper shell.
+- Reject if `hybrid_generic_shell_delta_budget_ms` stays flat / grows? **Yes.**
+  - The promotion target was canonical shell budgets, not vanished old bucket names.
+- Reject if `interaction_remainder_ms` grows? **Yes.**
+  - Waiting / serialization growth still means the critical path got worse.
+- Reject if `xprof_idle_attributed_ms` stays flat / grows when an XPlane pair is available? **Yes.**
+  - More xprof-attributed `IDLE` still means the branch boundary is not owning the real bottleneck.
+
+- Change summary:
+  - Starting from the pre-existing dirty branch-boundary prototype in `experiments/speedrun/hackable_transformer_gdn/hackable_transformer_gdn.py`, temporarily rewrote the branch wrapper so backward ran through branch-local pre, kernel, and post stages instead of reopening one `jax.vjp` across the whole branch.
+  - Added explicit branch-local sharding/layout constraints around branch input, kernel I/O, and branch output while keeping CE fixed at `pallas_tpu` + `pallas`.
+  - After validation the staged candidate was rejected and the executable benchmark path was restored to the carried pre-existing local branch-prototype state from session start.
+
+- Remote TPU prep:
+  - `uv run python scripts/gdn/gdnctl.py dev-tpu-allocate --cluster us-east5-a --tpu-name "$USER-gdn"`
+  - result: allocation succeeded on held host `t1v-n-9eaeb1ae-w-0` / alias `dev-tpu-calvinxu-gdn`
+  - remote sync used the already-held TPU path; the stage tree was refreshed before tests/profiles
+
+- Correctness checks:
+  - Preferred correctness command:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both --no-sync`
+    - result: `88 passed, 2 skipped in 228.57s (0:03:48)`
+  - Recovery note:
+    - the held TPU had a stale `/tmp/libtpu_lockfile`; removing it on `dev-tpu-calvinxu-gdn` was required before the remote pytest run could acquire TPU access
+
+- Profile runs:
+  - Hybrid staged-`G1` candidate:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --run-name-prefix gdn_g1_i03_branch --profile-env GDN_PROFILE_GDN_BRANCH_BOUNDARY_PROTOTYPE=1 --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_g1_i03_branch_gdn3of4_130m_ch128_seg16_20steps-a5d95f`
+    - selected CE backend: `pallas_tpu`
+    - selected CE bwd mode: `pallas`
+    - `gdn_layer_fraction=0.833333`
+  - Attention-only matched control:
+    - `uv run python scripts/gdn/gdnctl.py dev-tpu-profile --cluster us-east5-a --tpu-name "$USER-gdn" --tpu v5p-8 --size 130m --num-steps 20 --profile-start-step 2 --profile-num-steps 6 --batch-size 8 --ce-implementation pallas_tpu --ce-bwd-mode pallas --all-transformer --run-name-prefix gdn_g1_i03_attnctrl --no-sync`
+    - run: `https://wandb.ai/marin-community/marin/runs/gdn_g1_i03_attnctrl_attnonly_130m_ch128_seg16_20steps-b96531`
+    - selected CE backend: `pallas_tpu`
+    - selected CE bwd mode: `pallas`
+    - `gdn_layer_fraction=0.0`
+  - Summary and xprof attribution:
+    - `uv run python lib/marin/tools/profile_summary.py summarize --run-target https://wandb.ai/marin-community/marin/runs/gdn_g1_i03_branch_gdn3of4_130m_ch128_seg16_20steps-a5d95f --download-root scratch/gdn_g1_i03/profiles_hybrid --breakdown-mode exclusive_global --hot-op-limit 200 --output scratch/gdn_g1_i03/hybrid_summary_200.json`
+    - `uv run python lib/marin/tools/profile_summary.py summarize --run-target https://wandb.ai/marin-community/marin/runs/gdn_g1_i03_attnctrl_attnonly_130m_ch128_seg16_20steps-b96531 --download-root scratch/gdn_g1_i03/profiles_attn --breakdown-mode exclusive_global --hot-op-limit 200 --output scratch/gdn_g1_i03/attn_summary_200.json`
+    - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_g1_i03/hybrid_summary_200.json --baseline-summary scratch/gdn_g1_i03/attn_summary_200.json --step-duration-ms 195.50020699898596 --baseline-step-duration-ms 57.29541400069138 --upper-bound-step-ms 57.29541400069138 --gdn-layer-fraction 0.833333 --baseline-gdn-layer-fraction 0.0 --gdn-layers-per-block 3 --baseline-gdn-layers-per-block 0 --gdn-block-size 4 --baseline-gdn-block-size 4 --output scratch/gdn_g1_i03/attribution_no_xprof.json`
+    - `uv run python scripts/gdn/gdnctl.py xprof-compare-runs --cluster us-east5-a --tpu-name "$USER-gdn" --before-run-target https://wandb.ai/marin-community/marin/runs/gdn_g1_i03_attnctrl_attnonly_130m_ch128_seg16_20steps-b96531 --after-run-target https://wandb.ai/marin-community/marin/runs/gdn_g1_i03_branch_gdn3of4_130m_ch128_seg16_20steps-a5d95f --normalize-positive-deltas-ms 53.356229391336285 --download-root scratch/gdn_g1_i03/xprof_downloads --remote-stage-dir .agents/xprof_compare/gdn_g1_i03 --output scratch/gdn_g1_i03/xprof_compare.json`
+    - `uv run python scripts/gdn/gdnctl.py summary-attribution --summary scratch/gdn_g1_i03/hybrid_summary_200.json --baseline-summary scratch/gdn_g1_i03/attn_summary_200.json --step-duration-ms 195.50020699898596 --baseline-step-duration-ms 57.29541400069138 --upper-bound-step-ms 57.29541400069138 --gdn-layer-fraction 0.833333 --baseline-gdn-layer-fraction 0.0 --gdn-layers-per-block 3 --baseline-gdn-layers-per-block 0 --gdn-block-size 4 --baseline-gdn-block-size 4 --xprof-compare-json scratch/gdn_g1_i03/xprof_compare.json --output scratch/gdn_g1_i03/attribution.json`
+
+- Required metrics:
+  - `CE backend selected: pallas_tpu`
+  - `CE bwd mode: pallas`
+  - `gdn_layer_fraction: 0.833333`
+  - `forward_closed_call_ms: 20.663477 -> 0.000000`
+  - `backward_closed_call_ms: 13.128558 -> 0.000000`
+  - `while: 8.889455 -> 8.877802 ms`
+  - `conditional: 0.001404 -> 0.001381 ms`
+  - `CE-attributed while: 8.889455 -> 8.877802 ms`
+  - `Kernel budget: 33.792035 -> 0.000000 ms`
+  - `Control budget: 8.890858 -> 8.879182 ms`
+  - `Train-path budget: 42.682894 -> 8.879182 ms`
+  - `Decoder-layer shell budget: 20.388593 -> 76.214139 ms`
+  - `Hybrid generic shell delta budget: 20.103367 -> 75.969381 ms`
+  - `Dispatch/shard shell delta budget: 9.771419 -> 65.321388 ms`
+  - `AD/wrapper shell delta budget: 6.178290 -> 6.558211 ms`
+  - `AD shell budget: 6.978173 -> 46.267569 ms`
+  - `Sharding shell budget: 13.241332 -> 69.342130 ms`
+  - `Layout shell budget: 2.177870 -> 1.831214 ms`
+  - `Residual/add shell budget: 2.322353 -> 2.258567 ms`
+  - `xprof hybrid generic shell delta budget: 47.750288 -> 53.356229 ms`
+  - `xprof dispatch/shard shell delta budget: 31.572807 -> 38.627867 ms`
+  - `xprof AD/wrapper shell delta budget: 11.057602 -> 10.750577 ms`
+  - `xprof layout shell delta budget: 2.583071 -> 2.004656 ms`
+  - `xprof residual/add shell delta budget: 2.536807 -> 1.973130 ms`
+  - `xprof IDLE attributed remainder: 38.362912 -> 43.987461 ms`
+  - `step_duration_ms: 167.793375 -> 195.500207`
+  - `remainder_budget_ms: 125.110481 -> 186.621025`
+  - `interaction_remainder_ms: 47.750288 -> 53.356229`
+  - `upper_bound_gap_ms: 110.536548 -> 138.204793`
+  - `gap_explained_by_train_path: 38.61% -> 6.42%`
+  - `gap_explained_by_decoder_layer_shell: 18.45% -> 55.15%`
+  - `gap_explained_by_hybrid_generic_shell_delta: 18.19% -> 54.97%`
+  - `throughput/mfu: 6.036753 -> 5.181208`
+  - `throughput/tokens_per_second: 195287.805612 -> 167611.075727`
+  - `throughput/duration: 0.167793375 -> 0.195500207`
+  - `hybrid_generic_shell_delta_topk`:
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp(_gdn_branch_boundary_kernel_impl)/closed_call/shard_map/pallas_call:` -> `20.607400 ms`
+    - `HackableDecoderLayer/_gdn_branch_boundary_kernel_impl/closed_call/shard_map/pallas_call:` -> `20.052617 ms`
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/transpose(transpose(jvp(HackableTransformer)))/HackableDecoderLayer/jvp(_gdn_branch_boundary_kernel_impl)/closed_call/shard_map/pallas_call:` -> `13.129459 ms`
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp(_gdn_branch_boundary_post_impl)/shard_map/pallas_call:` -> `5.236272 ms`
+    - `HackableDecoderLayer/_gdn_branch_boundary_post_impl/shard_map/pallas_call:` -> `5.232483 ms`
+  - `decoder_layer_shell_topk`:
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp(_gdn_branch_boundary_kernel_impl)/closed_call/shard_map/pallas_call:` -> `20.607400 ms`
+    - `HackableDecoderLayer/_gdn_branch_boundary_kernel_impl/closed_call/shard_map/pallas_call:` -> `20.052617 ms`
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/transpose(transpose(jvp(HackableTransformer)))/HackableDecoderLayer/jvp(_gdn_branch_boundary_kernel_impl)/closed_call/shard_map/pallas_call:` -> `13.129459 ms`
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp(_gdn_branch_boundary_post_impl)/shard_map/pallas_call:` -> `5.236272 ms`
+    - `HackableDecoderLayer/_gdn_branch_boundary_post_impl/shard_map/pallas_call:` -> `5.232483 ms`
+  - `remainder_topk`:
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp(_gdn_branch_boundary_kernel_impl)/closed_call/shard_map/pallas_call:` -> `20.607400 ms`
+    - `HackableDecoderLayer/_gdn_branch_boundary_kernel_impl/closed_call/shard_map/pallas_call:` -> `20.052617 ms`
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/transpose(transpose(jvp(HackableTransformer)))/HackableDecoderLayer/jvp(_gdn_branch_boundary_kernel_impl)/closed_call/shard_map/pallas_call:` -> `13.129459 ms`
+    - `transpose(jvp(HackableTransformer))/HackableDecoderLayer/jvp(_gdn_branch_boundary_post_impl)/shard_map/pallas_call:` -> `5.236272 ms`
+    - `HackableDecoderLayer/_gdn_branch_boundary_post_impl/shard_map/pallas_call:` -> `5.232483 ms`
+
+- Governance / rejection rationale:
+  - The candidate is a hard regression versus the governance champion: `throughput/mfu 6.090697 -> 5.181208` (`-14.932%`).
+  - The candidate is also a hard regression versus the latest validated current-head `S3` pair: `step_duration_ms 167.793375 -> 195.500207`.
+  - This is rejected as wrong-boundary progress:
+    - visible old train-path closed-call buckets disappeared, but the real branch-local shell budgets exploded instead
+    - `dispatch_shard_shell_delta_ms` grew by `+55.549970 ms`
+    - `ad_wrapper_shell_delta_ms` grew by `+0.379921 ms`
+    - `hybrid_generic_shell_delta_budget_ms` grew by `+55.866014 ms`
+    - `interaction_remainder_ms` grew by `+5.605941 ms`
+    - `xprof_idle_attributed_ms` grew by `+5.624549 ms`
+  - This is not CE progress:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `CE-attributed while: 8.889455 -> 8.877802 ms`
+  - The new dominant shell family is exactly the branch wrapper itself:
+    - the top positive hybrid-only shell deltas are `_gdn_branch_boundary_kernel_impl` and `_gdn_branch_boundary_post_impl` `shard_map/pallas_call` sites
+    - the branch-local wrapper therefore reintroduced more dispatch/shard shell than the current head baseline instead of owning it away
+
+- Acceptance gate checklist:
+  - Correctness:
+    - TPU tests command + result: `uv run python scripts/gdn/gdnctl.py dev-tpu-test --cluster us-east5-a --tpu-name "$USER-gdn" --tests both --no-sync` -> `88 passed, 2 skipped in 228.57s (0:03:48)`
+  - Perf:
+    - `CE backend selected: pallas_tpu`
+    - `CE bwd mode: pallas`
+    - `gdn_layer_fraction: 0.833333`
+    - `step_duration_ms: 167.793375 -> 195.500207`
+    - `dispatch_shard_shell_delta_ms: 9.771419 -> 65.321388`
+    - `ad_wrapper_shell_delta_ms: 6.178290 -> 6.558211`
+    - `hybrid_generic_shell_delta_budget_ms: 20.103367 -> 75.969381`
+    - `interaction_remainder_ms: 47.750288 -> 53.356229`
+    - `xprof_idle_attributed_ms: 38.362912 -> 43.987461`
+  - Governance:
+    - rejected
+    - reverted from the executable benchmark path after validation
+    - no promotion; the champion remains `70a947614d96e9c4f008e09b359e5b13409d536f`
+
+- Assessment: **validated, rejected, and reverted**. This stronger staged `G1` branch-local ownership retry did remove the old visible train-path buckets, but it did so by turning the branch wrapper itself into a much larger `dispatch/shard` and generic shell source. The full step slowed materially, the canonical shell deltas exploded, and xprof-attributed `IDLE` also grew, so this cut failed the actual critical-path objective.
+- Next bold hypothesis:
+  - Another mainline `G1` turn is only justified if the branch cut is materially smaller and const-cleaner than this pre/kernel/post wrapper and can carry a single explicit branch-local sharding/layout contract without re-emitting `_gdn_branch_boundary_*` shell.
+  - If the next experiment cannot reduce wrapper scope further, the better follow-up is an isolated `D1` sharding/collective ownership diagnostic on the existing branch math rather than another broad `G1` wrapper retry.
