@@ -37,6 +37,24 @@ def _build_run_script(args: argparse.Namespace, *, bench_file_b64: str) -> str:
     if args.disable_aggressive_ptx_instrs:
         install_env_exports.append("export DISABLE_AGGRESSIVE_PTX_INSTRS=1")
     install_env_block = "\n".join(install_env_exports)
+    hybrid_ep_patch_block = ""
+    if args.patch_hybrid_ep_space_cluster:
+        hybrid_ep_patch_block = r"""
+/opt/conda/bin/python - <<'PY'
+from pathlib import Path
+
+backend = Path("/tmp/DeepEP/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh")
+text = backend.read_text()
+old = "cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,\n"
+new = "cuda::ptx::cp_async_bulk(cuda::ptx::space_cluster,\n"
+count = text.count(old)
+if count == 0:
+    raise SystemExit("PATCH_FAILED no space_shared cp_async_bulk callsites found")
+backend.write_text(text.replace(old, new))
+print("PATCHED_HYBRID_EP_SPACE_CLUSTER", count)
+PY
+rg -n "cp_async_bulk\\(cuda::ptx::space_(cluster|shared)" /tmp/DeepEP/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh
+"""
 
     bench_cmd = ""
     if args.run_bench:
@@ -105,6 +123,7 @@ with tarfile.open(download_path, "r:gz") as archive:
     extracted_root = next(temp_dir.iterdir())
     extracted_root.rename(target_dir)
 PY
+{hybrid_ep_patch_block}
 NVTX_LIB_DIR=$(/opt/conda/bin/python - <<'PY'
 from pathlib import Path
 import sys
@@ -200,6 +219,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-cuda-arch-list", default="9.0")
     parser.add_argument("--disable-sm90-features", action="store_true")
     parser.add_argument("--disable-aggressive-ptx-instrs", action="store_true")
+    parser.add_argument("--patch-hybrid-ep-space-cluster", action="store_true")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iters", type=int, default=5)
     return parser.parse_args()
