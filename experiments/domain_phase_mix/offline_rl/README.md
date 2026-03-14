@@ -58,6 +58,31 @@ The supporting writeup is:
 
 - [offline_rl_v4_pooled_aux_benchmark_report.md](/Users/calvinxu/Projects/Coursework/CS234/Project/RL_Bench/offline_rl_v4_pooled_aux_benchmark_report.md)
 
+A pooled-direct v5 follow-up now exists under:
+
+- `/Users/calvinxu/Projects/Coursework/CS234/Project/RL_Bench/offline_rl_v5_three_phase_target_pooled_direct_20260314/bench_v5`
+
+That v5 run reused the v4 pooled dense dataset and re-evaluated the current legacy `outcome_planner` against two new pooled-direct methods:
+
+- `dense_direct_v5`
+- `hybrid_q_direct_v5`
+
+Result:
+
+- `dense_direct_v5` is the first new offline method in this thread that clearly beats the current legacy `outcome_planner` on the same folds.
+  - `fqe_value_mean = 4.0860` vs legacy `4.0709`
+  - `dr_value_mean = 4.1887` vs legacy `3.1376`
+  - `beat_legacy_fqe_folds = 5/5`
+  - `beat_legacy_fqe_and_dr_folds = 4/5`
+- `hybrid_q_direct_v5` also beats legacy on FQE and improves DR materially, but is weaker than `dense_direct_v5` overall.
+  - `fqe_value_mean = 4.0870`
+  - `dr_value_mean = 4.0522`
+- neither v5 candidate beats `fixed_best_schedule`, so no new rollout is justified from v5 yet
+
+The supporting writeup is:
+
+- [offline_rl_v5_pooled_direct_benchmark_report.md](/Users/calvinxu/Projects/Coursework/CS234/Project/RL_Bench/offline_rl_v5_pooled_direct_benchmark_report.md)
+
 The fourth fix matters for result interpretation. Before March 8, 2026, chained rollout jobs were not directly comparable
 to native static schedule runs because the rollout evaluator changed the dataset slicing semantics in early phases.
 Regression coverage for this now lives in [test_domain_phase_mix_offline_rl.py](/Users/calvinxu/Projects/Work/Marin/marin/tests/test_domain_phase_mix_offline_rl.py).
@@ -80,6 +105,12 @@ Regression coverage for this now lives in [test_domain_phase_mix_offline_rl.py](
 - [train_three_phase_policy_bench_v4.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/train_three_phase_policy_bench_v4.py)
   - trains three-phase-target policies with pooled two-phase auxiliary data
   - current best v4 result is `dynamic_q_planner_v4_pooled`, but it still fails the rollout gate
+- [train_three_phase_policy_bench_v5.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/train_three_phase_policy_bench_v5.py)
+  - compares the legacy `outcome_planner` against:
+    - `dense_direct_v5`
+    - `hybrid_q_direct_v5`
+  - reuses the pooled v4 dense dataset and evaluates only on the three-phase target folds
+  - current best offline replacement for the legacy planner is `dense_direct_v5`
 - [train_three_phase_policy_bench_v3.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/train_three_phase_policy_bench_v3.py)
   - trains and compares:
     - `sklearn_dynamic_q_planner_v3`
@@ -147,4 +178,5 @@ If resuming this thread in a later session, the most useful sequence is:
 3. `train_lm.py` now waits for the async checkpointer before exit, and chained rollout should resume from the exact boundary checkpoint (`step == cumulative_steps - 1`), not the latest durable checkpoint.
 4. Native static replays of the corrected executed schedules are still needed to separate schedule quality from boundary-conditioned adaptivity.
 5. v3 is now available on the three-phase-only dense dataset and currently rejects all candidates before rollout.
-6. The next serious offline-control iteration should probably start from `dynamic_q_planner_v4_pooled`; pooled auxiliary data fixed the v3 phase-0 sanity failures, but the model still does not beat the strongest fixed historical schedule offline.
+6. The next serious offline-control iteration should now start from `dense_direct_v5`, not the older Q-only planners.
+7. `dense_direct_v5` beats the legacy `outcome_planner` on the same v4 folds, but still does not beat the strongest fixed historical schedule offline.
