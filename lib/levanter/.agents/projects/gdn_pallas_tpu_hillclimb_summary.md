@@ -44,10 +44,6 @@ Current mainline target order:
 - `D1`: completed as a partial diagnostic lead
   - narrower head-first branch layout handling slightly improved AD/layout behavior and step time
   - but it did not reduce `dispatch_shard_shell_delta_ms`, and xprof `IDLE` worsened
-- `D2`: first gate-owned post-conv kernel-entry cut attempted and rejected
-  - summary-side generic shell buckets vanished to zero, but matched xprof still showed larger `dispatch_shard_shell`, `ad_wrapper_shell`, and `IDLE`
-  - treat that cut as namespace-only / hidden-shell progress, not a positive `D2`
-  - `D2` remains open for a smaller branch-core cut
 
 ## D2 Definition
 
