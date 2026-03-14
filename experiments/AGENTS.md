@@ -2,6 +2,20 @@
 
 Start with `/AGENTS.md`; this file adds experiment-specific guidance.
 
+## Executor Framework
+
+- `ExecutorStep`s form a DAG. The executor computes all dependencies from `InputName(...)` / `step / "..."` references and runs steps in topological order.
+- Step caching is output-path based: if `<output_path>/.status` is `SUCCESS`, the step is skipped.
+- `output_path` is deterministic: `<prefix>/<step.name>-<hash>`.
+- The hash is computed from:
+  - `step.name`
+  - all `versioned(...)` values in config
+  - dependency versions (including pseudo-dependencies from `InputName(...).nonblocking()`)
+  - hardcoded input paths (`InputName.hardcoded(...)`) referenced in config
+- `fn` code is **not** part of the version hash. If behavior changes but `name` + version inputs stay the same, executor will reuse cache.
+- For fresh runs, make the step name unique (or add a versioned run token) when semantics differ and you do not want cache reuse.
+- Reusing a name intentionally is fine when you want stable, deduplicated artifacts across scripts.
+
 ## Artifact Path Rules
 
 - Do not hardcode `gs://...` paths in experiment configs unless there is no viable alternative.
