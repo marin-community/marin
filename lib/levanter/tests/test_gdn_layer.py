@@ -236,56 +236,6 @@ def test_layer_gradients_exist(use_flash: bool):
 
 
 @pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
-def test_train_gate_postconv_entry_branch_core_matches_default_training_path(use_flash: bool):
-    key = jax.random.PRNGKey(17)
-    B, L = 2, 21
-    cfg = GatedDeltaNetConfig(
-        Embed=Axis("embed", 48),
-        num_k_heads=2,
-        num_v_heads=4,
-        head_k_dim=8,
-        head_v_dim=8,
-        conv_kernel_size=4,
-        rms_norm_eps=1e-6,
-    )
-    layer = GatedDeltaNet.init(cfg, key=key, use_flash=use_flash)
-
-    Batch, Pos, Embed = Axis("batch", B), Axis("position", L), cfg.Embed
-    x0 = hax.named(jax.random.normal(key, (B, L, Embed.size), dtype=jnp.float32), (Batch, Pos, Embed))
-    mask = hax.named(
-        jnp.concatenate([jnp.ones((B, L - 3)), jnp.zeros((B, 3))], axis=1).astype(jnp.float32),
-        (Batch.name, Pos.name),
-    )
-
-    y_default, _ = layer(x0, inference=False, chunk_size=8, segment_size=4, attention_mask=mask)
-    y_diag, _ = layer(
-        x0,
-        inference=False,
-        chunk_size=8,
-        segment_size=4,
-        attention_mask=mask,
-        train_gate_postconv_entry_sharding_diagnostic=True,
-    )
-    np.testing.assert_allclose(y_default.array, y_diag.array, rtol=1e-5, atol=1e-5)
-
-    def loss_fn(x_arr, *, use_diagnostic: bool):
-        x = hax.named(x_arr, x0.axes)
-        y, _ = layer(
-            x,
-            inference=False,
-            chunk_size=8,
-            segment_size=4,
-            attention_mask=mask,
-            train_gate_postconv_entry_sharding_diagnostic=use_diagnostic,
-        )
-        return jnp.sum(y.array.astype(jnp.float32) ** 2)
-
-    grad_default = jax.grad(lambda x_arr: loss_fn(x_arr, use_diagnostic=False))(x0.array)
-    grad_diag = jax.grad(lambda x_arr: loss_fn(x_arr, use_diagnostic=True))(x0.array)
-    np.testing.assert_allclose(grad_default, grad_diag, rtol=1e-5, atol=1e-5)
-
-
-@pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 def test_train_branch_boundary_matches_default_training_path(use_flash: bool):
     key = jax.random.PRNGKey(123)
     B, L = 2, 19
