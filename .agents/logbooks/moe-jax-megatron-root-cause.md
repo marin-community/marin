@@ -73,3 +73,88 @@
 - Next action:
   - Create the experiment issue and link it back here.
   - Audit the relevant JAX / torch / Megatron code paths before launching the first H100x8 comparison.
+
+### 2026-03-14 22:00 - Matched same-shape JAX vs Megatron head-to-head
+- Commands:
+  ```bash
+  export KUBECONFIG=~/.kube/coreweave-iris
+
+  uv run python .agents/scripts/deepep_jax_krt_bench.py \
+    --repo-ref 4807bb3f3dbfe654977c978f57900a297cc421f5 \
+    --task-id jax-megatron-root-cause-jax-forward-20260314-1445 \
+    --skip-smoke \
+    --shared-expert-dim 0 \
+    --bench-pass forward \
+    --warmup 5 \
+    --iters 20 \
+    --topk-list 2,8 \
+    --distributions random,runs \
+    --kernels current,ragged_a2a,deepep_layout_ragged_a2a \
+    --ep-list 1,2,4,8
+
+  uv run python .agents/scripts/megatron_qwen_krt_bench.py \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --task-id jax-megatron-root-cause-megatron-20260314-1458 \
+    --cases marin_3633_topk_2,marin_3633_topk_8 \
+    --dispatchers alltoall,deepep,hybridep \
+    --warmup-iters 5 \
+    --measure-iters 20
+  ```
+- Result:
+  - JAX/Marin fixed-shape forward-only control stayed negative even after removing the shared-expert branch and using longer timing windows.
+  - On distributed JAX cells, `current / ragged_a2a` ranged from `1.73x` to `2.48x`.
+  - `deepep_layout_ragged_a2a` stayed effectively tied with `ragged_a2a`; most cells were within `~1%`, worst-case about `+4.2%`.
+  - Same-shape Megatron `MoELayer` runs were positive on both `topk=2` and `topk=8`:
+    - `topk=2`: `deepep` `1.89x` forward / `3.26x` backward faster than `alltoall`; `hybridep` `2.32x` forward / `2.35x` backward faster
+    - `topk=8`: `deepep` `2.33x` forward / `3.39x` backward faster than `alltoall`; `hybridep` `1.82x` forward / `2.00x` backward faster
+  - So the cross-framework discrepancy reproduces on the same H100x8 shape; it is not just a reporting artifact from unrelated model scales.
+- Additional signal:
+  - JAX emitted repeated `gemm_fusion_autotuner` slow-kernel warnings on the large grouped expert matmuls for the `topk=8` slices.
+  - This looks like an absolute JAX throughput factor, but it is not needed to explain the relative `deepep_layout_ragged_a2a ~= ragged_a2a` result.
+- Next action:
+  - Measure raw DeepEP dispatch/combine on the same shape and separate:
+    - layout cost
+    - steady-state transport cost
+    - JAX -> Torch bridge cost
+    - Torch -> JAX bridge cost
+
+### 2026-03-14 22:20 - Direct DeepEP dispatch/combine isolation with explicit JAX bridge
+- Commands:
+  ```bash
+  export KUBECONFIG=~/.kube/coreweave-iris
+
+  uv run python .agents/scripts/deepep_dispatch_krt_bench.py \
+    --worktree /Users/romain/marin-wt/moe-jax-megatron-root-cause \
+    --task-id jax-megatron-root-cause-dispatch-matrix-jax-20260314-1517 \
+    --topk-list 2,8 \
+    --distributions random,runs \
+    --input-sources torch,jax \
+    --return-to-jax \
+    --warmup 5 \
+    --iters 20
+  ```
+- Launcher/debug notes:
+  - First dispatch attempt failed because `Buffer.dispatch` was called with `topk_idx` as the second positional argument, which DeepEP interprets as a cached `handle`.
+  - Fixed the harness to use keyword arguments for the non-cached path and a real cached `handle` for the steady-state path.
+  - Second attempt failed because the PyTorch image did not include JAX.
+  - Fixed the launcher to install `jax[cuda12]==0.8.0` only when the matrix includes `input_source=jax`.
+- Result:
+  - Raw torch-side DeepEP dispatch/combine on the sealed shape is very fast:
+    - `random, topk=2`: `full_s=0.000486` (`67.44M tokens/s`)
+    - `random, topk=8`: `full_s=0.001062` (`30.85M tokens/s`)
+    - `runs, topk=2`: `full_s=0.000913` (`35.90M tokens/s`)
+    - `runs, topk=8`: `full_s=0.001298` (`25.25M tokens/s`)
+  - Once tensors are already in Torch, the steady-state dispatch/combine cost for JAX-originating tensors is in the same ballpark:
+    - `random, topk=2`: JAX/Torch `full_s` ratio `1.02x`
+    - `random, topk=8`: JAX/Torch `full_s` ratio `1.36x`
+    - `runs, topk=2`: JAX/Torch `full_s` ratio `0.96x`
+    - `runs, topk=8`: JAX/Torch `full_s` ratio `0.92x`
+  - The bridge itself is the expensive part:
+    - `bridge_to_torch_s`: about `85 ms` to `105 ms`
+    - `bridge_to_jax_s`: about `2 ms` to `12 ms`
+  - Therefore:
+    - a direct JAX -> Torch DLPack bridge every training step would dominate the sub-millisecond to low-millisecond transport kernel time
+    - but the raw DeepEP transport kernel is not inherently incompatible with JAX-shaped inputs once those tensors are already on the Torch side
+- Root-cause update:
+  - This confirms that the missing JAX gains are primarily about missing transport kernel coverage, not about DeepEP transport itself being bad on the sealed shape.
+  - It also shows that a naive per-step Torch interop path is not a viable substitute for a real JAX custom call, because the bridge cost would erase the gain.

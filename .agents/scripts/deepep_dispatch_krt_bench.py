@@ -28,9 +28,15 @@ def _entrypoint(argv: list[str], *, workdir_files: dict[str, bytes]) -> cluster_
     return entrypoint
 
 
-def _build_run_script(args: argparse.Namespace, *, bench_file_b64: str) -> str:
+def _bench_command(
+    args: argparse.Namespace,
+    *,
+    distribution: str,
+    input_source: str,
+    topk: int,
+) -> str:
     optional_flags: list[str] = []
-    if args.return_to_jax:
+    if input_source == "jax" and args.return_to_jax:
         optional_flags.append("--return-to-jax")
     if args.async_finish:
         optional_flags.append("--async-finish")
@@ -40,22 +46,52 @@ def _build_run_script(args: argparse.Namespace, *, bench_file_b64: str) -> str:
     if optional_flags:
         optional_flag_block = "".join(f"  {flag} \\\n" for flag in optional_flags)
 
-    bench_cmd = f"""
-echo RUNNING_DISPATCH_BENCH
+    return f"""
+echo "BENCH_START distribution={distribution} input_source={input_source} topk={topk}"
 torchrun --standalone --nproc_per_node={args.gpus} /app/{BENCH_PATH} \\
   --tokens {args.tokens} \\
   --hidden {args.hidden} \\
   --experts {args.experts} \\
-  --topk {args.topk} \\
-  --distribution {args.distribution} \\
+  --topk {topk} \\
+  --distribution {distribution} \\
   --dtype {args.dtype} \\
   --seed {args.seed} \\
   --warmup {args.warmup} \\
   --iters {args.iters} \\
-  --input-source {args.input_source} \\
+  --input-source {input_source} \\
 {optional_flag_block}\
   --num-nvl-bytes {args.num_nvl_bytes} \\
   --num-rdma-bytes {args.num_rdma_bytes}
+echo "BENCH_END distribution={distribution} input_source={input_source} topk={topk}"
+"""
+
+
+def _build_run_script(args: argparse.Namespace, *, bench_file_b64: str) -> str:
+    bench_commands = ["echo RUNNING_DISPATCH_BENCH"]
+    for distribution in args.distributions.split(","):
+        for topk_text in args.topk_list.split(","):
+            topk = int(topk_text)
+            for input_source in args.input_sources.split(","):
+                bench_commands.append(
+                    _bench_command(
+                        args,
+                        distribution=distribution,
+                        input_source=input_source,
+                        topk=topk,
+                    )
+                )
+    bench_cmd = "\n".join(bench_commands)
+    jax_setup_block = ""
+    if "jax" in args.input_sources.split(","):
+        jax_setup_block = """
+/opt/conda/bin/python -m pip install --no-cache-dir "jax[cuda12]==0.8.0"
+/opt/conda/bin/python - <<'PY'
+import jax
+import jaxlib
+print("JAX_VERSION", jax.__version__)
+print("JAXLIB_VERSION", jaxlib.__version__)
+print("JAX_DEVICES", jax.devices())
+PY
 """
 
     return f"""set -euxo pipefail
@@ -132,6 +168,7 @@ ln -sf "$NVTX_LIB_DIR/libnvToolsExt.so.1" /tmp/nvtxshim/libnvtx3interop.so
 export LIBRARY_PATH="/tmp/nvtxshim:$NVTX_LIB_DIR${{LIBRARY_PATH:+:$LIBRARY_PATH}}"
 export LD_LIBRARY_PATH="/tmp/nvtxshim:$NVTX_LIB_DIR${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
 /opt/conda/bin/python -m pip install --no-build-isolation /tmp/DeepEP
+{jax_setup_block}
 if [ -n "$ORIGINAL_PYTHONPATH" ]; then
   export PYTHONPATH="$ORIGINAL_PYTHONPATH"
 else
@@ -184,18 +221,28 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden", type=int, default=2048)
     parser.add_argument("--experts", type=int, default=128)
     parser.add_argument("--topk", type=int, default=8)
+    parser.add_argument("--topk-list")
     parser.add_argument("--distribution", choices=("random", "runs"), default="random")
+    parser.add_argument("--distributions")
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iters", type=int, default=5)
     parser.add_argument("--input-source", choices=("torch", "jax"), default="torch")
+    parser.add_argument("--input-sources")
     parser.add_argument("--return-to-jax", action="store_true")
     parser.add_argument("--async-finish", action="store_true")
     parser.add_argument("--allocate-on-comm-stream", action="store_true")
     parser.add_argument("--num-nvl-bytes", type=int, default=256 * 1024 * 1024)
     parser.add_argument("--num-rdma-bytes", type=int, default=0)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.topk_list is None:
+        args.topk_list = str(args.topk)
+    if args.distributions is None:
+        args.distributions = args.distribution
+    if args.input_sources is None:
+        args.input_sources = args.input_source
+    return args
 
 
 def main() -> int:

@@ -39,20 +39,46 @@ The goal is to produce a falsifiable explanation rather than another isolated ti
 
 ## Results
 
-In progress as of 2026-03-14.
+Current state as of 2026-03-14:
+- The same H100x8 shape now has three matched views:
+  1. JAX/Marin fixed-shape forward-only control on the sealed `#3633` harness
+  2. Megatron-LM full `MoELayer` timing on a same-shape `marin_3633_topk_{2,8}` case
+  3. direct DeepEP dispatch/combine isolation with explicit JAX -> Torch and Torch -> JAX bridge timing
 
-Current state:
-- New research branch/worktree created from the sealed Megatron snapshot so the starting point includes both the prior JAX custom-call code and the Megatron harness.
-- Root-cause categories being audited first:
-  - `benchmark scope`: dispatch-only vs full `MoELayer`
-  - `kernel scope`: layout-only custom call vs real dispatch/combine transport
-  - `backend scope`: JAX `ragged_all_to_all` / current ring EP vs DeepEP / Hybrid-EP
-  - `measurement scope`: warmup window, dummy GEMM, router setup, fixed inputs, and fp32 router dtype
-- The first experiment matrix is intentionally matched rather than broad:
-  1. re-establish the sealed JAX/Marin fixed-shape baseline on H100x8
-  2. run a same-shape torch-side DeepEP dispatch/combine comparison, with optional JAX->Torch bridge cost made explicit
-  3. run a direct JAX/Marin vs Megatron-LM head-to-head on the same H100x8 cluster with the closest practical shared synthetic shape
-  4. attribute the observed gap to the smallest validated set of causes
+Matched JAX/Marin result:
+- Shape: `tokens=32768 hidden=2048 mlp_dim=768 experts=128 shared_expert_dim=0`
+- Timing hygiene: `warmup=5 iters=20`
+- `current` still wins every distributed point (`EP > 1`)
+- `current / ragged_a2a` ranges from `1.73x` to `2.48x`
+- `deepep_layout_ragged_a2a` stays effectively tied with `ragged_a2a`, usually within `~1%`
+
+Matched Megatron result on the same shape:
+- `topk=2`
+  - `alltoall`: `forward 14.62 ms`, `backward 19.57 ms`
+  - `deepep`: `forward 7.74 ms`, `backward 6.00 ms`
+  - `hybridep`: `forward 6.31 ms`, `backward 8.35 ms`
+- `topk=8`
+  - `alltoall`: `forward 11.26 ms`, `backward 20.86 ms`
+  - `deepep`: `forward 4.84 ms`, `backward 6.15 ms`
+  - `hybridep`: `forward 6.19 ms`, `backward 10.43 ms`
+
+Direct DeepEP dispatch/combine isolation:
+- Raw torch-side DeepEP transport on the sealed shape is strong:
+  - `random, topk=2`: `67.44M tokens/s`
+  - `random, topk=8`: `30.85M tokens/s`
+  - `runs, topk=2`: `35.90M tokens/s`
+  - `runs, topk=8`: `25.25M tokens/s`
+- Once tensors are already in Torch, JAX-originating tensors see similar steady-state transport cost:
+  - JAX/Torch `dispatch_combine_full_s` ratio ranges from `0.92x` to `1.36x`
+- But the bridge itself is expensive:
+  - `bridge_to_torch_s`: about `85 ms` to `105 ms`
+  - `bridge_to_jax_s`: about `2 ms` to `12 ms`
+
+Root-cause summary:
+1. `#3665` never exercised the winning DeepEP / Hybrid-EP transport kernels. It only replaced dispatch-layout metadata and then still used JAX `ragged_all_to_all`.
+2. That kernel-coverage difference is sufficient to explain the main discrepancy: on the same shape, Megatron using real DeepEP / Hybrid-EP is positive while JAX `deepep_layout_ragged_a2a` remains tied with plain ragged.
+3. A naive JAX -> Torch bridge each training step would erase the gain. The direct bridge cost is tens of milliseconds, far larger than the sub-millisecond to low-millisecond transport kernel time.
+4. JAX likely also has a separate absolute-performance issue in grouped expert GEMMs on this shape; the JAX run emitted repeated XLA slow-kernel warnings on `topk=8`. That helps explain absolute JAX throughput, but it is not needed to explain why `deepep_layout_ragged_a2a` failed to beat `ragged_a2a`.
 
 ## Decision Log
 
@@ -63,7 +89,15 @@ Current state:
 ## Negative Results
 
 - `#3665` is already a sealed negative result for the narrow claim that replacing only the JAX dispatch-layout metadata producer improves the `#3633` fixed-shape H100x8 benchmark.
+- The first direct dispatch-isolation attempt failed because the harness misused the DeepEP cached-handle API; fixing that did not change the final conclusion.
+- The second dispatch-isolation attempt failed because the PyTorch benchmark image did not have JAX installed; adding `jax[cuda12]==0.8.0` resolved that setup issue.
 
 ## Conclusion
 
-Not complete yet. The immediate milestone is to turn the prior sealed results into a matched root-cause matrix and a direct JAX/Marin vs Megatron-LM comparison on CoreWeave H100x8.
+The root cause is now specific:
+
+- The positive H100x8 gains from `#3641` / `#3666` do exist on the sealed `#3633` shape, but only when the benchmark actually uses DeepEP / Hybrid-EP dispatch-combine transport.
+- The negative JAX result in `#3665` was not a faithful test of that path. It swapped in DeepEP layout metadata, but still paid JAX `ragged_all_to_all` transport costs, so it stayed tied with plain `ragged_a2a`.
+- Direct Torch interop is not an acceptable substitute for a real JAX integration because the JAX -> Torch bridge cost is too large to pay per step.
+
+The next meaningful follow-up is therefore not “retune `deepep_layout_ragged_a2a`”. The next meaningful follow-up is to wire a real JAX custom call for dispatch/combine transport, or to explicitly decide not to pursue that integration.

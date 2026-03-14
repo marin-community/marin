@@ -329,28 +329,38 @@ def _dispatch_and_combine(
     batch: TorchBatch,
     layout: LayoutCache,
     *,
+    handle: tuple | None = None,
     async_finish: bool,
     allocate_on_comm_stream: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    recv_x, _, recv_topk_weights, _, handle, _ = buffer.dispatch(
-        batch.x,
-        batch.topk_idx,
-        layout.num_tokens_per_rank,
-        layout.is_token_in_rank,
-        layout.num_tokens_per_expert,
-        layout.num_tokens_per_rdma_rank,
-        topk_weights=batch.topk_weights,
-        async_finish=async_finish,
-        allocate_on_comm_stream=allocate_on_comm_stream,
-    )
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, tuple]:
+    if handle is None:
+        recv_x, _, recv_topk_weights, _, dispatch_handle, _ = buffer.dispatch(
+            batch.x,
+            num_tokens_per_rank=layout.num_tokens_per_rank,
+            num_tokens_per_rdma_rank=layout.num_tokens_per_rdma_rank,
+            is_token_in_rank=layout.is_token_in_rank,
+            num_tokens_per_expert=layout.num_tokens_per_expert,
+            topk_idx=batch.topk_idx,
+            topk_weights=batch.topk_weights,
+            async_finish=async_finish,
+            allocate_on_comm_stream=allocate_on_comm_stream,
+        )
+    else:
+        recv_x, _, recv_topk_weights, _, _, _ = buffer.dispatch(
+            batch.x,
+            handle=handle,
+            async_finish=async_finish,
+            allocate_on_comm_stream=allocate_on_comm_stream,
+        )
+        dispatch_handle = handle
     combined_x, combined_topk_weights, _ = buffer.combine(
         recv_x,
-        handle,
+        dispatch_handle,
         topk_weights=recv_topk_weights,
         async_finish=async_finish,
         allocate_on_comm_stream=allocate_on_comm_stream,
     )
-    return recv_x, combined_x, combined_topk_weights
+    return recv_x, combined_x, combined_topk_weights, dispatch_handle
 
 
 def _bridge_back_to_jax(tensor: torch.Tensor) -> float:
@@ -421,7 +431,7 @@ def main() -> None:
         bridge_to_torch = 0.0
 
     layout = _layout_cache(buffer, batch, experts=args.experts)
-    recv_x, combined_x, _ = _dispatch_and_combine(
+    recv_x, combined_x, _, dispatch_handle = _dispatch_and_combine(
         buffer,
         batch,
         layout,
@@ -444,6 +454,7 @@ def main() -> None:
             buffer,
             batch,
             layout,
+            handle=dispatch_handle,
             async_finish=args.async_finish,
             allocate_on_comm_stream=args.allocate_on_comm_stream,
         ),
@@ -467,10 +478,11 @@ def main() -> None:
 
     bridge_to_jax = 0.0
     if args.return_to_jax:
-        _, combined_x, _ = _dispatch_and_combine(
+        _, combined_x, _, _ = _dispatch_and_combine(
             buffer,
             batch,
             layout,
+            handle=dispatch_handle,
             async_finish=args.async_finish,
             allocate_on_comm_stream=args.allocate_on_comm_stream,
         )
