@@ -7,7 +7,7 @@ from typing import List, Mapping, Optional, Sequence, Tuple, TypeVar
 
 import jax
 import numpy as np
-from async_lru import alru_cache
+import functools
 from jaxtyping import PRNGKeyArray
 
 from haliax.util import StringHolderEnum
@@ -199,8 +199,8 @@ class MixtureDataset(AsyncDataset[T]):
         stage_starts = np.array([start for start, _ in self.weight_stages])
         return max(0, np.searchsorted(stage_starts, block_start, side="right") - 1)
 
-    @alru_cache(maxsize=32)
-    async def _get_block(self, index: int) -> Optional[np.ndarray]:
+    @functools.lru_cache(maxsize=32)
+    def _get_block(self, index: int) -> Optional[np.ndarray]:
         stage = self._get_stage_for_block(index)
         if not self.randomize_blocks:
             return self._unpermuted_ids_per_stage[stage]
@@ -223,8 +223,7 @@ class MixtureDataset(AsyncDataset[T]):
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T]:
         block_ids = np.array([idx // self.block_size for idx in indices])
 
-        blocks = [self._get_block(block_id) for block_id in block_ids]
-        blocks = await asyncio.gather(*blocks)
+        blocks = [self._get_block(int(block_id)) for block_id in block_ids]
 
         # split the indices into batches for each dataset
         batches_per_dataset: list[list[int]] = [[] for _ in range(len(self.datasets))]
@@ -266,7 +265,7 @@ class MixtureDataset(AsyncDataset[T]):
         # simpler implementation because there's only one
         block_id = index // self.block_size
         index = index % self.block_size
-        permuted_ids = await self._get_block(block_id)
+        permuted_ids = self._get_block(int(block_id))
         dataset_id, dataset_index = self._index_into_dataset_for_id(permuted_ids[index], block_id)
 
         dataset = self._dataset_of_id(dataset_id)

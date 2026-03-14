@@ -1,546 +1,557 @@
-(SliceActor pid=3074, ip=10.164.2.191)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-(SliceActor pid=3074, ip=10.164.2.191)     return fn(*args, **kwargs)
-(SliceActor pid=3074, ip=10.164.2.191)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 2x across cluster]
-(SliceActor pid=3074, ip=10.164.2.191)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-(SliceActor pid=3074, ip=10.164.2.191)     return func(*args, **kwargs)
-(SliceActor pid=3074, ip=10.164.2.191)            ^^^^^^^^^^^^^^^^^^^^^
-(SliceActor pid=3074, ip=10.164.2.191)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-(SliceActor pid=3074, ip=10.164.2.191)     values, debugger_breakpoint = worker.get_objects(
-(SliceActor pid=3074, ip=10.164.2.191)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-(SliceActor pid=3074, ip=10.164.2.191)     raise value
-(SliceActor pid=3074, ip=10.164.2.191) ray.exceptions.ActorDiedError: The actor died unexpectedly before finishing this task.
-(raylet, ip=10.164.2.190) [2026-03-12 21:03:41,189 E 6893 6893] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 44x across cluster]
-(autoscaler +18m6s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +18m6s) Resized to 20640 CPUs, 696 TPUs.
-(autoscaler +18m6s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*1, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.2.112) [2026-03-12 21:04:35,074 E 6895 6895] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 9x across cluster]
-(raylet, ip=10.164.2.116) [2026-03-12 21:04:41,831 E 6903 6903] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 9x across cluster]
-(raylet, ip=10.164.2.112) [2026-03-12 21:04:47,135 E 6895 6895] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
-(autoscaler +19m53s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +19m53s) Resized to 20640 CPUs, 696 TPUs.
-(autoscaler +19m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*1, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.2.211) E0312 21:01:54.143209106    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-12T21:01:54.142816426-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-12T21:01:54.142807496-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-12T21:01:54.142779556-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-12T21:01:54.142760066-07:00"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-12T21:01:54.142804616-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-12T21:01:54.142799266-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
-(raylet, ip=10.164.2.211) [2026-03-12 21:01:54,220 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
-(raylet, ip=10.164.2.211) *** StackTrace Information ***
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x564052852eca] ray::operator<<()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x5640528554e9] ray::RayLog::~RayLog()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x564051d97ce9] ray::rpc::GrpcServer::Run()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x564051d1403c] ray::ObjectManager::ObjectManager()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x564051b5701e] std::make_unique<>()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x564051b860df] main::{lambda()#5}::operator()()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x564051b88c29] std::_Function_handler<>::_M_invoke()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x564051f56aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x564051f691b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x564051f80e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5640521515db] EventTracker::RecordExecution()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x564052148ffb] boost::asio::detail::executor_op<>::do_complete()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x56405281e6cb] boost::asio::detail::scheduler::do_run_one()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x564052820c79] boost::asio::detail::scheduler::run()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x564052821182] boost::asio::io_context::run()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x564051b1b3d7] main
-(raylet, ip=10.164.2.211) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f86f0f53d90]
-(raylet, ip=10.164.2.211) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f86f0f53e40] __libc_start_main
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x564051b3d4f7]
-(raylet, ip=10.164.2.211) 
-(raylet, ip=10.164.2.201) [2026-03-12 21:04:51,903 E 6895 6895] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x564052147c5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
-(raylet, ip=10.164.2.103) [2026-03-12 21:06:35,353 E 3881 3881] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 70x across cluster]
-(autoscaler +20m56s) Adding 2 node(s) of type tpu_slice_v5e_128.
-(autoscaler +20m56s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +20m56s) Resized to 20520 CPUs, 692 TPUs.
-(autoscaler +20m56s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*1, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.2.209) [2026-03-12 21:07:30,620 E 3882 3882] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 28x across cluster]
-(raylet, ip=10.164.2.209) [2026-03-12 21:07:38,656 E 3882 3882] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
-(autoscaler +22m15s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +22m15s) Resized to 20400 CPUs, 688 TPUs.
-(autoscaler +22m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +23m1s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +23m1s) Resized to 20400 CPUs, 688 TPUs.
-(autoscaler +23m1s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +23m30s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +23m30s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +23m30s) Resized to 20400 CPUs, 688 TPUs.
-(autoscaler +23m30s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.2.210) [2026-03-12 21:03:12,798 E 1070 1070] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 13x across cluster]
-(raylet, ip=10.164.2.211) E0312 21:01:54.143209106    1068 chttp2_server.cc:1063]                UNKNOWN:No address added out of total 1 resolved for '0.0.0.0:8076' {created_time:"2026-03-12T21:01:54.142816426-07:00", children:[UNKNOWN:Failed to add any wildcard listeners {created_time:"2026-03-12T21:01:54.142807496-07:00", children:[UNKNOWN:Unable to configure socket {fd:30, created_time:"2026-03-12T21:01:54.142779556-07:00", children:[UNKNOWN:Address already in use {syscall:"bind", os_error:"Address already in use", errno:98, created_time:"2026-03-12T21:01:54.142760066-07:00"}]}, UNKNOWN:Unable to configure socket {created_time:"2026-03-12T21:01:54.142804616-07:00", fd:30, children:[UNKNOWN:Address already in use {created_time:"2026-03-12T21:01:54.142799266-07:00", errno:98, os_error:"Address already in use", syscall:"bind"}]}]}]}
-(raylet, ip=10.164.2.211) [2026-03-12 21:01:54,220 C 1068 1068] (raylet) grpc_server.cc:133:  An unexpected system state has occurred. You have likely discovered a bug in Ray. Please report this issue at https://github.com/ray-project/ray/issues and we'll work with you to fix it. Check failed: server_ Failed to start the grpc server. The specified port is 8076. This means that Ray's core components will not be able to function correctly. If the server startup error message is `Address already in use`, it indicates the server fails to start because the port is already used by other processes (such as --node-manager-port, --object-manager-port, --gcs-server-port, and ports between --min-worker-port, --max-worker-port). Try running sudo lsof -i :8076 to check if there are other processes listening to the port.
-(raylet, ip=10.164.2.211) *** StackTrace Information ***
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf59eca) [0x564052852eca] ray::operator<<()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf5c4e9) [0x5640528554e9] ray::RayLog::~RayLog()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x49ece9) [0x564051d97ce9] ray::rpc::GrpcServer::Run()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x41b03c) [0x564051d1403c] ray::ObjectManager::ObjectManager()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x25e01e) [0x564051b5701e] std::make_unique<>()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28d0df) [0x564051b860df] main::{lambda()#5}::operator()()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x28fc29) [0x564051b88c29] std::_Function_handler<>::_M_invoke()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x65daaa) [0x564051f56aaa] ray::gcs::InternalKVAccessor::AsyncGetInternalConfig()::{lambda()#1}::operator()()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x6701b1) [0x564051f691b1] ray::rpc::RetryableGrpcClient::RetryableGrpcRequest::Create<>()::{lambda()#1}::operator()()::{lambda()#1}::operator()()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x687e4b) [0x564051f80e4b] ray::rpc::ClientCallImpl<>::OnReplyReceived()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x8585db) [0x5640521515db] EventTracker::RecordExecution()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84fffb) [0x564052148ffb] boost::asio::detail::executor_op<>::do_complete()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf256cb) [0x56405281e6cb] boost::asio::detail::scheduler::do_run_one()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf27c79) [0x564052820c79] boost::asio::detail::scheduler::run()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0xf28182) [0x564052821182] boost::asio::io_context::run()
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2223d7) [0x564051b1b3d7] main
-(raylet, ip=10.164.2.211) /usr/lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f86f0f53d90]
-(raylet, ip=10.164.2.211) /usr/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f86f0f53e40] __libc_start_main
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x2444f7) [0x564051b3d4f7]
-(raylet, ip=10.164.2.211) 
-(raylet, ip=10.164.2.211) [2026-03-12 21:11:08,720 E 5010 5010] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 77x across cluster]
-(raylet, ip=10.164.2.211) /home/ray/anaconda3/lib/python3.11/site-packages/ray/core/src/ray/raylet/raylet(+0x84ec5b) [0x564052147c5b] std::_Function_handler<>::_M_invoke() [repeated 3x across cluster]
-(raylet, ip=10.164.2.204) [2026-03-12 21:11:14,216 E 6698 6698] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 13x across cluster]
-(autoscaler +25m25s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +25m25s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +25m25s) Resized to 20400 CPUs, 688 TPUs.
-(autoscaler +25m25s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.2.211) [2026-03-12 21:12:01,273 E 5010 5010] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(raylet, ip=10.164.2.206) [2026-03-12 21:12:09,389 E 6696 6696] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
-(raylet, ip=10.164.2.206) [2026-03-12 21:12:18,543 E 6696 6696] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
-(raylet, ip=10.164.2.206) [2026-03-12 21:12:23,956 E 6696 6696] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
-(raylet, ip=10.164.2.103) [2026-03-12 21:12:28,777 E 6697 6697] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(raylet, ip=10.164.2.103) [2026-03-12 21:12:35,667 E 6697 6697] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
-(raylet, ip=10.164.2.204) [2026-03-12 21:12:41,394 E 6698 6698] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(raylet, ip=10.164.2.207) [2026-03-12 21:12:50,329 E 6695 6695] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(raylet, ip=10.164.2.203) [2026-03-12 21:12:55,862 E 6698 6698] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
-(autoscaler +27m0s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +27m0s) Adding 2 node(s) of type tpu_slice_v5e_128.
-(autoscaler +27m0s) Resized to 20160 CPUs, 680 TPUs.
-(autoscaler +27m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.2.208) [2026-03-12 21:13:01,726 E 6700 6700] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
-(raylet, ip=10.164.2.203) [2026-03-12 21:13:06,544 E 6698 6698] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(raylet, ip=10.164.2.213) [2026-03-12 21:13:12,330 E 6703 6703] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 2x across cluster]
-(raylet, ip=10.164.2.213) [2026-03-12 21:13:18,030 E 6703 6703] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
-(raylet, ip=10.164.2.213) [2026-03-12 21:13:22,927 E 6703 6703] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
-(raylet, ip=10.164.2.210) [2026-03-12 21:13:28,583 E 6704 6704] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
-(raylet, ip=10.164.2.96) [2026-03-12 21:13:35,534 E 6860 6860] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 6x across cluster]
-(raylet, ip=10.164.2.212) [2026-03-12 21:13:42,641 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
-(raylet, ip=10.164.2.212) [2026-03-12 21:13:47,535 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
-(raylet, ip=10.164.2.212) [2026-03-12 21:13:53,119 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
-(raylet, ip=10.164.2.212) [2026-03-12 21:14:06,249 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 5x across cluster]
-(raylet, ip=10.164.2.212) [2026-03-12 21:14:11,613 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(raylet, ip=10.164.2.212) [2026-03-12 21:14:15,598 E 6694 6694] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +29m7s) Adding 3 node(s) of type tpu_slice_v5e_256.
-(autoscaler +29m7s) Resized to 20160 CPUs, 680 TPUs.
-(autoscaler +29m7s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +31m26s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +31m26s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +31m26s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +31m26s) Resized to 20160 CPUs, 680 TPUs.
-(autoscaler +31m26s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +32m7s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +32m7s) Adding 3 node(s) of type tpu_slice_v5e_256.
-(autoscaler +32m7s) Removing 68 nodes of type tpu_slice_v5e_128 (idle).
-(autoscaler +32m7s) Removing 42 nodes of type tpu_slice_v5e_256 (idle).
-(autoscaler +32m7s) Resized to 6960 CPUs, 240 TPUs.
-(autoscaler +32m7s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet) The node with node id: 450b188709a11ed341140a889eea55e80a12e84bf9797578917bb29a and address: 10.164.0.16 and node name: 10.164.0.16 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload.
-(autoscaler +34m39s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +34m39s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +34m39s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +34m39s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +35m36s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +35m36s) Resized to 7320 CPUs, 252 TPUs.
-(autoscaler +35m36s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.2.142) [2026-03-12 21:22:17,612 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(raylet, ip=10.164.2.142) [2026-03-12 21:22:19,626 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +37m25s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +37m25s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +37m25s) Resized to 7320 CPUs, 252 TPUs.
-(autoscaler +37m25s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.2.142) [2026-03-12 21:22:21,640 E 1068 1068] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 4x across cluster]
-(raylet, ip=10.164.2.142) [2026-03-12 21:23:45,468 E 2831 2831] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(raylet, ip=10.164.2.142) [2026-03-12 21:23:51,703 E 2831 2831] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +40m28s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +40m28s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +40m28s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +40m28s) Resized to 7320 CPUs, 252 TPUs.
-(autoscaler +40m28s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +42m19s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +42m19s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +42m19s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +42m19s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +42m19s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +47m3s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +47m3s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +47m3s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +47m3s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +47m51s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +47m51s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +47m51s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +47m51s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +47m51s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +49m40s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +49m40s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +49m40s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +49m40s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +50m44s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +50m44s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +50m44s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +51m24s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +51m24s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +51m24s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +52m8s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +52m8s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +52m8s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.1.246) [2026-03-12 21:38:43,750 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +53m9s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +53m9s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +53m9s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet, ip=10.164.1.246) [2026-03-12 21:39:43,416 E 1069 1069] (raylet) worker_pool.cc:1865: Delete runtime env failed
-(autoscaler +54m13s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +54m13s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +54m13s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +54m13s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +55m50s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +55m50s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +55m50s) Resized to 7200 CPUs, 248 TPUs.
-(autoscaler +55m50s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +56m35s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +56m35s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +56m35s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +56m35s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +57m0s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +57m0s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +57m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +57m37s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +57m37s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +57m37s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +58m6s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +58m6s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +58m6s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +58m6s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +58m47s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +58m47s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +58m47s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +59m20s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +59m20s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +59m20s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +59m46s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +59m46s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +59m46s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h31s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h31s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h31s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +1h31s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h1m5s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h1m5s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +1h1m5s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h1m49s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h1m49s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h1m49s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +1h1m49s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h2m45s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h2m45s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h2m45s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +1h2m45s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h3m59s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h3m59s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +1h3m59s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h5m0s) Adding 2 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h5m0s) Resized to 7440 CPUs, 256 TPUs.
-(autoscaler +1h5m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h5m43s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h5m43s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h5m43s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h5m43s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h5m43s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h6m37s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h6m37s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h6m37s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h7m27s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h7m27s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h7m27s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h7m27s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h8m52s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h8m52s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h8m52s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h9m33s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h9m33s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h9m33s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h9m33s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h9m33s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h10m36s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h10m36s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h10m36s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h10m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h11m5s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h11m5s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h11m5s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h11m5s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h11m36s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h11m36s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h11m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h12m27s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h12m27s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h12m27s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h12m48s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h12m48s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h12m48s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h13m9s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h13m9s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h13m9s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h13m40s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h13m40s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h13m40s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h14m11s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h14m11s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h14m11s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h14m51s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h14m51s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h14m51s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h14m51s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h15m20s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h15m20s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h15m20s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h15m50s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h15m50s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h15m50s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h16m53s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h16m53s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h16m53s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h16m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h17m22s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h17m22s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h17m22s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h17m50s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h17m50s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h17m50s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h19m17s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h19m17s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h19m17s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h19m17s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h20m0s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h20m0s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h20m0s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h20m0s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h20m0s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h20m44s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h20m44s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h20m44s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h20m44s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h22m18s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h22m18s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h22m18s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h22m18s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h22m18s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h23m17s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h23m17s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h23m17s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h23m17s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h23m41s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h23m41s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h23m41s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h24m11s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h24m11s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h24m11s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h24m11s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h24m38s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h24m38s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h24m38s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h25m45s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h25m45s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h25m45s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h26m15s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h26m15s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h26m15s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h26m15s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h26m43s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h26m43s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h26m43s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h27m21s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h27m21s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h27m21s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h27m48s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h27m48s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h27m48s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h28m19s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h28m19s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h28m19s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h29m2s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h29m2s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h29m2s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h29m2s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h29m39s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h29m39s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h29m39s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h30m10s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h30m10s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h30m10s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h30m36s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h30m36s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h30m36s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h31m3s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h31m3s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h31m3s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h32m17s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h32m17s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h32m17s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h32m49s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h32m49s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h32m49s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h32m49s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h33m36s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h33m36s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h33m36s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h33m36s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h34m53s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h34m53s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h34m53s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h34m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h35m35s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h35m35s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h35m35s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h35m35s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h35m35s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h36m53s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h36m53s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h36m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h37m50s) Adding 4 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h37m50s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h37m50s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h38m53s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h38m53s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h38m53s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h39m27s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h39m27s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h39m27s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h39m56s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h39m56s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h39m56s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h39m56s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h40m26s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h40m26s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h40m26s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h41m30s) Adding 1 node(s) of type tpu_slice_v5e_8.
-(autoscaler +1h41m30s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h41m30s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h41m30s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h42m29s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h42m29s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h42m29s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h42m29s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h42m53s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h42m53s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h42m53s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h43m24s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h43m24s) Adding 3 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h43m24s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h43m24s) No available node types can fulfill resource requests {'TPU-v6e-8-head': 1.0, 'CPU': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h44m12s) Adding 1 node(s) of type tpu_slice_v5e_128.
-(autoscaler +1h44m12s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h44m12s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(autoscaler +1h44m46s) Adding 1 node(s) of type tpu_worker.
-(autoscaler +1h44m46s) Adding 1 node(s) of type tpu_slice_v5e_32.
-(autoscaler +1h44m46s) Resized to 7560 CPUs, 260 TPUs.
-(autoscaler +1h44m46s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet) The node with node id: 2041a11e1e9414bbfc118ea3a4fbe7d41cb9cf15cdf7a9aa81f5b91b and address: 10.164.0.64 and node name: 10.164.0.64 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload.
-(raylet) The node with node id: 7e49199dce7705d0869bc654ccb16e6c782f9f6c99eab6cbd2f722ea and address: 10.164.2.33 and node name: 10.164.2.33 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 50x across cluster]
-(raylet) The node with node id: 14ac2fd939470d7a1993531b6311e2e8bb5901e389d875b890e4b580 and address: 10.164.0.30 and node name: 10.164.0.30 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 12x across cluster]
-(autoscaler +1h47m7s) Adding 2 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h47m7s) Resized to 13680 CPUs, 464 TPUs.
-(autoscaler +1h47m7s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-f5ecb892-tpu': 1.0}*13, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7, {'ray-marin-eu-west4-worker-6d667a96-tpu': 1.0}*4. Add suitable node types to this cluster to resolve this issue.
-(raylet) The node with node id: a4b75c3bd6f4520cb81462d87e7152dc4982d60c31bc42b5c1a62bf6 and address: 10.164.1.234 and node name: 10.164.1.234 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload.
-(raylet) The node with node id: 446620b3a8f42c6e71cf6574fcbe322ca5b8c213763d1f633ef24153 and address: 10.164.2.2 and node name: 10.164.2.2 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a       (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload.
-(raylet) Task run_levanter_train_lm failed. There are 0 retries remaining, so the task will be retried. Error: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.123, node ID: d6fab874f9df8e78453a32ae54dbdcaad0f25c6c4dec16c162e3d14e. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=d6fab874f9df8e78453a32ae54dbdcaad0f25c6c4dec16c162e3d14e`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.123`.
-(raylet) The node with node id: 703b1312911ff48e192838bdd4f835e8c1277fe7a702d50d343395b1 and address: 10.164.1.231 and node name: 10.164.1.231 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 14x across cluster]
-(run_levanter_train_lm pid=10021, ip=10.164.2.112) Using CPython 3.11.11 interpreter at: /home/ray/anaconda3/bin/python3
-(run_levanter_train_lm pid=10021, ip=10.164.2.112) Resolved 535 packages in 5ms
-(raylet) The node with node id: d6fab874f9df8e78453a32ae54dbdcaad0f25c6c4dec16c162e3d14e and address: 10.164.2.123 and node name: 10.164.2.123 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload.
-(raylet) The node with node id: 960b35e450dbef3ef5142b8fb1cf79c5a57c1f4e094dd7929c117c1c and address: 10.164.2.129 and node name: 10.164.2.129 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload.
-(autoscaler +1h49m9s) Adding 1 node(s) of type tpu_slice_v5e_256.
-(autoscaler +1h49m9s) Resized to 9600 CPUs, 328 TPUs.
-(autoscaler +1h49m9s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7. Add suitable node types to this cluster to resolve this issue.
-(raylet) The node with node id: 1cd86821fe0470d3723877c88df4e7a06c9a5ae0640213469ba12f8d and address: 10.164.0.208 and node name: 10.164.0.208 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a   (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 15x across cluster]
-(autoscaler +1h55m43s) Adding 1 node(s) of type tpu_slice_v5e_64.
-(autoscaler +1h55m43s) Resized to 7800 CPUs, 268 TPUs.
-(autoscaler +1h55m43s) No available node types can fulfill resource requests {'CPU': 1.0, 'TPU-v6e-8-head': 1.0}*1, {'ray-marin-eu-west4-worker-cc910a61-tpu': 1.0}*4, {'ray-marin-eu-west4-worker-a422d77e-tpu': 1.0}*2, {'ray-marin-eu-west4-worker-9cae6862-tpu': 1.0}*7. Add suitable node types to this cluster to resolve this issue.
-2026-03-12 22:44:51,444 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed:
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
-    ray.get(self._ref)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-    values, debugger_breakpoint = worker.get_objects(
-                                  ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-    raise value
-ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.112, node ID: 32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.112`.
-2026-03-12 22:44:51,447 INFO executor.py:806 -- Waiting for ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 to finish for step checkpoints/unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0
-2026-03-12 22:44:51,447 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed:
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/fray/src/fray/v2/ray_backend/backend.py", line 101, in _wait_ref
-    ray.get(self._ref, timeout=timeout)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-    values, debugger_breakpoint = worker.get_objects(
-                                  ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-    raise value
-ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.112, node ID: 32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.112`.
-2026-03-12 22:44:51,447 - ERROR - Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed:
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/fray/src/fray/v2/ray_backend/backend.py", line 82, in _poll_ref
-    ray.get(self._ref)
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
-    values, debugger_breakpoint = worker.get_objects(
-                                  ^^^^^^^^^^^^^^^^^^^
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1017, in get_objects
-    raise value
-ray.exceptions.NodeDiedError: Task failed because the node it was running on is dead or unavailable. Node IP: 10.164.2.112, node ID: 32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=32b973d56dbd0f09fb1fc38b590b8aea8a410314f0a13a55f2f89333`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.164.2.112`.
-2026-03-12 22:44:51,790 ERROR executor.py:810 -- Step checkpoints/unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0 failed
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
-    runner.wait()
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 192, in wait
-    raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 808, in _run_steps
-    runner.wait()
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 192, in wait
-    raise RuntimeError(f"Job {self.job_id} failed")
-RuntimeError: Job ray-callable-run_levanter_train_lm-checkpoints-unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0-b4ce25b4 failed
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/experiments/unified/unified_pretrain_demo_eu.py", line 855, in <module>
-    executor_main(
-  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
-    response = fn(cfg, *args, **kwargs)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 1288, in executor_main
-    executor.run(
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 747, in run
-    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
-  File "/tmp/ray/session_2026-03-06_11-47-31_863579_657/runtime_resources/working_dir_files/_ray_pkg_430d7ae2d021359a/lib/marin/src/marin/execution/executor.py", line 827, in _run_steps
-    raise RuntimeError(message) from failure_exceptions[0]
-RuntimeError: 1 step(s) failed: ['checkpoints/unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0']
-(raylet) The node with node id: 1149fd0303c113aaee63dc073657d9c41834d701639f20fbf86ed8e2 and address: 10.164.2.96 and node name: 10.164.2.96 has been marked dead because the detector has missed too many heartbeats from it. This can happen when a     (1) raylet crashes unexpectedly (OOM, etc.) 
-        (2) raylet has lagging heartbeats due to slow network or busy workload. [repeated 20x across cluster]
-(base) ruili@t1v-n-f57f207c-w-0:~/marin_scaling$ uv run python -m marin.run.ray_run     --cluster infra/marin-eu-west4.yaml     -e WANDB_API_KEY ${WANDB_API_KEY}     -e TPU_TYPE v5litepod-32  -e EXP_NAME unified-qwen3-1.7b-1-0-0-w0.5-8e3-2.4e3-linear-10k-correct-demo0 -e TEXT_STEPS 5000 -e UND_STEPS  0 -e GEN_STEPS 0  -e W_VISUAL 0.5  -e MUON_LR 0.008 -e ADAM_LR 0.0024   -e LR_SCHEDULE   linear  -- python experiments/unified/unified_pretrain_demo_eu.py
+(<lambda> pid=12560, ip=10.130.0.28)     return base_func(*args, **kw)
+(<lambda> pid=12560, ip=10.130.0.28)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
+(<lambda> pid=12560, ip=10.130.0.28)     raise e
+(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 115, in encode
+(<lambda> pid=12560, ip=10.130.0.28)     return encode_choice(obj, underlying_type)
+(<lambda> pid=12560, ip=10.130.0.28)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice
+(<lambda> pid=12560, ip=10.130.0.28)     encoded = encode_dataclass(obj, declared_type)
+(<lambda> pid=12560, ip=10.130.0.28)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
+(<lambda> pid=12560, ip=10.130.0.28)     d[field.name] = encode(value, field_type)
+(<lambda> pid=12560, ip=10.130.0.28)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
+(<lambda> pid=12560, ip=10.130.0.28)     return base_func(*args, **kw)
+(<lambda> pid=12560, ip=10.130.0.28)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
+(<lambda> pid=12560, ip=10.130.0.28)     raise e
+(<lambda> pid=12560, ip=10.130.0.28)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 121, in encode
+(<lambda> pid=12560, ip=10.130.0.28)     raise Exception(f"No parser for object {obj} of type {type(obj)}, consider using draccus.encode.register")
+(<lambda> pid=12560, ip=10.130.0.28) Exception: No parser for object <function _make_visual_weight_transform.<locals>.transform at 0x7f45a396ee80> of type <class 'function'>, consider using draccus.encode.register
+(<lambda> pid=12560, ip=10.130.0.28) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:55 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:55 - 1 - tqdm_loggable.tqdm_logging - tqdm_logging.py:154 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:55 - 3 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274/checkpoints
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:57 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:57 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:55 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 7x across cluster]
+(<lambda> pid=12582, ip=10.130.0.21) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274. [repeated 2x across cluster]
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:57 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
+(<lambda> pid=12582, ip=10.130.0.21) I0314 01:13:57.761997   14213 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:58 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=12936, ip=10.130.0.29) wandb: Tracking run with wandb version 0.25.1 [repeated 3x across cluster]
+(<lambda> pid=13917, ip=10.130.0.32) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 2x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29) wandb: Run data is saved locally in /tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/wandb/run-20260314_011352-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 [repeated 3x across cluster]
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:58 - 3 - levanter.data.text - datasets.py:850 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:58 - 3 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_understanding, skipping
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:58 - 0 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_generation, skipping
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:13:55 - 2 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 [repeated 5x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:54 - 0 - levanter.tracker.tracker_fns - tracker_fns.py:203 - WARNING :: Failed to dump config to yaml. Skipping logging as artifact. [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29) Traceback (most recent call last): [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/tracker/tracker_fns.py", line 199, in log_configuration [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     draccus.dump(hparams, f, encoding="utf-8") [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/cfgparsing.py", line 134, in dump [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     config_dict = encode(config) [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)                   ^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper [repeated 18x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     return base_func(*args, **kw) [repeated 18x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)            ^^^^^^^^^^^^^^^^^^^^^^ [repeated 21x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 121, in encode [repeated 33x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     raise e [repeated 15x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     return encode_dataclass(obj, declared_type) [repeated 6x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 12x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass [repeated 12x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     d[field.name] = encode(value, field_type) [repeated 12x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)                     ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 12x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     return fn(obj, declared_type) [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 193, in encode_dict [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     v_ = encode(v, value_type) [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)          ^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     return encode_choice(obj, underlying_type) [repeated 6x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice [repeated 6x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     encoded = encode_dataclass(obj, declared_type) [repeated 6x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29)     raise Exception(f"No parser for object {obj} of type {type(obj)}, consider using draccus.encode.register") [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29) Exception: No parser for object <function _make_visual_weight_transform.<locals>.transform at 0x7f4457d62e80> of type <class 'function'>, consider using draccus.encode.register [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
+(<lambda> pid=12936, ip=10.130.0.29) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:59 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:59 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/hellaswag/validation
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/hellaswag/validation/shard_ledger.json
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:13:59 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'hellaswag', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/winogrande/validation
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:59 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/winogrande/validation/shard_ledger.json
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:00 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'winogrande', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_easy/validation
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_easy/validation/shard_ledger.json
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:00 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_easy', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_challenge/validation
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_challenge/validation/shard_ledger.json
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:00 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_challenge', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/mmlu/validation
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:14:00 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/mmlu/validation/shard_ledger.json
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:00 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'mmlu', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:55 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:154 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:- [repeated 3x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29) 2026-03-14T01:13:55 - 0 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274/checkpoints [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:02 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132/validation [repeated 76x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:02 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132/validation/shard_ledger.json [repeated 76x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:02 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 20x across cluster]
+(<lambda> pid=13917, ip=10.130.0.32) I0314 01:13:57.788786   15822 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 63x across cluster]
+(<lambda> pid=12936, ip=10.130.0.29) wandb: WARNING Artifact "requirements.txt" already exists with the same content. No new version will be created.
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:13:58 - 2 - levanter.data.text - datasets.py:850 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 3x across cluster]
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:13:58 - 2 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_understanding, skipping [repeated 3x across cluster]
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:13:58 - 3 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_generation, skipping [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/hellaswag/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/hellaswag/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:13:59 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'hellaswag', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/winogrande/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/winogrande/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'winogrande', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_easy/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_easy/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_easy', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_challenge/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_challenge/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_challenge', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/mmlu/validation [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/mmlu/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12560, ip=10.130.0.28) 2026-03-14T01:14:00 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'mmlu', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:14:07 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/github_python-00e7de/validation [repeated 57x across cluster]
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:14:07 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/github_python-00e7de/validation/shard_ledger.json [repeated 57x across cluster]
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:14:07 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 56x across cluster]
+(<lambda> pid=12582, ip=10.130.0.21) 2026-03-14T01:14:09 - 3 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
+(SliceActor pid=9436, ip=10.130.0.32) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=13917, ip=10.130.0.32)
+(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/backend.py", line 328, in <lambda>
+(SliceActor pid=9436, ip=10.130.0.32)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=9436, ip=10.130.0.32)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/main/train_lm.py", line 327, in main
+(SliceActor pid=9436, ip=10.130.0.32)     train_loader = trainer.data_loader(train_dataset)
+(SliceActor pid=9436, ip=10.130.0.32)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/trainer.py", line 625, in data_loader
+(SliceActor pid=9436, ip=10.130.0.32)     return DataLoader(
+(SliceActor pid=9436, ip=10.130.0.32)            ^^^^^^^^^^^
+(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
+(SliceActor pid=9436, ip=10.130.0.32)     initial_example = blocking_wait(self.data_store.getitem_async(0))
+(SliceActor pid=9436, ip=10.130.0.32)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
+(SliceActor pid=9436, ip=10.130.0.32)     return asyncio.run(coro)
+(SliceActor pid=9436, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^^
+(SliceActor pid=9436, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
+(SliceActor pid=9436, ip=10.130.0.32)     return runner.run(main)
+(SliceActor pid=9436, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^
+(SliceActor pid=9436, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
+(SliceActor pid=9436, ip=10.130.0.32)     return self._loop.run_until_complete(task)
+(SliceActor pid=9436, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=9436, ip=10.130.0.32)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(SliceActor pid=9436, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/mixture.py", line 268, in getitem_async
+(SliceActor pid=9436, ip=10.130.0.32)     permuted_ids = await self._get_block(block_id)
+(SliceActor pid=9436, ip=10.130.0.32)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=9436, ip=10.130.0.32) TypeError: object numpy.ndarray can't be used in 'await' expression
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:08 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 18x across cluster]
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:08 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 18x across cluster]
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:08 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 19x across cluster]
+(<lambda> pid=13917, ip=10.130.0.32) 2026-03-14T01:14:09 - 2 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 3x across cluster]
+(<lambda> pid=13917, ip=10.130.0.32) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7f14781cafc0>
+(<lambda> pid=13917, ip=10.130.0.32) Traceback (most recent call last):
+(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 73, in teardown_atexit
+(<lambda> pid=13917, ip=10.130.0.32)     conn.teardown(hooks.exit_code)
+(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 344, in teardown
+(<lambda> pid=13917, ip=10.130.0.32)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=13917, ip=10.130.0.32)     return future.result()
+(<lambda> pid=13917, ip=10.130.0.32)            ^^^^^^^^^^^^^^^
+(<lambda> pid=13917, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=13917, ip=10.130.0.32)     return self.__get_result()
+(<lambda> pid=13917, ip=10.130.0.32)            ^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=13917, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=13917, ip=10.130.0.32)     raise self._exception
+(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 220, in _wrap
+(<lambda> pid=13917, ip=10.130.0.32)     return await fn()
+(<lambda> pid=13917, ip=10.130.0.32)            ^^^^^^^^^^
+(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 342, in publish_teardown_and_close
+(<lambda> pid=13917, ip=10.130.0.32)     await self._client.close()
+(<lambda> pid=13917, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 123, in close
+(<lambda> pid=13917, ip=10.130.0.32)     await self._writer.wait_closed()
+(<lambda> pid=13917, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=13917, ip=10.130.0.32)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=13917, ip=10.130.0.32) BrokenPipeError: [Errno 32] Broken pipe
+(run_on_pod_ray pid=60507, ip=10.130.0.106) Task error ray::<lambda>() (pid=13917, ip=10.130.0.32)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/tpu.py", line 789, in run_on_pod_ray
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return func(*args, **kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=60507, ip=10.130.0.106) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=13917, ip=10.130.0.32)
+(run_on_pod_ray pid=60507, ip=10.130.0.106) Failed 3 times. Continuing to retry.
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/tpu.py", line 789, in run_on_pod_ray
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return func(*args, **kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=60507, ip=10.130.0.106) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=13917, ip=10.130.0.32)
+(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.799587   14067 coordination_service.cc:681] /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted.
+(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.799901   14067 coordination_service.cc:1858] Shutdown barrier in coordination service has failed:
+(<lambda> pid=13917, ip=10.130.0.32) INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x03']. Barrier Id: Shutdown::3442310185536402597::0, Task: /job:jax_worker/replica:0/task:3 [type.googleapis.com/tensorflow.CoordinationServiceError=''] [type.googleapis.com/tensorflow.BarrierError='\n\x1dShutdown::3442310185536402597']
+(<lambda> pid=13917, ip=10.130.0.32) This suggests that the workers are out of sync. Either at least one worker (a) crashed early due to program error or scheduler events (e.g. preemption, eviction), (b) was too fast in its execution, or (c) too slow / hanging. Check the logs (both the program and scheduler events) for an earlier error to identify the root cause.
+(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.799922   14067 coordination_service.cc:1899] Use error polling to propagate the following error to all tasks: INTERNAL: Shutdown barrier has failed.
+(<lambda> pid=13917, ip=10.130.0.32) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x03']. Barrier Id: Shutdown::3442310185536402597::0, Task: /job:jax_worker/replica:0/task:3 [type.googleapis.com/tensorflow.CoordinationServiceError=''] [type.googleapis.com/tensorflow.BarrierError='\n\x1dShutdown::3442310185536402597'] [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.800235   14067 coordination_service.cc:1899] Use error polling to propagate the following error to all tasks: ABORTED: /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x03']
+(<lambda> pid=13917, ip=10.130.0.32) E0314 01:14:32.800359   14086 coordination_service_agent.cc:332] Polled an error from coordination service (this can be an error from this or another task).
+(<lambda> pid=13917, ip=10.130.0.32) F0314 01:14:32.800553   14086 client.h:75] Terminating process because the JAX distributed service detected fatal errors. This most likely indicates that another task died; see the other task logs for more details. Disable Python buffering, i.e. `python -u`, to be sure to see all the previous output. absl::Status: INTERNAL: Shutdown barrier has failed.
+(<lambda> pid=13917, ip=10.130.0.32) Barrier result: 'INTERNAL: Barrier failed because: task is set to ERROR: ABORTED: /job:jax_worker/replica:0/task:3 unexpectedly tried to connect with a different incarnation. It has likely restarted. [type.googleapis.com/tensorflow.CoordinationServiceError='\"\x0e\n\njax_worker\x10\x03']. Barrier Id: Shutdown::3442310185536402597::0, Task: /job:jax_worker/replica:0/task:3 [type.googleapis.com/tensorflow.CoordinationServiceError=''] [type.googleapis.com/tensorflow.BarrierError='\n\x1dShutdown::3442310185536402597']
+(<lambda> pid=13917, ip=10.130.0.32) 
+(<lambda> pid=13917, ip=10.130.0.32) RPC: /tensorflow.CoordinationService/PollForError [type.googleapis.com/tensorflow.CoordinationServiceError='']
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/backend.py", line 328, in <lambda> [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/main/train_lm.py", line 327, in main [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     train_loader = trainer.data_loader(train_dataset) [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/trainer.py", line 625, in data_loader [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return DataLoader( [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/loader.py", line 141, in __init__ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     initial_example = blocking_wait(self.data_store.getitem_async(0)) [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return asyncio.run(coro) [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run [repeated 7x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return runner.run(main) [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return self._loop.run_until_complete(task) [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/mixture.py", line 268, in getitem_async [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     permuted_ids = await self._get_block(block_id) [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106) TypeError: object numpy.ndarray can't be used in 'await' expression [repeated 3x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106) Traceback (most recent call last): [repeated 2x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                                   ^^^^^^^^^^^^^^^^^^^ [repeated 4x across cluster]
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                                                  ^^^^^^^^^^ [repeated 2x across cluster]
+(raylet, ip=10.130.1.98) [2026-03-14 01:04:59,082 E 1067 1067] (raylet) worker_pool.cc:1865: Delete runtime env failed
+(<lambda> pid=13918, ip=10.130.0.32) 2026-03-14T01:14:39 - 2 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to .
+(<lambda> pid=14846, ip=10.130.0.29) wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+(<lambda> pid=14846, ip=10.130.0.29) wandb: Currently logged in as: 3303lr (rui_li) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+(<lambda> pid=12561, ip=10.130.0.28) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274.
+(<lambda> pid=13918, ip=10.130.0.32) wandb: Tracking run with wandb version 0.25.1
+(<lambda> pid=13918, ip=10.130.0.32) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+(<lambda> pid=13918, ip=10.130.0.32) wandb: Run data is saved locally in /tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/wandb/offline-run-20260314_011439-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
+(<lambda> pid=14846, ip=10.130.0.29) wandb: Run `wandb offline` to turn off syncing.
+(<lambda> pid=14846, ip=10.130.0.29) wandb: Resuming run unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
+(<lambda> pid=14846, ip=10.130.0.29) wandb: ⭐️ View project at https://wandb.ai/rui_li/marin
+(<lambda> pid=14846, ip=10.130.0.29) wandb: 🚀 View run at https://wandb.ai/rui_li/marin/runs/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:40 - 3 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:40 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:41 - 3 - levanter.tracker.tracker_fns - tracker_fns.py:203 - WARNING :: Failed to dump config to yaml. Skipping logging as artifact.
+(<lambda> pid=12583, ip=10.130.0.21) Traceback (most recent call last):
+(<lambda> pid=12583, ip=10.130.0.21)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/tracker/tracker_fns.py", line 199, in log_configuration
+(<lambda> pid=12583, ip=10.130.0.21)     draccus.dump(hparams, f, encoding="utf-8")
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/cfgparsing.py", line 134, in dump
+(<lambda> pid=12583, ip=10.130.0.21)     config_dict = encode(config)
+(<lambda> pid=12583, ip=10.130.0.21)                   ^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
+(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     raise e
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 117, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     return encode_dataclass(obj, declared_type)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
+(<lambda> pid=12583, ip=10.130.0.21)     d[field.name] = encode(value, field_type)
+(<lambda> pid=12583, ip=10.130.0.21)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
+(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     raise e
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 117, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     return encode_dataclass(obj, declared_type)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
+(<lambda> pid=12583, ip=10.130.0.21)     d[field.name] = encode(value, field_type)
+(<lambda> pid=12583, ip=10.130.0.21)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
+(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 106, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     return fn(obj, declared_type)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 193, in encode_dict
+(<lambda> pid=12583, ip=10.130.0.21)     v_ = encode(v, value_type)
+(<lambda> pid=12583, ip=10.130.0.21)          ^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
+(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     raise e
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 115, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     return encode_choice(obj, underlying_type)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice
+(<lambda> pid=12583, ip=10.130.0.21)     encoded = encode_dataclass(obj, declared_type)
+(<lambda> pid=12583, ip=10.130.0.21)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
+(<lambda> pid=12583, ip=10.130.0.21)     d[field.name] = encode(value, field_type)
+(<lambda> pid=12583, ip=10.130.0.21)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
+(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     raise e
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 115, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     return encode_choice(obj, underlying_type)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice
+(<lambda> pid=12583, ip=10.130.0.21)     encoded = encode_dataclass(obj, declared_type)
+(<lambda> pid=12583, ip=10.130.0.21)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass
+(<lambda> pid=12583, ip=10.130.0.21)     d[field.name] = encode(value, field_type)
+(<lambda> pid=12583, ip=10.130.0.21)                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper
+(<lambda> pid=12583, ip=10.130.0.21)     return base_func(*args, **kw)
+(<lambda> pid=12583, ip=10.130.0.21)            ^^^^^^^^^^^^^^^^^^^^^^
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 124, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     raise e
+(<lambda> pid=12583, ip=10.130.0.21)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 121, in encode
+(<lambda> pid=12583, ip=10.130.0.21)     raise Exception(f"No parser for object {obj} of type {type(obj)}, consider using draccus.encode.register")
+(<lambda> pid=12583, ip=10.130.0.21) Exception: No parser for object <function _make_visual_weight_transform.<locals>.transform at 0x7f354b0d6e80> of type <class 'function'>, consider using draccus.encode.register
+(<lambda> pid=12561, ip=10.130.0.28) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:42 - 0 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:42 - 3 - tqdm_loggable.tqdm_logging - tqdm_logging.py:154 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:-
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:43 - 3 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274/checkpoints
+(raylet, ip=10.130.1.97) [2026-03-14 01:14:44,647 E 8481 8481] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 12x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:44 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:44 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:42 - 0 - levanter.tracker.wandb - wandb.py:287 - INFO :: Setting wandb code_dir to . [repeated 7x across cluster]
+(<lambda> pid=12583, ip=10.130.0.21) wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274. [repeated 2x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:45 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}}
+(<lambda> pid=12561, ip=10.130.0.28) I0314 01:14:45.027487   16028 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com
+(<lambda> pid=14846, ip=10.130.0.29) wandb: Tracking run with wandb version 0.25.1 [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing. [repeated 2x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) wandb: Run data is saved locally in /tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/wandb/run-20260314_011439-unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:45 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}}
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:45 - 3 - levanter.data.text - datasets.py:850 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:45 - 1 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_understanding, skipping
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:45 - 3 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_generation, skipping
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:42 - 1 - levanter.tracker.wandb - wandb.py:261 - INFO :: Synced wandb run information from process 0: None unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274 [repeated 5x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:42 - 0 - levanter.tracker.tracker_fns - tracker_fns.py:203 - WARNING :: Failed to dump config to yaml. Skipping logging as artifact. [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) Traceback (most recent call last): [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/tracker/tracker_fns.py", line 199, in log_configuration [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     draccus.dump(hparams, f, encoding="utf-8") [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/cfgparsing.py", line 134, in dump [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     config_dict = encode(config) [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)                   ^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/registry_utils.py", line 78, in wrapper [repeated 18x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     return base_func(*args, **kw) [repeated 18x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)            ^^^^^^^^^^^^^^^^^^^^^^ [repeated 21x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 121, in encode [repeated 33x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     raise e [repeated 15x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     return encode_dataclass(obj, declared_type) [repeated 6x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 12x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 147, in encode_dataclass [repeated 12x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     d[field.name] = encode(value, field_type) [repeated 12x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)                     ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 12x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     return fn(obj, declared_type) [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 193, in encode_dict [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     v_ = encode(v, value_type) [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)          ^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     return encode_choice(obj, underlying_type) [repeated 6x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)   File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/parsers/encoding.py", line 164, in encode_choice [repeated 6x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     encoded = encode_dataclass(obj, declared_type) [repeated 6x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29)     raise Exception(f"No parser for object {obj} of type {type(obj)}, consider using draccus.encode.register") [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) Exception: No parser for object <function _make_visual_weight_transform.<locals>.transform at 0x7fef7ef92e80> of type <class 'function'>, consider using draccus.encode.register [repeated 3x across cluster]
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:46 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json
+(<lambda> pid=14846, ip=10.130.0.29) wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run. [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:46 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:46 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/hellaswag/validation
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/hellaswag/validation/shard_ledger.json
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'hellaswag', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/winogrande/validation
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/winogrande/validation/shard_ledger.json
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'winogrande', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_easy/validation
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_easy/validation/shard_ledger.json
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_easy', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_challenge/validation
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_challenge/validation/shard_ledger.json
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_challenge', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/mmlu/validation
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:47 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/mmlu/validation/shard_ledger.json
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'mmlu', 'format': 'text_eval_benchmark'}}}}
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:43 - 0 - tqdm_loggable.tqdm_logging - tqdm_logging.py:154 - INFO :: Progress on:train -/10000 rate:- remaining:? elapsed:00:00 postfix:- [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:43 - 0 - levanter.checkpoint - checkpoint.py:567 - WARNING :: No checkpoints found in gs://marin-us-central2/checkpoints/unified-qwen3-1.7b-1-1-0-w0.5-8e3-2.4e3-linear-10k-correct-demo1-991274/checkpoints [repeated 3x across cluster]
+(raylet, ip=10.130.1.97) [2026-03-14 01:14:49,451 E 8481 8481] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 17x across cluster]
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:50 - 3 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132/validation [repeated 76x across cluster]
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:50 - 3 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132/validation/shard_ledger.json [repeated 76x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:50 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 23x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) I0314 01:14:45.192793   16433 google_auth_provider.cc:181] Running on GCE, using service account 748532799086-compute@developer.gserviceaccount.com [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:46 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'type_changes': {'root.preprocessor_metadata': {'old_type': <class 'NoneType'>, 'new_type': <class 'dict'>, 'old_value': None, 'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}}}} [repeated 63x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) wandb: WARNING Artifact "requirements.txt" already exists with the same content. No new version will be created.
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:45 - 0 - levanter.data.text - datasets.py:850 - WARNING :: No source for nemotron_cc/hq_actual in validation split and no cache at gs://marin-us-central2/tokenized/nemotron_cc/hq_actual-5af4cc/validation, skipping [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:45 - 0 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_understanding, skipping [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:45 - 0 - levanter.data.text - datasets.py:841 - WARNING :: No validation cache found for component multimodal_generation, skipping [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/textvqa/validation [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/textvqa/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/chartqa/validation [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/chartqa/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/mmmu/validation [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/mmmu/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/unified_eval_cache/imagenet_small/validation [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:46 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/unified_eval_cache/imagenet_small/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/hellaswag/validation [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/hellaswag/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'hellaswag', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/winogrande/validation [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/winogrande/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'winogrande', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_easy/validation [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_easy/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:47 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_easy', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/arc_challenge/validation [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/arc_challenge/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'arc_challenge', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-vlm/text_eval_cache/mmlu/validation [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-vlm/text_eval_cache/mmlu/validation/shard_ledger.json [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:47 - 0 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {'root.preprocessor_metadata': {'new_value': {'input_ids_key': 'input_ids', 'loss_weights_key': 'loss_weights'}, 'old_value': {'benchmark': 'mmlu', 'format': 'text_eval_benchmark'}}}} [repeated 3x across cluster]
+(raylet, ip=10.130.1.96) [2026-03-14 01:14:50,346 E 8440 8440] (raylet) worker_pool.cc:1865: Delete runtime env failed [repeated 3x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:55 - 0 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-d0da6b/validation [repeated 58x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:55 - 0 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-d0da6b/validation/shard_ledger.json [repeated 58x across cluster]
+(<lambda> pid=12561, ip=10.130.0.28) 2026-03-14T01:14:55 - 1 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 62x across cluster]
+(<lambda> pid=14846, ip=10.130.0.29) 2026-03-14T01:14:56 - 0 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch.
+(run_on_pod_ray pid=60507, ip=10.130.0.106) Task error ray::<lambda>() (pid=13918, ip=10.130.0.32)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/backend.py", line 328, in <lambda>
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/main/train_lm.py", line 327, in main
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     train_loader = trainer.data_loader(train_dataset)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/trainer.py", line 625, in data_loader
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return DataLoader(
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     initial_example = blocking_wait(self.data_store.getitem_async(0))
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return asyncio.run(coro)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return runner.run(main)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return self._loop.run_until_complete(task)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/mixture.py", line 268, in getitem_async
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     permuted_ids = await self._get_block(block_id)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106) TypeError: object numpy.ndarray can't be used in 'await' expression
+(run_on_pod_ray pid=60507, ip=10.130.0.106) Traceback (most recent call last):
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/tpu.py", line 789, in run_on_pod_ray
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return func(*args, **kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                                   ^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=60507, ip=10.130.0.106) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=13918, ip=10.130.0.32)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/backend.py", line 328, in <lambda>
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/main/train_lm.py", line 327, in main
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     train_loader = trainer.data_loader(train_dataset)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/trainer.py", line 625, in data_loader
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return DataLoader(
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/loader.py", line 141, in __init__
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     initial_example = blocking_wait(self.data_store.getitem_async(0))
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/utils/thread_utils.py", line 27, in blocking_wait
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return asyncio.run(coro)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 190, in run
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return runner.run(main)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/asyncio/runners.py", line 118, in run
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return self._loop.run_until_complete(task)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/levanter/src/levanter/data/mixture.py", line 268, in getitem_async
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     permuted_ids = await self._get_block(block_id)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106) TypeError: object numpy.ndarray can't be used in 'await' expression
+(<lambda> pid=13918, ip=10.130.0.32) 2026-03-14T01:14:55 - 2 - levanter.store.cache - cache.py:135 - INFO :: Loading cache from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation [repeated 17x across cluster]
+(<lambda> pid=13918, ip=10.130.0.32) 2026-03-14T01:14:55 - 2 - levanter.store.cache - cache.py:185 - INFO :: Attempting to load cache ledger from gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735/validation/shard_ledger.json [repeated 17x across cluster]
+(<lambda> pid=13918, ip=10.130.0.32) 2026-03-14T01:14:55 - 2 - levanter.store.cache - cache.py:191 - WARNING :: Metadata mismatch: {'values_changed': {"root.preprocessor_metadata['tokenizer']": {'new_value': 'gs://marin-us-central2/tokenizers/llama3-unified-144k', 'old_value': 'meta-llama/Meta-Llama-3.1-8B'}, "root.preprocessor_metadata['vocab_size']": {'new_value': 144640, 'old_value': 128256}}} [repeated 10x across cluster]
+(<lambda> pid=12583, ip=10.130.0.21) 2026-03-14T01:14:56 - 3 - levanter.main.train_lm - train_lm.py:207 - INFO :: No checkpoint found. Starting from scratch. [repeated 3x across cluster]
+(SliceActor pid=9436, ip=10.130.0.32) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=13918, ip=10.130.0.32)
+(<lambda> pid=13918, ip=10.130.0.32) Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7fa1b02aafc0>
+(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 73, in teardown_atexit
+(<lambda> pid=13918, ip=10.130.0.32)     conn.teardown(hooks.exit_code)
+(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 344, in teardown
+(<lambda> pid=13918, ip=10.130.0.32)     self._asyncer.run(publish_teardown_and_close)
+(<lambda> pid=13918, ip=10.130.0.32)     return future.result()
+(<lambda> pid=13918, ip=10.130.0.32)            ^^^^^^^^^^^^^^^
+(<lambda> pid=13918, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+(<lambda> pid=13918, ip=10.130.0.32)     return self.__get_result()
+(<lambda> pid=13918, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+(<lambda> pid=13918, ip=10.130.0.32)     raise self._exception
+(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/asyncio_manager.py", line 220, in _wrap
+(<lambda> pid=13918, ip=10.130.0.32)     return await fn()
+(<lambda> pid=13918, ip=10.130.0.32)          
+(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_connection.py", line 342, in publish_teardown_and_close
+(<lambda> pid=13918, ip=10.130.0.32)     await self._client.close()
+(<lambda> pid=13918, ip=10.130.0.32)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/pip/bfe6c5756a04ff4db6908f24338e8d7fa70f8208/virtualenv/lib/python3.11/site-packages/wandb/sdk/lib/service/service_client.py", line 123, in close
+(<lambda> pid=13918, ip=10.130.0.32)     await self._writer.wait_closed()
+(<lambda> pid=13918, ip=10.130.0.32)   File "/home/ray/anaconda3/lib/python3.11/asyncio/streams.py", line 364, in wait_closed
+(<lambda> pid=13918, ip=10.130.0.32)     await self._protocol._get_close_waiter(self)
+(<lambda> pid=13918, ip=10.130.0.32) BrokenPipeError
+(<lambda> pid=13918, ip=10.130.0.32) : [Errno 32] Broken pipe
+(run_on_pod_ray pid=60507, ip=10.130.0.106) Failed 4 times. Continuing to retry.
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/tmp/ray/session_2026-03-13_12-12-57_058436_659/runtime_resources/working_dir_files/_ray_pkg_ed3a56ad5bd72ff2/lib/fray/src/fray/v2/ray_backend/tpu.py", line 789, in run_on_pod_ray
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return fn(*args, **kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     return func(*args, **kwargs)
+(run_on_pod_ray pid=60507, ip=10.130.0.106)            ^^^^^^^^^^^^^^^^^^^^^
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=60507, ip=10.130.0.106)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=60507, ip=10.130.0.106)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=60507, ip=10.130.0.106) ray.exceptions.RayTaskError(TypeError): ray::<lambda>() (pid=13918, ip=10.130.0.32)
+(autoscaler +5m35s) Adding 1 node(s) of type tpu_slice_v4_64.
+(autoscaler +5m35s) Resized to 5520 CPUs, 184 TPUs.
