@@ -56,6 +56,7 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
 WORKDIR /app
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy pyproject and build hook first so the heavy dependency install is
 # cached independently of source changes.

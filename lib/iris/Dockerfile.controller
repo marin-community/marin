@@ -41,6 +41,7 @@ RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kub
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
 WORKDIR /app
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy pyproject.toml and build hook first and sync dependencies (cached layer)
 COPY pyproject.toml hatch_build.py ./
