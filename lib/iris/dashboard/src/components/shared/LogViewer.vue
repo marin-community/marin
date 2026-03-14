@@ -42,6 +42,7 @@ const taskLogState = props.taskId
       id: props.taskId,
       maxTotalLines: tailLines.value || undefined,
       attemptId: selectedAttemptId.value >= 0 ? selectedAttemptId.value : -1,
+      tail: true,
     }))
   : null
 
