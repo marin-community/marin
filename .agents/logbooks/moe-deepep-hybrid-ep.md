@@ -583,3 +583,27 @@
 - Next action:
   - Update `#3641` to note that the `runs` slice is replicated, `random, topk=2` is confirmed, and `random, topk=8` is repeat-sensitive for plain `hybrid_ep`.
   - Snapshot the branch again so the public issue can link to the revised interpretation.
+
+### 2026-03-14 10:58 - Seal torch-side DeepEP / Hybrid-EP experiment
+- Hypothesis: the torch-side thread has enough evidence to stop; sealing it now will give the follow-up JAX custom-call experiment a stable parent snapshot and a crisp scope boundary.
+- Command:
+  ```bash
+  ./infra/pre-commit.py --all-files
+  git add .agents/logbooks/moe-deepep-hybrid-ep.md .agents/projects/moe-deepep-hybrid-ep-issue.md
+  git commit -m "Seal DeepEP Hybrid-EP torch experiment"
+  git tag -a moe-deepep-hybrid-ep-seal-20260314 -m "Sealed DeepEP Hybrid-EP torch experiment"
+  git push origin research/moe-deepep-hybrid-ep
+  git push origin moe-deepep-hybrid-ep-seal-20260314
+  gh issue comment 3641 --repo marin-community/marin --body-file <final-summary>
+  gh issue close 3641 --repo marin-community/marin
+  ```
+- Config:
+  - branch: `research/moe-deepep-hybrid-ep`
+  - final seal tag: `moe-deepep-hybrid-ep-seal-20260314`
+- Result:
+  - The torch-side DeepEP / Hybrid-EP experiment is sealed with a stable branch tip, tag, issue body, and final close-out comment.
+- Interpretation:
+  - Future work can now refer to one immutable experiment snapshot instead of an open-ended branch state.
+  - The next thread should focus on JAX custom-call integration and direct comparison against `#3633`, not keep expanding the torch-only benchmark scope.
+- Next action:
+  - Start the follow-up JAX custom-call experiment on a new branch/worktree from the sealed tag.
