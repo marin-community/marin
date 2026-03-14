@@ -438,8 +438,6 @@ class FakeGcloud:
     _serial_output: dict[tuple[str, str], str] = field(default_factory=dict)
     # Cloud Logging entries keyed by TPU name, for testing _fetch_bootstrap_logs.
     _cloud_log_entries: dict[str, list[str]] = field(default_factory=dict)
-    # Recorded commands for assertion in tests.
-    recorded_commands: list[list[str]] = field(default_factory=list)
 
     def set_failure(self, operation: str, error: str, code: int = 1) -> None:
         """Make a specific operation type fail on the next call.
@@ -464,7 +462,6 @@ class FakeGcloud:
 
     def __call__(self, cmd: list[str], **kwargs) -> FakeResult:
         """Drop-in replacement for subprocess.run. Dispatches by gcloud subcommand."""
-        self.recorded_commands.append(list(cmd))
         if not cmd or cmd[0] != "gcloud":
             raise ValueError(f"FakeGcloud: unrecognized command: {cmd}")
 
