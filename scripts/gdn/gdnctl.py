@@ -2444,13 +2444,7 @@ def cmd_dev_tpu_allocate(args: argparse.Namespace) -> int:
 
 
 def cmd_dev_tpu_test(args: argparse.Namespace) -> int:
-    remote_cmd = "\n".join(
-        [
-            "set -e",
-            *_dev_tpu_precleanup_lines(set_jax_coordinator=False),
-            _build_remote_test_command(args.tests, args.pytest_args),
-        ]
-    )
+    remote_cmd = _build_remote_test_command(args.tests, args.pytest_args)
     print("[gdnctl] remote TPU test setup installs torch + transformers; full HF parity slice is enabled.")
     cmd = [
         *DEV_TPU,
@@ -2470,74 +2464,12 @@ def cmd_dev_tpu_test(args: argparse.Namespace) -> int:
     return _run(cmd, check=False).returncode
 
 
-def _dev_tpu_precleanup_lines(*, set_jax_coordinator: bool) -> list[str]:
-    lines: list[str] = []
-    if set_jax_coordinator:
-        lines.append('export JAX_COORDINATOR_ADDRESS="${JAX_COORDINATOR_ADDRESS:-127.0.0.1:8477}"')
-    lines.append(
-        "\n".join(
-            [
-                "sudo -n python3 - <<'PY'",
-                "import os",
-                "import signal",
-                "import subprocess",
-                "",
-                "patterns = (",
-                "    'ray::run_on_pod',",
-                "    'ray::TPUHostAct',",
-                "    'ray::SliceActor',",
-                "    'ray::<lambda>',",
-                "    'wandb-core',",
-                "    'gpu_stats',",
-                ")",
-                "out = subprocess.check_output(['ps', '-eo', 'pid=,comm='], text=True)",
-                "skip_pids = {os.getpid(), os.getppid()}",
-                "try:",
-                "    with open(f'/proc/{os.getppid()}/stat', encoding='utf-8') as fp:",
-                "        skip_pids.add(int(fp.read().split()[3]))",
-                "except (FileNotFoundError, ValueError, OSError):",
-                "    pass",
-                "pids = []",
-                "for line in out.splitlines():",
-                "    parts = line.strip().split(None, 1)",
-                "    if len(parts) != 2:",
-                "        continue",
-                "    pid = int(parts[0])",
-                "    comm = parts[1]",
-                "    if not any(comm.startswith(pattern) for pattern in patterns):",
-                "        continue",
-                "    if pid in skip_pids:",
-                "        continue",
-                "    pids.append(pid)",
-                "for pid in pids:",
-                "    try:",
-                "        os.kill(pid, signal.SIGKILL)",
-                "    except ProcessLookupError:",
-                "        pass",
-                "try:",
-                "    os.remove('/tmp/libtpu_lockfile')",
-                "except FileNotFoundError:",
-                "    pass",
-                "if pids:",
-                "    holders = ' '.join(str(pid) for pid in pids)",
-                "    print('[gdnctl] cleared stale dev TPU libtpu holders:', holders, flush=True)",
-                "PY",
-            ]
-        )
-    )
-    lines.append("sleep 1")
-    return lines
-
-
 def _profile_command_lines(
     *,
     include_tpu_sync: bool,
     profile_args: Sequence[str],
-    include_dev_tpu_cleanup: bool = False,
 ) -> list[str]:
     lines = ["set -e"]
-    if include_dev_tpu_cleanup:
-        lines.extend(_dev_tpu_precleanup_lines(set_jax_coordinator=True))
     sync_cmd = "uv sync --all-packages --extra=tpu --python=3.11" if include_tpu_sync else "uv sync"
     lines.append(
         'if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then '
@@ -3117,12 +3049,8 @@ def cmd_dev_tpu_profile(args: argparse.Namespace) -> int:
     if args.dry_run:
         profile_args += ["--dry_run", "true"]
 
-    profile_cmd_lines = _profile_command_lines(
-        include_tpu_sync=True,
-        profile_args=profile_args,
-        include_dev_tpu_cleanup=True,
-    )
-    cmd += ["--", "\n".join(profile_cmd_lines)]
+    profile_cmd_lines = _profile_command_lines(include_tpu_sync=True, profile_args=profile_args)
+    cmd += ["--", " && ".join(profile_cmd_lines)]
     return _run(cmd, check=False).returncode
 
 

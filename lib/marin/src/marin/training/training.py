@@ -4,9 +4,6 @@
 import dataclasses
 import logging
 import os
-import signal
-import subprocess
-import time
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TypeVar
@@ -23,7 +20,6 @@ from fray.v2 import (
     create_environment,
     current_client,
 )
-from fray.v2.local_backend import LocalClient
 from levanter.main import train_dpo
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
@@ -222,87 +218,6 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
     logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
 
 
-def _run_local_tpu_callable_inline(request: JobRequest) -> None:
-    """Run a TPU callable inline when Fray resolved to LocalClient.
-
-    LocalClient executes callable jobs in a thread and does not materialize the
-    request environment. TPU training needs exclusive process ownership of
-    libtpu, so the local fallback must preserve the env vars and run in the
-    current process instead of launching a nested in-process job.
-    """
-    callable_entrypoint = request.entrypoint.callable_entrypoint
-    assert callable_entrypoint is not None, "Inline TPU execution requires a callable entrypoint."
-
-    patterns = (
-        "ray::run_on_pod",
-        "ray::TPUHostAct",
-        "ray::SliceActor",
-        "ray::<lambda>",
-        "wandb-core",
-        "gpu_stats",
-    )
-    out = subprocess.check_output(["ps", "-eo", "pid=,comm="], text=True)
-    skip_pids = {os.getpid(), os.getppid()}
-    try:
-        with open(f"/proc/{os.getppid()}/stat", encoding="utf-8") as fp:
-            skip_pids.add(int(fp.read().split()[3]))
-    except (FileNotFoundError, OSError, ValueError):
-        pass
-
-    stale_pids: list[int] = []
-    for line in out.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) != 2:
-            continue
-        pid = int(parts[0])
-        comm = parts[1]
-        if pid in skip_pids or not any(comm.startswith(pattern) for pattern in patterns):
-            continue
-        stale_pids.append(pid)
-
-    for pid in stale_pids:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            subprocess.run(
-                ["sudo", "-n", "kill", "-9", str(pid)],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-    try:
-        os.remove("/tmp/libtpu_lockfile")
-    except FileNotFoundError:
-        pass
-    except PermissionError:
-        subprocess.run(
-            ["sudo", "-n", "rm", "-f", "/tmp/libtpu_lockfile"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-    if stale_pids:
-        logger.info("Cleared stale local TPU holders before inline launch: %s", " ".join(map(str, stale_pids)))
-        time.sleep(1)
-
-    env_updates = request.environment.env_vars if request.environment is not None else {}
-    old_env = {key: os.environ.get(key) for key in env_updates}
-
-    try:
-        os.environ.update(env_updates)
-        callable_entrypoint.callable(*callable_entrypoint.args, **callable_entrypoint.kwargs)
-    finally:
-        for key, value in old_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -385,10 +300,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         environment=create_environment(env_vars=env, extras=extras),
         max_retries_failure=10,
     )
-    if isinstance(client, LocalClient) and isinstance(config.resources.device, TpuConfig):
-        logger.info("Running TPU training inline because current_client() resolved to LocalClient.")
-        _run_local_tpu_callable_inline(job_request)
-        return
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
 
@@ -451,10 +362,6 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
         environment=create_environment(env_vars=env, extras=extras),
         max_retries_failure=10,
     )
-    if isinstance(client, LocalClient) and isinstance(config.resources.device, TpuConfig):
-        logger.info("Running TPU DPO training inline because current_client() resolved to LocalClient.")
-        _run_local_tpu_callable_inline(job_request)
-        return
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
 
