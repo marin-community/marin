@@ -561,12 +561,7 @@ class Job:
     is_reservation_holder: bool = db_field("is_reservation_holder", _decode_bool_int)
 
     def is_finished(self) -> bool:
-        return self.state in (
-            cluster_pb2.JOB_STATE_SUCCEEDED,
-            cluster_pb2.JOB_STATE_FAILED,
-            cluster_pb2.JOB_STATE_KILLED,
-            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-        )
+        return self.state in TERMINAL_JOB_STATES
 
     @property
     def is_coscheduled(self) -> bool:

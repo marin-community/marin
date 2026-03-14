@@ -3224,3 +3224,41 @@ def test_multi_task_parent_preserves_children(job_request, worker_metadata):
     # Multi-task default is PRESERVE_CHILDREN: child stays running
     child_task = _query_task(state, child_tasks[0].task_id)
     assert child_task.state == cluster_pb2.TASK_STATE_RUNNING
+
+
+def test_task_update_worker_failed_cascades_children(job_request, worker_metadata):
+    """apply_task_updates with WORKER_FAILED terminal task cascades children via preemption policy."""
+    state = _make_state()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    # Parent job with 0 preemption retries so WORKER_FAILED makes the task terminal
+    parent_req = job_request("parent")
+    parent_req.max_retries_preemption = 0
+    parent_req.max_task_failures = 0
+    parent_tasks = submit_job(state, "parent", parent_req)
+    dispatch_task(state, parent_tasks[0], worker_id)
+
+    # Child job under parent
+    child_req = job_request("child")
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+    w2 = register_worker(state, "w2", "host2:8080", worker_metadata())
+    dispatch_task(state, child_tasks[0], w2)
+    assert _query_task(state, child_tasks[0].task_id).state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Report WORKER_FAILED via heartbeat update (goes through apply_task_updates)
+    transition_task(state, parent_tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker crashed")
+
+    # Parent task terminal
+    parent_task = _query_task(state, parent_tasks[0].task_id)
+    assert parent_task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+
+    # Parent job should be WORKER_FAILED
+    parent_job = _query_job(state, JobName.root("test-user", "parent"))
+    assert parent_job.state == cluster_pb2.JOB_STATE_WORKER_FAILED
+
+    # Child should be killed via cascade
+    child_task = _query_task(state, child_tasks[0].task_id)
+    assert child_task.state == cluster_pb2.TASK_STATE_KILLED
+
+    child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
+    assert child_job.state == cluster_pb2.JOB_STATE_KILLED

@@ -94,7 +94,6 @@ class RemoteClusterClient:
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
-            fail_if_exists=False,
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
         )

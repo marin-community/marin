@@ -276,8 +276,8 @@ def test_launch_job_replaces_finished_job_by_default(service, state, job_request
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_request):
-    """Verify fail_if_exists=true prevents replacing finished jobs."""
+def test_launch_job_error_policy_prevents_replacement(service, state, job_request):
+    """Verify EXISTING_JOB_POLICY_ERROR prevents replacing finished jobs."""
     request = job_request("no-replace-job")
     job_id = JobName.root("test-user", "no-replace-job")
 
@@ -293,9 +293,9 @@ def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_requ
     job = _query_job(state, job_id)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
-    # Submit again with fail_if_exists=true - should fail
+    # Submit again with ERROR policy - should fail
     request_no_replace = job_request("no-replace-job")
-    request_no_replace.fail_if_exists = True
+    request_no_replace.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_ERROR
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request_no_replace, None)
@@ -382,21 +382,6 @@ def test_existing_job_policy_unspecified_preserves_current_behavior(service, sta
     assert response.job_id == job_id.to_wire()
     job = _query_job(state, job_id)
     assert job.state == cluster_pb2.JOB_STATE_PENDING
-
-
-def test_fail_if_exists_backward_compat(service, state, job_request):
-    """Legacy fail_if_exists=true is equivalent to EXISTING_JOB_POLICY_ERROR."""
-    request = job_request("compat-job")
-    job_id = JobName.root("test-user", "compat-job")
-
-    service.launch_job(request, None)
-    _set_job_state(state, job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
-
-    request_legacy = job_request("compat-job")
-    request_legacy.fail_if_exists = True
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request_legacy, None)
-    assert exc_info.value.code == Code.ALREADY_EXISTS
 
 
 def test_launch_job_rejects_empty_name(service, state):
