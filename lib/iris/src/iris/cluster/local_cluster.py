@@ -213,28 +213,45 @@ class LocalCluster:
         )
         self._controller.start()
 
-        # Auto-login: create an API key and store it for CLI usage
+        # Auto-login: mint a JWT via the controller's auth system.
+        # Raw tokens won't work since the verifier only accepts JWTs.
         url = self._controller.url
-        raw_token = secrets.token_urlsafe(32)
+        now = Timestamp.now()
         key_id = f"iris_k_local_{secrets.token_hex(8)}"
-        db.ensure_user("local-admin", Timestamp.now(), role="admin")
-        create_api_key(
-            db,
-            key_id=key_id,
-            key_hash=hash_token(raw_token),
-            key_prefix=raw_token[:8],
-            user_id="local-admin",
-            name="local-auto-login",
-            now=Timestamp.now(),
-        )
+        db.ensure_user("local-admin", now, role="admin")
+        db.set_user_role("local-admin", "admin")
+
+        if auth.jwt_manager:
+            create_api_key(
+                db,
+                key_id=key_id,
+                key_hash=f"jwt:{key_id}",
+                key_prefix="jwt",
+                user_id="local-admin",
+                name="local-auto-login",
+                now=now,
+            )
+            jwt_token = auth.jwt_manager.create_token("local-admin", "admin", key_id)
+        else:
+            # Fallback for no-DB / no-JWT mode (shouldn't happen in practice)
+            jwt_token = secrets.token_urlsafe(32)
+            create_api_key(
+                db,
+                key_id=key_id,
+                key_hash=hash_token(jwt_token),
+                key_prefix=jwt_token[:8],
+                user_id="local-admin",
+                name="local-auto-login",
+                now=now,
+            )
 
         # Local import to break circular dependency:
         # local_cluster → cli.token_store → cli.__init__ → cli.main → client → local_cluster
         from iris.cli.token_store import store_token
 
         cluster_name = self._config.name or "local"
-        store_token(cluster_name, url, raw_token)
-        self._auto_login_token = raw_token
+        store_token(cluster_name, url, jwt_token)
+        self._auto_login_token = jwt_token
 
         return url
 

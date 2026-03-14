@@ -15,6 +15,7 @@ from iris.rpc.auth import (
     StaticTokenProvider,
     StaticTokenVerifier,
     _extract_cookie,
+    get_verified_identity,
     get_verified_user,
 )
 
@@ -136,7 +137,16 @@ def test_verified_user_is_none_without_interceptor():
 
 def test_static_token_verifier_valid():
     v = StaticTokenVerifier({"tok": "user1"})
-    assert v.verify("tok") == "user1"
+    result = v.verify("tok")
+    assert result.user_id == "user1"
+    assert result.role == "user"
+
+
+def test_static_token_verifier_with_custom_role():
+    v = StaticTokenVerifier({"tok": "admin1"}, roles={"admin1": "admin"})
+    result = v.verify("tok")
+    assert result.user_id == "admin1"
+    assert result.role == "admin"
 
 
 def test_static_token_verifier_invalid():
@@ -188,9 +198,10 @@ def test_gcp_access_token_verifier_valid():
     mock_resp.json.return_value = {"email": "alice@example.com"}
 
     with patch("requests.get", return_value=mock_resp) as mock_get:
-        email = verifier.verify("fake-access-token")
+        result = verifier.verify("fake-access-token")
 
-    assert email == "alice@example.com"
+    assert result.user_id == "alice@example.com"
+    assert result.role == "user"
     mock_get.assert_called_once_with(
         "https://oauth2.googleapis.com/tokeninfo",
         params={"access_token": "fake-access-token"},
@@ -242,9 +253,9 @@ def test_gcp_access_token_verifier_checks_project_access():
     project_resp.status_code = 200
 
     with patch("requests.get", side_effect=[tokeninfo_resp, project_resp]) as mock_get:
-        email = verifier.verify("valid-token")
+        result = verifier.verify("valid-token")
 
-    assert email == "alice@example.com"
+    assert result.user_id == "alice@example.com"
     assert mock_get.call_count == 2
     mock_get.assert_any_call(
         "https://cloudresourcemanager.googleapis.com/v3/projects/my-project",
@@ -293,14 +304,16 @@ def test_composite_verifier_first_match():
     v1 = StaticTokenVerifier({"tok-a": "alice"})
     v2 = StaticTokenVerifier({"tok-b": "bob"})
     composite = CompositeTokenVerifier([v1, v2])
-    assert composite.verify("tok-a") == "alice"
+    result = composite.verify("tok-a")
+    assert result.user_id == "alice"
 
 
 def test_composite_verifier_second_match():
     v1 = StaticTokenVerifier({"tok-a": "alice"})
     v2 = StaticTokenVerifier({"tok-b": "bob"})
     composite = CompositeTokenVerifier([v1, v2])
-    assert composite.verify("tok-b") == "bob"
+    result = composite.verify("tok-b")
+    assert result.user_id == "bob"
 
 
 def test_composite_verifier_rejects_empty_list():
@@ -325,29 +338,34 @@ def test_null_auth_interceptor_sets_anonymous_user():
     from iris.rpc.auth import NullAuthInterceptor
 
     interceptor = NullAuthInterceptor()
-    captured_user = []
+    captured = []
 
     def handler(req, ctx):
-        captured_user.append(get_verified_user())
+        captured.append((get_verified_user(), get_verified_identity()))
         return "ok"
 
     result = interceptor.intercept_unary_sync(handler, "request", _make_ctx())
     assert result == "ok"
-    assert captured_user == ["anonymous"]
+    assert captured[0][0] == "anonymous"
+    identity = captured[0][1]
+    assert identity is not None
+    assert identity.user_id == "anonymous"
+    assert identity.role == "admin"
 
 
 def test_null_auth_interceptor_custom_user():
     from iris.rpc.auth import NullAuthInterceptor
 
-    interceptor = NullAuthInterceptor(user="custom-user")
-    captured_user = []
+    interceptor = NullAuthInterceptor(user="custom-user", role="user")
+    captured = []
 
     def handler(req, ctx):
-        captured_user.append(get_verified_user())
+        captured.append(get_verified_identity())
         return "ok"
 
     interceptor.intercept_unary_sync(handler, "request", _make_ctx())
-    assert captured_user == ["custom-user"]
+    assert captured[0].user_id == "custom-user"
+    assert captured[0].role == "user"
 
 
 def test_null_auth_interceptor_resets_context():
@@ -361,6 +379,7 @@ def test_null_auth_interceptor_resets_context():
 
     interceptor.intercept_unary_sync(handler, "request", _make_ctx())
     assert get_verified_user() is None
+    assert get_verified_identity() is None
 
 
 def test_null_auth_interceptor_resets_context_on_error():
@@ -376,6 +395,7 @@ def test_null_auth_interceptor_resets_context_on_error():
         interceptor.intercept_unary_sync(failing_handler, "request", _make_ctx())
 
     assert get_verified_user() is None
+    assert get_verified_identity() is None
 
 
 # ---------------------------------------------------------------------------
@@ -452,135 +472,100 @@ def test_hash_token_is_sha256_hex():
 
 
 # ---------------------------------------------------------------------------
-# DbTokenVerifier
+# JwtTokenManager (replaces DbTokenVerifier)
 # ---------------------------------------------------------------------------
 
 
-def test_db_token_verifier_valid_key(tmp_path):
-    from iris.cluster.controller.auth import DbTokenVerifier, create_api_key
-    from iris.cluster.controller.db import ControllerDB
-    from iris.rpc.auth import hash_token
-    from iris.time_utils import Timestamp
+@pytest.fixture
+def jwt_manager():
+    from iris.cluster.controller.auth import JwtTokenManager
 
-    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
-    now = Timestamp.now()
-    db.ensure_user("alice", now)
-    raw_token = "my-secret-token"
-    create_api_key(
-        db,
-        key_id="k1",
-        key_hash=hash_token(raw_token),
-        key_prefix=raw_token[:8],
-        user_id="alice",
-        name="test-key",
-        now=now,
-    )
-    verifier = DbTokenVerifier(db)
-    assert verifier.verify(raw_token) == "alice"
-    db.close()
+    return JwtTokenManager(signing_key="test-signing-key-abcdef1234567890")
 
 
-def test_db_token_verifier_invalid_key(tmp_path):
-    from iris.cluster.controller.auth import DbTokenVerifier
-    from iris.cluster.controller.db import ControllerDB
-
-    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
-    verifier = DbTokenVerifier(db)
-    with pytest.raises(ValueError, match="Invalid API key"):
-        verifier.verify("nonexistent-token")
-    db.close()
+def test_jwt_token_manager_roundtrip(jwt_manager):
+    token = jwt_manager.create_token(user_id="alice", role="user", key_id="k1")
+    identity = jwt_manager.verify(token)
+    assert identity.user_id == "alice"
+    assert identity.role == "user"
 
 
-def test_db_token_verifier_revoked_key(tmp_path):
-    from iris.cluster.controller.auth import DbTokenVerifier, create_api_key, revoke_api_key
-    from iris.cluster.controller.db import ControllerDB
-    from iris.rpc.auth import hash_token
-    from iris.time_utils import Timestamp
+def test_jwt_token_manager_rejects_wrong_key():
+    from iris.cluster.controller.auth import JwtTokenManager
 
-    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
-    now = Timestamp.now()
-    db.ensure_user("alice", now)
-    raw_token = "revoked-token"
-    create_api_key(
-        db,
-        key_id="k1",
-        key_hash=hash_token(raw_token),
-        key_prefix=raw_token[:8],
-        user_id="alice",
-        name="test-key",
-        now=now,
-    )
-    revoke_api_key(db, "k1", now)
+    manager_a = JwtTokenManager(signing_key="key-a-abcdef1234567890abcdef")
+    manager_b = JwtTokenManager(signing_key="key-b-abcdef1234567890abcdef")
+    token = manager_a.create_token(user_id="alice", role="user", key_id="k1")
+    with pytest.raises(ValueError, match="Invalid token"):
+        manager_b.verify(token)
 
-    verifier = DbTokenVerifier(db)
+
+def test_jwt_token_manager_revocation(jwt_manager):
+    token = jwt_manager.create_token(user_id="alice", role="user", key_id="revoke-me")
+    jwt_manager.revoke("revoke-me")
     with pytest.raises(ValueError, match="revoked"):
-        verifier.verify(raw_token)
-    db.close()
+        jwt_manager.verify(token)
 
 
-def test_db_token_verifier_expired_key(tmp_path):
-    from iris.cluster.controller.auth import DbTokenVerifier, create_api_key
-    from iris.cluster.controller.db import ControllerDB
-    from iris.rpc.auth import hash_token
-    from iris.time_utils import Timestamp
-
-    db = ControllerDB(db_path=tmp_path / "test.sqlite3")
-    now = Timestamp.now()
-    db.ensure_user("alice", now)
-    raw_token = "expired-token"
-    past = Timestamp.from_ms(1000)
-    create_api_key(
-        db,
-        key_id="k1",
-        key_hash=hash_token(raw_token),
-        key_prefix=raw_token[:8],
-        user_id="alice",
-        name="test-key",
-        now=past,
-        expires_at=past,
-    )
-
-    verifier = DbTokenVerifier(db)
+def test_jwt_token_manager_expired(jwt_manager):
+    token = jwt_manager.create_token(user_id="alice", role="user", key_id="k-exp", ttl_seconds=-1)
     with pytest.raises(ValueError, match="expired"):
-        verifier.verify(raw_token)
-    db.close()
+        jwt_manager.verify(token)
 
 
-def test_db_token_verifier_last_used_throttle(tmp_path):
-    from iris.cluster.controller.auth import DbTokenVerifier, create_api_key, lookup_api_key_by_hash
+def test_jwt_token_manager_load_revocations(tmp_path):
+    from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
     from iris.cluster.controller.db import ControllerDB
-    from iris.rpc.auth import hash_token
     from iris.time_utils import Timestamp
 
     db = ControllerDB(db_path=tmp_path / "test.sqlite3")
     now = Timestamp.now()
     db.ensure_user("alice", now)
-    raw_token = "throttle-test-token"
+
+    manager = JwtTokenManager(signing_key="test-key-load-revocations-abc123")
+
+    # Insert a key and revoke it in the DB
     create_api_key(
         db,
-        key_id="k1",
-        key_hash=hash_token(raw_token),
-        key_prefix=raw_token[:8],
+        key_id="k-revoked",
+        key_hash="jwt:k-revoked",
+        key_prefix="jwt",
         user_id="alice",
         name="test-key",
         now=now,
     )
+    revoke_api_key(db, "k-revoked", now)
 
-    verifier = DbTokenVerifier(db)
+    # Also insert an active key
+    create_api_key(
+        db,
+        key_id="k-active",
+        key_hash="jwt:k-active",
+        key_prefix="jwt",
+        user_id="alice",
+        name="active-key",
+        now=now,
+    )
 
-    # First call should set last_used_at
-    verifier.verify(raw_token)
-    key = lookup_api_key_by_hash(db, hash_token(raw_token))
-    assert key is not None
-    assert key.last_used_at is not None
-    first_used = key.last_used_at.epoch_ms()
+    manager.load_revocations(db)
 
-    # Immediate second call should NOT update (throttled)
-    verifier.verify(raw_token)
-    key2 = lookup_api_key_by_hash(db, hash_token(raw_token))
-    assert key2.last_used_at.epoch_ms() == first_used
+    revoked_token = manager.create_token(user_id="alice", role="user", key_id="k-revoked")
+    active_token = manager.create_token(user_id="alice", role="user", key_id="k-active")
+
+    with pytest.raises(ValueError, match="revoked"):
+        manager.verify(revoked_token)
+
+    identity = manager.verify(active_token)
+    assert identity.user_id == "alice"
 
     db.close()
+
+
+def test_jwt_token_manager_worker_role(jwt_manager):
+    token = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w1")
+    identity = jwt_manager.verify(token)
+    assert identity.user_id == "system:worker"
+    assert identity.role == "worker"
 
 
 # ---------------------------------------------------------------------------
@@ -653,3 +638,117 @@ def test_extract_cookie(cookie_header, name, expected):
 
 def test_extract_cookie_empty_string():
     assert _extract_cookie("", "iris_session") is None
+
+
+# ---------------------------------------------------------------------------
+# Centralized authorization (authorize / authorize_resource_owner)
+# ---------------------------------------------------------------------------
+
+
+def test_authorize_admin_always_passes():
+    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
+    try:
+        # Admin should pass any action, even REGISTER_WORKER
+        identity = authorize(AuthzAction.REGISTER_WORKER)
+        assert identity.user_id == "admin-user"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_worker_can_register():
+    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
+    try:
+        identity = authorize(AuthzAction.REGISTER_WORKER)
+        assert identity.role == "worker"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_user_cannot_register_worker():
+    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            authorize(AuthzAction.REGISTER_WORKER)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_raises_unauthenticated_when_no_identity():
+    from iris.rpc.auth import AuthzAction, authorize
+
+    # No identity set — should raise UNAUTHENTICATED
+    with pytest.raises(ConnectError) as exc_info:
+        authorize(AuthzAction.REGISTER_WORKER)
+    assert exc_info.value.code == Code.UNAUTHENTICATED
+
+
+def test_authorize_manage_other_keys_admin_only():
+    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            authorize(AuthzAction.MANAGE_OTHER_KEYS)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_resource_owner_same_user():
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        identity = authorize_resource_owner("alice")
+        assert identity.user_id == "alice"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_resource_owner_different_user_denied():
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            authorize_resource_owner("alice")
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_authorize_resource_owner_admin_can_access_any():
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
+    try:
+        identity = authorize_resource_owner("alice")
+        assert identity.user_id == "admin-user"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_require_identity_returns_identity():
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity, require_identity
+
+    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        identity = require_identity()
+        assert identity.user_id == "alice"
+    finally:
+        _verified_identity.reset(reset)
+
+
+def test_require_identity_raises_unauthenticated():
+    from iris.rpc.auth import require_identity
+
+    with pytest.raises(ConnectError) as exc_info:
+        require_identity()
+    assert exc_info.value.code == Code.UNAUTHENTICATED

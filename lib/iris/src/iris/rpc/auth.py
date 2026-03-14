@@ -3,15 +3,21 @@
 
 """Authentication interceptor for Iris Connect RPC services.
 
-Provides bearer token verification on the server side and token injection
-on the client side. Authentication is optional: when no verifier is configured,
-all requests pass through without authentication.
+All tokens are JWTs signed with HMAC-SHA256. Verification is a pure crypto
+operation — no database hit on the hot path. User identity and role are
+embedded in the JWT claims, so authorization checks read directly from the
+verified token instead of querying the database.
+
+Authentication is optional: when no verifier is configured, all requests
+pass through as the anonymous admin user.
 """
 
 import hashlib
 import logging
 import time
 from contextvars import ContextVar
+from dataclasses import dataclass
+from enum import StrEnum
 from http.cookies import SimpleCookie
 from typing import Protocol
 
@@ -21,6 +27,14 @@ from connectrpc.errors import ConnectError
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "iris_session"
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedIdentity:
+    """Identity of an authenticated caller, extracted from JWT claims."""
+
+    user_id: str
+    role: str
 
 
 def _extract_cookie(cookie_header: str, name: str) -> str | None:
@@ -35,26 +49,94 @@ def _extract_cookie(cookie_header: str, name: str) -> str | None:
         return None
 
 
+def _extract_bearer_token(headers: dict) -> str | None:
+    """Extract bearer token from Authorization header or session cookie."""
+    auth_header = headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[len("Bearer ") :]
+    cookie_header = headers.get("cookie", "")
+    return _extract_cookie(cookie_header, SESSION_COOKIE)
+
+
 def hash_token(raw_token: str) -> str:
     """SHA-256 hex digest of a raw API key. Used for storage and lookup."""
     return hashlib.sha256(raw_token.encode()).hexdigest()
 
 
-# Thread-local storage for the verified user identity within an RPC handler.
-# Set by AuthInterceptor before calling the handler, read by service code.
-_verified_user: ContextVar[str | None] = ContextVar("verified_user", default=None)
+# Per-request identity set by AuthInterceptor, read by service handlers.
+_verified_identity: ContextVar[VerifiedIdentity | None] = ContextVar("verified_identity", default=None)
+
+
+def get_verified_identity() -> VerifiedIdentity | None:
+    """Return the verified identity for the current RPC, or None if auth is disabled."""
+    return _verified_identity.get()
 
 
 def get_verified_user() -> str | None:
-    """Return the verified user for the current RPC, or None if auth is disabled."""
-    return _verified_user.get()
+    """Return just the user_id for the current RPC, or None."""
+    identity = _verified_identity.get()
+    return identity.user_id if identity is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Centralized authorization — policy is defined here, not scattered in service
+# ---------------------------------------------------------------------------
+
+
+class AuthzAction(StrEnum):
+    """Actions requiring authorization. Add new actions here; policy is in POLICY."""
+
+    REGISTER_WORKER = "register_worker"
+    MANAGE_OTHER_KEYS = "manage_other_keys"
+
+
+# Action → frozenset of roles allowed. Admin is implicitly always allowed.
+POLICY: dict[AuthzAction, frozenset[str]] = {
+    AuthzAction.REGISTER_WORKER: frozenset({"worker"}),
+    AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
+}
+
+
+def require_identity() -> VerifiedIdentity:
+    """Get the verified identity for the current RPC or raise UNAUTHENTICATED."""
+    identity = _verified_identity.get()
+    if identity is None:
+        raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
+    return identity
+
+
+def authorize(action: AuthzAction) -> VerifiedIdentity:
+    """Require the current caller has permission for the given action.
+
+    Admin role is always authorized. Other roles are checked against POLICY.
+    """
+    identity = require_identity()
+    if identity.role == "admin":
+        return identity
+    allowed = POLICY.get(action, frozenset())
+    if identity.role not in allowed:
+        raise ConnectError(Code.PERMISSION_DENIED, f"{action} not allowed for role {identity.role}")
+    return identity
+
+
+def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:
+    """Require the caller owns the resource or is admin."""
+    identity = require_identity()
+    if identity.role == "admin":
+        return identity
+    if identity.user_id != resource_owner:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"User '{identity.user_id}' cannot access resources owned by '{resource_owner}'",
+        )
+    return identity
 
 
 class TokenVerifier(Protocol):
-    """Verifies a bearer token and returns the authenticated username."""
+    """Verifies a bearer token and returns the authenticated identity."""
 
-    def verify(self, token: str) -> str:
-        """Verify the token and return the username (e.g. email).
+    def verify(self, token: str) -> VerifiedIdentity:
+        """Verify the token and return the identity.
 
         Raises:
             ValueError: If the token is invalid or expired.
@@ -63,19 +145,22 @@ class TokenVerifier(Protocol):
 
 
 class StaticTokenVerifier:
-    """Maps fixed tokens to usernames. Useful for testing and worker auth."""
+    """Maps fixed tokens to identities. Useful for testing and login exchange."""
 
-    def __init__(self, tokens: dict[str, str]):
+    def __init__(self, tokens: dict[str, str], roles: dict[str, str] | None = None):
         """Args:
         tokens: Mapping of token string to username.
+        roles: Optional mapping of username to role (defaults to "user").
         """
         self._tokens = tokens
+        self._roles = roles or {}
 
-    def verify(self, token: str) -> str:
+    def verify(self, token: str) -> VerifiedIdentity:
         user = self._tokens.get(token)
         if user is None:
             raise ValueError("Invalid token")
-        return user
+        role = self._roles.get(user, "user")
+        return VerifiedIdentity(user_id=user, role=role)
 
 
 class GcpAccessTokenVerifier:
@@ -91,7 +176,7 @@ class GcpAccessTokenVerifier:
     def __init__(self, project_id: str | None = None):
         self._project_id = project_id
 
-    def verify(self, token: str) -> str:
+    def verify(self, token: str) -> VerifiedIdentity:
         import requests
 
         resp = requests.get(self._TOKENINFO_URL, params={"access_token": token}, timeout=10)
@@ -111,7 +196,7 @@ class GcpAccessTokenVerifier:
             if proj_resp.status_code != 200:
                 raise ValueError(f"User {email} does not have access to project {self._project_id}")
 
-        return email
+        return VerifiedIdentity(user_id=email, role="user")
 
 
 class CompositeTokenVerifier:
@@ -122,7 +207,7 @@ class CompositeTokenVerifier:
             raise ValueError("CompositeTokenVerifier requires at least one verifier")
         self._verifiers = verifiers
 
-    def verify(self, token: str) -> str:
+    def verify(self, token: str) -> VerifiedIdentity:
         errors = []
         for verifier in self._verifiers:
             try:
@@ -135,39 +220,30 @@ class CompositeTokenVerifier:
 class AuthInterceptor:
     """Server-side Connect RPC interceptor that enforces bearer token auth.
 
-    Reads the Authorization header, verifies the token via the configured
-    verifier, and stores the verified user in a ContextVar for the service
-    layer to read via get_verified_user().
+    Reads the Authorization header (or session cookie), verifies the JWT via
+    the configured verifier, and stores the VerifiedIdentity in a ContextVar
+    for the service layer to read via get_verified_identity().
     """
 
     def __init__(self, verifier: TokenVerifier):
         self._verifier = verifier
 
     def intercept_unary_sync(self, call_next, request, ctx):
-        headers = ctx.request_headers()
-        auth_header = headers.get("authorization", "")
-        token = None
-
-        if auth_header.startswith("Bearer "):
-            token = auth_header[len("Bearer ") :]
-        else:
-            cookie_header = headers.get("cookie", "")
-            token = _extract_cookie(cookie_header, SESSION_COOKIE)
-
+        token = _extract_bearer_token(ctx.request_headers())
         if not token:
             raise ConnectError(Code.UNAUTHENTICATED, "Missing or malformed Authorization header")
 
         try:
-            user = self._verifier.verify(token)
+            identity = self._verifier.verify(token)
         except ValueError as exc:
             logger.warning("Authentication failed: %s", exc)
             raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
 
-        reset_token = _verified_user.set(user)
+        reset_token = _verified_identity.set(identity)
         try:
             return call_next(request, ctx)
         finally:
-            _verified_user.reset(reset_token)
+            _verified_identity.reset(reset_token)
 
     def intercept_server_stream_sync(self, call_next, request, ctx):
         raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
@@ -183,38 +259,35 @@ class NullAuthInterceptor:
     """Interceptor for null-auth mode.
 
     When a verifier is provided, tokens are verified if present (e.g. worker
-    tokens) but unauthenticated requests fall through as the anonymous user.
-    Without a verifier, all requests are treated as anonymous.
+    tokens) but unauthenticated requests fall through as the anonymous admin.
+    Without a verifier, all requests are treated as anonymous admin.
     """
 
-    def __init__(self, user: str = "anonymous", verifier: TokenVerifier | None = None):
-        self._user = user
+    def __init__(
+        self,
+        user: str = "anonymous",
+        role: str = "admin",
+        verifier: TokenVerifier | None = None,
+    ):
+        self._default_identity = VerifiedIdentity(user_id=user, role=role)
         self._verifier = verifier
 
     def intercept_unary_sync(self, call_next, request, ctx):
-        user = self._user
+        identity = self._default_identity
 
         if self._verifier is not None:
-            headers = ctx.request_headers()
-            auth_header = headers.get("authorization", "")
-            token = None
-            if auth_header.startswith("Bearer "):
-                token = auth_header[len("Bearer ") :]
-            else:
-                cookie_header = headers.get("cookie", "")
-                token = _extract_cookie(cookie_header, SESSION_COOKIE)
-
+            token = _extract_bearer_token(ctx.request_headers())
             if token:
                 try:
-                    user = self._verifier.verify(token)
+                    identity = self._verifier.verify(token)
                 except ValueError:
                     pass
 
-        reset_token = _verified_user.set(user)
+        reset_token = _verified_identity.set(identity)
         try:
             return call_next(request, ctx)
         finally:
-            _verified_user.reset(reset_token)
+            _verified_identity.reset(reset_token)
 
 
 class AuthTokenInjector:
