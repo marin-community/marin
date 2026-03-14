@@ -83,3 +83,61 @@
 - Next action:
   - Implement the torch benchmark harness in this worktree.
   - Run an intranode H100x8 smoke/benchmark via Iris.
+
+### 2026-03-14 06:53 - Direct KubernetesRuntime launcher reaches a working DeepEP install/import on H100x8
+- Hypothesis: bypassing the default Iris task image with a direct `KubernetesRuntime` pod on a CUDA-devel image should resolve the remaining bring-up blockers (`CUDA_HOME`, missing `nvcc`, and the earlier `-lnvtx3interop` link failure) without changing the cluster.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - launcher: `.agents/scripts/deepep_krt_smoke.py`
+  - pod image: `pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel`
+  - shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `topk=2`, `distribution=random`, `world_size=8`
+  - pod IDs during bring-up: `iris-task-f891bd28306d`, `iris-task-b2859b96b39e`
+- Result:
+  - The direct pod path now stages the benchmark script reliably and sees all 8 H100s.
+  - `nvcc` is present under `/usr/local/cuda/bin/nvcc` and `CUDA_HOME=/usr/local/cuda` is valid.
+  - Shadowing `nvidia.nvshmem` during `pip install /tmp/DeepEP` keeps the build intranode-only and avoids the earlier `mlx5dv.h` path.
+  - The NVTX shim (`libnvtx3interop.so -> libnvToolsExt.so.1`) is sufficient for `pip install --no-build-isolation /tmp/DeepEP` to succeed.
+  - `deep_ep` imports successfully from the installed wheel and exposes `HybridEPBuffer`.
+  - First failure after import: the `deep_ep.Buffer` benchmark path still calls `get_rdma_buffer_size_hint(...)`, which asserts with `NVSHMEM is disable during compilation`.
+- Interpretation:
+  - The cluster, pod image, and build environment are no longer the active blockers.
+  - The remaining failures are now inside the kernel paths themselves.
+  - The benchmark harness should treat `deep_ep.Buffer` as blocked for this intranode-only build unless/until the library exposes a no-RDMA path that avoids the NVSHMEM assertion.
+- Next action:
+  - Run `HybridEPBuffer` directly (`--kernel hybrid_ep`) to separate the main DeepEP path from the hybrid path.
+
+### 2026-03-14 06:57 - Hybrid-EP reaches runtime JIT but fails to compile kernels on H100 / CUDA 12.8
+- Hypothesis: if the install/import layer is solved, `HybridEPBuffer` should either produce the first H100x8 timings or fail with a kernel-specific compile/runtime error that is narrower than the earlier environment blockers.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - pod ID: `iris-task-ea6a2781fd40`
+  - same fixed shape as above: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `topk=2`, `distribution=random`, `world_size=8`
+- Result:
+  - `HybridEPBuffer` gets past installation and import, starts the `torchrun` benchmark, and reaches the runtime JIT compiler.
+  - The JIT compile fails on every rank with `cuda::ptx::cp_async_bulk` overload mismatches in `deep_ep/backend/hybrid_ep_backend.cuh`.
+  - Representative error:
+    - `RuntimeError: Failed to compile the code, compile command: /usr/local/cuda/bin/nvcc ... /root/.deepep/hybrid_ep/jit/2048-4096-16-8-1-uint16_t-10-8-128-32-1-1-...`
+    - `error: no instance of overloaded function "cuda::ptx::cp_async_bulk" matches the argument list`
+  - Upstream docs still claim Hopper support on CUDA `12.3+`, so this H100 / CUDA 12.8 failure is not explained by an obviously unsupported baseline.
+- Interpretation:
+  - The current blocker has narrowed to a kernel/toolchain mismatch rather than cluster bring-up.
+  - Inference: the hybrid JIT source in the current `hybrid-ep` branch appears incompatible with the CUDA 12.8 PTX header signature for `cp_async_bulk` at this shape.
+  - There are still no steady-state kernel timings; the experiment has advanced from environment failure to kernel compile failure.
+- Next action:
+  - Check whether the upstream fallback knobs (`DISABLE_SM90_FEATURES` / related JIT settings) actually apply to the hybrid runtime path.
+  - If not, try a different CUDA minor/toolchain that is still consistent with the upstream Hopper support claim and rerun the same fixed H100x8 smoke command.

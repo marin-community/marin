@@ -28,17 +28,19 @@ The first goal is execution and benchmarking, not production integration. A true
 
 ## Results
 
-In progress as of 2026-03-13.
+In progress as of 2026-03-14.
 
-Initial plan:
-- Add a repo-local torch benchmark that can import `deep_ep` and drive DeepEP / Hybrid-EP kernels with a controlled routing distribution.
-- Start with intranode H100x8 on CoreWeave because it is available now and does not require multi-node RDMA bring-up.
-- Match the prior issue's total expert count when practical:
-  - global experts: `128`
-  - local experts per rank: `16` on `8` GPUs
-  - `topk in {2, 8}`
-  - routing distributions: `random`, `runs`
-- Record both bring-up failures and steady-state timings.
+Current state:
+- The direct `KubernetesRuntime` path on CoreWeave H100x8 now works end-to-end for environment bring-up:
+  - pod image: `pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel`
+  - `nvcc` is present and `CUDA_HOME=/usr/local/cuda` is valid
+  - the repo-local benchmark script can be staged into the pod reliably
+  - `pip install --no-build-isolation /tmp/DeepEP` succeeds
+  - `import deep_ep` succeeds and `HybridEPBuffer` is available
+- There are still no steady-state timings because the failures have moved into the kernel paths:
+  - `deep_ep.Buffer` still asserts on `get_rdma_buffer_size_hint(...)` when the build is intranode-only with NVSHMEM disabled
+  - `HybridEPBuffer` reaches its runtime JIT, but the JIT compile fails on H100 / CUDA 12.8 with `cuda::ptx::cp_async_bulk` overload mismatches in `hybrid_ep_backend.cuh`
+- Upstream DeepEP docs still claim Hopper support on CUDA `12.3+`, so the current Hybrid-EP failure looks like a narrower toolchain/kernel compatibility issue rather than a generic unsupported-environment case.
 
 ## Decision Log
 
@@ -47,8 +49,10 @@ Initial plan:
 
 ## Negative Results
 
-- None yet.
+- 2026-03-13: the default Iris task image (`ghcr.io/marin-community/iris-task:latest`) cannot build DeepEP because it has no CUDA toolkit (`CUDA_HOME` unset, `nvcc` missing).
+- 2026-03-14: the direct CUDA-devel pod path fixes the environment blocker, but `deep_ep.Buffer` still asserts when NVSHMEM is disabled for the intranode-only build.
+- 2026-03-14: `HybridEPBuffer` runtime JIT on H100 / CUDA 12.8 fails with `cuda::ptx::cp_async_bulk` overload mismatches before any timing loop runs.
 
 ## Conclusion
 
-Pending.
+Pending. The experiment has advanced from task-image failure to kernel-specific failure, but there is still no valid timing table yet.
