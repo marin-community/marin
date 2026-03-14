@@ -292,7 +292,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 FilterConfig(
                     type=FilterType.REMOVE_DOC,
                     attribute_path=dedup_fuzzy_document_step.cd("data"),
-                    name=str(DedupMode.FUZZY_DOCUMENT),
+                    name="dup_doc",
+                    attribute_filetype="vortex",
+                    keep_if_missing=True,
                 ),
             ],
         ),

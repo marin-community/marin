@@ -18,14 +18,16 @@ logger = logging.getLogger(__name__)
 class RecordId(TypedDict):
     record_id: Any
     record_id_norm: str
+    file_idx: int
 
 
-# TODO: dataclasses are not writable to parquet ATM, is there something better than TypedDict that works out of the box?
 class CCNode(TypedDict):
-    node_id: RecordId
+    record_id: Any
+    record_id_norm: str
     adjacency_list: list[str]
     component_id: str
     changed: bool
+    file_idx: int
 
 
 @dataclass
@@ -45,6 +47,7 @@ class CompMessage(CCMessage):
 class CCInput(TypedDict):
     bucket: str
     id: Any
+    file_idx: int
 
 
 def _internal_orderable_id(record_id: Any) -> str:
@@ -100,7 +103,7 @@ def connected_components(
         .group_by(
             lambda x: x[0]["record_id_norm"],
             reducer=_build_adjacency,
-        ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
+        ).write_vortex(f"{output_dir}/it_0/part-{{shard:05d}}.vortex"),
         verbose=True,
     )
 
@@ -109,18 +112,17 @@ def connected_components(
         logger.info(f"Connected components iteration {i}...")
         curr_it = ctx.execute(
             Dataset.from_list(curr_it)
-            .load_parquet()
+            .load_vortex()
             .map(lambda record: CCNode(**record))
             .flat_map(_emit_messages)
             .group_by(key=lambda x: x[0], reducer=_reduce_node_step)
-            # NOTE: parquet built-in does not support list of int :/
-            .write_parquet(f"{output_dir}/it_{i}/part-{{shard:05d}}.parquet"),
+            .write_vortex(f"{output_dir}/it_{i}/part-{{shard:05d}}.vortex"),
             verbose=True,
         )
 
         # Check for convergence
         changes = ctx.execute(
-            Dataset.from_list(curr_it).load_parquet(columns=["changed"]).filter(col("changed")).count(),
+            Dataset.from_list(curr_it).load_vortex(columns=["changed"]).filter(col("changed")).count(),
         )
 
         num_changes = changes[0]
@@ -141,7 +143,14 @@ def _reduce_buckets(bucket: str, items: Iterator[CCInput]) -> BucketWithIds:
     #    return None  # No duplicates in this bucket
     return {
         "bucket": bucket,
-        "ids": [RecordId(record_id=item["id"], record_id_norm=_internal_orderable_id(item["id"])) for item in items],
+        "ids": [
+            RecordId(
+                record_id=item["id"],
+                record_id_norm=_internal_orderable_id(item["id"]),
+                file_idx=item["file_idx"],
+            )
+            for item in items
+        ],
     }
 
 
@@ -168,14 +177,17 @@ def _gen_links_within_buckets(record: CCInput, *, preserve_singletons: bool) -> 
             yield (ids[j], ids[i])
 
 
-def _build_adjacency(node_id: RecordId, links: Iterator[tuple[RecordId, RecordId]]) -> CCNode:
+def _build_adjacency(node_id: str, links: Iterator[tuple[RecordId, RecordId]]) -> CCNode:
     all_links = list(links)
+    source = all_links[0][0]
     return CCNode(
-        node_id=all_links[0][0],
+        record_id=source["record_id"],
+        record_id_norm=source["record_id_norm"],
         adjacency_list=list(set([link[1]["record_id_norm"] for link in all_links])),
         # init with own id as component
         component_id=node_id,
         changed=True,
+        file_idx=source["file_idx"],
     )
 
 
@@ -185,7 +197,7 @@ def _emit_messages(node: CCNode) -> Iterator[tuple[str, CCMessage]]:
     2. Emit the current component ID to all neighbors.
     """
     # 1. Preserve structure
-    yield (node["node_id"]["record_id_norm"], SelfMessage(node=node))
+    yield (node["record_id_norm"], SelfMessage(node=node))
 
     # 2. Propagate component ID to neighbors
     # (Optimization: Only send if we changed recently, but strictly Hash-to-Min sends always)
