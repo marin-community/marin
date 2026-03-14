@@ -12,6 +12,7 @@ Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/ski
 
 - [pull-request](.agents/skills/pull-request/SKILL.md) — PR descriptions, testing, review workflow
 - [fix-issue](.agents/skills/fix-issue/SKILL.md) — issue triage and fix protocol
+- [file-issue](.agents/skills/file-issue/SKILL.md) — file a GitHub issue from conversation context
 - [add-dataset](.agents/skills/add-dataset/SKILL.md) — dataset addition (start with schema inspection)
 - [organize-experiments](.agents/skills/organize-experiments/SKILL.md) — experiment organization
 - [agent-research](.agents/skills/agent-research/SKILL.md) — long-running benchmark/research threads
