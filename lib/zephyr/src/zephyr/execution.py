@@ -63,6 +63,7 @@ class Chunk(Protocol):
 _ZEPHYR_SHUFFLE_SHARD_IDX_COL = "shard_idx"
 _ZEPHYR_SHUFFLE_CHUNK_IDX_COL = "chunk_idx"
 _ZEPHYR_SHUFFLE_ITEM_COL = "item"
+_ZEPHYR_SHUFFLE_PICKLED_COL = "pickled"
 
 
 @dataclass(frozen=True)
@@ -114,34 +115,38 @@ class ParquetDiskChunk:
     for different (shard_idx, chunk_idx) pairs. Each chunk is pre-sorted
     by key, preserving the invariant needed for k-way merge in Reduce.
 
-    Items are stored wrapped in an envelope struct with routing metadata::
+    Items are stored in one of two envelope formats:
 
-        {"shard_idx": int, "chunk_idx": int, "item": <user_data>}
+    * **Native** (``is_pickled=False``): ``{"shard_idx", "chunk_idx", "item": <data>}``
+    * **Pickle** (``is_pickled=True``): ``{"shard_idx", "chunk_idx", "pickled": <bytes>}``
 
-    The ``read`` method filters by shard/chunk and unwraps the ``item`` field.
-    Predicate pushdown in Parquet skips irrelevant row groups, so each
-    reducer reads only its own data efficiently.
+    The pickle envelope is used when items are not Arrow-serializable.
     """
 
     path: str
     filter_shard: int
     filter_chunk: int
     count: int
+    is_pickled: bool = False
 
     def __iter__(self) -> Iterator:
         return iter(self.read())
 
     def read(self) -> list:
         """Load filtered chunk data from a Parquet file, unwrapping envelope."""
+        col = _ZEPHYR_SHUFFLE_PICKLED_COL if self.is_pickled else _ZEPHYR_SHUFFLE_ITEM_COL
         table = pq.read_table(
             self.path,
-            columns=[_ZEPHYR_SHUFFLE_ITEM_COL],
+            columns=[col],
             filters=(
                 (pc.field(_ZEPHYR_SHUFFLE_SHARD_IDX_COL) == self.filter_shard)
                 & (pc.field(_ZEPHYR_SHUFFLE_CHUNK_IDX_COL) == self.filter_chunk)
             ),
         )
-        return table.column(_ZEPHYR_SHUFFLE_ITEM_COL).to_pylist()
+        items = table.column(col).to_pylist()
+        if self.is_pickled:
+            return [pickle.loads(b) for b in items]
+        return items
 
 
 @dataclass
@@ -225,6 +230,18 @@ def _make_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]
     ]
 
 
+def _make_pickle_envelope(items: list, target_shard: int, chunk_idx: int) -> list[dict]:
+    """Wrap items as cloudpickle-serialized bytes for Arrow-incompatible types."""
+    return [
+        {
+            _ZEPHYR_SHUFFLE_SHARD_IDX_COL: target_shard,
+            _ZEPHYR_SHUFFLE_CHUNK_IDX_COL: chunk_idx,
+            _ZEPHYR_SHUFFLE_PICKLED_COL: cloudpickle.dumps(item),
+        }
+        for item in items
+    ]
+
+
 def _segment_path(base_path: str, seg_idx: int) -> str:
     """Return the file path for a given segment index.
 
@@ -245,6 +262,7 @@ def _write_parquet_scatter(
     stage_gen: Iterator[StageResultChunk],
     source_shard: int,
     parquet_path: str,
+    pickled: bool = False,
 ) -> list[ResultChunk]:
     """Stream scatter chunks into Parquet files as row groups.
 
@@ -252,6 +270,9 @@ def _write_parquet_scatter(
     (e.g. a field evolves from null to a concrete type). On mismatch the
     current file is closed, the schema is unified via ``pa.unify_schemas``,
     and a new segment file is opened with the evolved schema.
+
+    When ``pickled=True``, items are serialized via cloudpickle into a binary
+    ``pickled`` column instead of being stored natively in the ``item`` column.
     """
     chunk_results: list[_ChunkMetadata] = []
     per_shard_chunk_cnt: dict[int, int] = defaultdict(int)
@@ -285,7 +306,8 @@ def _write_parquet_scatter(
         target_shard = result.target_shard
         shard_chunk_idx = per_shard_chunk_cnt[target_shard]
         per_shard_chunk_cnt[target_shard] += 1
-        envelope = _make_envelope(chunk_items, target_shard, shard_chunk_idx)
+        envelope_fn = _make_pickle_envelope if pickled else _make_envelope
+        envelope = envelope_fn(chunk_items, target_shard, shard_chunk_idx)
         chunk_arrow = pa.RecordBatch.from_pylist(envelope)
 
         if schema is None:
@@ -328,7 +350,11 @@ def _write_parquet_scatter(
             source_shard=source_shard,
             target_shard=rec.target_shard,
             data=ParquetDiskChunk(
-                path=rec.path, filter_shard=rec.target_shard, filter_chunk=rec.chunk_idx, count=rec.cnt
+                path=rec.path,
+                filter_shard=rec.target_shard,
+                filter_chunk=rec.chunk_idx,
+                count=rec.cnt,
+                is_pickled=pickled,
             ),
         )
         for rec in chunk_results
@@ -387,33 +413,26 @@ def _write_stage_chunks(
 
     first_items = list(first_result.chunk)
 
-    # Test Arrow serializability on the first chunk to decide parquet vs pickle
-    use_parquet = False
-    if is_scatter:
-        try:
-            test_envelope = _make_envelope(first_items, 0, 0)
-            pa.RecordBatch.from_pylist(test_envelope)
-            use_parquet = True
-            logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
-        except Exception:
-            sample_rows = str(test_envelope[:5]) if len(test_envelope) > 5 else str(test_envelope)
-            if len(sample_rows) > 1000:
-                sample_rows = sample_rows[:1000] + "...(truncated)"
-            logger.warning(
-                "Arrow scatter serialization failed for shard %d; "
-                "falling back to pickle. Performance will be degraded. Sample rows: %s",
-                source_shard,
-                sample_rows,
-                exc_info=True,
-            )
-
     # Prepend the already-consumed first result back into the stream
     first_with_materialized_chunk = dataclasses.replace(first_result, chunk=first_items)
     full_gen = itertools.chain([first_with_materialized_chunk], stage_gen)
 
-    if use_parquet:
+    if is_scatter:
+        # Test Arrow serializability on the first chunk to decide native vs pickle envelope
+        use_pickle_envelope = False
+        try:
+            test_envelope = _make_envelope(first_items, 0, 0)
+            pa.RecordBatch.from_pylist(test_envelope)
+            logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
+        except Exception:
+            use_pickle_envelope = True
+            logger.info(
+                "Using Parquet with pickle envelope for scatter serialization for shard %d",
+                source_shard,
+            )
+
         parquet_path = f"{stage_dir}/shard-{shard_idx:04d}.parquet"
-        return _write_parquet_scatter(full_gen, source_shard, parquet_path)
+        return _write_parquet_scatter(full_gen, source_shard, parquet_path, pickled=use_pickle_envelope)
 
     def chunk_path_fn(idx: int) -> str:
         return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
