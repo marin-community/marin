@@ -219,10 +219,6 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 # =============================================================================
 
 
-def _effective_existing_job_policy(request: cluster_pb2.Controller.LaunchJobRequest) -> int:
-    return request.existing_job_policy
-
-
 def _read_job(db: ControllerDB, job_id: JobName) -> Job | None:
     with db.snapshot() as q:
         return q.one(JOBS, where=JOBS.c.job_id == job_id.to_wire())
@@ -594,7 +590,7 @@ class ControllerServiceImpl:
 
         existing_job = _read_job(self._db, job_id)
         if existing_job:
-            policy = _effective_existing_job_policy(request)
+            policy = request.existing_job_policy
             if policy == cluster_pb2.EXISTING_JOB_POLICY_ERROR:
                 raise ConnectError(
                     Code.ALREADY_EXISTS,
