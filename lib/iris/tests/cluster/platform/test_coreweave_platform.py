@@ -656,7 +656,7 @@ def test_terminate_deletes_pod_only(fake_kubectl: FakeKubectl):
     handle = platform.create_slice(config, bootstrap)
     slice_id = handle.slice_id
 
-    pod_name = f"iris-worker-{slice_id}"
+    pod_name = f"iris-worker-{slice_id}-vm0"
     # Wait for Pod to be created by monitor thread
     _wait_for_condition(lambda: pod_name in fake_kubectl._pods, timeout=5)
 
@@ -754,14 +754,14 @@ def test_node_selector_uses_label_override_not_name_prefix(fake_kubectl: FakeKub
 
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     node_selector = fake_kubectl._pods[pod_name]["spec"]["nodeSelector"]
     assert node_selector == {iris_labels.iris_scale_group: "h100_8x"}
     platform.shutdown()
 
 
-def test_create_slice_rejects_multi_node(fake_kubectl: FakeKubectl):
-    """create_slice() raises ValueError when num_vms > 1."""
+def test_create_slice_multi_node_creates_n_pods(fake_kubectl: FakeKubectl):
+    """create_slice() with num_vms=2 creates 2 Pods sharing one ConfigMap."""
     platform = _make_platform()
     config = config_pb2.SliceConfig(
         name_prefix="h100-8x",
@@ -770,11 +770,116 @@ def test_create_slice_rejects_multi_node(fake_kubectl: FakeKubectl):
         coreweave=config_pb2.CoreweaveSliceConfig(
             region="LGA1",
             instance_type="gd-8xh100ib-i128",
+            gpu_class="H100",
         ),
     )
+    bootstrap = _make_worker_config()
 
-    with pytest.raises(ValueError, match="does not support multi-node"):
-        platform.create_slice(config)
+    handle = platform.create_slice(config, bootstrap)
+    slice_id = handle.slice_id
+
+    pod0 = f"iris-worker-{slice_id}-vm0"
+    pod1 = f"iris-worker-{slice_id}-vm1"
+
+    # Wait for both Pods to be created
+    _wait_for_condition(lambda: pod0 in fake_kubectl._pods and pod1 in fake_kubectl._pods, timeout=5)
+
+    # Both pods should exist
+    assert pod0 in fake_kubectl._pods
+    assert pod1 in fake_kubectl._pods
+
+    # Single shared ConfigMap
+    cm_name = f"iris-worker-{slice_id}-wc"
+    assert cm_name in fake_kubectl._configmaps
+
+    # Each pod has a distinct IRIS_WORKER_ID
+    env0 = {e["name"]: e for e in fake_kubectl._pods[pod0]["spec"]["containers"][0]["env"]}
+    env1 = {e["name"]: e for e in fake_kubectl._pods[pod1]["spec"]["containers"][0]["env"]}
+    assert env0["IRIS_WORKER_ID"]["value"] == pod0
+    assert env1["IRIS_WORKER_ID"]["value"] == pod1
+
+    # Mark both pods ready
+    fake_kubectl.make_pod_ready(pod0)
+    fake_kubectl.make_pod_ready(pod1)
+
+    _wait_for_condition(lambda: handle.describe().state == CloudSliceState.READY, timeout=5)
+
+    status = handle.describe()
+    assert status.state == CloudSliceState.READY
+    assert status.worker_count == 2
+    assert len(status.workers) == 2
+    platform.shutdown()
+
+
+def test_multi_node_terminate_deletes_all_pods(fake_kubectl: FakeKubectl):
+    """terminate() on a multi-VM slice deletes all Pods and the shared ConfigMap."""
+    platform = _make_platform()
+    config = config_pb2.SliceConfig(
+        name_prefix="h100-8x",
+        num_vms=2,
+        gpu_count=8,
+        coreweave=config_pb2.CoreweaveSliceConfig(
+            region="LGA1",
+            instance_type="gd-8xh100ib-i128",
+            gpu_class="H100",
+        ),
+    )
+    bootstrap = _make_worker_config()
+
+    handle = platform.create_slice(config, bootstrap)
+    slice_id = handle.slice_id
+    pod0 = f"iris-worker-{slice_id}-vm0"
+    pod1 = f"iris-worker-{slice_id}-vm1"
+    cm_name = f"iris-worker-{slice_id}-wc"
+
+    _wait_for_condition(lambda: pod0 in fake_kubectl._pods and pod1 in fake_kubectl._pods, timeout=5)
+    fake_kubectl.make_pod_ready(pod0)
+    fake_kubectl.make_pod_ready(pod1)
+    _wait_for_condition(lambda: handle.describe().state == CloudSliceState.READY, timeout=5)
+
+    handle.terminate()
+
+    assert pod0 not in fake_kubectl._pods
+    assert pod1 not in fake_kubectl._pods
+    assert cm_name not in fake_kubectl._configmaps
+    platform.shutdown()
+
+
+def test_multi_node_partial_failure_cleans_up(fake_kubectl: FakeKubectl):
+    """If one Pod in a multi-VM slice fails, all created Pods are cleaned up."""
+    platform = _make_platform()
+    config = config_pb2.SliceConfig(
+        name_prefix="h100-8x",
+        num_vms=2,
+        gpu_count=8,
+        coreweave=config_pb2.CoreweaveSliceConfig(
+            region="LGA1",
+            instance_type="gd-8xh100ib-i128",
+            gpu_class="H100",
+        ),
+    )
+    bootstrap = _make_worker_config()
+
+    # Make the first Pod apply succeed, then fail the second apply
+    apply_count = 0
+    original_call = fake_kubectl.__call__
+
+    def failing_apply(cmd, **kwargs):
+        nonlocal apply_count
+        if "apply" in cmd and "-f" in cmd:
+            # ConfigMap apply (1st), Pod vm0 apply (2nd) succeed; Pod vm1 apply (3rd) fails
+            input_data = kwargs.get("input", "")
+            if '"kind": "Pod"' in input_data:
+                apply_count += 1
+                if apply_count >= 2:
+                    return _completed(returncode=1, stderr="simulated pod creation failure")
+        return original_call(cmd, **kwargs)
+
+    with patch("iris.cluster.k8s.kubectl.subprocess.run", failing_apply):
+        handle = platform.create_slice(config, bootstrap)
+        _wait_for_condition(lambda: handle.describe().state == CloudSliceState.FAILED, timeout=5)
+
+    assert handle.describe().state == CloudSliceState.FAILED
     platform.shutdown()
 
 
@@ -1198,7 +1303,7 @@ def test_worker_pod_has_gpu_resource_limits_with_docker_runtime(fake_kubectl: Fa
     handle = platform.create_slice(config, wc)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     limits = container["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "8"
@@ -1214,7 +1319,7 @@ def test_worker_pod_no_gpu_limits_with_kubernetes_runtime(fake_kubectl: FakeKube
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     assert "nvidia.com/gpu" not in container.get("resources", {}).get("limits", {})
     platform.shutdown()
@@ -1229,7 +1334,7 @@ def test_worker_pod_no_gpu_limits_when_zero(fake_kubectl: FakeKubectl):
     handle = platform.create_slice(config, bootstrap)
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     assert "nvidia.com/gpu" not in container.get("resources", {}).get("limits", {})
     platform.shutdown()
@@ -1246,7 +1351,7 @@ def test_worker_pod_has_s3_env_vars(fake_kubectl: FakeKubectl):
 
     _wait_for_condition(lambda: len(fake_kubectl._pods) > 0, timeout=5)
 
-    pod_name = f"iris-worker-{handle.slice_id}"
+    pod_name = f"iris-worker-{handle.slice_id}-vm0"
     container = fake_kubectl._pods[pod_name]["spec"]["containers"][0]
     env_by_name = {e["name"]: e for e in container["env"]}
 
@@ -1505,7 +1610,7 @@ def test_stop_all_deletes_pods_not_nodepools(fake_kubectl: FakeKubectl):
     targets = platform.stop_all(cluster_config)
 
     # Worker Pod should be deleted
-    assert "iris-worker-iris-h100-8x-1000" not in fake_kubectl._pods
+    assert "iris-worker-iris-h100-8x-1000-vm0" not in fake_kubectl._pods
     # NodePool should remain
     assert "iris-h100-8x" in fake_kubectl._nodepools
     # Controller resources deleted
@@ -1523,10 +1628,10 @@ def test_stop_all_dry_run(fake_kubectl: FakeKubectl):
 
     targets = platform.stop_all(cluster_config, dry_run=True)
 
-    assert "pod:iris-worker-iris-h100-8x-1000" in targets
+    assert "pod:iris-worker-iris-h100-8x-1000-vm0" in targets
     assert "controller" in targets
     # Pod should still exist
-    assert "iris-worker-iris-h100-8x-1000" in fake_kubectl._pods
+    assert "iris-worker-iris-h100-8x-1000-vm0" in fake_kubectl._pods
     platform.shutdown()
 
 
@@ -1582,10 +1687,11 @@ def _seed_worker_pod(
     scale_group: str,
     label_prefix: str = "iris",
     ready: bool = True,
+    vm_index: int = 0,
 ) -> None:
     """Inject a managed worker Pod into FakeKubectl state."""
     pod_labels = Labels(label_prefix)
-    pod_name = f"iris-worker-{slice_id}"
+    pod_name = f"iris-worker-{slice_id}-vm{vm_index}"
     fake_kubectl._pods[pod_name] = {
         "metadata": {
             "name": pod_name,
