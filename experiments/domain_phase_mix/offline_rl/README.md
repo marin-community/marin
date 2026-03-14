@@ -4,7 +4,7 @@ This directory contains the offline-control and rollout code for the domain/phas
 
 ## Current State
 
-As of March 7, 2026, the main online policy asset to resume from is:
+As of March 12, 2026, the main historical online policy asset to resume from is:
 
 - [selected_policy_artifact.json](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/policy_assets/three_phase_starcoder_outcome_planner_v2/selected_policy_artifact.json)
 - companion defaults: [decision_state_defaults.json](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/policy_assets/three_phase_starcoder_outcome_planner_v2/decision_state_defaults.json)
@@ -17,12 +17,76 @@ This asset is the pooled `sklearn_outcome_planner_v2` selected from the offline 
 4. chained rollout stages now preserve the native multi-phase data schedule and full simulated-epoching budget instead of
    rebuilding each phase as a one-phase cumulative-budget experiment.
 
+The current offline frontier is no longer that pooled v2 benchmark. A new three-phase-only dense v3 benchmark now exists under:
+
+- `/Users/calvinxu/Projects/Coursework/CS234/Project/RL_Bench/offline_rl_v3_three_phase_dense_20260312`
+
+That v3 run completed on March 12, 2026 with:
+
+- dataset: `160` finished three-phase runs, `480` decision rows, `38,240` interior windows
+- candidates: `sklearn_dynamic_q_planner_v3`, `torch_gru_q_v3`, `torch_transformer_q_v3`
+- result: no passing methods
+- best v3 candidate: `dynamic_q_planner_v3`
+  - `fqe_value_mean = 4.0462`
+  - `dr_value_mean = 4.0466`
+  - `unsupported_rate_mean = 0.0021`
+  - `boundary_rate_mean = 0.2208`
+- online action: no rollout was launched because the offline gate failed
+
+The supporting writeup is:
+
+- [offline_rl_v3_benchmark_report.md](/Users/calvinxu/Projects/Coursework/CS234/Project/RL_Bench/offline_rl_v3_benchmark_report.md)
+
+A pooled-auxiliary v4 benchmark now also exists under:
+
+- `/Users/calvinxu/Projects/Coursework/CS234/Project/RL_Bench/offline_rl_v4_three_phase_target_pooled_aux_20260312`
+
+That v4 run reused the same three-phase evaluation target but added the `143` finished two-phase runs as auxiliary training data. It completed grouped CV on March 12, 2026 with:
+
+- dataset: `303` total runs, `766` decision rows, `61,120` pretraining windows
+- candidates: `dynamic_q_planner_v4_pooled`, `gru_q_v4_pooled`, `transformer_q_v4_pooled`
+- result: no passing methods
+- best v4 candidate: `dynamic_q_planner_v4_pooled`
+  - `fqe_value_mean = 4.0492`
+  - `dr_value_mean = 4.2855`
+  - `unsupported_rate_mean = 0.0760`
+  - `boundary_rate_mean = 0.2324`
+  - `canonical_phase0_pass_rate = 1.0`
+- online action: no rollout was launched because the offline gate failed
+
+The supporting writeup is:
+
+- [offline_rl_v4_pooled_aux_benchmark_report.md](/Users/calvinxu/Projects/Coursework/CS234/Project/RL_Bench/offline_rl_v4_pooled_aux_benchmark_report.md)
+
 The fourth fix matters for result interpretation. Before March 8, 2026, chained rollout jobs were not directly comparable
 to native static schedule runs because the rollout evaluator changed the dataset slicing semantics in early phases.
 Regression coverage for this now lives in [test_domain_phase_mix_offline_rl.py](/Users/calvinxu/Projects/Work/Marin/marin/tests/test_domain_phase_mix_offline_rl.py).
 
 ## Key Entry Points
 
+- [collect_three_phase_starcoder_dense_dataset.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/collect_three_phase_starcoder_dense_dataset.py)
+  - cadence-aware W&B collector for three-phase-only v3 data
+  - keeps train/LR, norm, and eval histories in separate queries to avoid mixed-key history collapse
+- [build_three_phase_dense_policy_dataset.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/build_three_phase_dense_policy_dataset.py)
+  - builds the v3 decision table plus dense pre-boundary sequence windows
+  - action grid is now `[0.0, 1.0]` with 21 bins, matching historical three-phase runs
+  - now uses per-run cached dense arrays so the full real dataset build finishes in minutes instead of thrashing pandas filters
+- [collect_pooled_starcoder_dense_dataset.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/collect_pooled_starcoder_dense_dataset.py)
+  - collects pooled dense two-phase plus three-phase telemetry for v4
+  - can reuse an existing three-phase dense collector output and only fetch the missing two-phase dense histories
+- [build_pooled_dense_policy_dataset_v4.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/build_pooled_dense_policy_dataset_v4.py)
+  - builds the pooled v4 decision table while preserving `num_phases_total` and `remaining_decisions`
+  - evaluation remains three-phase-only; the pooled two-phase rows are auxiliary training data
+- [train_three_phase_policy_bench_v4.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/train_three_phase_policy_bench_v4.py)
+  - trains three-phase-target policies with pooled two-phase auxiliary data
+  - current best v4 result is `dynamic_q_planner_v4_pooled`, but it still fails the rollout gate
+- [train_three_phase_policy_bench_v3.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/train_three_phase_policy_bench_v3.py)
+  - trains and compares:
+    - `sklearn_dynamic_q_planner_v3`
+    - `torch_gru_q_v3`
+    - `torch_transformer_q_v3`
+  - keeps `fixed_best_schedule` and `discrete_bc` as offline baselines
+  - disables the transformer nested-tensor fast path so the sequence benchmark runs on Apple `mps`
 - [train_offline_policy_bench.py](/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/offline_rl/train_offline_policy_bench.py)
   - trains and evaluates the offline policy families
   - now includes the finite-horizon backward-induction planner artifact kind `sklearn_dynamic_q_planner_v2`
@@ -80,5 +144,7 @@ If resuming this thread in a later session, the most useful sequence is:
 
 1. The March 7 rollout results should be treated as provisional because they predate the chained-rollout budget fix.
 2. Corrected reruns on March 8 are the right apples-to-apples comparison point for both two-phase and three-phase.
-3. Native static replays of the corrected executed schedules are still needed to separate schedule quality from boundary-conditioned adaptivity.
-4. The pooled planner is empirically strong online, but it is still a surrogate planner rather than a learned policy with a clean finite-horizon value interpretation.
+3. `train_lm.py` now waits for the async checkpointer before exit, and chained rollout should resume from the exact boundary checkpoint (`step == cumulative_steps - 1`), not the latest durable checkpoint.
+4. Native static replays of the corrected executed schedules are still needed to separate schedule quality from boundary-conditioned adaptivity.
+5. v3 is now available on the three-phase-only dense dataset and currently rejects all candidates before rollout.
+6. The next serious offline-control iteration should probably start from `dynamic_q_planner_v4_pooled`; pooled auxiliary data fixed the v3 phase-0 sanity failures, but the model still does not beat the strongest fixed historical schedule offline.

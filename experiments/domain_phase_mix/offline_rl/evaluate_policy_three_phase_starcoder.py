@@ -34,6 +34,9 @@ from marin.utils import create_cache_tokenizer_step
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.offline_rl.build_transitions import _feature_defaults, extract_decision_state
 from experiments.domain_phase_mix.offline_rl.collect_pooled_starcoder_dataset import collect_history_long_rows_batched
+from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dense_dataset import (
+    collect_dense_history_from_run,
+)
 from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dataset import (
     build_wide_history,
     dedupe_history_rows,
@@ -43,6 +46,11 @@ from experiments.domain_phase_mix.offline_rl.contracts import (
     DEFAULT_PHASE_END_STEPS,
     DEFAULT_TOTAL_STEPS,
 )
+from experiments.domain_phase_mix.offline_rl.build_three_phase_dense_policy_dataset import (
+    SEQUENCE_CHANNELS,
+    build_decision_state_features,
+)
+from experiments.domain_phase_mix.offline_rl.ope import DecisionBatch
 from experiments.domain_phase_mix.offline_rl.policy_artifact import (
     AnyPolicyArtifact,
     PolicyArtifactV1,
@@ -50,6 +58,10 @@ from experiments.domain_phase_mix.offline_rl.policy_artifact import (
     clip_action,
     load_policy_artifact,
     normalize_state,
+)
+from experiments.domain_phase_mix.offline_rl.train_three_phase_policy_bench_v3 import (
+    GRUQNetwork,
+    TransformerQNetwork,
 )
 from experiments.domain_phase_mix.three_phase_starcoder_experiment import (
     EVAL_DATASETS_CACHE_PATH,
@@ -192,6 +204,15 @@ def _discover_latest_checkpoint(training_output_path: str) -> str:
     protocol = fs.protocol[0] if isinstance(fs.protocol, (tuple, list)) else fs.protocol
     latest = scored[-1][1]
     return f"{protocol}://{latest}" if protocol else latest
+
+
+def _discover_exact_checkpoint(training_output_path: str, expected_step: int) -> str:
+    checkpoint_path = os.path.join(training_output_path, "checkpoints", f"step-{expected_step}")
+    fs, base = fsspec.core.url_to_fs(checkpoint_path)
+    if not fs.exists(base):
+        raise FileNotFoundError(f"Expected exact checkpoint step-{expected_step} under {training_output_path}")
+    protocol = fs.protocol[0] if isinstance(fs.protocol, (tuple, list)) else fs.protocol
+    return f"{protocol}://{base}" if protocol else base
 
 
 def _default_three_phase_phase_end_steps() -> tuple[int, int]:
@@ -456,6 +477,22 @@ def _load_outcome_planner_bundle(artifact_path: str) -> dict[str, Any]:
 
 
 @cache
+def _load_dynamic_q_v3_bundle(artifact_path: str) -> dict[str, Any]:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2) or artifact.kind != "sklearn_dynamic_q_planner_v3":
+        raise ValueError(f"Artifact at {artifact_path} is not a v3 dynamic-Q planner.")
+    model_path = _resolve_policy_model_path(artifact_path, artifact.model_path)
+    bundle = joblib.load(model_path)
+    if not isinstance(bundle, dict):
+        raise TypeError(f"Expected dict bundle at {model_path}, found {type(bundle)!r}.")
+    required = {"feature_keys", "action_grid", "q_models", "behavior_policy", "support_lambda", "support_floor"}
+    missing = required.difference(bundle)
+    if missing:
+        raise KeyError(f"Dynamic-Q bundle at {model_path} is missing keys: {sorted(missing)}")
+    return bundle
+
+
+@cache
 def _load_decision_state_defaults(artifact_path: str) -> dict[str, dict[str, float]]:
     artifact = _load_policy_artifact_cached(artifact_path)
     if not isinstance(artifact, PolicyArtifactV2):
@@ -524,6 +561,62 @@ def _load_torch_discrete_iql_policy(artifact_path: str, device: str) -> _EvalIQL
     return policy_net
 
 
+@cache
+def _load_sequence_support_bundle(artifact_path: str) -> dict[str, Any]:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2):
+        raise ValueError(f"Artifact at {artifact_path} is not a v2/v3 policy artifact.")
+    path = artifact.aux_paths.get("support_bundle")
+    if not path:
+        raise KeyError(f"Artifact at {artifact_path} does not define support_bundle.")
+    resolved = _resolve_artifact_aux_path(artifact_path, path)
+    bundle = joblib.load(resolved)
+    if not isinstance(bundle, dict):
+        raise TypeError(f"Expected support bundle dict at {resolved}, found {type(bundle)!r}.")
+    return bundle
+
+
+@cache
+def _load_gru_q_v3_policy(artifact_path: str, device: str) -> GRUQNetwork:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2) or artifact.kind != "torch_gru_q_v3":
+        raise ValueError(f"Artifact at {artifact_path} is not a GRU Q policy.")
+    model_path = _resolve_policy_model_path(artifact_path, artifact.model_path)
+    checkpoint = torch.load(model_path, map_location=device)
+    model = GRUQNetwork(
+        summary_dim=len(artifact.state_keys),
+        sequence_dim=len(SEQUENCE_CHANNELS),
+        action_dim=len(artifact.action_values),
+        hidden_size=int(checkpoint["hidden_size"]),
+    ).to(device)
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return model
+
+
+@cache
+def _load_transformer_q_v3_policy(artifact_path: str, device: str) -> TransformerQNetwork:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2) or artifact.kind != "torch_transformer_q_v3":
+        raise ValueError(f"Artifact at {artifact_path} is not a transformer Q policy.")
+    model_path = _resolve_policy_model_path(artifact_path, artifact.model_path)
+    checkpoint = torch.load(model_path, map_location=device)
+    model = TransformerQNetwork(
+        summary_dim=len(artifact.state_keys),
+        sequence_dim=len(SEQUENCE_CHANNELS),
+        action_dim=len(artifact.action_values),
+        hidden_size=int(checkpoint["hidden_size"]),
+        num_layers=int(checkpoint["transformer_layers"]),
+        num_heads=int(checkpoint["transformer_heads"]),
+        ffn_dim=int(checkpoint["transformer_ffn_dim"]),
+        dropout=float(checkpoint["dropout"]),
+        max_length=int(checkpoint["max_length"]),
+    ).to(device)
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    return model
+
+
 def _phase_lengths(total_steps: int, phase_end_steps: tuple[int, ...]) -> list[int]:
     starts = [0, *phase_end_steps]
     ends = [*phase_end_steps, total_steps]
@@ -581,6 +674,18 @@ def _compute_exposure(actions: list[float], phase_lengths: list[int], decision_i
     return float(prev_action), cumulative, delta_prev
 
 
+def _is_v3_dynamic_q_artifact(artifact: AnyPolicyArtifact) -> bool:
+    return isinstance(artifact, PolicyArtifactV2) and artifact.kind == "sklearn_dynamic_q_planner_v3"
+
+
+def _is_v3_sequence_artifact(artifact: AnyPolicyArtifact) -> bool:
+    return isinstance(artifact, PolicyArtifactV2) and artifact.kind in {"torch_gru_q_v3", "torch_transformer_q_v3"}
+
+
+def _is_v3_artifact(artifact: AnyPolicyArtifact) -> bool:
+    return _is_v3_dynamic_q_artifact(artifact) or _is_v3_sequence_artifact(artifact)
+
+
 def _history_from_completed_run(wb_run, metric_keys: tuple[str, ...]) -> pd.DataFrame:
     long_rows = collect_history_long_rows_batched(
         wb_run,
@@ -591,6 +696,82 @@ def _history_from_completed_run(wb_run, metric_keys: tuple[str, ...]) -> pd.Data
     )
     long_df = dedupe_history_rows(pd.DataFrame(long_rows))
     return build_wide_history(long_df).sort_values("step").reset_index(drop=True)
+
+
+def _dense_policy_input_from_history(
+    *,
+    artifact_path: str,
+    history: pd.DataFrame,
+    phase_index: int,
+    objective_metric: str,
+    total_steps: int,
+    prior_actions: list[float],
+    phase_end_steps: tuple[int, ...],
+    num_phases_total: int = 3,
+) -> DecisionBatch:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    if not isinstance(artifact, PolicyArtifactV2):
+        raise TypeError(f"Dense policy input requires a v2/v3 artifact, found {type(artifact)!r}.")
+    padded_actions = list(prior_actions) + [prior_actions[-1]] * max(0, num_phases_total - len(prior_actions))
+    run_row = pd.Series(
+        {
+            "wandb_run_id": "online_rollout",
+            "source_experiment": "online_rollout",
+            "local_run_id": None,
+            "run_name": "online_rollout",
+            "total_steps": total_steps,
+            "phase_boundaries_json": json.dumps(list(phase_end_steps)),
+            **{f"phase_{idx}_starcoder": float(padded_actions[idx]) for idx in range(num_phases_total)},
+        }
+    )
+    built = build_decision_state_features(
+        run_row=run_row,
+        history=history,
+        objective_metric=objective_metric,
+        decision_index=phase_index,
+    )
+    if built is None:
+        raise ValueError(f"Could not build dense policy input for decision {phase_index}")
+    state_features, window, mask = built
+    defaults = _artifact_state_defaults(artifact)
+    defaults.update(
+        {
+            key: float(value)
+            for key, value in _decision_state_default(artifact_path, decision_index=phase_index).items()
+            if key in artifact.state_keys
+        }
+    )
+    defaults.update({key: float(value) for key, value in state_features.items() if key in artifact.state_keys})
+    frame = pd.DataFrame([{key: float(defaults[key]) for key in artifact.state_keys}], columns=list(artifact.state_keys))
+    return DecisionBatch(
+        frame=frame, sequences=window[None, ...].astype(np.float32), masks=mask[None, ...].astype(np.float32)
+    )
+
+
+def _initial_policy_input(
+    artifact_path: str,
+    *,
+    num_phases_total: int = 3,
+    total_steps: int = DEFAULT_TOTAL_STEPS,
+    phase_end_steps: tuple[int, ...] = DEFAULT_PHASE_END_STEPS,
+    run_family: str | None = None,
+) -> dict[str, float] | DecisionBatch:
+    artifact = _load_policy_artifact_cached(artifact_path)
+    state = _initial_policy_state(
+        artifact_path,
+        num_phases_total=num_phases_total,
+        total_steps=total_steps,
+        phase_end_steps=phase_end_steps,
+        run_family=run_family,
+    )
+    if _is_v3_artifact(artifact):
+        frame = pd.DataFrame(
+            [{key: float(state[key]) for key in artifact.state_keys}], columns=list(artifact.state_keys)
+        )
+        sequences = np.zeros((1, 32, len(SEQUENCE_CHANNELS)), dtype=np.float32)
+        masks = np.zeros((1, 32), dtype=np.float32)
+        return DecisionBatch(frame=frame, sequences=sequences, masks=masks)
+    return state
 
 
 def _state_from_completed_run(
@@ -606,8 +787,26 @@ def _state_from_completed_run(
     phase_end_steps: tuple[int, ...],
     num_phases_total: int = 3,
     run_family: str | None = None,
-) -> dict[str, float]:
+) -> dict[str, float] | DecisionBatch:
     artifact = _load_policy_artifact_cached(artifact_path)
+    if _is_v3_artifact(artifact):
+        history = collect_dense_history_from_run(
+            wb_run,
+            objective_metric=objective_metric,
+            retry_attempts=ONLINE_HISTORY_RETRY_ATTEMPTS,
+            backoff_seconds=ONLINE_HISTORY_BACKOFF_SECONDS,
+        )
+        return _dense_policy_input_from_history(
+            artifact_path=artifact_path,
+            history=history,
+            phase_index=phase_index,
+            objective_metric=objective_metric,
+            total_steps=total_steps,
+            prior_actions=prior_actions,
+            phase_end_steps=phase_end_steps,
+            num_phases_total=num_phases_total,
+        )
+
     if isinstance(artifact, PolicyArtifactV2):
         history = _history_from_completed_run(
             wb_run,
@@ -720,10 +919,22 @@ def _state_from_completed_run(
     return state
 
 
-def _policy_predict_action(artifact_path: str, state: dict[str, float], device: str = "cpu") -> float:
+def _policy_predict_action(
+    artifact_path: str,
+    state: dict[str, float] | DecisionBatch,
+    device: str = "cpu",
+) -> float:
     artifact = _load_policy_artifact_cached(artifact_path)
-    state_with_defaults = _artifact_state_defaults(artifact)
-    state_with_defaults.update({key: float(value) for key, value in state.items()})
+    if isinstance(state, DecisionBatch):
+        batch = state
+        if len(batch.frame) != 1:
+            raise ValueError("Online policy inference expects a single-row DecisionBatch.")
+        state_with_defaults = _artifact_state_defaults(artifact)
+        state_with_defaults.update({key: float(value) for key, value in batch.frame.iloc[0].to_dict().items()})
+    else:
+        batch = None
+        state_with_defaults = _artifact_state_defaults(artifact)
+        state_with_defaults.update({key: float(value) for key, value in state.items()})
 
     if isinstance(artifact, PolicyArtifactV2) and artifact.kind == "sklearn_outcome_planner_v2":
         bundle = _load_outcome_planner_bundle(artifact_path)
@@ -758,12 +969,83 @@ def _policy_predict_action(artifact_path: str, state: dict[str, float], device: 
         best_local = int(candidate_indices[np.argmin(scores[candidate_indices])])
         return float(action_grid[best_local])
 
+    if _is_v3_dynamic_q_artifact(artifact):
+        bundle = _load_dynamic_q_v3_bundle(artifact_path)
+        if batch is None:
+            planner_state = pd.DataFrame(
+                [{key: float(state_with_defaults[key]) for key in bundle["feature_keys"]}],
+                columns=list(bundle["feature_keys"]),
+            )
+        else:
+            planner_state = batch.frame.loc[:, list(bundle["feature_keys"])].reset_index(drop=True)
+        if len(planner_state) != 1:
+            raise ValueError("Dynamic-Q rollout inference expects exactly one state row.")
+        action_grid = np.asarray(bundle["action_grid"], dtype=np.float32)
+        tiled = pd.concat([planner_state] * len(action_grid), ignore_index=True)
+        support_matrix = bundle["behavior_policy"].predict_proba(tiled)
+        support = support_matrix[np.arange(len(action_grid)), np.arange(len(action_grid))]
+        scores = (
+            bundle["q_models"][round(float(planner_state.iloc[0]["decision_index"]))]
+            .predict(
+                np.concatenate(
+                    [
+                        tiled.loc[:, list(bundle["feature_keys"])].to_numpy(dtype=np.float32),
+                        action_grid.reshape(-1, 1).astype(np.float32),
+                    ],
+                    axis=1,
+                )
+            )
+            .astype(np.float32)
+        )
+        score = scores + float(bundle["support_lambda"]) * np.log(np.maximum(support, float(bundle["support_floor"])))
+        valid = support >= float(bundle["support_floor"])
+        if not valid.any():
+            best_local = int(np.argmax(support))
+        else:
+            score = np.where(valid, score, -np.inf)
+            best_local = int(np.argmax(score))
+        return float(action_grid[best_local])
+
     if isinstance(artifact, PolicyArtifactV2) and artifact.kind == "torch_discrete_iql_v2":
         policy_net = _load_torch_discrete_iql_policy(artifact_path, device)
         normalized = normalize_state(state_with_defaults, artifact).reshape(1, -1)
         inputs = torch.tensor(normalized, dtype=torch.float32, device=device)
         with torch.no_grad():
             action_idx = int(torch.argmax(policy_net.forward(inputs), dim=1).item())
+        return float(artifact.action_values[action_idx])
+
+    if isinstance(artifact, PolicyArtifactV2) and artifact.kind in {"torch_gru_q_v3", "torch_transformer_q_v3"}:
+        if batch is None or batch.sequences is None or batch.masks is None:
+            raise ValueError(f"{artifact.kind} rollout inference requires a sequence-aware DecisionBatch.")
+        state_mean = np.asarray(artifact.state_mean, dtype=np.float32)
+        state_std = np.asarray(artifact.state_std, dtype=np.float32)
+        safe_std = np.where(state_std <= 0.0, 1.0, state_std)
+        summary = (batch.frame.loc[:, list(artifact.state_keys)].to_numpy(dtype=np.float32) - state_mean) / safe_std
+        summary_tensor = torch.tensor(summary, dtype=torch.float32, device=device)
+        sequence_tensor = torch.tensor(batch.sequences, dtype=torch.float32, device=device)
+        mask_tensor = torch.tensor(batch.masks, dtype=torch.float32, device=device)
+        model = (
+            _load_gru_q_v3_policy(artifact_path, device)
+            if artifact.kind == "torch_gru_q_v3"
+            else _load_transformer_q_v3_policy(artifact_path, device)
+        )
+        support_bundle = _load_sequence_support_bundle(artifact_path)
+        with torch.no_grad():
+            q_values, _, _, _ = model(summary_tensor, sequence_tensor, mask_tensor)
+        support = support_bundle["behavior_policy"].predict_proba(batch.frame.loc[:, list(artifact.state_keys)])
+        support_tensor = torch.tensor(support, dtype=torch.float32, device=device)
+        score = q_values + float(support_bundle["support_lambda"]) * torch.log(
+            torch.clamp(support_tensor, min=float(support_bundle["support_floor"]))
+        )
+        score = torch.where(
+            support_tensor >= float(support_bundle["support_floor"]),
+            score,
+            torch.full_like(score, float("-inf")),
+        )
+        if (~torch.isfinite(score)).all(dim=1).any():
+            action_idx = int(torch.argmax(support_tensor, dim=1)[0].item())
+        else:
+            action_idx = int(torch.argmax(score, dim=1)[0].item())
         return float(artifact.action_values[action_idx])
 
     normalized = normalize_state(state_with_defaults, artifact).reshape(1, -1)
@@ -858,7 +1140,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
         actions = []
         run_ids = []
 
-        state = _initial_policy_state(
+        policy_input = _initial_policy_input(
             config.policy_artifact_path,
             num_phases_total=3,
             total_steps=config.total_steps,
@@ -871,7 +1153,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
         replicate_force_dry = force_dry_run
 
         for phase_idx in range(3):
-            action = _policy_predict_action(config.policy_artifact_path, state)
+            action = _policy_predict_action(config.policy_artifact_path, policy_input)
             actions.append(action)
 
             phase_plan = build_phase_train_plan(
@@ -884,7 +1166,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
             # Using a static basename like "phase_0" causes run-id collisions and hidden logging.
             phase_output_basename = f"phase_{phase_idx}_{job_token}_r{replicate_idx:02d}"
             relative_output_path = (
-                "domain_phase_mix/offline_rl/policy_eval/" f"{job_token}/rep_{replicate_idx:02d}/{phase_output_basename}"
+                f"domain_phase_mix/offline_rl/policy_eval/{job_token}/rep_{replicate_idx:02d}/{phase_output_basename}"
             )
             training_step = _build_training_step(
                 run_namespace=run_namespace,
@@ -934,7 +1216,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
 
                 if not replicate_force_dry:
                     output_path = os.path.join(prefix, relative_output_path)
-                    checkpoint_path = _discover_latest_checkpoint(output_path)
+                    checkpoint_path = _discover_exact_checkpoint(output_path, phase_plan.cumulative_steps - 1)
 
                     display_name = f"{run_namespace}/phase_{phase_idx}"
                     wb_run = _fetch_wandb_run_by_display_name(
@@ -946,7 +1228,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
 
                     if phase_idx < 2:
                         decision_step = config.phase_end_steps[phase_idx]
-                        state = _state_from_completed_run(
+                        policy_input = _state_from_completed_run(
                             wb_run,
                             phase_index=phase_idx + 1,
                             decision_step=decision_step,
@@ -966,14 +1248,14 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
             if replicate_force_dry:
                 run_ids.append(f"dry_run_rep{replicate_idx}_phase{phase_idx}")
                 checkpoint_path = f"dry://rep{replicate_idx}/phase{phase_idx}/checkpoint"
-                state = _artifact_state_defaults(artifact)
+                synthetic_state = _artifact_state_defaults(artifact)
                 if isinstance(artifact, PolicyArtifactV2):
                     decision_index = float(min(phase_idx + 1, 2))
                     budget_frac_consumed = (phase_idx + 1) / 3.0
                     global_step = (
                         float(config.phase_end_steps[min(phase_idx, 1)]) if phase_idx < 2 else float(config.total_steps)
                     )
-                    state.update(
+                    synthetic_state.update(
                         {
                             "decision_index": decision_index,
                             "num_phases_total": 3.0,
@@ -987,8 +1269,20 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
                             "delta_prev_action": float(actions[-1] - actions[-2]) if len(actions) > 1 else 0.0,
                         }
                     )
+                    if _is_v3_artifact(artifact):
+                        frame = pd.DataFrame(
+                            [{key: float(synthetic_state[key]) for key in artifact.state_keys}],
+                            columns=list(artifact.state_keys),
+                        )
+                        policy_input = DecisionBatch(
+                            frame=frame,
+                            sequences=np.zeros((1, 32, len(SEQUENCE_CHANNELS)), dtype=np.float32),
+                            masks=np.zeros((1, 32), dtype=np.float32),
+                        )
+                    else:
+                        policy_input = synthetic_state
                 else:
-                    state.update(
+                    synthetic_state.update(
                         {
                             "phase_index": float(min(phase_idx + 1, 2)),
                             "last_train_loss": 0.0,
@@ -999,6 +1293,7 @@ def evaluate_policy(config: EvaluateConfig) -> pd.DataFrame:
                             "prev_action_starcoder": action,
                         }
                     )
+                    policy_input = synthetic_state
                 final_metric = 0.0
 
         rows.append(

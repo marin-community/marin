@@ -311,7 +311,12 @@ def main(config: TrainLmConfig):
             train_loader = train_loader.iter_from_step(0)
 
         ## OK, actually run training!
-        trainer.train(state, train_loader)
+        last_info = trainer.train(state, train_loader)
+
+        if trainer.config.checkpointer is not None:
+            trainer.run_hooks(last_info, force=True)
+            checkpointer = trainer.config.checkpointer.create(trainer.run_id)
+            checkpointer.wait_until_finished()
 
     # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
     trainer.tracker.finish()

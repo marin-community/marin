@@ -120,12 +120,13 @@ def build_wide_history(history_long: pd.DataFrame) -> pd.DataFrame:
         local_run_id=("local_run_id", "last"),
         total_tokens=("total_tokens", "last"),
     )
-    values = history_long.pivot_table(
+    # `dedupe_history_rows` guarantees one row per (run, step, metric), so a strict pivot is valid here.
+    # Using `pivot_table(..., dropna=False)` expands to the cartesian product of the index levels, which
+    # explodes dense-history tables for multi-run collections.
+    values = history_long.pivot(
         index=base_cols,
         columns="metric_key",
         values="metric_value",
-        aggfunc="last",
-        dropna=False,
     ).reset_index()
     values.columns.name = None
     return values.merge(metadata, on=base_cols, how="left")
