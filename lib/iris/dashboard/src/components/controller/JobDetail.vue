@@ -436,19 +436,19 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       <EmptyState v-if="tasks.length === 0" message="No tasks" />
       <EmptyState v-else-if="filteredTasks.length === 0" message="No matching tasks" />
 
-      <div v-else class="overflow-x-auto">
+      <div v-else>
         <table class="w-full border-collapse table-fixed">
           <colgroup>
-            <col class="w-[5%]" />
-            <col class="w-[10%]" />
-            <col class="w-[20%]" />
-            <col class="w-[7%]" />
+            <col class="w-[4%]" />
+            <col class="w-[9%]" />
+            <col />
             <col class="w-[6%]" />
-            <col class="w-[14%]" />
-            <col class="w-[10%]" />
             <col class="w-[5%]" />
             <col class="w-[13%]" />
+            <col class="w-[8%]" />
+            <col class="w-[4%]" />
             <col class="w-[10%]" />
+            <col class="w-[11%]" />
           </colgroup>
           <thead>
             <tr class="border-b border-surface-border">
