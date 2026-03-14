@@ -41,7 +41,7 @@ from jax import lax
 from jax import shard_map as jax_shard_map
 from jax.experimental import pallas as pl
 from jax._src.state.indexing import dslice
-from jax.sharding import PartitionSpec as P
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 import haliax as hax
 import haliax.nn as hnn
@@ -684,6 +684,69 @@ def _preserve_sharding_like(x: jnp.ndarray, like: jnp.ndarray) -> jnp.ndarray:
         return jax.lax.with_sharding_constraint(x, like.sharding)
     except Exception:
         return x
+
+
+def _permute_partition_spec(
+    spec: P | tuple | None,
+    *,
+    source_axes: tuple[str, ...],
+    target_axes: tuple[str, ...],
+) -> P:
+    spec_tuple = tuple(spec) if spec is not None else ()
+    if len(spec_tuple) < len(source_axes):
+        spec_tuple = spec_tuple + (None,) * (len(source_axes) - len(spec_tuple))
+    axis_to_spec = {axis_name: spec_tuple[idx] for idx, axis_name in enumerate(source_axes)}
+    return P(*(axis_to_spec.get(axis_name) for axis_name in target_axes))
+
+
+def _rearrange_with_sharding_contract(
+    x: NamedArray,
+    target_axes: tuple[Axis | str, ...],
+) -> NamedArray:
+    source_axis_names = tuple(ax.name for ax in x.axes)
+    target = hax.rearrange(x, target_axes)
+    target_axis_names = tuple(ax.name for ax in target.axes)
+    mesh, spec = _get_mesh_and_spec(x.array)
+    if _mesh_size(mesh) <= 1:
+        return target
+
+    sharding = NamedSharding(
+        mesh,
+        _permute_partition_spec(spec, source_axes=source_axis_names, target_axes=target_axis_names),
+    )
+    constrained = jax.lax.with_sharding_constraint(target.array, sharding)
+    return hax.named(constrained, target.axes)
+
+
+def _constrain_head_first_from_channel_major(x: jnp.ndarray, like: jnp.ndarray) -> jnp.ndarray:
+    mesh, spec = _get_mesh_and_spec(like)
+    if _mesh_size(mesh) <= 1:
+        return x
+
+    spec_tuple = tuple(spec) if spec is not None else ()
+    batch_spec = spec_tuple[0] if len(spec_tuple) > 0 else None
+    channel_spec = spec_tuple[1] if len(spec_tuple) > 1 else None
+    pos_spec = spec_tuple[2] if len(spec_tuple) > 2 else None
+    sharding = NamedSharding(mesh, P(batch_spec, channel_spec, pos_spec, None))
+    return jax.lax.with_sharding_constraint(x, sharding)
+
+
+def _channel_major_to_head_first(
+    x: jnp.ndarray,
+    *,
+    start: int,
+    size: int,
+    Batch: Axis,
+    Pos: Axis,
+    head_axis: Axis,
+    dim_axis: Axis,
+    dtype: jnp.dtype,
+) -> NamedArray:
+    view = x[:, start : start + size, :].astype(dtype)
+    view = view.reshape(Batch.size, head_axis.size, dim_axis.size, Pos.size)
+    view = jnp.transpose(view, (0, 1, 3, 2))
+    view = _constrain_head_first_from_channel_major(view, x)
+    return hax.named(view, (Batch, head_axis, Pos, dim_axis))
 
 
 def _apply_linear_weight(
@@ -4548,6 +4611,99 @@ class GatedDeltaNet(eqx.Module):
         )
         return hax.named(y_arr, x.axes)
 
+    def _train_gate_postconv_entry_branch_core(
+        self,
+        *,
+        x: NamedArray,
+        y_ncl: jnp.ndarray,
+        z: NamedArray,
+        b: NamedArray,
+        a: NamedArray,
+        chunk_size: int,
+        segment_size: int,
+    ) -> NamedArray:
+        """Own the gate-owned post-conv kernel-entry contract and hand back the default tail."""
+        cfg = self.config
+        Batch = x.resolve_axis("batch")
+        Pos = x.resolve_axis("position")
+        ratio = cfg.num_v_heads // cfg.num_k_heads
+
+        q_head = _channel_major_to_head_first(
+            y_ncl,
+            start=0,
+            size=cfg.key_dim,
+            Batch=Batch,
+            Pos=Pos,
+            head_axis=cfg.KHeads,
+            dim_axis=cfg.KHeadDim,
+            dtype=jnp.float32,
+        )
+        k_head = _channel_major_to_head_first(
+            y_ncl,
+            start=cfg.key_dim,
+            size=cfg.key_dim,
+            Batch=Batch,
+            Pos=Pos,
+            head_axis=cfg.KHeads,
+            dim_axis=cfg.KHeadDim,
+            dtype=jnp.float32,
+        )
+        v_head = _channel_major_to_head_first(
+            y_ncl,
+            start=2 * cfg.key_dim,
+            size=cfg.value_dim,
+            Batch=Batch,
+            Pos=Pos,
+            head_axis=cfg.VHeads,
+            dim_axis=cfg.VHeadDim,
+            dtype=jnp.float32,
+        ).rename({cfg.VHeads.name: cfg.Heads.name})
+
+        if ratio > 1:
+            q_head = hax.named(
+                _preserve_sharding_like(jnp.repeat(q_head.array, ratio, axis=1), q_head.array),
+                (Batch, cfg.Heads, Pos, cfg.KHeadDim),
+            )
+            k_head = hax.named(
+                _preserve_sharding_like(jnp.repeat(k_head.array, ratio, axis=1), k_head.array),
+                (Batch, cfg.Heads, Pos, cfg.KHeadDim),
+            )
+        else:
+            q_head = q_head.rename({cfg.KHeads.name: cfg.Heads.name})
+            k_head = k_head.rename({cfg.KHeads.name: cfg.Heads.name})
+
+        b_head = _rearrange_with_sharding_contract(
+            b.astype(jnp.float32).rename({cfg.VHeads.name: cfg.Heads.name}),
+            (Batch, cfg.Heads, Pos),
+        )
+        a_head = _rearrange_with_sharding_contract(
+            a.astype(jnp.float32).rename({cfg.VHeads.name: cfg.Heads.name}),
+            (Batch, cfg.Heads, Pos),
+        )
+
+        beta = hnn.sigmoid(b_head)
+        dt_bias = self.dt_bias.astype(jnp.float32)
+        A_exp = hax.exp(self.A_log.astype(jnp.float32))
+        g = -(A_exp * hnn.softplus(a_head + dt_bias)).astype(jnp.float32)
+
+        out_pos, _ = chunk_gated_delta_rule(
+            q_head,
+            k_head,
+            v_head,
+            g,
+            beta,
+            chunk_size=chunk_size,
+            segment_size=segment_size,
+            initial_state=None,
+            output_final_state=False,
+            use_qk_l2norm_in_kernel=True,
+            use_flash=self.use_flash,
+        )
+        z_gate = z.rename({cfg.VHeads.name: "heads"})
+        y_norm = self.o_norm(out_pos, gate=z_gate)
+        y_out = self.out_proj(y_norm.astype(x.dtype))
+        return hax.named(_preserve_sharding_like(y_out.array, x.array), y_out.axes)
+
     def __call__(
         self,
         x: NamedArray,
@@ -4556,6 +4712,7 @@ class GatedDeltaNet(eqx.Module):
         chunk_size: int = 64,
         segment_size: int = 8,
         attention_mask: Optional[NamedArray] = None,
+        train_gate_postconv_entry_sharding_diagnostic: bool = False,
         decode_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None,  # (conv_state, S_state)
     ) -> Tuple[NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
         """Run the full GDN token mixer.
@@ -4565,6 +4722,9 @@ class GatedDeltaNet(eqx.Module):
           inference: if True, returns and expects state for streaming decode.
           chunk_size: chunk length for the parallel kernel (prefill/train).
           attention_mask: optional [B, Pos] (1 for real tokens, 0 for pad).
+          train_gate_postconv_entry_sharding_diagnostic: if True, run the
+              training-only gate-owned post-conv kernel-entry cut with explicit
+              head-first sharding/layout ownership and the default position-major tail.
           decode_state: optional tuple (conv_state, S_state) for streaming decode:
               conv_state: (N, Channels, K)
               S_state:    (B, VHeads, d_k, d_v)
@@ -4631,6 +4791,19 @@ class GatedDeltaNet(eqx.Module):
                 S_state = None
 
         _dbg("conv/out_ncl", y_ncl)
+
+        if train_gate_postconv_entry_sharding_diagnostic and not inference and decode_state is None:
+            y_out = self._train_gate_postconv_entry_branch_core(
+                x=x,
+                y_ncl=y_ncl,
+                z=z,
+                b=b,
+                a=a,
+                chunk_size=chunk_size,
+                segment_size=segment_size,
+            )
+            _dbg("layer/y_out", y_out.array)
+            return y_out, None
 
         # Unpack [Q|K|V] after conv back to per-head tensors (mirror the same channel order)
         y_bpc = hax.rearrange(hax.named(y_ncl, ("batch", "channels", "position")), ("batch", "position", "channels"))

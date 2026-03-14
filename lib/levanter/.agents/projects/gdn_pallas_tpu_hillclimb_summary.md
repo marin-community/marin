@@ -44,6 +44,10 @@ Current mainline target order:
 - `D1`: completed as a partial diagnostic lead
   - narrower head-first branch layout handling slightly improved AD/layout behavior and step time
   - but it did not reduce `dispatch_shard_shell_delta_ms`, and xprof `IDLE` worsened
+- `D2`: the gate-owned post-conv kernel-entry cut is now a validated positive same-cut lead
+  - it reduced `step_duration_ms`, `dispatch_shard_shell_delta_ms`, `hybrid_generic_shell_delta_budget_ms`, `interaction_remainder_ms`, `xprof_dispatch_shard_shell_delta_ms`, and `xprof_idle_attributed_ms`
+  - summary-side `ad_wrapper_shell_delta_ms` and layout shell still grew, concentrated in `convert_element_type` / `select_n` / `transpose` / `reshape`
+  - `A2` is now admissible only on this same cut; `G2` remains premature until the cut is const-clean and the summary-side wrapper leak is better controlled
 
 ## D2 Definition
 
