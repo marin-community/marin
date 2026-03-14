@@ -142,7 +142,7 @@ def build_tagged_evaluator(
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
 
     def eval_loss_fn(model: Transformer, batch: GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
-        per_pos_loss = model.compute_next_token_loss(
+        per_pos_loss = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
@@ -256,7 +256,7 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.compute_next_token_loss(
+            return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
