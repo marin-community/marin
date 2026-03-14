@@ -35,7 +35,7 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
-from levanter.utils.jax_utils import move_tree_to_memory_kind, parameter_count
+from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -399,11 +399,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     raise
                 logger.info(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
 
-        state = dataclasses.replace(
-            state,
-            opt_state=move_tree_to_memory_kind(state.opt_state, memory_kind="pinned_host"),
-        )
-
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
@@ -477,15 +472,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state = dataclasses.replace(
-                    state,
-                    opt_state=move_tree_to_memory_kind(state.opt_state, memory_kind="device"),
-                )
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
-                state = dataclasses.replace(
-                    state,
-                    opt_state=move_tree_to_memory_kind(state.opt_state, memory_kind="pinned_host"),
-                )
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
