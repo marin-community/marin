@@ -280,3 +280,130 @@
 - Next action:
   - Publish the completed DeepEP mini-matrix to `#3641`.
   - Decide whether the next best spend is a wider DeepEP table or a different toolchain attempt for Hybrid-EP.
+
+### 2026-03-14 07:55 - `sm_90a` does not fix the Hybrid-EP JIT failure
+- Hypothesis: the runtime JIT failure might be caused by targeting `sm_90` rather than a Hopper arch variant such as `sm_90a`.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --torch-cuda-arch-list '9.0a' \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - pod ID: `iris-task-8cf7dab14484`
+  - shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `topk=2`, `distribution=random`, `world_size=8`
+- Result:
+  - The runtime JIT compile command now targets `-gencode=arch=compute_90a,code=sm_90a`.
+  - The compile still fails with the same `cuda::ptx::cp_async_bulk(space_shared, space_global, ..., mbarrier)` overload mismatch.
+- Interpretation:
+  - `sm_90a` targeting is not the primary blocker.
+  - The problem is more likely the call shape used by the Hybrid-EP source against the CUDA 12.8 PTX header API.
+- Next action:
+  - Patch the extracted Hybrid-EP backend source in-pod and test the failing `cp_async_bulk` callsites directly.
+
+### 2026-03-14 07:58 - Local `space_cluster` rewrite unblocks Hybrid-EP on H100
+- Hypothesis: the failing six-argument `cp_async_bulk` sites should use `cuda::ptx::space_cluster` rather than `cuda::ptx::space_shared` for the destination space on CUDA 12.8.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - launcher patch: replace `cuda::ptx::cp_async_bulk(cuda::ptx::space_shared,` with `cuda::ptx::cp_async_bulk(cuda::ptx::space_cluster,` in `/tmp/DeepEP/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh` before install
+  - patched callsite count: `11`
+  - pod ID: `iris-task-3e75d7332a0a`
+  - shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `topk=2`, `distribution=random`, `world_size=8`
+- Result:
+  - The patched Hybrid-EP backend now compiles and runs on H100x8.
+  - First working timing:
+    - `RESULT kernel=hybrid_ep ep=8 distribution=random topk=2 pass=dispatch_combine time_s=0.000401 tokens_per_s=81669478.85`
+- Interpretation:
+  - The blocker was source-level and localizable, not an inherent H100/CUDA 12.8 incompatibility.
+  - A minimal launcher-applied workaround is enough to get Hybrid-EP working on the CoreWeave H100 machine.
+- Next action:
+  - Fill the remaining fixed-shape Hybrid-EP points and compare against the DeepEP table.
+
+### 2026-03-14 08:00 - Patched Hybrid-EP completes the fixed-shape H100x8 mini-matrix
+- Hypothesis: if the `space_cluster` rewrite is the real fix, the patched Hybrid-EP path should stay working across the same fixed-shape `random/runs x topk {2,8}` slice already measured for DeepEP.
+- Command:
+  ```bash
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution runs \
+    --topk 2 \
+    --warmup 1 \
+    --iters 3
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution random \
+    --topk 8 \
+    --warmup 1 \
+    --iters 3
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution runs \
+    --topk 8 \
+    --warmup 1 \
+    --iters 3
+
+  KUBECONFIG=~/.kube/coreweave-iris \
+    uv run python .agents/scripts/deepep_krt_smoke.py \
+    --run-bench \
+    --kernel hybrid_ep \
+    --torch-cuda-arch-list '9.0' \
+    --patch-hybrid-ep-space-cluster \
+    --distribution runs \
+    --topk 2 \
+    --warmup 1 \
+    --iters 3
+  ```
+- Config:
+  - pod IDs: `iris-task-b82e42c3d426`, `iris-task-354070cca683`, `iris-task-5780e45dbd4f`, `iris-task-49f40f2421da`
+  - shared shape: `tokens_per_rank=4096`, `hidden=2048`, `local_experts=16`, `world_size=8`
+- Result:
+  - Initial `runs, topk=2` patched timing:
+    - `RESULT kernel=hybrid_ep ep=8 distribution=runs topk=2 pass=dispatch_combine time_s=0.002073 tokens_per_s=15809521.51`
+  - Immediate rerun of the same point:
+    - `RESULT kernel=hybrid_ep ep=8 distribution=runs topk=2 pass=dispatch_combine time_s=0.000436 tokens_per_s=75096827.43`
+  - Other patched timings:
+    - `RESULT kernel=hybrid_ep ep=8 distribution=random topk=8 pass=dispatch_combine time_s=0.000856 tokens_per_s=38288395.31`
+    - `RESULT kernel=hybrid_ep ep=8 distribution=runs topk=8 pass=dispatch_combine time_s=0.000874 tokens_per_s=37512463.91`
+  - Current exploratory comparison table, using the rerun value for `runs, topk=2` and noting the first run as an outlier:
+
+    | distribution | topk | deep_ep tokens_per_s | patched hybrid_ep tokens_per_s | hybrid / deep |
+    | --- | ---: | ---: | ---: | ---: |
+    | random | 2 | 70,742,659.76 | 81,669,478.85 | 1.15x |
+    | runs   | 2 | 45,030,617.74 | 75,096,827.43 | 1.67x |
+    | random | 8 | 32,637,536.88 | 38,288,395.31 | 1.17x |
+    | runs   | 8 | 31,285,893.37 | 37,512,463.91 | 1.20x |
+- Interpretation:
+  - The patched Hybrid-EP path is working across the same fixed-shape H100x8 mini-matrix used for DeepEP.
+  - On this exploratory table, the patched Hybrid-EP path beats DeepEP on all four points.
+  - The first slow `runs, topk=2` patched timing looks like an outlier rather than the stable behavior, because the immediate rerun on the same path was much faster.
+- Next action:
+  - Publish the workaround and the Hybrid-EP comparison table on `#3641`.
+  - Decide whether to upstream the minimal `space_cluster` fix and whether to test `hybrid_ep_permute` next.

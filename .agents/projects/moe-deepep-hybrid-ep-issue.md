@@ -48,17 +48,31 @@ Current state:
   | runs   | 8 | `0.001047` | `31,285,893.37` |
 
 - In this small table, `topk=8` is the dominant slowdown and `random` is modestly faster than `runs` once `topk` is fixed.
-- Hybrid-EP is still blocked before any timing loop runs:
-  - baseline H100 / CUDA 12.8 runtime JIT fails with `cuda::ptx::cp_async_bulk` overload mismatches in `hybrid_ep_backend.cuh`
+- Unmodified Hybrid-EP is blocked on H100 / CUDA 12.8:
+  - baseline runtime JIT fails with `cuda::ptx::cp_async_bulk` overload mismatches in `hybrid_ep_backend.cuh`
   - `DISABLE_AGGRESSIVE_PTX_INSTRS=1` does not change the failure
   - `DISABLE_SM90_FEATURES=1` does not change the failure
-- Upstream DeepEP docs still claim Hopper support on CUDA `12.3+`, so the current Hybrid-EP result still looks like a narrower toolchain/kernel compatibility issue rather than a generic unsupported-environment case.
+  - `TORCH_CUDA_ARCH_LIST=9.0a` does not change the failure
+- A local launcher-applied workaround now exists:
+  - before install, rewrite the 11 failing `cp_async_bulk(cuda::ptx::space_shared, ... , mbarrier)` callsites in the extracted `csrc/hybrid_ep/backend/hybrid_ep_backend.cuh` to use `cuda::ptx::space_cluster`
+  - with that workaround, Hybrid-EP compiles and runs on H100x8
+- Exploratory fixed-shape comparison table (`deep_ep` vs patched `hybrid_ep`):
+
+  | distribution | topk | deep_ep tokens_per_s | patched hybrid_ep tokens_per_s | hybrid / deep |
+  | --- | ---: | ---: | ---: | ---: |
+  | random | 2 | `70,742,659.76` | `81,669,478.85` | `1.15x` |
+  | runs   | 2 | `45,030,617.74` | `75,096,827.43` | `1.67x` |
+  | random | 8 | `32,637,536.88` | `38,288,395.31` | `1.17x` |
+  | runs   | 8 | `31,285,893.37` | `37,512,463.91` | `1.20x` |
+
+- Caveat: the first patched `runs, topk=2` Hybrid-EP measurement landed at `15,809,521.51 tokens_per_s`, but an immediate rerun produced `75,096,827.43`; treat that cell as exploratory and keep the outlier in mind.
 
 ## Decision Log
 
 - 2026-03-13: Treat this as a torch-kernel benchmark experiment first, not a production JAX integration project.
 - 2026-03-13: Start with intranode H100x8 DeepEP / Hybrid-EP measurements before any multi-node or JAX-bridge work.
 - 2026-03-14: Accept a harness-side intranode RDMA hint skip for exploratory DeepEP bring-up on `world_size <= 8`; keep Hybrid-EP blocked until the runtime JIT compiles on Hopper.
+- 2026-03-14: Use a launcher-applied `space_cluster` rewrite as the current experimental workaround for Hybrid-EP on H100 / CUDA 12.8.
 
 ## Negative Results
 
@@ -66,7 +80,8 @@ Current state:
 - 2026-03-14: `deep_ep.Buffer` initially asserted on `get_rdma_buffer_size_hint(...)` with `NVSHMEM is disable during compilation`; this turned out to be a harness-level intranode bring-up bug rather than a hard stop for the NVLink path.
 - 2026-03-14: `HybridEPBuffer` runtime JIT on H100 / CUDA 12.8 fails with `cuda::ptx::cp_async_bulk` overload mismatches before any timing loop runs.
 - 2026-03-14: `DISABLE_AGGRESSIVE_PTX_INSTRS=1` and `DISABLE_SM90_FEATURES=1` do not change the Hybrid-EP JIT failure on H100 / CUDA 12.8.
+- 2026-03-14: `TORCH_CUDA_ARCH_LIST=9.0a` changes the JIT target to `sm_90a`, but does not change the Hybrid-EP overload failure.
 
 ## Conclusion
 
-Partial success. The torch-side benchmark path is now validated for DeepEP on CoreWeave H100x8 and yields a complete fixed-shape `random/runs x topk {2,8}` dispatch/combine mini-matrix, but Hybrid-EP remains blocked by an upstream/runtime JIT compile incompatibility on Hopper that is not resolved by the documented compatibility flags.
+Partial success with a local workaround. Unmodified Hybrid-EP is still broken on H100 / CUDA 12.8, but a minimal launcher-applied `space_cluster` rewrite gets Hybrid-EP compiling and running on the CoreWeave H100 machine. On the current exploratory fixed-shape `random/runs x topk {2,8}` slice, the patched Hybrid-EP path beats DeepEP on all four points, though one `runs, topk=2` outlier means the current table should still be treated as exploratory.
