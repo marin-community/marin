@@ -495,6 +495,30 @@ Keep the first evaluation stack narrow and aligned with the research question.
 - decoded-image degradation after forced token corruption,
 - fraction of future blocks that remain semantically aligned.
 
+### AR tokenizer decision matrix (v0)
+
+Use this matrix as the default pass/fail rubric for "good tokenizer for AR NTP."
+
+| Axis | Metric | Green (pass) | Yellow (borderline) | Red (fail) |
+| --- | --- | --- | --- | --- |
+| (1) Length / locality | `tokens/image` at matched reconstruction-quality band | `<= 2x` best tokenizer | `2x-4x` best | `> 4x` best |
+| (2) Noise tolerance | corruption amplification (`delta bits/image`) at `h1` and `h64-tail` | `h1 <= 0.1` and `h64-tail <= 0.3` | one passes, one misses | `h1 > 0.3` or `h64-tail > 0.7` |
+| (3) State complexity | context-dependence score (local token flip rate when only surrounding context changes) | `< 5%` | `5%-20%` | `> 20%` |
+| (4) Rollout stability | free-run decode validity and degradation slope vs rollout length | `>= 99%` valid + shallow slope | `95%-99%` valid or moderate slope | `< 95%` valid or steep slope |
+
+#### Aggregation rule
+
+- A tokenizer is "good for AR NTP" only if it passes axes `(2)`, `(3)`, and `(4)`.
+- Axis `(1)` may be borderline if whole-image loss is still competitive (`bits/image` top-2 in the compared set).
+- If a tokenizer passes `(1)` but fails `(2)-(4)`, classify it as "reconstruction-friendly but AR-hostile."
+
+#### Fairness protocol
+
+- run each tokenizer under both:
+  - fixed tokens/step budget
+  - fixed wall-clock budget
+- report only whole-sequence/whole-image metrics for final conclusions.
+
 ### What not to optimize first
 
 - downstream image quality benchmarks,

@@ -1296,3 +1296,31 @@
 - Next action:
   - rerun perturbation with multiple positions (`0.25,0.5,0.75`) and token-type-conditioned corruption (especially
     symbol control-token hits) to separate immediate desync brittleness from long-tail coupling.
+
+### 2026-03-14 15:06 - AR rubric added; position and representation perturbation sweeps launched
+
+- Goal:
+  - formalize pass/fail criteria for tokenizer quality under AR NTP and launch the first rubric-aligned perturbation
+    sweeps
+- Changes:
+  - added an explicit v0 decision matrix (axes `(1)-(4)` with green/yellow/red thresholds) and aggregation rule to:
+    `.agents/projects/jpeg_tokenizer.md`
+- Launches:
+  - position sweep (core three representations, full validation, three perturb positions):
+    - Iris job: `/dlwh/jpeg-tokenizer-perturbation-position-sweep-r2-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-perturbation-position-sweep-r2-iris1`
+    - command:
+      `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --cpu 1.0 --memory 24GB --extra marin:tpu --tpu v6e-8 --region europe-west4 --zone europe-west4-a --job-name jpeg-tokenizer-perturbation-position-sweep-r2-iris1 -- uv run python scripts/jpeg_tokenizer/evaluate_representation_perturbation.py --run-spec name=coeff_k64_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial-7e3e81/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0,sliding_window=4096 --run-spec name=ac_dense_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-trial-97d827/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_ac_dense_whole_libjpeg_v0,sliding_window=4096 --run-spec name=symbols_whole_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0,sliding_window=4096 --batch-size 8 --max-examples 3925 --perturb-fractions 0.25,0.5,0.75 --horizons 1,64,512,4096 --output-dir gs://marin-eu-west4/tokexplore/jpeg-tokenizer-perturbation-position-sweep-r2-iris1`
+  - representation sweep (broader set including bytes/scan/huffman):
+    - Iris job: `/dlwh/jpeg-tokenizer-perturbation-repr-sweep-r1-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-perturbation-repr-sweep-r1-iris1`
+    - command:
+      `uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --cpu 1.0 --memory 24GB --extra marin:tpu --tpu v6e-8 --region europe-west4 --zone europe-west4-a --job-name jpeg-tokenizer-perturbation-repr-sweep-r1-iris1 -- uv run python scripts/jpeg_tokenizer/evaluate_representation_perturbation.py --run-spec name=coeff_k64_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial-7e3e81/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_coeff_k64_libjpeg_v0,sliding_window=4096 --run-spec name=ac_dense_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-trial-97d827/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_ac_dense_whole_libjpeg_v0,sliding_window=4096 --run-spec name=symbols_whole_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-symbols-whole-libjpeg-swa4096-trial-a844e3/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_symbols_whole_libjpeg_v0,sliding_window=4096 --run-spec name=huffman_events_exact,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-huffman-events-whole-libjpeg-swa4096-trial-r2-1b0df4/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_huffman_events_whole_libjpeg_v0,sliding_window=4096 --run-spec name=scan_bytes_whole,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-scan-bytes-whole-swa4096-trial-c0c6f0/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_scan_bytes_whole_v0,sliding_window=4096 --run-spec name=bytes_whole,checkpoint=gs://marin-eu-west4/tokexplore/jpeg-tokenizer-bytes-whole-swa4096-trial-7cc718/checkpoints/step-2000,store=gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_bytes_whole_v0,sliding_window=4096 --batch-size 8 --max-examples 1024 --perturb-fractions 0.5 --horizons 1,64,512,4096 --output-dir gs://marin-eu-west4/tokexplore/jpeg-tokenizer-perturbation-repr-sweep-r1-iris1`
+- Current status:
+  - both jobs are `JOB_STATE_PENDING` under build-slot saturation in `europe-west4-a` (no failure signal)
+- Next action:
+  - monitor to terminal state and summarize by rubric axis:
+    - `(2)` from perturbation amplification
+    - partial `(4)` signal from horizon-tail behavior
