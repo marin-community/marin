@@ -25,28 +25,20 @@ The new thread should not redefine the benchmark. It should reuse the sealed `#3
 
 ## Results
 
-In progress as of 2026-03-14.
+Completed fixed-shape H100x8 sweep as of 2026-03-14.
 
 Current state:
-- The prior torch-side experiment is sealed; this new thread starts from that snapshot.
-- CoreWeave H100x8 access is healthy and the submission credentials are present in a fresh shell.
-- A repo-local JAX custom-call path is now wired into `bench_moe_hillclimb.py` as `deepep_layout_ragged_a2a`.
-- The current implementation milestone wraps DeepEP `deep_ep::layout::get_dispatch_layout` via JAX FFI and feeds its per-expert metadata into the existing `ragged_a2a` dispatch contract.
-- A raw CoreWeave launcher exists at `.agents/scripts/deepep_jax_krt_bench.py` to run:
-  - a GPU correctness smoke for the new custom call
-  - the fixed-shape `#3633` matrix for `current`, `ragged_a2a`, and `deepep_layout_ragged_a2a`
+- The JAX custom-call path is runnable on CoreWeave H100x8 and passed a GPU correctness smoke before the main benchmark.
+- The completed implementation milestone is still narrow: `deepep_layout_ragged_a2a` replaces only the dispatch-layout metadata producer with a DeepEP CUDA custom call and then feeds that metadata into the existing JAX `ragged_a2a` path.
+- The full head-to-head matrix against the sealed `#3633` shape is now complete for `current`, `ragged_a2a`, and `deepep_layout_ragged_a2a`.
 
-Current implementation checkpoint:
+Completed implementation checkpoint:
 - Added `lib/levanter/src/levanter/kernels/deepep/layout_ffi.py` and `lib/levanter/src/levanter/kernels/deepep/csrc/deepep_layout_ffi.cu`.
-- Added a new benchmark kernel path in `lib/levanter/scripts/bench/bench_moe_hillclimb.py`.
-- Local validation passed:
-  - `python -m py_compile` on the edited Python files
-  - `uv run ruff check` on the edited Python and launcher files
-- Two integration bugs were found and fixed before the first cluster run:
-  - `num_tokens_per_rdma_rank` must be passed as `nullptr` on the single-node H100x8 regime; requesting it would trip DeepEP's multi-node assertion
-  - DeepEP token-per-rank counts do not match this benchmark's repeated-assignment send sizes, so shard counts must still be derived from per-expert assignment counts
+- Added `deepep_layout_ragged_a2a` to `lib/levanter/scripts/bench/bench_moe_hillclimb.py`.
+- Added raw CoreWeave launcher `.agents/scripts/deepep_jax_krt_bench.py`.
+- The successful matrix ran from repo tag `moe-deepep-jax-layout-ffi-smokefix-20260314` as task `deepep-jax-krt-bench-20260314-114210`.
 
-Planned benchmark target:
+Completed benchmark target:
 - Fixed-shape H100x8 regime from `#3633`:
   - `tokens=32768`
   - `hidden=2048`
@@ -58,9 +50,31 @@ Planned benchmark target:
   - `EP in {1, 2, 4, 8}`
   - `bench_pass=forward_backward`
 
-Planned implementation target:
-- repo-local JAX custom-call path, not a Torch DLPack bridge benchmark
-- direct comparison against the sealed `bench_moe_hillclimb.py` results from `#3633`
+Primary result:
+- `current` won at every distributed point (`EP > 1`).
+- `deepep_layout_ragged_a2a` did not close the gap to `current`; `current` was about `1.48x` to `1.81x` faster across the completed distributed matrix.
+- `deepep_layout_ragged_a2a` stayed effectively tied with vanilla `ragged_a2a` on the distributed cells, so replacing only the JAX-side layout metadata producer does not move the GPU result.
+
+Completed matrix (`tokens/s`):
+
+| distribution | topk | kernel | EP1 | EP2 | EP4 | EP8 |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| random | 2 | current | 610333 | 892081 | 1724413 | 2966491 |
+| random | 2 | ragged_a2a | 620045 | 553780 | 1058353 | 2001628 |
+| random | 2 | deepep_layout_ragged_a2a | 617592 | 538626 | 1057965 | 2002620 |
+| random | 8 | current | 151577 | 237428 | 482195 | 956226 |
+| random | 8 | ragged_a2a | 150450 | 138256 | 279590 | 546790 |
+| random | 8 | deepep_layout_ragged_a2a | 151781 | 132724 | 276921 | 539028 |
+| runs | 2 | current | 616690 | 886567 | 1728405 | 2963386 |
+| runs | 2 | ragged_a2a | 614976 | 524339 | 970674 | 1668893 |
+| runs | 2 | deepep_layout_ragged_a2a | 619300 | 527523 | 974219 | 1665751 |
+| runs | 8 | current | 152001 | 235254 | 489235 | 958629 |
+| runs | 8 | ragged_a2a | 151848 | 135279 | 274323 | 526984 |
+| runs | 8 | deepep_layout_ragged_a2a | 130124 | 138148 | 273787 | 530715 |
+
+Confidence:
+- `exploratory` for the general DeepEP-on-JAX question.
+- `replicated` for the narrower claim that this layout-only custom-call insertion does not improve the sealed `#3633` H100x8 benchmark.
 
 ## Decision Log
 
@@ -68,12 +82,15 @@ Planned implementation target:
 - 2026-03-14: reuse the sealed `#3633` fixed-shape GPU benchmark regime as the direct comparison target.
 - 2026-03-14: treat Torch-only benchmarks as prior evidence, not as the final comparison harness for this thread.
 - 2026-03-14: use DeepEP `get_dispatch_layout` as the first JAX custom-call milestone because it is the narrowest raw CUDA kernel entry point without Torch process-group dependencies.
+- 2026-03-14: stop the layout-only custom-call path here as a negative result; further JAX-native DeepEP work should target dispatch/combine transport rather than more layout-only tuning.
 
 ## Negative Results
 
 - The first draft of the benchmark integration incorrectly tried to use DeepEP token-per-rank counts as `ragged_a2a` assignment send sizes. That mapping is wrong for repeated top-k assignments and would have made the comparison invalid.
 - The first draft of the FFI wrapper also requested `num_tokens_per_rdma_rank`, which is invalid on the single-node H100x8 regime and would have triggered a DeepEP device assertion.
+- The raw CoreWeave launch path exposed several non-benchmark blockers before the successful run: mounted `/app` cleanup, missing `git` in the image, NVSHMEM-disabled DeepEP compilation, CUDA FFI handler symbol registration, and JAX 64-bit operand expectations.
+- The completed benchmark itself is a negative result for the targeted hypothesis: the JAX layout-only custom call never beat `ragged_a2a` in a meaningful way and never approached `current` on the distributed cells.
 
 ## Conclusion
 
-Not complete yet. The goal of this thread is to determine whether a real JAX custom-call path can be benchmarked directly against the sealed `#3633` H100x8 GPU baseline.
+Conclusion: the repo-local JAX custom-call path is runnable and benchmarkable on the sealed `#3633` H100x8 regime, but this first layout-only DeepEP insertion does not improve the GPU result. The direct head-to-head comparison shows that `deepep_layout_ragged_a2a` is effectively just another face of `ragged_a2a` on this workload, while `current` remains decisively faster for every distributed `EP`.
