@@ -42,8 +42,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
 WORKDIR /app
 
-# Copy pyproject.toml first and sync dependencies (cached layer)
-COPY pyproject.toml ./
+# Copy pyproject.toml and build hook first and sync dependencies (cached layer)
+COPY pyproject.toml hatch_build.py ./
 RUN uv sync --no-install-project
 
 # Copy source and install the project
