@@ -44,10 +44,11 @@ Current mainline target order:
 - `D1`: completed as a partial diagnostic lead
   - narrower head-first branch layout handling slightly improved AD/layout behavior and step time
   - but it did not reduce `dispatch_shard_shell_delta_ms`, and xprof `IDLE` worsened
-- `D2`: immediate kernel-entry and direct array-entry branch-core cuts attempted and rejected
+- `D2`: immediate kernel-entry, direct array-entry, and prepared-array leaf-call branch-core cuts attempted and rejected
   - immediate kernel-entry cut: summary-side `dispatch_shard_shell_delta_ms` dropped, but `ad_wrapper_shell_delta_ms`, `layout_shell_delta_ms`, total hybrid shell, and full-step time all worsened
   - direct array-entry cut: summary-side and xprof `dispatch_shard_shell_delta_ms` both improved, but `ad_wrapper_shell_delta_ms`, `layout_shell_delta_ms`, total hybrid shell, `interaction_remainder_ms`, and xprof `IDLE` still grew and the full step slowed
-  - `D2` remains open only for an even smaller branch-core cut that reduces dispatch/shard ownership without recreating grouped-head AD/layout spill under generic decoder shell names
+  - prepared-array leaf-call cut: summary-side `step_duration_ms`, `hybrid_generic_shell_delta_budget_ms`, and `dispatch_shard_shell_delta_ms` all improved, but `ad_wrapper_shell_delta_ms` and `interaction_remainder_ms` still grew, matched xprof `dispatch_shard_shell_delta_ms` stayed flat/up, and xprof `IDLE` worsened sharply
+  - `D2` remains open only for a smaller cut that improves matched xprof `dispatch/shard` and `IDLE`, not just summary-side shell budgets
 
 ## D2 Definition
 

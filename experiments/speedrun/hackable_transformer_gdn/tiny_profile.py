@@ -23,7 +23,7 @@ Environment overrides:
 - GDN_PROFILE_GDN_LAYERS_PER_BLOCK: optional GDN layer-count-per-block override
 - GDN_PROFILE_GDN_BLOCK_SIZE: optional GDN block-size override
 - GDN_PROFILE_GDN_KERNEL_ENTRY_BRANCH_CORE_SHARDING_DIAGNOSTIC: if `1`, enable
-  the opt-in immediate kernel-entry branch-core sharding diagnostic
+  the opt-in prepared-array leaf-call branch-core sharding diagnostic
 - GDN_PROFILE_GDN_BRANCH_BOUNDARY_PROTOTYPE: if `1`, enable the opt-in array-only GDN branch boundary prototype
 - GDN_PROFILE_DECODER_BLOCK_BOUNDARY_PROTOTYPE: if `1`, enable the opt-in fixed-`3/4` decoder-block boundary prototype
 - GDN_PROFILE_GRADIENT_CHECKPOINTING: optional transformer-layer checkpointing override
