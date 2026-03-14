@@ -396,7 +396,9 @@ def _write_stage_chunks(
             use_parquet = True
             logger.info("Using Parquet for scatter serialization for shard %d", source_shard)
         except Exception:
-            sample_rows = str(first_envelope[:5]) if len(first_envelope) > 5 else str(first_envelope)
+            sample_rows = str(test_envelope[:5]) if len(test_envelope) > 5 else str(test_envelope)
+            if len(sample_rows) > 1000:
+                sample_rows = sample_rows[:1000] + "...(truncated)"
             logger.warning(
                 "Arrow scatter serialization failed for shard %d; "
                 "falling back to pickle. Performance will be degraded. Sample rows: %s",
