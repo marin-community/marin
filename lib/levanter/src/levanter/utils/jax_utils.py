@@ -569,7 +569,7 @@ def sharded_tree_size(
     Returns the size of a sharded tree, in bytes. If the tree is sharded, this returns the size of a per-device shard.
 
     If mesh is None, uses the current mesh.
-    If mapping is None, uses the current mapping.
+    If mapping is None, assumes no axis mapping.
 
     For named arrays, this uses the provided mesh and mapping to determine the sharding.
     For real jax.Arrays, uses their existing sharding.
@@ -584,7 +584,7 @@ def sharded_tree_size(
         mesh = jax.sharding.get_abstract_mesh()
 
     if mapping is None:
-        mapping = haliax.partitioning.current_thread_local_mapping()
+        mapping = {}
 
     def _mesh_axis_size(axis_name) -> int:
         if mesh is None:

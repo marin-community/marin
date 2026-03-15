@@ -265,6 +265,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         logsumexp_weight: Optional[float] = None,
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
+        axis_mapping: hax.partitioning.ResourceMapping | None = None,
     ) -> jnp.ndarray | NamedArray:
         """
         Compute next-token cross-entropy for a language modeling example.
@@ -292,6 +293,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
             logit_soft_cap=logit_soft_cap,
+            axis_mapping=axis_mapping,
         )
 
         return loss + aux_loss

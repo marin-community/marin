@@ -33,6 +33,7 @@ def maybe_fused_next_token_loss(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    axis_mapping: hax.partitioning.ResourceMapping | None = None,
 ) -> NamedArray:
     """
     Compute the next token loss using the fused kernel path.
@@ -51,6 +52,7 @@ def maybe_fused_next_token_loss(
         dtype (Optional[jnp.dtype]): Data type for the loss.
         logit_soft_cap (Optional[float]): Optional soft cap for logits
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override.
+        axis_mapping: Optional explicit axis mapping used for shard_map.
     Returns:
         NamedArray: Computed loss.
     """
@@ -84,6 +86,7 @@ def maybe_fused_next_token_loss(
         dtype=dtype,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
+        axis_mapping=axis_mapping,
     )
 
 
@@ -174,6 +177,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: Literal[False] = False,
+    axis_mapping: hax.partitioning.ResourceMapping | None = None,
 ) -> NamedArray: ...
 
 
@@ -194,6 +198,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: Literal[True] = True,
+    axis_mapping: hax.partitioning.ResourceMapping | None = None,
 ) -> tuple[NamedArray, NamedArray]: ...
 
 
@@ -213,6 +218,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
+    axis_mapping: hax.partitioning.ResourceMapping | None = None,
 ) -> NamedArray | tuple[NamedArray, NamedArray]:
     """
     Compute cross-entropy loss and logsumexp penalty using the fused Pallas kernel.
@@ -231,6 +237,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         dtype (Optional[jnp.dtype]): Data type for the loss.
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override for the fused kernel.
         return_argmax (bool): Whether to return per-position argmax token ids as well.
+        axis_mapping: Optional explicit axis mapping used for shard_map.
 
     Returns:
         If return_argmax=False: computed loss.
@@ -277,8 +284,12 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     if getattr(mesh, "empty", False):
         output = fused_impl(pred_embeddings, target_y, lm_head)
     else:
-        axis_mapping = current_thread_local_mapping() or {}
-        output = shard_map(fused_impl, axis_mapping=axis_mapping, check_rep=False)(pred_embeddings, target_y, lm_head)
+        resolved_axis_mapping = axis_mapping
+        if resolved_axis_mapping is None:
+            resolved_axis_mapping = current_thread_local_mapping() or {}
+        output = shard_map(fused_impl, axis_mapping=resolved_axis_mapping, check_rep=False)(
+            pred_embeddings, target_y, lm_head
+        )
 
     if return_argmax:
         loss, argmax = cast(tuple[NamedArray, NamedArray], output)

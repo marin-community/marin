@@ -242,9 +242,6 @@ class DataLoaderIterator(Iterator[Ex]):
     def __init__(self, data_loader: DataLoader, start_from_batch: int | None = None):
         self.dl = data_loader
         self._start_from_batch = start_from_batch
-        self.mapping = self.dl.axis_resources
-        if self.mapping is None:
-            self.mapping = hax.partitioning.current_thread_local_mapping()
 
         buffered_batches = self.dl.max_buffered_batches
         self._batches: Iterator[Ex]
