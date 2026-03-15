@@ -16,11 +16,16 @@ Trigger a fresh checkpoint on-demand and download it:
 
 ```bash
 # Trigger a fresh checkpoint (uses the BeginCheckpoint RPC)
-uv run iris cluster checkpoint
-# Output includes the checkpoint path, job/task/worker counts
+# The --config flag selects the cluster; adjust as needed.
+uv run iris --config lib/iris/examples/marin.yaml cluster controller checkpoint
+# Example output:
+#   Checkpoint DB written: gs://marin-us-central2/iris/marin/state/controller-state/checkpoint-1773533644027.sqlite3
+#   Jobs:    417
+#   Tasks:   46790
+#   Workers: 243
 
-# Download the checkpoint (production Marin cluster)
-gcloud storage cp gs://marin-us-central2/iris/marin/state/controller-state/latest.sqlite3 /tmp/controller.sqlite3
+# Download the checkpoint (use the path from the output above)
+gcloud storage cp gs://marin-us-central2/iris/marin/state/controller-state/checkpoint-<EPOCH_MS>.sqlite3 /tmp/controller.sqlite3
 
 # Query offline
 python3 -c "
@@ -31,7 +36,7 @@ conn.row_factory = sqlite3.Row
 "
 ```
 
-If the state has changed and you need another snapshot, trigger another checkpoint with `uv run iris cluster checkpoint` and re-download. **Do not SSH into the controller VM to run scripts against the live database** — a slow query can stall the controller and break other users.
+If the state has changed and you need another snapshot, trigger another checkpoint with `uv run iris --config lib/iris/examples/marin.yaml cluster controller checkpoint` and re-download. **Do not SSH into the controller VM to run scripts against the live database** — a slow query can stall the controller and break other users.
 
 **Production defaults** (verify at session start):
 - Checkpoint location: `gs://marin-us-central2/iris/marin/state/controller-state/latest.sqlite3`
