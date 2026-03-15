@@ -3,30 +3,25 @@
 
 """Canary ferry: Grug MoE daily pretraining canary.
 
-Supports TPU (v5p-8, Nemotron, ~1B tokens) and GPU (8x H100, SlimPajama, ~50 steps).
+Supports TPU (v5p-8, Nemotron, ~1B tokens) and GPU (8x H100, Nemotron, ~50 steps).
 Config is driven by env vars set in the GH Actions workflow env: block and forwarded
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
     CANARY_BATCH_SIZE    per-device batch size
-    CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_TARGET_TOKENS total training tokens
     RUN_ID               unique run identifier
 """
 
-import dataclasses
 import datetime
 import os
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize.data_configs import lm_data_config
 
-from experiments.defaults import default_tokenize
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -34,7 +29,6 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.llama import llama3_tokenizer
 
 CANARY_OPTIMIZER = AdamConfig(
     learning_rate=3e-3,
@@ -82,28 +76,8 @@ def _build_step_from_env() -> ExecutorStep:
     else:
         multi_host = os.environ.get("CANARY_MULTI_HOST", "").lower() in ("1", "true")
         batch_size = _env_int("CANARY_BATCH_SIZE", 32)
-        cache_copy_max_workers = _env_int("CANARY_CACHE_COPY_MAX_WORKERS", 12)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
-        # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
-        tokenize_step = default_tokenize(
-            name="slimpajama-6b-cw",
-            dataset="DKYoon/SlimPajama-6B",
-            tokenizer=llama3_tokenizer,
-            format=TextLmDatasetFormat(),
-        )
-        tokenize_step = dataclasses.replace(
-            tokenize_step,
-            config=dataclasses.replace(
-                tokenize_step.config,
-                # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
-                worker_resources=ResourceConfig(ram="64g", disk="64g"),
-                cache_copy_max_workers=cache_copy_max_workers,
-            ),
-        )
-        data = lm_data_config(
-            training_set=tokenize_step,
-            shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
-        )
+        data = NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
         if multi_host:
             name = "canary-ferry-cw-multihost"
             resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g", replicas=2)
