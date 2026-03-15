@@ -50,7 +50,7 @@ Always run `build:check` after editing `.vue` or `.ts` files to catch type error
 ## Code Conventions
 
 - Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
-- After changing `.proto` files, regenerate via `scripts/generate_protos.py`.
+- After changing `.proto` files, regenerate via `lib/iris/scripts/generate_protos.py` (from the repo root).
 - Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
 - Dashboards must be a thin UI over the RPC API, not a second implementation path.
 - Use `iris.time_utils` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.
