@@ -21,7 +21,7 @@ from levanter.data.text import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.partitioning import named_jit, round_axis_for_partitioning
@@ -29,9 +29,6 @@ from levanter.utils.tree_utils import inference_mode
 
 
 logger = logging.getLogger(__name__)
-
-
-LmEvalExample = LmExample | GrugLmExample
 
 
 @dataclass
@@ -93,7 +90,7 @@ def main(config: EvalLmConfig):
 
         mp: jmp.Policy = config.trainer.mp
 
-        def eval_loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
+        def eval_loss_fn(model: LmHeadModel, batch: GrugLmExample) -> LossFnOutput:
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
             with hax.axis_mapping(compute_axis_mapping):
@@ -103,13 +100,8 @@ def main(config: EvalLmConfig):
                     reduction=None,
                     reduction_axis=(),
                 )
-
-            if isinstance(batch, LmExample):
-                per_pos_weight = batch.loss_weight.array
-                per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
-            else:
-                per_pos_weight = batch.loss_weight
-                per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+            per_pos_weight = batch.loss_weight
+            per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
             return per_pos_loss, per_pos_weight, per_pos_token_id
 
         evaluator = TaggedEvaluator(
@@ -121,20 +113,9 @@ def main(config: EvalLmConfig):
             max_examples_per_dataset=max_examples,
         )
 
-        @named_jit(axis_resources=compute_axis_mapping)
-        def compute_loss(model: LmHeadModel, example: LmExample):
-            model = inference_mode(model, True)
-            model = mp.cast_to_compute(model)
-            return model.compute_next_token_loss(example, key=None)
-
-        def compute_logits(model: LmHeadModel, example: LmEvalExample):
+        def compute_logits(model: LmHeadModel, example: GrugLmExample):
             model = mp.cast_to_compute(model)
             with hax.axis_mapping(compute_axis_mapping):
-                if isinstance(example, LmExample):
-                    activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-                    head = model.get_lm_head()
-                    return hax.dot(activations, head, axis=model.Embed)
-
                 logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=Batch, key=None)
                 if logits_array.ndim == 2:
                     return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))

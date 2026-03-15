@@ -16,7 +16,6 @@ from jax.experimental import multihost_utils
 from levanter.callbacks import StepInfo
 from levanter.data import DataLoader
 from levanter.data.text.examples import GrugLmExample
-from levanter.models.lm_model import LmExample
 from levanter.utils.hf_utils import HfTokenizer
 
 
@@ -315,9 +314,7 @@ def _decode_tokens_pretty(tok, ids):
         return [str(t) for t in tok.decode(ids)]
 
 
-def _tokens_from_batch(batch: LmExample | GrugLmExample) -> jax.Array:
-    if isinstance(batch, LmExample):
-        return batch.tokens.array
+def _tokens_from_batch(batch: GrugLmExample) -> jax.Array:
     return batch.tokens
 
 

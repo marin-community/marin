@@ -27,7 +27,7 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -287,13 +287,8 @@ def main(config: TrainLmConfig):
             )
 
         @named_jit(axis_resources=compute_axis_mapping)
-        def compute_logits(model: LmHeadModel, example: LmExample | GrugLmExample):
+        def compute_logits(model: LmHeadModel, example: GrugLmExample):
             model = trainer.mp.cast_to_compute(model)
-            if isinstance(example, LmExample):
-                activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-                head = model.get_lm_head()
-                return hax.dot(activations, head, axis=model.Embed)
-
             logits_array = model.logits_from_token_ids_array(example.tokens, batch_axis=EvalBatch, key=None)
             if logits_array.ndim == 2:
                 return hax.named(logits_array, (Pos.resize(logits_array.shape[0]), model.Vocab))
