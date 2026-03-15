@@ -7,7 +7,6 @@ import socket
 import time
 import zipfile
 import hashlib
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -137,6 +136,7 @@ def create_mock_container_handle(
     handle.log_reader = Mock(return_value=log_reader_mock)
 
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
+    handle.disk_usage_mb = Mock(return_value=0)
     handle.cleanup = Mock()
     return handle
 
@@ -157,8 +157,6 @@ def mock_runtime():
     runtime.list_iris_containers = Mock(return_value=[])
     runtime.remove_all_iris_containers = Mock(return_value=0)
     runtime.cleanup = Mock()
-    runtime.prepare_workdir = Mock()
-    runtime.cleanup_workdir = Mock()
     return runtime
 
 
@@ -670,22 +668,22 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert "IRIS_TASK_ID" in env
 
 
-def test_prepare_and_cleanup_workdir_called_during_lifecycle(worker, mock_runtime):
-    """prepare_workdir is called during setup and cleanup_workdir during teardown."""
+def test_workdir_spec_passed_to_stage_bundle(worker, mock_runtime):
+    """stage_bundle receives a WorkdirSpec when disk_bytes > 0."""
     request = create_run_task_request()
+    request.resources.CopyFrom(cluster_pb2.ResourceSpecProto(disk_bytes=512 * 1024 * 1024))
     task_id = worker.submit_task(request)
 
     task = worker.get_task(task_id)
     task.thread.join(timeout=15.0)
 
-    mock_runtime.prepare_workdir.assert_called_once()
-    call_kwargs = mock_runtime.prepare_workdir.call_args.kwargs
-    assert isinstance(call_kwargs["workdir"], Path)
-    assert isinstance(call_kwargs["disk_bytes"], int)
+    mock_runtime.stage_bundle.assert_called_once()
+    call_kwargs = mock_runtime.stage_bundle.call_args.kwargs
+    from iris.cluster.runtime.types import WorkdirSpec
 
-    mock_runtime.cleanup_workdir.assert_called_once()
-    cleanup_arg = mock_runtime.cleanup_workdir.call_args[0][0]
-    assert isinstance(cleanup_arg, Path)
+    assert isinstance(call_kwargs["workdir_spec"], WorkdirSpec)
+    assert call_kwargs["workdir_spec"].disk_bytes == 512 * 1024 * 1024
+    assert call_kwargs["workdir_spec"].tmpfs is True
 
 
 def test_task_failure_error_appears_in_logs(worker):

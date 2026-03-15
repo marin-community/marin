@@ -88,6 +88,20 @@ class ContainerConfig:
         return self.resources.disk_bytes
 
 
+@dataclass(frozen=True)
+class WorkdirSpec:
+    """Declares the workdir configuration a task wants.
+
+    The runtime interprets this according to its capabilities:
+    - Docker: mounts tmpfs with size limit when disk_bytes > 0
+    - K8s: sets emptyDir sizeLimit in the pod spec
+    - Process: no enforcement
+    """
+
+    disk_bytes: int = 0
+    tmpfs: bool = False
+
+
 @dataclass
 class ContainerResult:
     container_id: str
@@ -208,6 +222,14 @@ class ContainerHandle(Protocol):
         """Get resource usage statistics."""
         ...
 
+    def disk_usage_mb(self) -> int:
+        """Return disk usage in MB for this container's workdir.
+
+        Docker/Process: shutil.disk_usage on the host workdir path.
+        K8s: 0 (workdir lives inside the pod, not on the worker node).
+        """
+        ...
+
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
@@ -250,30 +272,14 @@ class ContainerRuntime(Protocol):
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
+        workdir_spec: WorkdirSpec | None = None,
     ) -> None:
-        """Materialize task bundle/workdir files for this runtime.
+        """Provision the workdir and materialize task bundle/workdir files.
 
-        Runtimes that execute from worker-local paths (docker/process)
-        stage the bundle into ``workdir`` directly. Kubernetes runtime may no-op
-        and materialize inside the task Pod instead.
+        The runtime sets up any backing storage described by *workdir_spec*
+        (e.g. Docker mounts tmpfs) before extracting the bundle. Kubernetes
+        may no-op and materialize inside the task Pod instead.
         """
-        ...
-
-    def prepare_workdir(
-        self,
-        *,
-        workdir: Path,
-        disk_bytes: int,
-    ) -> None:
-        """Prepare runtime-specific backing storage for workdir before staging.
-
-        Docker mounts a bounded tmpfs. K8s handles this via pod spec. Process is a no-op.
-        disk_bytes of 0 means no limit requested.
-        """
-        ...
-
-    def cleanup_workdir(self, workdir: Path) -> None:
-        """Undo any runtime-specific workdir setup from prepare_workdir."""
         ...
 
     def list_containers(self) -> list[ContainerHandle]:

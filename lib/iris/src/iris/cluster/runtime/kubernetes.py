@@ -37,6 +37,7 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerStats,
     ContainerStatus,
+    WorkdirSpec,
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
@@ -497,6 +498,10 @@ class KubernetesContainerHandle:
             available=True,
         )
 
+    def disk_usage_mb(self) -> int:
+        """K8s workdir lives inside the pod; disk usage isn't observable from the worker."""
+        return 0
+
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         if not self._pod_name:
@@ -643,15 +648,10 @@ class KubernetesRuntime:
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
+        workdir_spec: WorkdirSpec | None = None,
     ) -> None:
         """No-op: Kubernetes task Pods materialize bundle/workdir in-pod."""
-        del bundle_id, workdir, workdir_files, bundle_store
-
-    def prepare_workdir(self, *, workdir: Path, disk_bytes: int) -> None:
-        pass  # K8s handles workdir provisioning via pod spec emptyDir
-
-    def cleanup_workdir(self, workdir: Path) -> None:
-        pass  # K8s cleans up pod volumes automatically
+        del bundle_id, workdir, workdir_files, bundle_store, workdir_spec
 
     def list_containers(self) -> list[KubernetesContainerHandle]:
         return list(self._handles)

@@ -1,14 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for DockerRuntime prepare_workdir / cleanup_workdir tmpfs management."""
+"""Tests for DockerRuntime tmpfs management via stage_bundle and release_tmpfs."""
 
 import logging
 import subprocess
+from unittest.mock import Mock
 
 import pytest
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.types import WorkdirSpec
 
 
 @pytest.fixture
@@ -16,8 +19,16 @@ def runtime():
     return DockerRuntime()
 
 
-def test_prepare_workdir_mounts_tmpfs(monkeypatch, tmp_path, runtime):
-    """On Linux with disk_bytes > 0 and no existing mount, subprocess.run is called to mount tmpfs."""
+@pytest.fixture
+def mock_bundle_store():
+    store = Mock(spec=BundleStore)
+    store.extract_bundle_to = Mock()
+    store.write_workdir_files = Mock()
+    return store
+
+
+def test_stage_bundle_mounts_tmpfs(monkeypatch, tmp_path, runtime, mock_bundle_store):
+    """On Linux with disk_bytes > 0, stage_bundle mounts tmpfs before extracting."""
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
 
@@ -30,7 +41,15 @@ def test_prepare_workdir_mounts_tmpfs(monkeypatch, tmp_path, runtime):
     monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
 
     workdir = tmp_path / "task-workdir"
-    runtime.prepare_workdir(workdir=workdir, disk_bytes=1024 * 1024 * 512)
+    workdir.mkdir()
+    spec = WorkdirSpec(disk_bytes=1024 * 1024 * 512, tmpfs=True)
+    runtime.stage_bundle(
+        bundle_id="abc",
+        workdir=workdir,
+        workdir_files={},
+        bundle_store=mock_bundle_store,
+        workdir_spec=spec,
+    )
 
     assert len(calls) == 1
     cmd = calls[0]
@@ -39,28 +58,67 @@ def test_prepare_workdir_mounts_tmpfs(monkeypatch, tmp_path, runtime):
     assert f"size={1024 * 1024 * 512}" in cmd[cmd.index("-o") + 1]
     assert str(workdir) in cmd
 
+    mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
+    assert workdir in runtime._tmpfs_mounts
 
-def test_prepare_workdir_skips_when_no_disk(monkeypatch, tmp_path, runtime):
-    """disk_bytes=0 means no limit, so no subprocess call."""
+
+def test_stage_bundle_no_tmpfs_without_spec(monkeypatch, tmp_path, runtime, mock_bundle_store):
+    """Without workdir_spec, no subprocess call for mounting."""
     calls: list = []
     monkeypatch.setattr(
         "iris.cluster.runtime.docker.subprocess.run",
         lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
     )
 
-    runtime.prepare_workdir(workdir=tmp_path / "w", disk_bytes=0)
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    runtime.stage_bundle(
+        bundle_id="abc",
+        workdir=workdir,
+        workdir_files={},
+        bundle_store=mock_bundle_store,
+    )
+    assert len(calls) == 0
+    mock_bundle_store.extract_bundle_to.assert_called_once()
+
+
+def test_stage_bundle_no_tmpfs_when_zero_disk(monkeypatch, tmp_path, runtime, mock_bundle_store):
+    """disk_bytes=0 means no limit, so no tmpfs mount."""
+    calls: list = []
+    monkeypatch.setattr(
+        "iris.cluster.runtime.docker.subprocess.run",
+        lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
+    )
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    spec = WorkdirSpec(disk_bytes=0)
+    runtime.stage_bundle(
+        bundle_id="",
+        workdir=workdir,
+        workdir_files={},
+        bundle_store=mock_bundle_store,
+        workdir_spec=spec,
+    )
     assert len(calls) == 0
 
 
-def test_prepare_workdir_rejects_non_linux(monkeypatch, tmp_path, runtime):
+def test_stage_bundle_rejects_non_linux(monkeypatch, tmp_path, runtime, mock_bundle_store):
     """tmpfs mounts require Linux; other platforms should raise RuntimeError."""
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "darwin")
 
+    spec = WorkdirSpec(disk_bytes=1024, tmpfs=True)
     with pytest.raises(RuntimeError, match="Linux"):
-        runtime.prepare_workdir(workdir=tmp_path / "w", disk_bytes=1024)
+        runtime.stage_bundle(
+            bundle_id="",
+            workdir=tmp_path / "w",
+            workdir_files={},
+            bundle_store=mock_bundle_store,
+            workdir_spec=spec,
+        )
 
 
-def test_prepare_workdir_skips_already_mounted(monkeypatch, tmp_path, runtime):
+def test_stage_bundle_skips_already_mounted(monkeypatch, tmp_path, runtime, mock_bundle_store):
     """If workdir is already a mountpoint, no mount call is made."""
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: True)
@@ -73,12 +131,19 @@ def test_prepare_workdir_skips_already_mounted(monkeypatch, tmp_path, runtime):
 
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    runtime.prepare_workdir(workdir=workdir, disk_bytes=1024)
+    spec = WorkdirSpec(disk_bytes=1024, tmpfs=True)
+    runtime.stage_bundle(
+        bundle_id="",
+        workdir=workdir,
+        workdir_files={},
+        bundle_store=mock_bundle_store,
+        workdir_spec=spec,
+    )
     assert len(calls) == 0
 
 
-def test_cleanup_workdir_unmounts(monkeypatch, tmp_path, runtime):
-    """When workdir is a mountpoint, cleanup_workdir calls umount."""
+def test_release_tmpfs_unmounts(monkeypatch, tmp_path, runtime):
+    """release_tmpfs unmounts tracked tmpfs workdirs."""
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: True)
 
     calls: list[list[str]] = []
@@ -90,27 +155,27 @@ def test_cleanup_workdir_unmounts(monkeypatch, tmp_path, runtime):
     monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
 
     workdir = tmp_path / "task-workdir"
-    runtime.cleanup_workdir(workdir)
+    runtime._tmpfs_mounts.add(workdir)
+    runtime.release_tmpfs(workdir)
 
     assert len(calls) == 1
     assert calls[0] == ["umount", str(workdir)]
+    assert workdir not in runtime._tmpfs_mounts
 
 
-def test_cleanup_workdir_noop_when_not_mounted(monkeypatch, tmp_path, runtime):
-    """When workdir is not a mountpoint, cleanup_workdir does nothing."""
-    monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
-
+def test_release_tmpfs_noop_when_not_tracked(monkeypatch, tmp_path, runtime):
+    """release_tmpfs does nothing for workdirs it didn't mount."""
     calls: list = []
     monkeypatch.setattr(
         "iris.cluster.runtime.docker.subprocess.run",
         lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
     )
 
-    runtime.cleanup_workdir(tmp_path / "task-workdir")
+    runtime.release_tmpfs(tmp_path / "task-workdir")
     assert len(calls) == 0
 
 
-def test_prepare_workdir_raises_on_mount_failure(monkeypatch, tmp_path, runtime):
+def test_stage_bundle_raises_on_mount_failure(monkeypatch, tmp_path, runtime, mock_bundle_store):
     """Failed mount command propagates as RuntimeError."""
     monkeypatch.setattr("iris.cluster.runtime.docker.sys.platform", "linux")
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: False)
@@ -119,11 +184,18 @@ def test_prepare_workdir_raises_on_mount_failure(monkeypatch, tmp_path, runtime)
         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="mount: permission denied"),
     )
 
+    spec = WorkdirSpec(disk_bytes=1024, tmpfs=True)
     with pytest.raises(RuntimeError, match="permission denied"):
-        runtime.prepare_workdir(workdir=tmp_path / "w", disk_bytes=1024)
+        runtime.stage_bundle(
+            bundle_id="",
+            workdir=tmp_path / "w",
+            workdir_files={},
+            bundle_store=mock_bundle_store,
+            workdir_spec=spec,
+        )
 
 
-def test_cleanup_workdir_warns_on_umount_failure(monkeypatch, tmp_path, runtime, caplog):
+def test_release_tmpfs_warns_on_umount_failure(monkeypatch, tmp_path, runtime, caplog):
     """Failed umount logs a warning instead of raising."""
     monkeypatch.setattr("iris.cluster.runtime.docker.os.path.ismount", lambda p: True)
     monkeypatch.setattr(
@@ -132,7 +204,9 @@ def test_cleanup_workdir_warns_on_umount_failure(monkeypatch, tmp_path, runtime,
     )
 
     workdir = tmp_path / "task-workdir"
+    runtime._tmpfs_mounts.add(workdir)
     with caplog.at_level(logging.WARNING, logger="iris.cluster.runtime.docker"):
-        runtime.cleanup_workdir(workdir)
+        runtime.release_tmpfs(workdir)
 
     assert "device busy" in caplog.text
+    assert workdir not in runtime._tmpfs_mounts

@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -43,6 +44,7 @@ from iris.cluster.runtime.types import (
     ContainerStats,
     ContainerStatus,
     ImageInfo,
+    WorkdirSpec,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import cluster_pb2
@@ -384,6 +386,15 @@ exec {quoted_cmd}
             return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
         return self._docker_stats(self._run_container_id)
 
+    def disk_usage_mb(self) -> int:
+        """Return used space in MB on the filesystem containing the workdir."""
+        for host_path, container_path, _mode in self.config.mounts:
+            if container_path == self.config.workdir:
+                path = Path(host_path)
+                if path.exists():
+                    return int(shutil.disk_usage(path).used / (1024 * 1024))
+        return 0
+
     def profile(self, duration_seconds: int, profile_type: "cluster_pb2.ProfileType") -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
         container_id = self._run_container_id
@@ -483,11 +494,16 @@ exec {quoted_cmd}
             self._docker_rm_files(container_id, [trace_path, output_path])
 
     def cleanup(self) -> None:
-        """Remove the run container and clean up resources."""
+        """Remove the run container and clean up resources (including tmpfs mounts)."""
         if self._run_container_id:
             self._docker_remove(self._run_container_id)
             self.runtime.untrack_container(self._run_container_id)
             self._run_container_id = None
+        # Release any tmpfs backing storage for the workdir
+        for host_path, container_path, _mode in self.config.mounts:
+            if container_path == self.config.workdir:
+                self.runtime.release_tmpfs(Path(host_path))
+                break
 
     # -------------------------------------------------------------------------
     # Docker CLI helpers
@@ -716,6 +732,7 @@ class DockerRuntime:
     def __init__(self) -> None:
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
+        self._tmpfs_mounts: set[Path] = set()
         # Serializes `docker pull` per image tag so that concurrent task threads
         # don't each trigger docker-credential-gcloud against the metadata server,
         # which causes sporadic "no active account" errors under load.
@@ -782,15 +799,16 @@ class DockerRuntime:
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
+        workdir_spec: WorkdirSpec | None = None,
     ) -> None:
-        """Stage bundle and workdir files on worker-local filesystem."""
+        """Provision backing storage, then stage bundle and workdir files."""
+        if workdir_spec and workdir_spec.disk_bytes > 0:
+            self._mount_tmpfs(workdir, workdir_spec.disk_bytes)
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
         bundle_store.write_workdir_files(workdir, workdir_files)
 
-    def prepare_workdir(self, *, workdir: Path, disk_bytes: int) -> None:
-        if disk_bytes <= 0:
-            return
+    def _mount_tmpfs(self, workdir: Path, disk_bytes: int) -> None:
         if sys.platform != "linux":
             raise RuntimeError("Docker workdir disk limits require Linux tmpfs mounts")
         workdir.mkdir(parents=True, exist_ok=True)
@@ -805,16 +823,22 @@ class DockerRuntime:
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to mount tmpfs workdir {workdir}: {result.stderr.strip()}")
+        self._tmpfs_mounts.add(workdir)
         logger.info("Mounted tmpfs workdir %s with size=%d bytes", workdir, disk_bytes)
 
-    def cleanup_workdir(self, workdir: Path) -> None:
+    def release_tmpfs(self, workdir: Path) -> None:
+        """Unmount a tmpfs workdir if it was mounted by this runtime."""
+        if workdir not in self._tmpfs_mounts:
+            return
         if not os.path.ismount(workdir):
+            self._tmpfs_mounts.discard(workdir)
             return
         result = subprocess.run(["umount", str(workdir)], capture_output=True, text=True, check=False)
         if result.returncode != 0:
             logger.warning("Failed to unmount tmpfs workdir %s: %s", workdir, result.stderr.strip())
-            return
-        logger.info("Unmounted tmpfs workdir %s", workdir)
+        else:
+            logger.info("Unmounted tmpfs workdir %s", workdir)
+        self._tmpfs_mounts.discard(workdir)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

@@ -29,6 +29,7 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     RuntimeLogReader,
+    WorkdirSpec,
 )
 from iris.cluster.types import (
     JobName,
@@ -36,7 +37,6 @@ from iris.cluster.types import (
     is_task_finished,
 )
 from iris.cluster.bundle import BundleStore
-from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
 from iris.logging import parse_log_level, str_to_log_level
@@ -87,6 +87,7 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
 # /dev/shm/iris into the worker container so this path is available on GCE VMs.
 _TMPFS_DIR = Path("/dev/shm/iris")
 _TMPFS_MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
+_DISK_CHECK_INTERVAL_SECONDS = 60.0
 
 
 def get_fast_io_dir(cache_dir: Path) -> Path:
@@ -472,10 +473,6 @@ class TaskAttempt:
         self.workdir = self._fast_io_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
 
-        # Let runtime set up backing storage (e.g. tmpfs mount) before staging
-        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
-        self._runtime.prepare_workdir(workdir=self.workdir, disk_bytes=disk_bytes)
-
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
 
@@ -553,11 +550,14 @@ class TaskAttempt:
         # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
+        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
+        workdir_spec = WorkdirSpec(disk_bytes=disk_bytes, tmpfs=disk_bytes > 0) if disk_bytes > 0 else None
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
             workdir_files=dict(self.request.entrypoint.workdir_files),
             bundle_store=self._bundle_store,
+            workdir_spec=workdir_spec,
         )
 
         logger.info(
@@ -715,6 +715,7 @@ class TaskAttempt:
         log_reader: RuntimeLogReader,
         deadline: Deadline | None,
     ) -> None:
+        last_disk_check = 0.0
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
@@ -798,8 +799,10 @@ class TaskAttempt:
                     if stats.memory_mb > self.peak_memory_mb:
                         self.peak_memory_mb = stats.memory_mb
 
-                if self.workdir:
-                    self.disk_mb = collect_workdir_size_mb(self.workdir)
+                now = time.monotonic()
+                if now - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
+                    self.disk_mb = handle.disk_usage_mb()
+                    last_disk_check = now
             except Exception:
                 logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
@@ -849,14 +852,7 @@ class TaskAttempt:
         except Exception as e:
             logger.warning("Failed to release ports for task %s: %s", self.task_id, e)
 
-        # Tear down runtime backing storage (e.g. unmount tmpfs) before removing files
-        if self.workdir:
-            try:
-                self._runtime.cleanup_workdir(self.workdir)
-            except Exception as e:
-                logger.warning("Failed to cleanup runtime workdir for task %s at %s: %s", self.task_id, self.workdir, e)
-
-        # Remove working directory
+        # Remove working directory (handle.cleanup() already released backing storage)
         if self.workdir and self.workdir.exists():
             try:
                 shutil.rmtree(self.workdir)

@@ -50,6 +50,7 @@ def create_mock_container_handle():
     handle.stop = Mock()
     handle.logs = Mock(return_value=[])
     handle.stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=1, available=True))
+    handle.disk_usage_mb = Mock(return_value=0)
     handle.cleanup = Mock()
     return handle
 
@@ -64,8 +65,6 @@ def mock_runtime():
 
     runtime.list_iris_containers = Mock(return_value=[])
     runtime.remove_all_iris_containers = Mock(return_value=0)
-    runtime.prepare_workdir = Mock()
-    runtime.cleanup_workdir = Mock()
     return runtime
 
 

@@ -22,6 +22,7 @@ import ctypes.util
 import logging
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -49,6 +50,7 @@ from iris.cluster.runtime.types import (
     ContainerStats,
     ContainerStatus,
     RuntimeLogReader,
+    WorkdirSpec,
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
@@ -484,6 +486,14 @@ class ProcessContainerHandle:
             available=memory_mb is not None,
         )
 
+    def disk_usage_mb(self) -> int:
+        """Return used space in MB on the filesystem containing the workdir."""
+        mount_map = {cp: hp for hp, cp, _ in self.config.mounts}
+        host_workdir = mount_map.get(self.config.workdir)
+        if host_workdir and Path(host_workdir).exists():
+            return int(shutil.disk_usage(host_workdir).used / (1024 * 1024))
+        return 0
+
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
 
@@ -610,17 +620,13 @@ class ProcessRuntime:
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
+        workdir_spec: WorkdirSpec | None = None,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
+        del workdir_spec  # Process runtime has no backing storage to provision
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
         bundle_store.write_workdir_files(workdir, workdir_files)
-
-    def prepare_workdir(self, *, workdir: Path, disk_bytes: int) -> None:
-        pass
-
-    def cleanup_workdir(self, workdir: Path) -> None:
-        pass
 
     def list_containers(self) -> list[ProcessContainerHandle]:
         """List all managed container handles."""

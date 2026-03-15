@@ -186,19 +186,6 @@ def _get_disk_bytes() -> int:
         return 100 * 1024**3  # Default 100GB
 
 
-def collect_workdir_size_mb(workdir: Path) -> int:
-    """Return used space in MB on the filesystem containing workdir.
-
-    Uses shutil.disk_usage (O(1) statvfs) instead of du (O(files)).
-    When workdir is on its own tmpfs mount, this gives per-task usage.
-    On shared filesystems, this reports whole-disk usage as an approximation.
-    """
-    if not workdir.exists():
-        return 0
-    usage = shutil.disk_usage(workdir)
-    return int(usage.used / (1024 * 1024))
-
-
 def _build_worker_attributes(
     *,
     accelerator_type: int,
