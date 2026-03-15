@@ -260,7 +260,34 @@ def write_token_store(
 ) -> None:
     """Write a deterministic fixed-length token store to disk."""
 
-    store_path = Path(store_dir)
+    store_dir_str = str(store_dir).rstrip("/")
+    if "://" in store_dir_str:
+        with tempfile.TemporaryDirectory(prefix="jpeg_token_store_write_") as temp_dir:
+            temp_store_path = Path(temp_dir)
+            _write_token_store_local(
+                temp_store_path,
+                metadata=metadata,
+                split_tokens=split_tokens,
+                split_records=split_records,
+            )
+            _upload_token_store_to_remote(temp_store_path, remote_store_dir=store_dir_str)
+        return
+
+    _write_token_store_local(
+        Path(store_dir_str),
+        metadata=metadata,
+        split_tokens=split_tokens,
+        split_records=split_records,
+    )
+
+
+def _write_token_store_local(
+    store_path: Path,
+    *,
+    metadata: TokenStoreMetadata,
+    split_tokens: dict[str, np.ndarray],
+    split_records: dict[str, Sequence[TokenSequenceRecord]],
+) -> None:
     store_path.mkdir(parents=True, exist_ok=True)
 
     metadata_path = store_path / "metadata.json"
@@ -284,6 +311,19 @@ def write_token_store(
             for record in records:
                 json.dump(asdict(record), handle, sort_keys=True)
                 handle.write("\n")
+
+
+def _upload_token_store_to_remote(local_store_path: Path, *, remote_store_dir: str) -> None:
+    fs, remote_root = fsspec.core.url_to_fs(remote_store_dir)
+    if remote_root:
+        fs.makedirs(remote_root, exist_ok=True)
+
+    for local_file in local_store_path.iterdir():
+        if not local_file.is_file():
+            continue
+        remote_path = f"{remote_root}/{local_file.name}" if remote_root else local_file.name
+        with local_file.open("rb") as src, fs.open(remote_path, "wb") as dst:
+            shutil.copyfileobj(src, dst)
 
 
 def _copy_remote_file(fs, remote_path: str, local_path: Path) -> None:

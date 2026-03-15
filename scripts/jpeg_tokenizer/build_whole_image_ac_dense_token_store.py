@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import logging
 from dataclasses import asdict, replace
-from pathlib import Path
 
 import numpy as np
 from datasets import load_dataset
@@ -59,7 +58,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    output_dir = Path(args.output_dir)
+    output_dir = args.output_dir.rstrip("/")
 
     tokenizer_config = replace(V0_AC_DENSE_CONFIG, source=CoefficientTokenSource(args.source))
     blocks_per_axis = V0_CANONICAL_JPEG_CONFIG.resolution // 8

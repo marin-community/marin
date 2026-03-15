@@ -3,6 +3,7 @@
 
 import asyncio
 import cloudpickle
+import fsspec
 import json
 import logging
 import uuid
@@ -387,6 +388,43 @@ def test_file_backed_token_store_round_trip(tmp_path):
     validation_sets = data_config.validation_grug_sets(seq_len=4)
     first_example = asyncio.run(validation_sets["jpeg_tokens"].get_batch([0]))
     assert first_example[0].tokens.tolist() == [9, 10, 11, 12]
+
+
+def test_write_token_store_supports_fsspec_remote_paths():
+    store_dir = f"memory://jpeg-tokenizer-store-{uuid.uuid4().hex}"
+    metadata = TokenStoreMetadata(
+        dataset="dummy",
+        dataset_config="v0",
+        image_column="image",
+        vocab_size=4095,
+        seq_len=4,
+        canonical_config={"resolution": 256},
+        tokenizer_config={"zigzag_coefficients": 4},
+        splits={
+            "train": TokenStoreSplitInfo(
+                num_examples=1,
+                seq_len=4,
+                tokens_path="train_tokens.npy",
+                manifest_path="train_manifest.jsonl",
+            ),
+        },
+    )
+    split_tokens = {
+        "train": np.asarray([[1, 2, 3, 4]], dtype=np.int32),
+    }
+    split_records = {
+        "train": [
+            TokenSequenceRecord(example_id="train:0", split="train", num_tokens=4, checksum="a", source_index=0),
+        ],
+    }
+    write_token_store(store_dir, metadata=metadata, split_tokens=split_tokens, split_records=split_records)
+
+    fs, store_path = fsspec.core.url_to_fs(store_dir)
+    metadata_path = f"{store_path}/metadata.json" if store_path else "metadata.json"
+    assert fs.exists(metadata_path)
+    with fs.open(metadata_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    assert payload["vocab_size"] == 4095
 
 
 def test_file_backed_token_store_uses_loss_mask_ignore_id_from_metadata(tmp_path):
