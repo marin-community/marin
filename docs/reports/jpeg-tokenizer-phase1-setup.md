@@ -1125,3 +1125,48 @@ This suggests a non-monotonic reset tradeoff in this setup:
 - frequent resets materially reduce semantic corruption amplification
 - very sparse resets can be worse than no resets for semantic tail stability, likely because rare mode markers become
   high-impact single points of failure when perturbed
+
+## Synthetic Transformer Check (`r1`)
+
+To validate the synthetic mechanism result with a learned model, we added:
+
+- script:
+  `scripts/jpeg_tokenizer/evaluate_synthetic_tokenizer_transformer.py`
+
+Medium run (`3` variants, `d_model=96`, `3` layers, `200` steps):
+
+- output:
+  `artifacts/jpeg_tokenizer/analysis/synthetic_tokenizer_transformer_r1`
+- variants:
+  `run_joint`, `run_shared`, `run_shared_reset_32`
+- perturb mode:
+  `any` token near fraction `0.5`
+
+From `r1`, semantic tail hamming was:
+
+- `run_joint`: `0.008`
+- `run_shared`: `0.057`
+- `run_shared_reset_32`: `0.071`
+
+This looked inconsistent with the reset hypothesis, but we confirmed a perturbation-location confound:
+
+- at fraction `0.5`, `run_shared_reset_32` has many mode-marker tokens at candidate positions
+- mode-marker corruption is disproportionately destructive in decoded event space
+
+So we reran with perturbation restricted to value tokens only:
+
+- output:
+  `artifacts/jpeg_tokenizer/analysis/synthetic_tokenizer_transformer_r2_valueonly`
+- perturb mode:
+  `value_only`
+
+Value-only semantic tail hamming:
+
+- `run_joint`: `0.008`
+- `run_shared`: `0.057`
+- `run_shared_reset_32`: `0.026`
+
+This restores the expected qualitative pattern under a learned transformer:
+
+- context-dependent shared-value tokens are much more semantically fragile than fixed-semantic joint tokens
+- periodic resets materially mitigate that fragility once perturbation type is controlled
