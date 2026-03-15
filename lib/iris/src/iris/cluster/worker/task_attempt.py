@@ -32,9 +32,10 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.types import (
     JobName,
+    TaskAttempt as TaskAttemptIdentity,
     is_task_finished,
 )
-from iris.cluster.worker.bundle_cache import BundleProvider
+from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.log_store import LogCursor, LogStore, task_log_key
@@ -118,11 +119,18 @@ class TaskCancelled(Exception):
 class TaskAttemptConfig:
     """Immutable configuration for a task attempt, derived from the RPC request."""
 
-    task_id: JobName
+    task_attempt: TaskAttemptIdentity
     num_tasks: int
-    attempt_id: int
     request: cluster_pb2.Worker.RunTaskRequest
     cache_dir: Path
+
+    @property
+    def task_id(self) -> JobName:
+        return self.task_attempt.task_id
+
+    @property
+    def attempt_id(self) -> int:
+        return self.task_attempt.require_attempt()
 
 
 def _get_host_ip() -> str:
@@ -162,12 +170,9 @@ def build_iris_env(
     env = {}
 
     # N.B. This needs to mirror JobInfo.from_env()
-    # XXX: Should we move this code there instead?
-    # Core task metadata
-    env["IRIS_JOB_ID"] = task.task_id.to_wire()
+    env["IRIS_TASK_ID"] = task.task_attempt.to_wire()
     env["IRIS_NUM_TASKS"] = str(task.num_tasks)
-    env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
-    env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
+    env["IRIS_BUNDLE_ID"] = task.request.bundle_id
 
     if worker_id:
         env["IRIS_WORKER_ID"] = worker_id
@@ -176,10 +181,7 @@ def build_iris_env(
         # With --network=host, containers share the host's network directly,
         # so no address rewriting is needed.
         env["IRIS_CONTROLLER_ADDRESS"] = controller_address
-
-    # Inject bundle path for sub-task inheritance
-    if task.request.bundle_gcs_path:
-        env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
+        env["IRIS_CONTROLLER_URL"] = controller_address
 
     # With --network=host, containers share the host's network stack.
     # Compute the host's routable IP so container code can read it via
@@ -240,7 +242,7 @@ class TaskAttempt:
     def __init__(
         self,
         config: TaskAttemptConfig,
-        bundle_provider: BundleProvider,
+        bundle_store: BundleStore,
         container_runtime: ContainerRuntime,
         worker_metadata: WorkerMetadata,
         worker_id: str | None,
@@ -249,7 +251,6 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str],
         port_allocator: PortAllocator,
-        report_state: Callable[[], None],
         log_store: LogStore,
         poll_interval_seconds: float = 5.0,
     ):
@@ -261,7 +262,7 @@ class TaskAttempt:
 
         Args:
             config: Immutable configuration for this attempt
-            bundle_provider: Provider for downloading code bundles
+            bundle_store: Bundle store for resolving task bundles
             container_runtime: Runtime for creating and managing containers
             worker_metadata: Worker's hardware/environment metadata
             worker_id: Worker identifier for env injection
@@ -271,11 +272,10 @@ class TaskAttempt:
             resolve_image: Resolves image tags for the current platform
                 (e.g. GHCR→AR rewriting on GCP). Zone is pre-bound by the worker.
             port_allocator: Port allocator for releasing ports on cleanup
-            report_state: Callback to report task state changes to Worker
             log_store: Shared LogStore for appending and querying task logs.
             poll_interval_seconds: How often to poll container status
         """
-        self._bundle_provider = bundle_provider
+        self._bundle_store = bundle_store
         self._runtime = container_runtime
         self._worker_metadata = worker_metadata
         self._worker_id = worker_id
@@ -284,12 +284,12 @@ class TaskAttempt:
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image
         self._port_allocator = port_allocator
-        self._report_state = report_state
         self._poll_interval_seconds = poll_interval_seconds
         self._log_store = log_store
-        self._log_key = task_log_key(config.task_id, config.attempt_id)
+        self._log_key = task_log_key(config.task_attempt)
 
         # Task identity (from config)
+        self.task_attempt: TaskAttemptIdentity = config.task_attempt
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
@@ -336,8 +336,26 @@ class TaskAttempt:
         """Return recent logs for this task attempt."""
         return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
 
-    def drain_heartbeat_logs(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
-        """Return log entries appended since the last call, for delta forwarding."""
+    def drain_heartbeat_logs(self, max_entries: int = 5000, final: bool = False) -> list[logging_pb2.LogEntry]:
+        """Return log entries appended since the last call, for delta forwarding.
+
+        Args:
+            max_entries: Maximum number of entries to return per call.
+            final: When True (terminal heartbeat), reads all pending entries and
+                truncates locally to *max_entries* with a marker.  When False
+                (normal heartbeat), uses the bounded cursor so undelivered rows
+                remain available for subsequent heartbeats.
+        """
+        if final:
+            entries = self._heartbeat_cursor.read(max_entries=0)
+            if len(entries) > max_entries:
+                marker = logging_pb2.LogEntry(
+                    source="iris",
+                    data=f"<logs truncated — {len(entries) - max_entries} earlier entries exceeded heartbeat log quota>",
+                )
+                marker.timestamp.epoch_ms = entries[-max_entries].timestamp.epoch_ms
+                entries = [marker, *entries[-max_entries:]]
+            return entries
         return self._heartbeat_cursor.read(max_entries=max_entries)
 
     def stop(self, force: bool = False) -> None:
@@ -459,7 +477,7 @@ class TaskAttempt:
 
         The lifecycle is:
         0. Setup: allocate ports, create workdir
-        1. Download bundle from GCS
+        1. Download bundle by bundle ID
         2. Resolve base image
         3. Create container handle
         4. Build phase: run setup_commands (uv sync) - BUILDING state
@@ -497,8 +515,6 @@ class TaskAttempt:
             self._append_log(source="error", data=f"Task failed:\n{error_msg}")
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
-            if is_task_finished(self.status):
-                self._report_state()
             self._cleanup()
             logger.info(
                 "TaskAttempt finished: task_id=%s attempt=%s state=%s exit_code=%s",
@@ -509,7 +525,7 @@ class TaskAttempt:
             )
 
     def _download_bundle(self) -> None:
-        """Download the code bundle from GCS.
+        """Stage the code bundle from the configured bundle ID.
 
         Transitions task to BUILDING state and performs chaos injection checks
         for testing delayed builds.
@@ -517,7 +533,6 @@ class TaskAttempt:
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
         self._building_start_monotonic = time.monotonic()
-        self._report_state()  # Report BUILDING state to controller
 
         download_start = time.monotonic()
 
@@ -531,15 +546,16 @@ class TaskAttempt:
         # Periodically check should_stop during download to support kill during BUILDING
         # (RF-3: For now, we defer kill handling until container starts, as bundle
         # downloads are typically fast. Future work could add cancellation support
-        # to BundleProvider.get_bundle if long downloads become a problem.)
+        # to BundleStore.extract_bundle_to if long downloads become a problem.)
 
         assert self.workdir is not None
         self._runtime.stage_bundle(
-            bundle_gcs_path=self.request.bundle_gcs_path,
+            bundle_id=self.request.bundle_id,
             workdir=self.workdir,
             workdir_files=dict(self.request.entrypoint.workdir_files),
-            fetch_bundle=lambda path: self._bundle_provider.get_bundle(path, expected_hash=None),
+            bundle_store=self._bundle_store,
         )
+
         logger.info(
             "Bundle staged for task %s in %.2fs",
             self.task_id,
@@ -570,6 +586,15 @@ class TaskAttempt:
             self._controller_address,
         )
         env = dict(iris_env)
+
+        # Expose the worker's region so child jobs can inherit a region
+        # constraint (e.g. when the parent holds a reservation).
+        from iris.cluster.constraints import WellKnownAttribute
+
+        region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
+        if region_attr and region_attr.string_value:
+            env["IRIS_WORKER_REGION"] = region_attr.string_value
+
         env.update(self._default_task_env)
         env.update(dict(self.request.environment.env_vars))
 
@@ -634,7 +659,6 @@ class TaskAttempt:
         if self.request.entrypoint.setup_commands:
             self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
             self.build_started = Timestamp.now()
-            self._report_state()
 
         build_logs = self._container_handle.build()
 
@@ -665,8 +689,11 @@ class TaskAttempt:
         Streams logs incrementally into task.logs (single source of truth).
         Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
         Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
+
+        Profiling is handled centrally by the controller's profile loop thread.
         """
         assert self._container_handle is not None
+        assert self.workdir is not None
         handle = self._container_handle
 
         # Create deadline from timeout if specified (0 or unset means no timeout)
@@ -676,7 +703,14 @@ class TaskAttempt:
             deadline = Deadline.from_seconds(timeout_seconds)
 
         log_reader = handle.log_reader()
+        self._monitor_loop(handle, log_reader, deadline)
 
+    def _monitor_loop(
+        self,
+        handle: ContainerHandle,
+        log_reader: RuntimeLogReader,
+        deadline: Deadline | None,
+    ) -> None:
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
@@ -709,7 +743,6 @@ class TaskAttempt:
                 building_duration = time.monotonic() - self._building_start_monotonic
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
                 self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
-                self._report_state()
 
             if status.phase == ContainerPhase.STOPPED:
                 logger.info(

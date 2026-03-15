@@ -5,13 +5,18 @@
 
 import logging
 import time
+import uuid
+
+from collections.abc import Iterable
+
+from connectrpc.errors import ConnectError
+from connectrpc.interceptor import InterceptorSync
 
 from iris.cluster.client.protocol import TaskStateLogger
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, adjust_tpu_replicas, is_job_finished
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from connectrpc.errors import ConnectError
 from iris.rpc.errors import call_with_retry, format_connect_error
 from iris.time_utils import Deadline, Duration, ExponentialBackoff
 
@@ -27,25 +32,28 @@ class RemoteClusterClient:
     def __init__(
         self,
         controller_address: str,
-        bundle_gcs_path: str | None = None,
+        bundle_id: str | None = None,
         bundle_blob: bytes | None = None,
         timeout_ms: int = 30000,
+        interceptors: Iterable[InterceptorSync] = (),
     ):
         """Initialize RPC cluster operations.
 
         Args:
             controller_address: Controller URL (e.g., "http://localhost:8080")
-            bundle_gcs_path: GCS path to workspace bundle for job inheritance
+            bundle_id: Workspace bundle identifier for job inheritance
             bundle_blob: Workspace bundle as bytes (for initial job submission)
             timeout_ms: RPC timeout in milliseconds
+            interceptors: Client-side interceptors (e.g. AuthTokenInjector for token auth)
         """
         self._address = controller_address
-        self._bundle_gcs_path = bundle_gcs_path
+        self._bundle_id = bundle_id
         self._bundle_blob = bundle_blob
         self._timeout_ms = timeout_ms
         self._client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=timeout_ms,
+            interceptors=interceptors,
         )
 
     def submit_job(
@@ -63,6 +71,8 @@ class RemoteClusterClient:
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
         reservation: cluster_pb2.ReservationConfig | None = None,
+        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -84,10 +94,11 @@ class RemoteClusterClient:
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
-            fail_if_exists=False,
+            preemption_policy=preemption_policy,
+            existing_job_policy=existing_job_policy,
         )
-        if self._bundle_gcs_path:
-            request.bundle_gcs_path = self._bundle_gcs_path
+        if self._bundle_id:
+            request.bundle_id = self._bundle_id
         else:
             request.bundle_blob = self._bundle_blob or b""
 
@@ -251,16 +262,23 @@ class RemoteClusterClient:
         self,
         name: str,
         address: str,
-        job_id: JobName,
+        task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
     ) -> str:
+        endpoint_id = str(uuid.uuid4())
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
-            job_id=job_id.to_wire(),
+            task_id=task_attempt.task_id.to_wire(),
+            attempt_id=task_attempt.attempt_id if task_attempt.attempt_id is not None else 0,
             metadata=metadata or {},
+            endpoint_id=endpoint_id,
         )
-        response = self._client.register_endpoint(request)
+
+        def _call():
+            return self._client.register_endpoint(request)
+
+        response = call_with_retry("register_endpoint", _call)
         return response.endpoint_id
 
     def unregister_endpoint(self, endpoint_id: str) -> None:

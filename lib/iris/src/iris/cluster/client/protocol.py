@@ -5,7 +5,7 @@
 
 from typing import Protocol
 
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, JobName, TaskAttempt
 from iris.rpc import cluster_pb2
 from iris.time_utils import Duration
 
@@ -52,6 +52,9 @@ class ClusterClient(Protocol):
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
         timeout: Duration | None = None,
+        reservation: cluster_pb2.ReservationConfig | None = None,
+        preemption_policy: cluster_pb2.JobPreemptionPolicy = cluster_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: cluster_pb2.ExistingJobPolicy = cluster_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
     ) -> None: ...
 
     def get_job_status(self, job_id: JobName) -> cluster_pb2.JobStatus: ...
@@ -81,7 +84,7 @@ class ClusterClient(Protocol):
         self,
         name: str,
         address: str,
-        job_id: JobName,
+        task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
     ) -> str: ...
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
-from iris.cluster.types import JobName
+from iris.cluster.types import TaskAttempt
 from iris.logging import str_to_log_level
 from iris.rpc import logging_pb2
 
@@ -50,9 +50,10 @@ def _escape_like(s: str) -> str:
 PROCESS_LOG_KEY = "/system/process"
 
 
-def task_log_key(task_id: JobName, attempt_id: int) -> str:
+def task_log_key(task_attempt: TaskAttempt) -> str:
     """Build a hierarchical key for task attempt logs."""
-    return f"{task_id.to_wire()}:{attempt_id}"
+    task_attempt.require_attempt()
+    return task_attempt.to_wire()
 
 
 @dataclass
@@ -68,24 +69,34 @@ class LogStore:
     allows readers to proceed without blocking the writer.
     """
 
-    def __init__(self, log_dir: Path | None = None, *, max_records: int = _MAX_RECORDS):
+    def __init__(
+        self,
+        log_dir: Path | None = None,
+        *,
+        db_path: Path | None = None,
+        max_records: int = _MAX_RECORDS,
+    ):
         self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
-        if log_dir is not None:
+        if db_path is not None:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_path_str = str(db_path)
+        elif log_dir is not None:
             log_dir.mkdir(parents=True, exist_ok=True)
-            db_path = str(log_dir / "logs.db")
+            db_path_str = str(log_dir / "logs.db")
         else:
             self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_controller_logs_")
-            db_path = str(Path(self._temp_dir.name) / "logs.db")
+            db_path_str = str(Path(self._temp_dir.name) / "logs.db")
 
         # Separate connections for writers and readers so WAL concurrency
         # actually works: readers never block the writer and vice-versa.
-        self._write_conn = self._make_conn(db_path)
+        self._write_conn = self._make_conn(db_path_str)
         self._write_conn.executescript(_SCHEMA)
         self._write_conn.commit()
 
-        self._read_conn = self._make_conn(db_path)
+        self._read_conn = self._make_conn(db_path_str)
 
         self._write_lock = Lock()
+        self._read_lock = Lock()
         self._max_records = max_records
         self._rows_since_eviction_check = 0
         self._eviction_check_interval = max_records // 10
@@ -170,22 +181,24 @@ class LogStore:
 
         if tail and max_lines > 0:
             params.append(max_lines)
-            rows = self._read_conn.execute(
-                f"SELECT id, source, data, epoch_ms, level FROM logs "
-                f"WHERE key = ? AND id > ?{where_extra} ORDER BY id DESC LIMIT ?",
-                params,
-            ).fetchall()
+            with self._read_lock:
+                rows = self._read_conn.execute(
+                    f"SELECT id, source, data, epoch_ms, level FROM logs "
+                    f"WHERE key = ? AND id > ?{where_extra} ORDER BY id DESC LIMIT ?",
+                    params,
+                ).fetchall()
             rows.reverse()
         else:
             limit_clause = ""
             if max_lines > 0:
                 limit_clause = " LIMIT ?"
                 params.append(max_lines)
-            rows = self._read_conn.execute(
-                f"SELECT id, source, data, epoch_ms, level FROM logs "
-                f"WHERE key = ? AND id > ?{where_extra} ORDER BY id{limit_clause}",
-                params,
-            ).fetchall()
+            with self._read_lock:
+                rows = self._read_conn.execute(
+                    f"SELECT id, source, data, epoch_ms, level FROM logs "
+                    f"WHERE key = ? AND id > ?{where_extra} ORDER BY id{limit_clause}",
+                    params,
+                ).fetchall()
 
         if not rows:
             return LogReadResult(entries=[], cursor=cursor)
@@ -202,6 +215,7 @@ class LogStore:
         since_ms: int = 0,
         substring_filter: str = "",
         max_lines: int = 0,
+        tail: bool = False,
         min_level: str = "",
         shallow: bool = False,
     ) -> LogReadResult:
@@ -210,6 +224,8 @@ class LogStore:
         All filtering is pushed into SQL so LIMIT works correctly.
 
         Args:
+            tail: If True and max_lines > 0, return the *last* N entries instead
+                  of the first N (uses DESC ordering then reverses).
             shallow: If True, only match keys one level deep (no nested '/' after prefix).
                      This excludes child job logs when fetching by job prefix.
         """
@@ -230,35 +246,45 @@ class LogStore:
             where += " AND (level = 0 OR level >= ?)"
             params.append(min_level_enum)
 
-        limit_clause = ""
-        if max_lines > 0:
-            limit_clause = " LIMIT ?"
+        if tail and max_lines > 0:
             params.append(max_lines)
+            with self._read_lock:
+                rows = self._read_conn.execute(
+                    f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id DESC LIMIT ?",
+                    params,
+                ).fetchall()
+            rows.reverse()
+        else:
+            limit_clause = ""
+            if max_lines > 0:
+                limit_clause = " LIMIT ?"
+                params.append(max_lines)
 
-        rows = self._read_conn.execute(
-            f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
-            params,
-        ).fetchall()
+            with self._read_lock:
+                rows = self._read_conn.execute(
+                    f"SELECT id, key, source, data, epoch_ms, level FROM logs {where} ORDER BY id{limit_clause}",
+                    params,
+                ).fetchall()
 
         max_id = max((r[0] for r in rows), default=cursor)
         entries = []
         for r in rows:
-            # Parse attempt_id from key: key format is "task_wire:attempt_id"
+            # Parse attempt_id from key using TaskAttempt wire format: "/user/job/0:attempt_id"
             key = r[1]
-            colon = key.rfind(":")
-            attempt_id = int(key[colon + 1 :]) if colon >= 0 else 0
+            parsed = TaskAttempt.from_wire(key)
             entry = logging_pb2.LogEntry(source=r[2], data=r[3], level=r[5])
             entry.timestamp.epoch_ms = r[4]
-            entry.attempt_id = attempt_id
+            entry.attempt_id = parsed.attempt_id if parsed.attempt_id is not None else 0
             entries.append(entry)
 
         return LogReadResult(entries=entries, cursor=max_id)
 
     def has_logs(self, key: str) -> bool:
-        row = self._read_conn.execute(
-            "SELECT 1 FROM logs WHERE key = ? LIMIT 1",
-            (key,),
-        ).fetchone()
+        with self._read_lock:
+            row = self._read_conn.execute(
+                "SELECT 1 FROM logs WHERE key = ? LIMIT 1",
+                (key,),
+            ).fetchone()
         return row is not None
 
     def clear(self, key: str) -> None:
@@ -290,6 +316,10 @@ class LogStore:
         Uses MAX(id) - MIN(id) as a cheap approximation of row count (autoincrement
         IDs are nearly contiguous since we only delete from the bottom). Evicts down
         to max_records // 2 so we don't pay eviction cost on every subsequent append.
+
+        After bulk deletion we truncate the WAL to prevent it from growing unboundedly.
+        Without this, the DELETE pages accumulate in the WAL and the next automatic
+        checkpoint stalls the writer while flushing gigabytes of data.
         """
         row = self._write_conn.execute("SELECT MIN(id), MAX(id) FROM logs").fetchone()
         min_id, max_id = row
@@ -298,10 +328,17 @@ class LogStore:
         approx_count = max_id - min_id + 1
         if approx_count <= self._max_records:
             return
-        # Keep the most recent max_records // 2 rows.
-        cutoff = max_id - (self._max_records // 2)
-        self._write_conn.execute("DELETE FROM logs WHERE id <= ?", (cutoff,))
-        self._write_conn.commit()
+        # Keep the most recent max_records // 2 rows. Delete in batches to
+        # avoid a single enormous transaction that bloats the WAL.
+        target_cutoff = max_id - (self._max_records // 2)
+        batch_size = 100_000
+        cursor = min_id - 1
+        while cursor < target_cutoff:
+            batch_end = min(cursor + batch_size, target_cutoff)
+            self._write_conn.execute("DELETE FROM logs WHERE id > ? AND id <= ?", (cursor, batch_end))
+            self._write_conn.commit()
+            self._write_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            cursor = batch_end
 
 
 class LogCursor:

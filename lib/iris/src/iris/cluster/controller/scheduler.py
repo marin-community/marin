@@ -10,7 +10,7 @@ be in BUILDING state on each worker, preventing resource exhaustion.
 
 The scheduler operates exclusively on scheduler-owned types (JobRequirements,
 WorkerCapacity, SchedulingContext) and has ZERO runtime imports from controller
-state. The boundary conversion from ControllerWorker to WorkerCapacity happens
+state. The boundary conversion from worker rows to WorkerCapacity happens
 via the WorkerSnapshot protocol in create_scheduling_context.
 """
 
@@ -59,8 +59,8 @@ spare CPU can absorb multiple tasks, preventing false demand signals.
 class WorkerSnapshot(Protocol):
     """What the scheduler needs from a worker to build a capacity snapshot.
 
-    This protocol decouples the scheduler from ControllerWorker. Any object
-    exposing these fields can be used (ControllerWorker satisfies this).
+    This protocol decouples the scheduler from a concrete worker row type. Any object
+    exposing these fields can be used.
     """
 
     worker_id: WorkerId
@@ -714,7 +714,7 @@ class Scheduler:
         """Create a scheduling context for the given workers.
 
         This is the boundary conversion point: accepts WorkerSnapshot-compatible
-        objects (e.g. ControllerWorker) and converts them to scheduler-internal types.
+        objects (e.g. worker rows) and converts them to scheduler-internal types.
 
         Args:
             workers: Workers to include (any objects satisfying WorkerSnapshot)

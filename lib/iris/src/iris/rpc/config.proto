@@ -257,8 +257,20 @@ message WorkerConfig {
   iris.time.Duration poll_interval = 40;
   iris.time.Duration heartbeat_timeout = 41;
 
+  // Iris slice_id; used by multi-VM slices (TPU) to construct worker_id
+  // from slice_id + TPU worker index so registration IDs match platform IDs.
+  string slice_id = 8;
+
   // Platform config (for image resolution — worker creates lightweight platform)
   PlatformConfig platform = 50;
+
+  // Storage prefix for task artifacts (profiles). Injected by the controller
+  // from the resolved remote_state_dir. Empty disables profile upload.
+  string storage_prefix = 60;
+
+  // Bearer token for worker→controller authentication.
+  // Set by the controller when auth is enabled; empty when auth is disabled.
+  string auth_token = 70;
 }
 
 // SSH configuration for manual hosts
@@ -274,7 +286,11 @@ message SshConfig {
 // ============================================================================
 
 message StorageConfig {
-  string bundle_prefix = 1;  // URI prefix for job bundles (e.g. s3://iris/bundles, gs://bucket/path)
+  string local_state_dir = 1;      // Local directory for controller DB, logs, bundle cache.
+                                    // Must be on a volume that survives container restarts.
+                                    // Default: /var/cache/iris/controller
+  string remote_state_dir = 2;     // Remote URI for controller checkpoints and worker profiles
+                                    // (e.g. gs://bucket/iris/state). Required for production.
 }
 
 // ============================================================================
@@ -327,7 +343,7 @@ message ControllerVmConfig {
 message AutoscalerConfig {
   iris.time.Duration evaluation_interval = 1;  // Default: 10s
   iris.time.Duration scale_up_delay = 3;       // Default: 60s
-  iris.time.Duration scale_down_delay = 4;     // Default: 300s
+  iris.time.Duration scale_down_delay = 4;     // Default: 600s (idle threshold before scale-down)
   iris.time.Duration startup_grace_period = 5; // Default: 30min — time for new slices to boot and register workers
   iris.time.Duration heartbeat_grace_period = 6; // Default: 5min — time after last worker heartbeat before reaping slice
 }
@@ -341,11 +357,35 @@ message DefaultsConfig {
 }
 
 // ============================================================================
+// AUTHENTICATION CONFIGURATION
+// ============================================================================
+
+message GcpAuthConfig {
+  string project_id = 1;  // GCP project ID — users must have access to this project to log in
+}
+
+message StaticAuthConfig {
+  // Map of token string → username. Useful for local dev and testing.
+  map<string, string> tokens = 1;
+}
+
+message AuthConfig {
+  oneof provider {
+    GcpAuthConfig gcp = 1;
+    StaticAuthConfig static = 2;
+  }
+  repeated string admin_users = 3;
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
 // Full cluster configuration - single source of truth
 message IrisClusterConfig {
+  // Human-readable cluster name for token store
+  string name = 5;
+
   // Platform settings
   PlatformConfig platform = 10;
   DefaultsConfig defaults = 11;
@@ -356,4 +396,7 @@ message IrisClusterConfig {
 
   // Scale groups (name -> config)
   map<string, ScaleGroupConfig> scale_groups = 50;
+
+  // Authentication (optional — when absent, no auth is required)
+  AuthConfig auth = 60;
 }

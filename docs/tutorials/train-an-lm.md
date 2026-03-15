@@ -97,6 +97,8 @@ Set up your training configuration by calculating the number of training steps a
     )
     ```
 
+If you hit HBM OOM while scaling model size, batch size, or sequence length, see [Making Things Fit in HBM](../references/hbm-optimization.md) for a practical tuning checklist.
+
 ## Creating the Training Pipeline
 
 Connect your model configuration, training parameters, and dataset to create a training pipeline:

@@ -16,6 +16,7 @@ import pytest
 from iris.cluster.controller.autoscaler import (
     AdditiveReq,
     Autoscaler,
+    DEFAULT_UNRESOLVABLE_TIMEOUT,
     DemandEntry,
     ScalingAction,
     ScalingDecision,
@@ -30,7 +31,7 @@ from iris.cluster.platform.base import (
     Labels,
     QuotaExhaustedError,
     SliceStatus,
-    WorkerStatus,
+    WorkerStatus as CloudWorkerStatus,
 )
 from iris.cluster.constraints import (
     Constraint,
@@ -43,7 +44,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.types import VmWorkerStatus
+from iris.cluster.types import WorkerStatus
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import Duration, Timestamp
 from tests.cluster.platform.fakes import FailureMode, FakePlatform, FakePlatformConfig
@@ -172,7 +173,7 @@ def make_mock_worker_handle(vm_id: str, address: str, state: vm_pb2.VmState, boo
     handle.internal_address = address
     handle.external_address = None
     handle.bootstrap_log = bootstrap_log
-    handle.status.return_value = WorkerStatus(state=_cloud_worker_state_from_iris(state))
+    handle.status.return_value = CloudWorkerStatus(state=_cloud_worker_state_from_iris(state))
     return handle
 
 
@@ -255,10 +256,10 @@ def make_mock_platform(
 
 
 def _mark_discovered_ready(group: ScalingGroup, handles: list[MagicMock], timestamp: Timestamp | None = None) -> None:
-    """Mark discovered slices as READY with their VM addresses."""
+    """Mark discovered slices as READY with their worker IDs."""
     for handle in handles:
-        vm_addresses = [w.internal_address for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, vm_addresses, timestamp=timestamp)
+        worker_ids = [w.worker_id for w in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, worker_ids, timestamp=timestamp)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> None:
@@ -268,7 +269,7 @@ def _mark_discovered_failed(group: ScalingGroup, handles: list[MagicMock]) -> No
 
 
 def _mark_all_slices_ready(group: ScalingGroup) -> None:
-    """Mark all tracked slices as READY with their VM addresses.
+    """Mark all tracked slices as READY with their worker IDs.
 
     Used after FakePlatform.tick() to simulate the bootstrap thread
     marking slices ready once VMs are running.
@@ -276,8 +277,8 @@ def _mark_all_slices_ready(group: ScalingGroup) -> None:
     for handle in group.slice_handles():
         desc = handle.describe()
         if desc.state == CloudSliceState.READY:
-            vm_addresses = [w.internal_address for w in desc.workers]
-            group.mark_slice_ready(handle.slice_id, vm_addresses)
+            worker_ids = [w.worker_id for w in desc.workers]
+            group.mark_slice_ready(handle.slice_id, worker_ids)
 
 
 @pytest.fixture
@@ -360,20 +361,12 @@ class TestAutoscalerScaleUp:
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
         assert decisions[0].scale_group == "test-group"
-        assert "required_slices=1 > capacity=0" in decisions[0].reason
+        assert "required_slices=1 > pending=0" in decisions[0].reason
 
     @pytest.mark.parametrize(
         "discovered,demand_count,reason",
         [
             ([make_mock_slice_handle(f"slice-{i}") for i in range(5)], 10, "at_max_slices"),
-            (
-                [
-                    make_mock_slice_handle("slice-001", all_ready=True),
-                    make_mock_slice_handle("slice-002", all_ready=True),
-                ],
-                2,
-                "capacity_meets_demand",
-            ),
             (
                 [
                     make_mock_slice_handle("slice-001", vm_states=[vm_pb2.VM_STATE_BOOTING]),
@@ -383,7 +376,7 @@ class TestAutoscalerScaleUp:
                 "pending_slices_count",
             ),
         ],
-        ids=["at_max_slices", "capacity_meets_demand", "pending_slices_count"],
+        ids=["at_max_slices", "pending_slices_count"],
     )
     def test_no_scale_up_when_condition_met(
         self, scale_group_config: config_pb2.ScaleGroupConfig, discovered: list, demand_count: int, reason: str
@@ -473,6 +466,29 @@ class TestAutoscalerScaleUp:
 
         assert len(decisions) == 0
 
+    def test_scale_up_when_ready_workers_full(self):
+        """Scales up when all ready workers are full and demand survives dry-run.
+
+        With 5 ready slices and 0 pending, a single unplaceable demand entry (which
+        survived the scheduler dry-run against all ready workers) must trigger scale-up.
+        The old comparison (required > ready+pending) would see 1 > 5 and deadlock.
+        The correct comparison (required > pending) sees 1 > 0 and scales up.
+        """
+        config = make_scale_group_config(name="test-group", max_slices=10)
+        discovered = [make_mock_slice_handle(f"slice-{i}", all_ready=True) for i in range(5)]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group.reconcile()
+        _mark_discovered_ready(group, discovered)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        decisions = autoscaler.evaluate(demand)
+
+        assert len(decisions) == 1
+        assert decisions[0].action == ScalingAction.SCALE_UP
+        assert "required_slices=1 > pending=0" in decisions[0].reason
+
 
 class TestAutoscalerScaleDown:
     """Tests for scale-down behavior (delegated to ScalingGroup)."""
@@ -499,11 +515,11 @@ class TestAutoscalerScaleDown:
         # Get VM addresses from the adapter
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.describe().workers[0].internal_address
-        slice_002_addr = slice_002.describe().workers[0].internal_address
+        slice_001_wid = slice_001.describe().workers[0].worker_id
+        slice_002_wid = slice_002.describe().workers[0].worker_id
         vm_status_map = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_001_wid: WorkerStatus(worker_id=slice_001_wid, running_task_ids=frozenset()),
+            slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset()),
         }
 
         # Timestamp must be past idle_threshold (1000ms) from when slices became ready
@@ -536,11 +552,11 @@ class TestAutoscalerScaleDown:
         demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.describe().workers[0].internal_address
-        slice_002_addr = slice_002.describe().workers[0].internal_address
+        slice_001_wid = slice_001.describe().workers[0].worker_id
+        slice_002_wid = slice_002.describe().workers[0].worker_id
         vm_status_map = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_001_wid: WorkerStatus(worker_id=slice_001_wid, running_task_ids=frozenset()),
+            slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset()),
         }
 
         autoscaler.run_once(demand, vm_status_map)
@@ -567,22 +583,23 @@ class TestAutoscalerScaleDown:
 
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        slice_001_addr = slice_001.describe().workers[0].internal_address
-        slice_002_addr = slice_002.describe().workers[0].internal_address
+        slice_001_wid = slice_001.describe().workers[0].worker_id
+        slice_002_wid = slice_002.describe().workers[0].worker_id
 
         vm_status_map_active = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset({"task-2"})),
+            slice_001_wid: WorkerStatus(worker_id=slice_001_wid, running_task_ids=frozenset({"task-1"})),
+            slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset({"task-2"})),
         }
         group.update_slice_activity(vm_status_map_active, timestamp=Timestamp.from_ms(1000))
 
-        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        # Use empty demand (simulating dry-run absorbed all tasks onto ready workers)
+        # to test that scale-down is blocked by idle_threshold, not scale-up.
         vm_status_map_idle = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
+            slice_001_wid: WorkerStatus(worker_id=slice_001_wid, running_task_ids=frozenset()),
+            slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset()),
         }
 
-        autoscaler.run_once(demand, vm_status_map_idle, timestamp=Timestamp.from_ms(100_000))
+        autoscaler.run_once([], vm_status_map_idle, timestamp=Timestamp.from_ms(100_000))
 
         assert group.slice_count() == 2
 
@@ -609,13 +626,13 @@ class TestAutoscalerScaleDown:
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
         slice_003 = group.get_slice("slice-003")
-        slice_001_addr = slice_001.describe().workers[0].internal_address
-        slice_002_addr = slice_002.describe().workers[0].internal_address
-        slice_003_addr = slice_003.describe().workers[0].internal_address
+        slice_001_wid = slice_001.describe().workers[0].worker_id
+        slice_002_wid = slice_002.describe().workers[0].worker_id
+        slice_003_wid = slice_003.describe().workers[0].worker_id
         vm_status_map = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
-            slice_003_addr: VmWorkerStatus(vm_address=slice_003_addr, running_task_ids=frozenset()),
+            slice_001_wid: WorkerStatus(worker_id=slice_001_wid, running_task_ids=frozenset()),
+            slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset()),
+            slice_003_wid: WorkerStatus(worker_id=slice_003_wid, running_task_ids=frozenset()),
         }
 
         # With rate_limit=1, only 1 slice should be scaled down per cycle
@@ -645,13 +662,13 @@ class TestAutoscalerScaleDown:
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
         slice_003 = group.get_slice("slice-003")
-        slice_001_addr = slice_001.describe().workers[0].internal_address
-        slice_002_addr = slice_002.describe().workers[0].internal_address
-        slice_003_addr = slice_003.describe().workers[0].internal_address
+        slice_001_wid = slice_001.describe().workers[0].worker_id
+        slice_002_wid = slice_002.describe().workers[0].worker_id
+        slice_003_wid = slice_003.describe().workers[0].worker_id
         vm_status_map = {
-            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
-            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
-            slice_003_addr: VmWorkerStatus(vm_address=slice_003_addr, running_task_ids=frozenset()),
+            slice_001_wid: WorkerStatus(worker_id=slice_001_wid, running_task_ids=frozenset()),
+            slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset()),
+            slice_003_wid: WorkerStatus(worker_id=slice_003_wid, running_task_ids=frozenset()),
         }
 
         # With rate_limit=5, all 3 idle slices should be scaled down in one cycle
@@ -746,8 +763,8 @@ class TestAutoscalerWorkerFailure:
         autoscaler = make_autoscaler({"test-group": group})
         _mark_discovered_ready(group, [mock_handle])
 
-        vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
-        autoscaler.notify_worker_failed(vm_address)
+        failed_worker_id = "slice-001-vm-0"
+        autoscaler.notify_worker_failed(failed_worker_id)
 
         assert group.slice_count() == 0
 
@@ -759,9 +776,70 @@ class TestAutoscalerWorkerFailure:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        autoscaler.notify_worker_failed("10.1.2.3")
+        autoscaler.notify_worker_failed("unknown-worker-99")
 
         assert group.slice_count() == 1
+
+    def test_notify_worker_failed_returns_sibling_worker_ids(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """notify_worker_failed() returns sibling worker IDs for multi-VM slices."""
+        # Create a slice with 4 VMs
+        mock_handle = make_mock_slice_handle(
+            "slice-001",
+            all_ready=True,
+            vm_states=[vm_pb2.VM_STATE_READY] * 4,
+        )
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+        _mark_discovered_ready(group, [mock_handle])
+
+        # Fail the first worker — should return 3 sibling worker IDs
+        failed_worker_id = "slice-001-vm-0"
+        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+
+        expected_siblings = [f"slice-001-vm-{i}" for i in range(1, 4)]
+        assert sorted(siblings) == sorted(expected_siblings)
+        assert group.slice_count() == 0
+
+    def test_notify_worker_failed_returns_empty_for_single_vm_slice(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """Single-VM slices return no siblings."""
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+        _mark_discovered_ready(group, [mock_handle])
+
+        failed_worker_id = "slice-001-vm-0"
+        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+
+        assert siblings == []
+
+    def test_notify_worker_failed_cleans_up_even_if_terminate_fails(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """notify_worker_failed() removes the slice even if terminate() raises.
+
+        Prevents ghost slices where a preempted/deleted cloud resource causes
+        terminate() to fail, leaving the slice tracked forever.
+        """
+        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
+        mock_handle.terminate.side_effect = RuntimeError("resource not found")
+        platform = make_mock_platform(slices_to_discover=[mock_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({"test-group": group})
+        _mark_discovered_ready(group, [mock_handle])
+
+        failed_worker_id = "slice-001-vm-0"
+        siblings = autoscaler.notify_worker_failed(failed_worker_id)
+
+        # Slice should be removed despite terminate() failure
+        assert group.slice_count() == 0
+        assert siblings == []
 
 
 class TestAutoscalerIdleVerification:
@@ -785,10 +863,10 @@ class TestAutoscalerIdleVerification:
         demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
 
         slice_001 = group.get_slice("slice-001")
-        slice_001_addr = slice_001.describe().workers[0].internal_address
+        slice_001_wid = slice_001.describe().workers[0].worker_id
         vm_status_map = {
-            slice_001_addr: VmWorkerStatus(
-                vm_address=slice_001_addr,
+            slice_001_wid: WorkerStatus(
+                worker_id=slice_001_wid,
                 running_task_ids=frozenset({"task-1"}),
             )
         }
@@ -1795,8 +1873,8 @@ class TestAutoscalerActionLogging:
         autoscaler = make_autoscaler({"test-group": group})
         _mark_discovered_ready(group, [mock_handle])
 
-        vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
-        autoscaler.notify_worker_failed(vm_address)
+        failed_worker_id = "slice-001-vm-0"
+        autoscaler.notify_worker_failed(failed_worker_id)
 
         status = autoscaler.get_status()
         actions_by_type = {a.action_type: a for a in status.recent_actions}
@@ -1804,7 +1882,7 @@ class TestAutoscalerActionLogging:
         action = actions_by_type["worker_failed"]
         assert action.scale_group == "test-group"
         assert action.slice_id == "slice-001"
-        assert vm_address in action.reason
+        assert failed_worker_id in action.reason
 
     def test_action_log_bounded_to_100_entries(self, empty_autoscaler: Autoscaler):
         """Verify action log is bounded to 100 entries."""
@@ -2437,8 +2515,8 @@ class TestGpuScaleGroupBugs:
         group.complete_scale_up(handle, ts)
 
         # Mark the slice as READY (simulates bootstrap completion)
-        vm_addresses = [w.internal_address for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, vm_addresses)
+        worker_ids = [w.worker_id for w in handle.describe().workers]
+        group.mark_slice_ready(handle.slice_id, worker_ids)
 
         # last_active should be initialized to at least the ready time
         with group._slices_lock:
@@ -2490,11 +2568,11 @@ class TestGpuScaleGroupBugs:
         # target_capacity = max(0, 0) = 0, ready=2 > 0 -> scaledown check runs
         slice_001 = group.get_slice("slice-001")
         slice_002 = group.get_slice("slice-002")
-        addr1 = slice_001.describe().workers[0].internal_address
-        addr2 = slice_002.describe().workers[0].internal_address
+        wid1 = slice_001.describe().workers[0].worker_id
+        wid2 = slice_002.describe().workers[0].worker_id
         vm_status_map = {
-            addr1: VmWorkerStatus(vm_address=addr1, running_task_ids=frozenset()),
-            addr2: VmWorkerStatus(vm_address=addr2, running_task_ids=frozenset()),
+            wid1: WorkerStatus(worker_id=wid1, running_task_ids=frozenset()),
+            wid2: WorkerStatus(worker_id=wid2, running_task_ids=frozenset()),
         }
 
         # Run 1 second after ready — well within the 5-minute idle_threshold.
@@ -2757,10 +2835,10 @@ class TestPackingRouting:
     """Tests for packing-aware routing and scaling decisions."""
 
     def test_packing_allows_multiple_cpu_tasks_per_vm(self):
-        """16 CPU tasks at 32GiB each pack into 4 VMs of 128GiB.
+        """16 CPU tasks at 32GiB each pack into 4 VMs of 128GiB → 1 slice.
 
-        With num_vms=4, that's exactly 1 slice. If 1 slice already exists,
-        no scale-up is needed.
+        Verifies that bin-packing computes required_slices=1 (not 16), and
+        that route_demand correctly determines 1 slice is needed.
         """
         config = make_scale_group_config(
             name="cpu-group",
@@ -2768,15 +2846,11 @@ class TestPackingRouting:
             num_vms=4,
             priority=10,
         )
-        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         group = ScalingGroup(
             config,
-            make_mock_platform(slices_to_discover=discovered),
+            make_mock_platform(),
             scale_up_cooldown=Duration.from_ms(0),
         )
-        group.reconcile()
-        _mark_discovered_ready(group, discovered)
-        autoscaler = make_autoscaler({"cpu-group": group})
 
         # 16 entries x 32GiB = 512GiB total. 4 VMs x 128GiB = 512GiB capacity.
         # Packing: 4 entries per VM → 4 VMs → ceil(4/4) = 1 slice needed.
@@ -2787,13 +2861,12 @@ class TestPackingRouting:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        decisions = autoscaler.evaluate(entries)
+        result = route_demand([group], entries)
 
-        assert len(decisions) == 0
-        assert group.current_demand == 1
+        assert result.group_required_slices.get("cpu-group") == 1
 
     def test_packing_prevents_cpu_walkup(self):
-        """CPU entries that pack within group A's capacity should not spill to group B."""
+        """CPU entries that pack within group A's budget should not spill to group B."""
         config_a = make_scale_group_config(
             name="group-a",
             max_slices=5,
@@ -2807,25 +2880,19 @@ class TestPackingRouting:
             priority=20,
         )
 
-        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         group_a = ScalingGroup(
             config_a,
-            make_mock_platform(slices_to_discover=discovered),
+            make_mock_platform(),
             scale_up_cooldown=Duration.from_ms(0),
         )
-        group_a.reconcile()
-        _mark_discovered_ready(group_a, discovered)
-
         group_b = ScalingGroup(
             config_b,
             make_mock_platform(),
             scale_up_cooldown=Duration.from_ms(0),
         )
 
-        autoscaler = make_autoscaler({"group-a": group_a, "group-b": group_b})
-
         # 8 entries at 32GiB each → 2 VMs needed → ceil(2/4) = 1 slice.
-        # Group A has 1 ready slice. No overflow to B.
+        # All demand routes to group A (higher priority). Nothing spills to B.
         entries = _make_big_demand_entries(
             8,
             cpu_millicores=32000,
@@ -2833,11 +2900,10 @@ class TestPackingRouting:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        decisions = autoscaler.evaluate(entries)
+        result = route_demand([group_a, group_b], entries)
 
-        assert len(decisions) == 0
-        assert group_a.current_demand == 1
-        assert group_b.current_demand == 0
+        assert result.group_required_slices.get("group-a") == 1
+        assert result.group_required_slices.get("group-b", 0) == 0
 
     def test_evaluate_uses_packed_capacity(self):
         """Scale-up triggers when packed demand exceeds existing capacity."""
@@ -2857,18 +2923,12 @@ class TestPackingRouting:
         _mark_discovered_ready(group, discovered)
         autoscaler = make_autoscaler({"test-group": group})
 
-        # 4 entries at 128GiB → 4 VMs → ceil(4/4) = 1 slice. Fits in 1 ready slice.
-        small_demand = _make_big_demand_entries(
-            4,
-            cpu_millicores=128000,
-            memory_bytes=128 * 1024**3,
-            device_type=DeviceType.TPU,
-            device_variants=frozenset({"v5p-8"}),
-        )
-        decisions = autoscaler.evaluate(small_demand)
+        # No demand → no scale up (all tasks absorbed by scheduler dry-run)
+        decisions = autoscaler.evaluate([])
         assert len(decisions) == 0
 
-        # 5 entries at 128GiB → 5 VMs → ceil(5/4) = 2 slices. Only 1 exists.
+        # 5 entries that survived dry-run → 5 VMs → ceil(5/4) = 2 slices needed.
+        # Scale-up compares against pending only (ready slices already tested by dry-run).
         big_demand = _make_big_demand_entries(
             5,
             cpu_millicores=128000,
@@ -2878,9 +2938,9 @@ class TestPackingRouting:
             task_prefix="big",
         )
         decisions = autoscaler.evaluate(big_demand)
-        assert len(decisions) == 1
-        assert decisions[0].action == ScalingAction.SCALE_UP
-        assert "required_slices=2 > capacity=1" in decisions[0].reason
+        assert len(decisions) == 2
+        assert all(d.action == ScalingAction.SCALE_UP for d in decisions)
+        assert "required_slices=2 > pending=0" in decisions[0].reason
 
     def test_scale_down_target_uses_packed_demand(self):
         """Scale-down uses packed required_slices, not entry count."""
@@ -2914,22 +2974,23 @@ class TestPackingRouting:
             device_variants=frozenset({"v5p-8"}),
         )
 
-        # First run to set current_demand (required_slices=1)
+        # Set current_demand (required_slices=1)
         autoscaler.evaluate(entries, timestamp=Timestamp.from_ms(2_000))
         assert group.current_demand == 1
 
-        # Now run_once with vm_status_map showing all VMs idle
+        # run_once with empty demand (simulating dry-run absorption) and all VMs idle.
+        # target_capacity = max(1, 0) = 1 (from current_demand set above).
         slice_0 = group.get_slice("slice-0")
         slice_1 = group.get_slice("slice-1")
-        addr_0 = slice_0.describe().workers[0].internal_address
-        addr_1 = slice_1.describe().workers[0].internal_address
+        wid_0 = slice_0.describe().workers[0].worker_id
+        wid_1 = slice_1.describe().workers[0].worker_id
         vm_status_map = {
-            addr_0: VmWorkerStatus(vm_address=addr_0, running_task_ids=frozenset()),
-            addr_1: VmWorkerStatus(vm_address=addr_1, running_task_ids=frozenset()),
+            wid_0: WorkerStatus(worker_id=wid_0, running_task_ids=frozenset()),
+            wid_1: WorkerStatus(worker_id=wid_1, running_task_ids=frozenset()),
         }
-        autoscaler.run_once(entries, vm_status_map, timestamp=Timestamp.from_ms(10_000))
+        autoscaler.run_once([], vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
-        # target_capacity = max(1, 0) = 1. One idle slice should be scaled down.
+        # One idle slice should be scaled down.
         assert group.slice_count() == 1
 
     def test_group_to_launch_uses_packing(self):
@@ -3695,3 +3756,78 @@ class TestCheckCoschedulingFeasibility:
         """Returns None when there are no groups (no validation possible)."""
         autoscaler = make_autoscaler({})
         assert autoscaler.check_coscheduling_feasibility(8, []) is None
+
+
+class TestAutoscalerUnresolvableTimeout:
+    """Tests for UNKNOWN slice → FAILED after timeout behavior."""
+
+    def _make_group_with_unknown_slice(
+        self, scale_group_config: config_pb2.ScaleGroupConfig, created_at_ms: int
+    ) -> tuple[Autoscaler, ScalingGroup, MagicMock]:
+        """Set up a group with one BOOTING slice that reports UNKNOWN state."""
+        handle = make_mock_slice_handle("slice-001", created_at_ms=created_at_ms)
+        handle.describe.return_value = SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[])
+
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        short_timeout = Duration.from_minutes(15)
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=short_timeout,
+        )
+        return autoscaler, group, handle
+
+    def test_unknown_before_timeout_stays_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice in UNKNOWN state before the timeout remains tracked (BOOTING)."""
+        created_at_ms = 0
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms)
+
+        # Refresh at 5 min — well under 15 min timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))
+
+        assert group.slice_count() == 1
+        assert group.ready_slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_unknown_after_timeout_triggers_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice in UNKNOWN state past the timeout is failed and removed."""
+        created_at_ms = 0
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms)
+
+        # Refresh at 16 min — past the 15 min timeout
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(16 * 60 * 1000))
+
+        assert group.slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_unknown_then_ready_before_timeout_recovers(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A slice that was UNKNOWN but becomes READY before timeout is marked ready."""
+        created_at_ms = 0
+        handle = make_mock_slice_handle("slice-001", created_at_ms=created_at_ms)
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=DEFAULT_UNRESOLVABLE_TIMEOUT,
+        )
+
+        # First refresh: UNKNOWN at 5 min → should stay BOOTING
+        handle.describe.return_value = SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[])
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))
+        assert group.slice_count() == 1
+
+        # Second refresh: READY before timeout
+        worker = make_mock_worker_handle("slice-001-vm-0", "10.0.1.0", vm_pb2.VM_STATE_READY)
+        handle.describe.return_value = SliceStatus(state=CloudSliceState.READY, worker_count=1, workers=[worker])
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(10 * 60 * 1000))
+
+        assert group.ready_slice_count() == 1
+        autoscaler.shutdown()
