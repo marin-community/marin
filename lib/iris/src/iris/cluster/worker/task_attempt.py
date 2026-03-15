@@ -472,6 +472,10 @@ class TaskAttempt:
         self.workdir = self._fast_io_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
 
+        # Let runtime set up backing storage (e.g. tmpfs mount) before staging
+        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
+        self._runtime.prepare_workdir(workdir=self.workdir, disk_bytes=disk_bytes)
+
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
 
@@ -844,6 +848,13 @@ class TaskAttempt:
             self._port_allocator.release(list(self.ports.values()))
         except Exception as e:
             logger.warning("Failed to release ports for task %s: %s", self.task_id, e)
+
+        # Tear down runtime backing storage (e.g. unmount tmpfs) before removing files
+        if self.workdir:
+            try:
+                self._runtime.cleanup_workdir(self.workdir)
+            except Exception as e:
+                logger.warning("Failed to cleanup runtime workdir for task %s at %s: %s", self.task_id, self.workdir, e)
 
         # Remove working directory
         if self.workdir and self.workdir.exists():

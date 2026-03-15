@@ -187,24 +187,16 @@ def _get_disk_bytes() -> int:
 
 
 def collect_workdir_size_mb(workdir: Path) -> int:
-    """Calculate workdir size in MB using du -sm."""
+    """Return used space in MB on the filesystem containing workdir.
+
+    Uses shutil.disk_usage (a single statvfs syscall) instead of du,
+    which is O(1) vs O(files). When workdir is on its own tmpfs mount,
+    this gives per-task usage.
+    """
     if not workdir.exists():
         return 0
-
-    result = subprocess.run(
-        ["du", "-sm", str(workdir)],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        return 0
-
-    # du -sm output format: "SIZE\tPATH"
-    output = result.stdout.strip()
-    size_str = output.split("\t")[0]
-
-    return int(size_str)
+    usage = shutil.disk_usage(workdir)
+    return int(usage.used / (1024 * 1024))
 
 
 def _build_worker_attributes(

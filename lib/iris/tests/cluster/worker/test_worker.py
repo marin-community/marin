@@ -156,6 +156,8 @@ def mock_runtime():
     runtime.list_iris_containers = Mock(return_value=[])
     runtime.remove_all_iris_containers = Mock(return_value=0)
     runtime.cleanup = Mock()
+    runtime.prepare_workdir = Mock()
+    runtime.cleanup_workdir = Mock()
     return runtime
 
 
