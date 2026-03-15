@@ -59,7 +59,7 @@ class _reset_abstract_mesh:
 class DummyModel(eqx.Module):
     w: jax.Array
 
-    def compute_next_token_loss(
+    def next_token_loss(
         self,
         token_ids: jax.Array,
         loss_weight: jax.Array,
@@ -251,7 +251,7 @@ def test_grug_base_loss_lowers_on_abstract_4_device_mesh(data: int, model: int):
             token_ids = jax.sharding.reshard(token_ids, Pbatch)
             loss_weight = jnp.ones((8, seq), dtype=jnp.float32)
             loss_weight = jax.sharding.reshard(loss_weight, Pbatch)
-            return p.compute_next_token_loss(token_ids, loss_weight, mask=GrugAttentionMask.causal(), reduction="mean")
+            return p.next_token_loss(token_ids, loss_weight, mask=GrugAttentionMask.causal(), reduction="mean")
 
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
         lowered = jax.jit(loss_fn).trace(params).lower(lowering_platforms=(platform,))

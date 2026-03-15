@@ -65,8 +65,10 @@ def dpo_loss_from_logps(
     return loss, metrics
 
 
-def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
-    nll = model.compute_next_token_loss(example, reduction=hax.sum, reduction_axis="position", key=key)
+def _logp_sum(model: LmHeadModel, example, *, key=None, axis_mapping=None) -> hax.NamedArray:
+    nll = model.compute_next_token_loss(
+        example, reduction=hax.sum, reduction_axis="position", key=key, axis_mapping=axis_mapping
+    )
     return -nll
 
 
@@ -277,11 +279,12 @@ def main(config: TrainDpoConfig):
             key_chosen = None
             key_rejected = None
 
-        logp_pi_chosen = _logp_sum(model.policy, example.chosen, key=key_chosen)
-        logp_pi_rejected = _logp_sum(model.policy, example.rejected, key=key_rejected)
+        axis_mapping = config.trainer.compute_axis_mapping
+        logp_pi_chosen = _logp_sum(model.policy, example.chosen, key=key_chosen, axis_mapping=axis_mapping)
+        logp_pi_rejected = _logp_sum(model.policy, example.rejected, key=key_rejected, axis_mapping=axis_mapping)
 
-        logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=key_chosen)
-        logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=key_rejected)
+        logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=key_chosen, axis_mapping=axis_mapping)
+        logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=key_rejected, axis_mapping=axis_mapping)
 
         delta_pi = logp_pi_chosen - logp_pi_rejected
         delta_ref = logp_ref_chosen - logp_ref_rejected
