@@ -832,15 +832,13 @@ class DockerRuntime:
                 result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
         return result
 
-    def create_container(
-        self, config: ContainerConfig, *, workdir_host_path: Path | None = None
-    ) -> DockerContainerHandle:
+    def create_container(self, config: ContainerConfig) -> DockerContainerHandle:
         """Create a container handle from config.
 
         The handle is not started - call handle.build() then handle.run()
         to execute the container.
         """
-        resolved = self.resolve_mounts(config.mounts, workdir_host_path=workdir_host_path)
+        resolved = self.resolve_mounts(config.mounts, workdir_host_path=config.workdir_host_path)
         handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)
         return handle

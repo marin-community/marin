@@ -275,7 +275,7 @@ def test_create_container_resolves_mounts(tmp_path):
         workdir_host_path=workdir,
     )
 
-    handle = runtime.create_container(config, workdir_host_path=workdir)
+    handle = runtime.create_container(config)
     assert len(handle._resolved_mounts) == 2
     assert handle._resolved_mounts[0].kind == MountKind.WORKDIR
     assert handle._resolved_mounts[0].host_path == str(workdir)
@@ -307,7 +307,7 @@ def test_cleanup_releases_workdir_and_tmpfs_mounts(tmp_path):
         workdir_host_path=workdir,
     )
 
-    handle = runtime.create_container(config, workdir_host_path=workdir)
+    handle = runtime.create_container(config)
     # Manually track which paths release_tmpfs was called on
     released: list[Path] = []
     original_release = runtime.release_tmpfs
