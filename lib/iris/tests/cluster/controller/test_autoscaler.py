@@ -361,20 +361,12 @@ class TestAutoscalerScaleUp:
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
         assert decisions[0].scale_group == "test-group"
-        assert "required_slices=1 > capacity=0" in decisions[0].reason
+        assert "required_slices=1 > pending=0" in decisions[0].reason
 
     @pytest.mark.parametrize(
         "discovered,demand_count,reason",
         [
             ([make_mock_slice_handle(f"slice-{i}") for i in range(5)], 10, "at_max_slices"),
-            (
-                [
-                    make_mock_slice_handle("slice-001", all_ready=True),
-                    make_mock_slice_handle("slice-002", all_ready=True),
-                ],
-                2,
-                "capacity_meets_demand",
-            ),
             (
                 [
                     make_mock_slice_handle("slice-001", vm_states=[vm_pb2.VM_STATE_BOOTING]),
@@ -384,7 +376,7 @@ class TestAutoscalerScaleUp:
                 "pending_slices_count",
             ),
         ],
-        ids=["at_max_slices", "capacity_meets_demand", "pending_slices_count"],
+        ids=["at_max_slices", "pending_slices_count"],
     )
     def test_no_scale_up_when_condition_met(
         self, scale_group_config: config_pb2.ScaleGroupConfig, discovered: list, demand_count: int, reason: str
@@ -473,6 +465,29 @@ class TestAutoscalerScaleUp:
         decisions = autoscaler.evaluate([])
 
         assert len(decisions) == 0
+
+    def test_scale_up_when_ready_workers_full(self):
+        """Scales up when all ready workers are full and demand survives dry-run.
+
+        With 5 ready slices and 0 pending, a single unplaceable demand entry (which
+        survived the scheduler dry-run against all ready workers) must trigger scale-up.
+        The old comparison (required > ready+pending) would see 1 > 5 and deadlock.
+        The correct comparison (required > pending) sees 1 > 0 and scales up.
+        """
+        config = make_scale_group_config(name="test-group", max_slices=10)
+        discovered = [make_mock_slice_handle(f"slice-{i}", all_ready=True) for i in range(5)]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(0))
+        group.reconcile()
+        _mark_discovered_ready(group, discovered)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        decisions = autoscaler.evaluate(demand)
+
+        assert len(decisions) == 1
+        assert decisions[0].action == ScalingAction.SCALE_UP
+        assert "required_slices=1 > pending=0" in decisions[0].reason
 
 
 class TestAutoscalerScaleDown:
@@ -577,13 +592,14 @@ class TestAutoscalerScaleDown:
         }
         group.update_slice_activity(vm_status_map_active, timestamp=Timestamp.from_ms(1000))
 
-        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        # Use empty demand (simulating dry-run absorbed all tasks onto ready workers)
+        # to test that scale-down is blocked by idle_threshold, not scale-up.
         vm_status_map_idle = {
             slice_001_wid: WorkerStatus(worker_id=slice_001_wid, running_task_ids=frozenset()),
             slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset()),
         }
 
-        autoscaler.run_once(demand, vm_status_map_idle, timestamp=Timestamp.from_ms(100_000))
+        autoscaler.run_once([], vm_status_map_idle, timestamp=Timestamp.from_ms(100_000))
 
         assert group.slice_count() == 2
 
@@ -2819,10 +2835,10 @@ class TestPackingRouting:
     """Tests for packing-aware routing and scaling decisions."""
 
     def test_packing_allows_multiple_cpu_tasks_per_vm(self):
-        """16 CPU tasks at 32GiB each pack into 4 VMs of 128GiB.
+        """16 CPU tasks at 32GiB each pack into 4 VMs of 128GiB → 1 slice.
 
-        With num_vms=4, that's exactly 1 slice. If 1 slice already exists,
-        no scale-up is needed.
+        Verifies that bin-packing computes required_slices=1 (not 16), and
+        that route_demand correctly determines 1 slice is needed.
         """
         config = make_scale_group_config(
             name="cpu-group",
@@ -2830,15 +2846,11 @@ class TestPackingRouting:
             num_vms=4,
             priority=10,
         )
-        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         group = ScalingGroup(
             config,
-            make_mock_platform(slices_to_discover=discovered),
+            make_mock_platform(),
             scale_up_cooldown=Duration.from_ms(0),
         )
-        group.reconcile()
-        _mark_discovered_ready(group, discovered)
-        autoscaler = make_autoscaler({"cpu-group": group})
 
         # 16 entries x 32GiB = 512GiB total. 4 VMs x 128GiB = 512GiB capacity.
         # Packing: 4 entries per VM → 4 VMs → ceil(4/4) = 1 slice needed.
@@ -2849,13 +2861,12 @@ class TestPackingRouting:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        decisions = autoscaler.evaluate(entries)
+        result = route_demand([group], entries)
 
-        assert len(decisions) == 0
-        assert group.current_demand == 1
+        assert result.group_required_slices.get("cpu-group") == 1
 
     def test_packing_prevents_cpu_walkup(self):
-        """CPU entries that pack within group A's capacity should not spill to group B."""
+        """CPU entries that pack within group A's budget should not spill to group B."""
         config_a = make_scale_group_config(
             name="group-a",
             max_slices=5,
@@ -2869,25 +2880,19 @@ class TestPackingRouting:
             priority=20,
         )
 
-        discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         group_a = ScalingGroup(
             config_a,
-            make_mock_platform(slices_to_discover=discovered),
+            make_mock_platform(),
             scale_up_cooldown=Duration.from_ms(0),
         )
-        group_a.reconcile()
-        _mark_discovered_ready(group_a, discovered)
-
         group_b = ScalingGroup(
             config_b,
             make_mock_platform(),
             scale_up_cooldown=Duration.from_ms(0),
         )
 
-        autoscaler = make_autoscaler({"group-a": group_a, "group-b": group_b})
-
         # 8 entries at 32GiB each → 2 VMs needed → ceil(2/4) = 1 slice.
-        # Group A has 1 ready slice. No overflow to B.
+        # All demand routes to group A (higher priority). Nothing spills to B.
         entries = _make_big_demand_entries(
             8,
             cpu_millicores=32000,
@@ -2895,11 +2900,10 @@ class TestPackingRouting:
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
         )
-        decisions = autoscaler.evaluate(entries)
+        result = route_demand([group_a, group_b], entries)
 
-        assert len(decisions) == 0
-        assert group_a.current_demand == 1
-        assert group_b.current_demand == 0
+        assert result.group_required_slices.get("group-a") == 1
+        assert result.group_required_slices.get("group-b", 0) == 0
 
     def test_evaluate_uses_packed_capacity(self):
         """Scale-up triggers when packed demand exceeds existing capacity."""
@@ -2919,18 +2923,12 @@ class TestPackingRouting:
         _mark_discovered_ready(group, discovered)
         autoscaler = make_autoscaler({"test-group": group})
 
-        # 4 entries at 128GiB → 4 VMs → ceil(4/4) = 1 slice. Fits in 1 ready slice.
-        small_demand = _make_big_demand_entries(
-            4,
-            cpu_millicores=128000,
-            memory_bytes=128 * 1024**3,
-            device_type=DeviceType.TPU,
-            device_variants=frozenset({"v5p-8"}),
-        )
-        decisions = autoscaler.evaluate(small_demand)
+        # No demand → no scale up (all tasks absorbed by scheduler dry-run)
+        decisions = autoscaler.evaluate([])
         assert len(decisions) == 0
 
-        # 5 entries at 128GiB → 5 VMs → ceil(5/4) = 2 slices. Only 1 exists.
+        # 5 entries that survived dry-run → 5 VMs → ceil(5/4) = 2 slices needed.
+        # Scale-up compares against pending only (ready slices already tested by dry-run).
         big_demand = _make_big_demand_entries(
             5,
             cpu_millicores=128000,
@@ -2940,9 +2938,9 @@ class TestPackingRouting:
             task_prefix="big",
         )
         decisions = autoscaler.evaluate(big_demand)
-        assert len(decisions) == 1
-        assert decisions[0].action == ScalingAction.SCALE_UP
-        assert "required_slices=2 > capacity=1" in decisions[0].reason
+        assert len(decisions) == 2
+        assert all(d.action == ScalingAction.SCALE_UP for d in decisions)
+        assert "required_slices=2 > pending=0" in decisions[0].reason
 
     def test_scale_down_target_uses_packed_demand(self):
         """Scale-down uses packed required_slices, not entry count."""
@@ -2976,11 +2974,12 @@ class TestPackingRouting:
             device_variants=frozenset({"v5p-8"}),
         )
 
-        # First run to set current_demand (required_slices=1)
+        # Set current_demand (required_slices=1)
         autoscaler.evaluate(entries, timestamp=Timestamp.from_ms(2_000))
         assert group.current_demand == 1
 
-        # Now run_once with vm_status_map showing all VMs idle
+        # run_once with empty demand (simulating dry-run absorption) and all VMs idle.
+        # target_capacity = max(1, 0) = 1 (from current_demand set above).
         slice_0 = group.get_slice("slice-0")
         slice_1 = group.get_slice("slice-1")
         wid_0 = slice_0.describe().workers[0].worker_id
@@ -2989,9 +2988,9 @@ class TestPackingRouting:
             wid_0: WorkerStatus(worker_id=wid_0, running_task_ids=frozenset()),
             wid_1: WorkerStatus(worker_id=wid_1, running_task_ids=frozenset()),
         }
-        autoscaler.run_once(entries, vm_status_map, timestamp=Timestamp.from_ms(10_000))
+        autoscaler.run_once([], vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
-        # target_capacity = max(1, 0) = 1. One idle slice should be scaled down.
+        # One idle slice should be scaled down.
         assert group.slice_count() == 1
 
     def test_group_to_launch_uses_packing(self):

@@ -266,12 +266,20 @@ class ActorServer:
         return op.to_proto()
 
     async def get_operation(self, request: actor_pb2.OperationId, ctx: RequestContext) -> actor_pb2.Operation:
-        """Poll the state of a long-running operation."""
+        """Poll the state of a long-running operation.
+
+        When the operation reaches a terminal state (SUCCEEDED, FAILED, CANCELLED),
+        the result is returned and the operation is removed from server memory.
+        """
         with self._operations_lock:
             op = self._operations.get(request.operation_id)
         if op is None:
             raise ConnectError(Code.NOT_FOUND, f"Operation '{request.operation_id}' not found")
-        return op.to_proto()
+        proto = op.to_proto()
+        if proto.state not in (actor_pb2.Operation.PENDING, actor_pb2.Operation.RUNNING):
+            with self._operations_lock:
+                self._operations.pop(request.operation_id, None)
+        return proto
 
     async def cancel_operation(self, request: actor_pb2.OperationId, ctx: RequestContext) -> actor_pb2.Operation:
         """Request cancellation of a long-running operation.

@@ -12,6 +12,7 @@ Agent-friendly skills live in `.agents/skills/` (also accessible as `.claude/ski
 
 - [pull-request](.agents/skills/pull-request/SKILL.md) — PR descriptions, testing, review workflow
 - [fix-issue](.agents/skills/fix-issue/SKILL.md) — issue triage and fix protocol
+- [file-issue](.agents/skills/file-issue/SKILL.md) — file a GitHub issue from conversation context
 - [add-dataset](.agents/skills/add-dataset/SKILL.md) — dataset addition (start with schema inspection)
 - [organize-experiments](.agents/skills/organize-experiments/SKILL.md) — experiment organization
 - [agent-research](.agents/skills/agent-research/SKILL.md) — long-running benchmark/research threads
@@ -42,6 +43,8 @@ uv run pyrefly
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
 - NEVER stop, restart, or bounce a Ray or Iris cluster unless the user gives express permission.
+- In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
+- do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
 ## Communication & Commits
 

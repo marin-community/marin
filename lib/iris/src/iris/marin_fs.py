@@ -13,13 +13,14 @@ Resolution chain for the storage prefix:
   2. GCS instance metadata → ``gs://marin-{region}``
   3. ``/tmp/marin`` (local fallback)
 
-Cross-region read guard:
-  ``CrossRegionGuardedFS`` wraps an fsspec filesystem and blocks reads of
-  large files from GCS buckets in a different region than the current VM.
-  Prefer the guarded helpers (``url_to_fs``, ``open_url``, ``filesystem``)
-  over the raw fsspec equivalents; they automatically wrap GCS filesystems
-  in the guard.  Set the ``MARIN_I_WILL_PAY_FOR_ALL_FEES`` env var to a
-  username to override the guard.
+Cross-region transfer budget:
+  ``TransferBudget`` tracks cumulative cross-region GCS bytes across all
+  filesystem instances in the process (default 10 GB).  Both
+  ``CrossRegionGuardedFS`` (direct reads) and ``MirrorFileSystem`` (mirror
+  copies) charge against the same global budget.  Prefer the guarded helpers
+  (``url_to_fs``, ``open_url``, ``filesystem``) over the raw fsspec
+  equivalents; they automatically wrap GCS filesystems in the guard.  Set
+  the ``MARIN_I_WILL_PAY_FOR_ALL_FEES`` env var to override the guard.
 """
 
 import dataclasses
@@ -28,6 +29,8 @@ import logging
 import os
 import pathlib
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
@@ -35,6 +38,8 @@ from pathlib import PurePath
 from typing import Any
 
 import fsspec
+
+from iris.distributed_lock import create_lock, default_worker_id
 
 logger = logging.getLogger(__name__)
 
@@ -362,8 +367,8 @@ def _normalize_path_like(path: str | os.PathLike) -> str:
 # Cross-region read guard
 # ---------------------------------------------------------------------------
 
-CROSS_REGION_READ_THRESHOLD_BYTES: int = 100 * 1024 * 1024  # 100 MB
 MARIN_CROSS_REGION_OVERRIDE_ENV: str = "MARIN_I_WILL_PAY_FOR_ALL_FEES"
+CROSS_REGION_TRANSFER_LIMIT_BYTES: int = 10 * 1024 * 1024 * 1024  # 10 GB
 
 # GCS multi-region bucket locations are returned as "us", "eu", or "asia"
 # rather than a specific region like "us-central1".  European regions use the
@@ -376,8 +381,67 @@ _MULTI_REGION_TO_PREFIXES: dict[str, tuple[str, ...]] = {
 }
 
 
-class CrossRegionReadError(Exception):
-    """Raised when a cross-region GCS read exceeds the size threshold."""
+class TransferBudgetExceeded(Exception):
+    """Raised when cumulative cross-region bytes exceed the budget."""
+
+    def __init__(self, bytes_used: int, attempted: int, limit: int, path: str):
+        self.bytes_used = bytes_used
+        self.attempted = attempted
+        self.limit = limit
+        self.path = path
+        super().__init__(
+            f"Cross-region transfer budget exceeded: {path} "
+            f"({attempted / (1024**2):.1f}MB) would bring total to "
+            f"{(bytes_used + attempted) / (1024**3):.2f}GB, "
+            f"exceeding the {limit / (1024**3):.0f}GB limit "
+            f"(already transferred {bytes_used / (1024**3):.2f}GB). "
+            f"Consider running in the source region instead."
+        )
+
+
+class TransferBudget:
+    """Thread-safe cumulative byte budget for cross-region transfers.
+
+    Shared by CrossRegionGuardedFS (direct reads) and MirrorFileSystem
+    (mirror copies).  A single process-global instance tracks total
+    cross-region bytes across all filesystem instances.
+    """
+
+    __slots__ = ("_bytes_used", "_limit_bytes", "_lock")
+
+    def __init__(self, limit_bytes: int = CROSS_REGION_TRANSFER_LIMIT_BYTES):
+        self._limit_bytes = limit_bytes
+        self._bytes_used: int = 0
+        self._lock = threading.Lock()
+
+    @property
+    def bytes_used(self) -> int:
+        return self._bytes_used
+
+    @property
+    def limit_bytes(self) -> int:
+        return self._limit_bytes
+
+    def record(self, size: int, path: str) -> None:
+        """Atomically record *size* bytes.  Raise if budget exceeded.
+
+        Does NOT increment on failure — the transfer hasn't happened yet.
+        """
+        with self._lock:
+            new_total = self._bytes_used + size
+            if new_total > self._limit_bytes:
+                raise TransferBudgetExceeded(self._bytes_used, size, self._limit_bytes, path)
+            self._bytes_used = new_total
+
+    def reset(self, limit_bytes: int | None = None) -> None:
+        """Reset counter to zero.  For testing only."""
+        with self._lock:
+            self._bytes_used = 0
+            if limit_bytes is not None:
+                self._limit_bytes = limit_bytes
+
+
+_global_transfer_budget = TransferBudget()
 
 
 @functools.lru_cache(maxsize=1)
@@ -431,46 +495,38 @@ def _is_gcs_protocol(protocol: str) -> bool:
 
 
 class CrossRegionGuardedFS:
-    """Wrapper around an fsspec filesystem that blocks large cross-region GCS reads.
-
-    Caches the VM region and GCS detection at construction time so that
-    per-read overhead is minimal (no metadata-server round-trips).
+    """Wrapper around a GCS fsspec filesystem that enforces a cross-region transfer budget.
 
     Intercepts read operations (``open``, ``cat``, ``cat_file``, ``get_file``,
-    ``get``) and checks whether the target file lives in a GCS bucket in a
-    different region than the current VM.  If the file exceeds
-    *threshold_bytes*, raises ``CrossRegionReadError``.
+    ``get``) and records each cross-region read against a shared
+    ``TransferBudget``.  Raises ``TransferBudgetExceeded`` when the cumulative
+    cross-region bytes exceed the budget.
 
-    The guard is skipped when:
-    * The ``MARIN_I_WILL_PAY_FOR_ALL_FEES`` env var is set.
-    * The underlying filesystem is not GCS.
-    * The bucket is in the same region (or region cannot be determined).
-    * The file is smaller than the threshold.
+    Only constructed for GCS filesystems — the entry points (``url_to_fs``,
+    ``open_url``, ``filesystem``) decide whether to wrap.
 
     Args:
-        fs: The fsspec filesystem to wrap.
-        threshold_bytes: Maximum allowed file size for cross-region reads.
+        fs: The GCS fsspec filesystem to wrap.
         cross_region_checker: Optional callback ``(bucket_name) -> bool``
             used **only** for testing.  When provided, bypasses the default
             region-comparison logic.
+        budget: Transfer budget to charge reads against.  Defaults to the
+            process-global singleton.
     """
 
-    __slots__ = ("_cross_region_checker", "_current_region", "_fs", "_is_gcs", "_threshold_bytes")
+    __slots__ = ("_budget", "_cross_region_checker", "_current_region", "_fs")
 
     def __init__(
         self,
         fs: Any,
         *,
-        threshold_bytes: int = CROSS_REGION_READ_THRESHOLD_BYTES,
         cross_region_checker: Callable[[str], bool] | None = None,
+        budget: TransferBudget | None = None,
     ):
         self._fs = fs
-        self._threshold_bytes = threshold_bytes
-        self._is_gcs = _fs_is_gcs(fs)
         self._cross_region_checker = cross_region_checker
-        # Cache the VM region once at construction so _guard_read never
-        # hits the metadata server.
         self._current_region = None if cross_region_checker else _cached_marin_region()
+        self._budget = budget if budget is not None else _global_transfer_budget
 
     # -- cross-region detection ----------------------------------------------
 
@@ -519,9 +575,6 @@ class CrossRegionGuardedFS:
     # -- guard logic ---------------------------------------------------------
 
     def _guard_read(self, path: str) -> None:
-        if not self._is_gcs:
-            return
-
         if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
             return
 
@@ -536,14 +589,8 @@ class CrossRegionGuardedFS:
             logger.warning("Failed to stat %s for cross-region guard check", path, exc_info=True)
             return
 
-        if size is not None and size > self._threshold_bytes:
-            msg = (
-                f"Cross-region read blocked: gs://{path} is {size / (1024 * 1024):.1f}MB "
-                f"(threshold: {self._threshold_bytes / (1024 * 1024):.0f}MB). "
-                f"Set {MARIN_CROSS_REGION_OVERRIDE_ENV}=<your-username> to override."
-            )
-            logger.warning(msg)
-            raise CrossRegionReadError(msg)
+        if size is not None:
+            self._budget.record(size, f"gs://{path}")
 
     # -- transparent delegation ----------------------------------------------
 
@@ -564,12 +611,8 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     """Like ``fsspec.core.url_to_fs`` but wraps GCS filesystems in a cross-region guard.
 
     Returns ``(fs, path)``.  For non-GCS URLs the filesystem is returned
-    unwrapped.  ``mirror://`` URLs are handled by :class:`iris.mirror_fs.MirrorFileSystem`.
+    unwrapped.  ``mirror://`` URLs are handled by :class:`MirrorFileSystem`.
     """
-    # Ensure mirror:// protocol is registered before dispatch.
-    if url.startswith("mirror://"):
-        import iris.mirror_fs  # noqa: F401 — triggers fsspec registration
-
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
@@ -577,11 +620,10 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
 
 
 def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
-    """Like ``fsspec.open`` but checks the cross-region guard for GCS reads.
+    """Like ``fsspec.open`` but checks the cross-region budget for GCS reads.
 
-    For read modes on GCS URLs, eagerly stats the file and raises
-    ``CrossRegionReadError`` if it exceeds the size threshold in a
-    cross-region bucket.  Then delegates to ``fsspec.open`` for the actual I/O.
+    For read modes on GCS URLs, eagerly stats the file and charges the
+    transfer budget.  Then delegates to ``fsspec.open`` for the actual I/O.
     """
     if "r" in mode and _is_gcs_url(url):
         fs, path = fsspec.core.url_to_fs(url)
@@ -596,3 +638,241 @@ def filesystem(protocol: str, **kwargs: Any) -> Any:
     if _is_gcs_protocol(protocol):
         fs = CrossRegionGuardedFS(fs)
     return fs
+
+
+# ---------------------------------------------------------------------------
+# Mirror filesystem
+#
+# Transparent cross-region file access: reads check the local prefix first,
+# then scan all other marin-* data buckets and copy on first access.
+# ---------------------------------------------------------------------------
+
+
+def _all_data_bucket_prefixes() -> list[str]:
+    """Return gs:// prefixes for all known marin data buckets."""
+    return [f"gs://{bucket}" for bucket in REGION_TO_DATA_BUCKET.values()]
+
+
+class MirrorFileSystem(fsspec.AbstractFileSystem):
+    """Fsspec filesystem that mirrors files across marin regional buckets.
+
+    Reads check the local prefix first, then scan other regions.  Files found
+    in a remote region are copied to the local prefix under a distributed lock.
+    Writes always target the local prefix.
+
+    Cross-region copies are charged against the shared ``TransferBudget``.
+    """
+
+    protocol = "mirror"
+
+    def __init__(
+        self,
+        *args: Any,
+        budget: TransferBudget | None = None,
+        **kwargs: Any,
+    ):
+        super().__init__(*args, **kwargs)
+        self._local_prefix = marin_prefix()
+        self._remote_prefixes = [p for p in _all_data_bucket_prefixes() if not self._local_prefix.startswith(p)]
+        self._budget = budget if budget is not None else _global_transfer_budget
+        self._worker_id = default_worker_id()
+
+    # -- underlying fs helpers ------------------------------------------------
+
+    def _get_fs_and_path(self, url: str) -> tuple[Any, str]:
+        """Return (fsspec_fs, path) for a full URL or local path."""
+        return fsspec.core.url_to_fs(url)
+
+    def _local_url(self, path: str) -> str:
+        return f"{self._local_prefix}/{path}"
+
+    def _remote_url(self, prefix: str, path: str) -> str:
+        return f"{prefix}/{path}"
+
+    def _lock_path_for(self, path: str) -> str:
+        return f"{self._local_prefix}/.mirror_locks/{path}.lock"
+
+    def _fs_exists(self, url: str) -> bool:
+        fs, fspath = self._get_fs_and_path(url)
+        return fs.exists(fspath)
+
+    def _fs_size(self, url: str) -> int | None:
+        fs, fspath = self._get_fs_and_path(url)
+        return fs.size(fspath)
+
+    def _fs_copy(self, src_url: str, dst_url: str) -> None:
+        src_fs, src_path = self._get_fs_and_path(src_url)
+        dst_fs, dst_path = self._get_fs_and_path(dst_url)
+
+        parent = dst_path.rsplit("/", 1)[0] if "/" in dst_path else ""
+        if parent:
+            dst_fs.makedirs(parent, exist_ok=True)
+
+        if type(src_fs) is type(dst_fs):
+            src_fs.copy(src_path, dst_path)
+        else:
+            data = src_fs.cat_file(src_path)
+            with dst_fs.open(dst_path, "wb") as f:
+                f.write(data)
+
+    # -- cross-region copy ----------------------------------------------------
+
+    def _find_in_remote_prefixes(self, path: str) -> str | None:
+        for prefix in self._remote_prefixes:
+            remote_url = self._remote_url(prefix, path)
+            if self._fs_exists(remote_url):
+                return prefix
+        return None
+
+    def _copy_to_local(self, source_prefix: str, path: str) -> None:
+        local_url = self._local_url(path)
+        remote_url = self._remote_url(source_prefix, path)
+
+        lock = create_lock(self._lock_path_for(path), self._worker_id)
+
+        if not lock.try_acquire():
+            for _ in range(60):
+                time.sleep(2)
+                if self._fs_exists(local_url):
+                    return
+                if not lock.has_active_holder():
+                    break
+            if self._fs_exists(local_url):
+                return
+            if not lock.try_acquire():
+                raise RuntimeError(f"Could not acquire mirror lock for {path} after waiting")
+
+        try:
+            if self._fs_exists(local_url):
+                return
+
+            size = self._fs_size(remote_url)
+            if size is not None:
+                self._budget.record(size, remote_url)
+
+            logger.info("Mirror: copying %s → %s", remote_url, local_url)
+            self._fs_copy(remote_url, local_url)
+        finally:
+            lock.release()
+
+    def _resolve_path(self, path: str) -> str:
+        """Resolve a mirror path to a concrete URL, copying if needed."""
+        local_url = self._local_url(path)
+        if self._fs_exists(local_url):
+            return local_url
+
+        source_prefix = self._find_in_remote_prefixes(path)
+        if source_prefix is None:
+            raise FileNotFoundError(f"mirror://{path} not found in any marin bucket")
+
+        self._copy_to_local(source_prefix, path)
+        return local_url
+
+    # -- fsspec interface: info/ls/exists -------------------------------------
+
+    def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
+        path = self._strip_protocol(path)
+        resolved = self._resolve_path(path)
+        fs, fspath = self._get_fs_and_path(resolved)
+        info = fs.info(fspath, **kwargs)
+        info["name"] = path
+        return info
+
+    def ls(self, path: str, detail: bool = True, **kwargs: Any) -> list[Any]:
+        path = self._strip_protocol(path)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        try:
+            results = fs.ls(fspath, detail=detail, **kwargs)
+        except FileNotFoundError:
+            results = []
+
+        prefix = self._local_prefix.rstrip("/") + "/"
+        # For GCS, fsspec strips the scheme, so the prefix in results won't have gs://
+        stripped_prefix = prefix.replace("gs://", "").replace("file://", "")
+
+        if detail:
+            for entry in results:
+                name = entry["name"]
+                if name.startswith(stripped_prefix):
+                    entry["name"] = name[len(stripped_prefix) :]
+            return results
+        else:
+            return [r[len(stripped_prefix) :] if r.startswith(stripped_prefix) else r for r in results]
+
+    def exists(self, path: str, **kwargs: Any) -> bool:
+        path = self._strip_protocol(path)
+        local_url = self._local_url(path)
+        if self._fs_exists(local_url):
+            return True
+        return self._find_in_remote_prefixes(path) is not None
+
+    # -- fsspec interface: read operations ------------------------------------
+
+    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+        path = self._strip_protocol(path)
+        if "r" in mode:
+            resolved = self._resolve_path(path)
+            fs, fspath = self._get_fs_and_path(resolved)
+            return fs.open(fspath, mode, **kwargs)
+        else:
+            local_url = self._local_url(path)
+            fs, fspath = self._get_fs_and_path(local_url)
+            parent = fspath.rsplit("/", 1)[0] if "/" in fspath else ""
+            if parent:
+                fs.makedirs(parent, exist_ok=True)
+            return fs.open(fspath, mode, **kwargs)
+
+    def cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any) -> bytes:
+        path = self._strip_protocol(path)
+        resolved = self._resolve_path(path)
+        fs, fspath = self._get_fs_and_path(resolved)
+        return fs.cat_file(fspath, start=start, end=end, **kwargs)
+
+    # -- fsspec interface: write operations ------------------------------------
+
+    def _mkdir(self, path: str, create_parents: bool = True, **kwargs: Any) -> None:
+        path = self._strip_protocol(path)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.mkdir(fspath, create_parents=create_parents, **kwargs)
+
+    def makedirs(self, path: str, exist_ok: bool = False) -> None:
+        path = self._strip_protocol(path)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.makedirs(fspath, exist_ok=exist_ok)
+
+    def put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
+        rpath = self._strip_protocol(rpath)
+        local_url = self._local_url(rpath)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.put_file(lpath, fspath, **kwargs)
+
+    def rm_file(self, path: str) -> None:
+        path = self._strip_protocol(path)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.rm_file(fspath)
+
+    def rm(self, path: str, recursive: bool = False, **kwargs: Any) -> None:
+        path = self._strip_protocol(path)
+        local_url = self._local_url(path)
+        fs, fspath = self._get_fs_and_path(local_url)
+        fs.rm(fspath, recursive=recursive, **kwargs)
+
+    def copy(self, path1: str, path2: str, **kwargs: Any) -> None:
+        path1 = self._strip_protocol(path1)
+        path2 = self._strip_protocol(path2)
+        resolved_src = self._resolve_path(path1)
+        local_dst = self._local_url(path2)
+        self._fs_copy(resolved_src, local_dst)
+
+    @property
+    def bytes_copied(self) -> int:
+        """Total cross-region bytes transferred (shared budget)."""
+        return self._budget.bytes_used
+
+
+# Register the mirror:// protocol with fsspec.
+fsspec.register_implementation("mirror", MirrorFileSystem)

@@ -26,9 +26,10 @@ Use this skill on scheduled scrub turns to identify and land high-leverage impro
 Run a lightweight, repeatable scan before choosing work:
 
 1. Review recent open issues and open PRs for repeated friction clusters.
-2. Review the latest commits on `main` for changes that imply follow-on docs/workflow updates.
-3. Search `AGENTS.md`, `.agents/skills/`, and docs for stale workflow guidance related to those clusters.
-4. De-duplicate against existing issues/PRs before creating new artifacts.
+2. Explicitly check for already-open scrub-generated issues/PRs touching the same area; prefer advancing or deferring to that existing artifact instead of creating a parallel one.
+3. Review the latest commits on `main` for changes that imply follow-on docs/workflow updates.
+4. Search `AGENTS.md`, `.agents/skills/`, and docs for stale workflow guidance related to those clusters.
+5. De-duplicate against existing issues/PRs before creating new artifacts.
 
 When possible, prefer improvements that remove recurring operator time (for example,
 turning ad-hoc scrub judgment into explicit repeatable guidance).
@@ -36,6 +37,7 @@ turning ad-hoc scrub judgment into explicit repeatable guidance).
 ## Decision Heuristics
 
 - Pick the highest-leverage change with the lowest coordination overhead.
+- Treat open scrub-generated issues/PRs as first-class prior art during triage; if one already covers the candidate improvement, avoid opening a second artifact unless the new scope is clearly distinct.
 - De-duplicate against existing issues/PRs before opening new work.
 - When an improvement changes recurring workflow guidance, codify it in durable repo instructions:
   `AGENTS.md` for cross-cutting agent behavior, or `.agents/skills/` for repeatable task workflows.

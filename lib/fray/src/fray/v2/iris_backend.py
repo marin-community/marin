@@ -31,7 +31,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import EnvironmentSpec, ResourceSpec
+from iris.cluster.types import EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import cluster_pb2
 
@@ -363,17 +363,23 @@ class IrisActorGroup:
         """Number of actors that are available for RPC."""
         return len(self._handles)
 
-    def discover_new(self) -> list[ActorHandle]:
+    def discover_new(self, target: int | None = None) -> list[ActorHandle]:
         """Probe for newly available actors without blocking.
 
         Returns only the handles discovered during this call (not previously
         known ones). Call repeatedly to pick up workers as they come online.
+
+        Args:
+            target: Stop probing once this many total actors are discovered.
+                If None, probes all indices.
         """
         client = self._get_client()
         resolver = client.resolver_for_job(self._job_id)
 
         newly_discovered: list[ActorHandle] = []
         for i in range(self._count):
+            if target is not None and len(self._discovered_names) >= target:
+                break
             # Absolute endpoint name matches what _host_actor registers
             endpoint_name = f"{self._job_id}/{self._name}-{i}"
             if endpoint_name in self._discovered_names:
@@ -402,14 +408,12 @@ class IrisActorGroup:
         allowing the caller to start work immediately and discover more
         workers later via discover_new().
         """
-        from iris.cluster.types import is_job_finished
-
         target = count if count is not None else self._count
         start = time.monotonic()
         sleep_secs = 0.5
 
         while True:
-            self.discover_new()
+            self.discover_new(target=target)
 
             if len(self._discovered_names) >= target:
                 return list(self._handles[:target])
@@ -432,6 +436,12 @@ class IrisActorGroup:
                 raise TimeoutError(f"Only {len(self._discovered_names)}/{target} actors ready after {timeout}s")
 
             time.sleep(sleep_secs)
+
+    def is_done(self) -> bool:
+        """Return True if the Iris worker job has permanently terminated."""
+        client = self._get_client()
+        job_status = client.status(self._job_id)
+        return is_job_finished(job_status.state)
 
     def shutdown(self) -> None:
         """Terminate the actor job."""

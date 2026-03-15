@@ -176,7 +176,7 @@ class MockSchedulerWake:
         self.wake = Mock()
         self.kill_tasks_on_workers = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
-        self.get_job_scheduling_diagnostics = Mock(return_value="")
+        self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
         self.stub_factory = Mock()
 
@@ -276,8 +276,8 @@ def test_launch_job_replaces_finished_job_by_default(service, state, job_request
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_request):
-    """Verify fail_if_exists=true prevents replacing finished jobs."""
+def test_launch_job_error_policy_prevents_replacement(service, state, job_request):
+    """Verify EXISTING_JOB_POLICY_ERROR prevents replacing finished jobs."""
     request = job_request("no-replace-job")
     job_id = JobName.root("test-user", "no-replace-job")
 
@@ -293,15 +293,95 @@ def test_launch_job_fail_if_exists_prevents_replacement(service, state, job_requ
     job = _query_job(state, job_id)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
-    # Submit again with fail_if_exists=true - should fail
+    # Submit again with ERROR policy - should fail
     request_no_replace = job_request("no-replace-job")
-    request_no_replace.fail_if_exists = True
+    request_no_replace.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_ERROR
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request_no_replace, None)
 
     assert exc_info.value.code == Code.ALREADY_EXISTS
     assert "SUCCEEDED" in exc_info.value.message
+
+
+def test_existing_job_policy_keep_running(service, state, job_request):
+    """KEEP policy on a running job returns the existing handle without re-creating."""
+    request = job_request("keep-job")
+    job_id = JobName.root("test-user", "keep-job")
+
+    service.launch_job(request, None)
+
+    # Job is still running (PENDING). Submit again with KEEP policy.
+    request_keep = job_request("keep-job")
+    request_keep.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_KEEP
+    response = service.launch_job(request_keep, None)
+
+    assert response.job_id == job_id.to_wire()
+    # Job should still be in its original PENDING state (not replaced).
+    job = _query_job(state, job_id)
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_existing_job_policy_recreate_running(service, state, job_request):
+    """RECREATE policy cancels a running job and replaces it."""
+    request = job_request("recreate-job")
+    job_id = JobName.root("test-user", "recreate-job")
+
+    service.launch_job(request, None)
+    # Confirm job exists and is pending
+    job = _query_job(state, job_id)
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+    request_recreate = job_request("recreate-job")
+    request_recreate.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_RECREATE
+    response = service.launch_job(request_recreate, None)
+
+    assert response.job_id == job_id.to_wire()
+    # New job should be pending (the old one was cancelled and removed).
+    job = _query_job(state, job_id)
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_existing_job_policy_error_any_state(service, state, job_request):
+    """ERROR policy rejects submission regardless of job state."""
+    request = job_request("error-policy-job")
+    job_id = JobName.root("test-user", "error-policy-job")
+
+    service.launch_job(request, None)
+
+    # Running job with ERROR policy -> error
+    request_err = job_request("error-policy-job")
+    request_err.existing_job_policy = cluster_pb2.EXISTING_JOB_POLICY_ERROR
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request_err, None)
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+
+    # Mark job as finished, ERROR policy should still reject
+    _set_job_state(state, job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request_err, None)
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+
+
+def test_existing_job_policy_unspecified_preserves_current_behavior(service, state, job_request):
+    """Default (UNSPECIFIED) policy replaces finished jobs and errors on running ones."""
+    request = job_request("default-policy-job")
+    job_id = JobName.root("test-user", "default-policy-job")
+
+    service.launch_job(request, None)
+
+    # Running job -> error (same as before)
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+    assert "still running" in exc_info.value.message
+
+    # Finished job -> replaced
+    _set_job_state(state, job_id, cluster_pb2.JOB_STATE_FAILED)
+    response = service.launch_job(request, None)
+    assert response.job_id == job_id.to_wire()
+    job = _query_job(state, job_id)
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
 
 
 def test_launch_job_rejects_empty_name(service, state):
@@ -488,6 +568,97 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
     assert parent_status.job.state == cluster_pb2.JOB_STATE_KILLED
 
 
+# =============================================================================
+# Authorization Tests
+# =============================================================================
+
+
+def test_terminate_job_allowed_by_owner(service, job_request):
+    """Job owner can terminate their own job."""
+    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+
+    service.launch_job(job_request("/alice/my-job"), None)
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+        service.terminate_job(request, None)
+    finally:
+        _verified_identity.reset(token)
+
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_terminate_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
+    """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+
+    auth_service = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles_owner.sqlite3"),
+        log_store=state._log_store,
+        auth=ControllerAuth(provider="static"),
+    )
+
+    auth_service.launch_job(job_request("/alice/my-job"), None)
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
+    try:
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+        with pytest.raises(ConnectError) as exc_info:
+            auth_service.terminate_job(request, None)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(token)
+
+    # Job should still be running
+    status = auth_service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_launch_child_job_rejected_for_non_owner(state, mock_scheduler, tmp_path, job_request):
+    """Cannot submit a child job under another user's hierarchy."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+
+    auth_service = ControllerServiceImpl(
+        state,
+        state._db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles_child.sqlite3"),
+        log_store=state._log_store,
+        auth=ControllerAuth(provider="static"),
+    )
+
+    auth_service.launch_job(job_request("/alice/parent-job"), None)
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            auth_service.launch_job(job_request("/alice/parent-job/sneaky-child"), None)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(token)
+
+
+def test_terminate_job_allowed_when_auth_disabled(service, job_request):
+    """When auth is disabled (no verified user), anyone can terminate."""
+    service.launch_job(job_request("/alice/my-job"), None)
+
+    # No _verified_identity set => auth disabled
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
+    service.terminate_job(request, None)
+
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_KILLED
+
+
 def test_parent_job_failure_cascades_to_children(service, state, job_request):
     """Verify when a parent job fails, all children are automatically cancelled."""
     # Launch parent and children via RPC
@@ -589,15 +760,23 @@ def test_list_jobs_returns_all_jobs(service, job_request):
 # =============================================================================
 
 
-def test_list_workers_returns_all(service, worker_metadata):
+def test_list_workers_returns_all(service, state, worker_metadata):
     """Verify list_workers returns all registered workers."""
-    for i in range(3):
-        request = cluster_pb2.Controller.RegisterRequest(
-            address=f"host{i}:8080",
-            metadata=worker_metadata(),
-            worker_id=f"worker-{i}",
-        )
-        service.register(request, None)
+    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+
+    db = state._db
+    db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
+    try:
+        for i in range(3):
+            request = cluster_pb2.Controller.RegisterRequest(
+                address=f"host{i}:8080",
+                metadata=worker_metadata(),
+                worker_id=f"worker-{i}",
+            )
+            service.register(request, None)
+    finally:
+        _verified_identity.reset(token)
 
     request = cluster_pb2.Controller.ListWorkersRequest()
     response = service.list_workers(request, None)
@@ -681,3 +860,79 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 
     job = _query_job(state, JobName.root("test-user", "cpu-job"))
     assert len(job.request.constraints) == 0
+
+
+# =============================================================================
+# Register Role-Gating Tests
+# =============================================================================
+
+
+def test_register_requires_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+    """Non-worker user gets PERMISSION_DENIED on register()."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+
+    db = state._db
+    now = Timestamp.now()
+    db.ensure_user("alice", now, role="user")
+
+    auth = ControllerAuth(provider="static")
+    service = ControllerServiceImpl(
+        state,
+        db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
+        auth=auth,
+    )
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
+    try:
+        with pytest.raises(ConnectError) as exc_info:
+            service.register(
+                cluster_pb2.Controller.RegisterRequest(
+                    worker_id="w-1",
+                    address="localhost:8080",
+                    metadata=worker_metadata(),
+                ),
+                None,
+            )
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(token)
+
+
+def test_register_allows_worker_role(state, mock_scheduler, tmp_path, worker_metadata):
+    """Worker-role user can call register()."""
+    from iris.cluster.bundle import BundleStore
+    from iris.cluster.controller.auth import ControllerAuth
+    from iris.rpc.auth import _verified_identity, VerifiedIdentity
+
+    db = state._db
+    now = Timestamp.now()
+    db.ensure_user("system:worker", now, role="worker")
+
+    auth = ControllerAuth(provider="static")
+    service = ControllerServiceImpl(
+        state,
+        db,
+        controller=mock_scheduler,
+        bundle_store=BundleStore(db_path=tmp_path / "bundles.sqlite3"),
+        log_store=state._log_store,
+        auth=auth,
+    )
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
+    try:
+        resp = service.register(
+            cluster_pb2.Controller.RegisterRequest(
+                worker_id="w-1",
+                address="localhost:8080",
+                metadata=worker_metadata(),
+            ),
+            None,
+        )
+        assert resp.accepted
+    finally:
+        _verified_identity.reset(token)

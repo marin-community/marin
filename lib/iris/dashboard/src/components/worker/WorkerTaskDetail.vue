@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useWorkerRpc } from '@/composables/useRpc'
+import { useWorkerRpc, workerRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useProfileAction } from '@/composables/useProfileAction'
 import { stateToName } from '@/types/status'
 import type { TaskStatus } from '@/types/rpc'
 import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatTimestamp } from '@/utils/formatting'
@@ -11,6 +12,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 
 const MAX_HISTORY_SAMPLES = 60
 
@@ -89,44 +91,7 @@ const ports = computed<[string, number][]>(() => {
   return Object.entries(p)
 })
 
-// Profiling — calls the worker's ProfileTask RPC via Connect
-const profiling = ref(false)
-
-function buildProfileType(profilerType: string): Record<string, unknown> {
-  if (profilerType === 'cpu') return { cpu: { format: 'SPEEDSCOPE' } }
-  if (profilerType === 'memory') return { memory: { format: 'FLAMEGRAPH' } }
-  return { threads: {} }
-}
-
-async function handleProfile(profilerType: string) {
-  profiling.value = true
-  try {
-    const { workerRpcCall } = await import('@/composables/useRpc')
-    const body = {
-      target: props.taskId,
-      durationSeconds: 10,
-      profileType: buildProfileType(profilerType),
-    }
-    const resp = await workerRpcCall<{ profileData?: string; error?: string }>('ProfileTask', body)
-    if (resp.error) {
-      alert(`${profilerType.toUpperCase()} profile failed: ${resp.error}`)
-      return
-    }
-    if (resp.profileData) {
-      const blob = new Blob([atob(resp.profileData)], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `profile-${props.taskId.replace(/\//g, '_')}.out`
-      a.click()
-      URL.revokeObjectURL(url)
-    }
-  } catch (e) {
-    alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
-  } finally {
-    profiling.value = false
-  }
-}
+const { profiling, profile: handleProfile } = useProfileAction(workerRpcCall, () => props.taskId)
 
 const { active: autoRefreshActive, start: startRefresh, stop: stopRefresh } = useAutoRefresh(
   fetchTask,
@@ -294,30 +259,7 @@ onMounted(async () => {
       </InfoCard>
 
       <!-- Profiling buttons (running tasks only) -->
-      <div v-if="isActive" class="flex items-center gap-3">
-        <span class="text-xs text-text-secondary font-medium uppercase tracking-wider">Profiling</span>
-        <button
-          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary disabled:opacity-50"
-          :disabled="profiling"
-          @click="handleProfile('cpu')"
-        >
-          {{ profiling ? '⏳' : 'CPU Profile' }}
-        </button>
-        <button
-          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary disabled:opacity-50"
-          :disabled="profiling"
-          @click="handleProfile('memory')"
-        >
-          {{ profiling ? '⏳' : 'Memory Profile' }}
-        </button>
-        <button
-          class="px-3 py-1.5 text-xs border border-surface-border rounded hover:bg-surface-raised text-text-secondary disabled:opacity-50"
-          :disabled="profiling"
-          @click="handleProfile('threads')"
-        >
-          {{ profiling ? '⏳' : 'Thread Dump' }}
-        </button>
-      </div>
+      <ProfileButtons v-if="isActive" :profiling="profiling" @profile="handleProfile" />
 
       <!-- Error display -->
       <div
@@ -334,5 +276,6 @@ onMounted(async () => {
         <LogViewer :task-id="taskId" source="worker" />
       </div>
     </template>
+
   </div>
 </template>

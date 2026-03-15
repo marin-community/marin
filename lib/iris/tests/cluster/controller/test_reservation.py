@@ -264,7 +264,7 @@ class FakeStubFactory:
 def _make_controller() -> Controller:
     """Create a Controller with minimal config for unit testing."""
     config = ControllerConfig(
-        bundle_prefix="file:///tmp/iris-test-bundles",
+        remote_state_dir="file:///tmp/iris-test-bundles",
     )
     return Controller(config=config, worker_stub_factory=FakeStubFactory())
 

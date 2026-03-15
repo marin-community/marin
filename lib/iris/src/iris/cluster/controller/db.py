@@ -561,12 +561,7 @@ class Job:
     is_reservation_holder: bool = db_field("is_reservation_holder", _decode_bool_int)
 
     def is_finished(self) -> bool:
-        return self.state in (
-            cluster_pb2.JOB_STATE_SUCCEEDED,
-            cluster_pb2.JOB_STATE_FAILED,
-            cluster_pb2.JOB_STATE_KILLED,
-            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-        )
+        return self.state in TERMINAL_JOB_STATES
 
     @property
     def is_coscheduled(self) -> bool:
@@ -738,6 +733,19 @@ class TaskJobSummary:
     task_state_counts: dict[int, int] = field(default_factory=dict)
 
 
+@db_row_model
+class ApiKey:
+    key_id: str = db_field("key_id", _decode_str)
+    key_hash: str = db_field("key_hash", _decode_str)
+    key_prefix: str = db_field("key_prefix", _decode_str)
+    user_id: str = db_field("user_id", _decode_str)
+    name: str = db_field("name", _decode_str)
+    created_at: Timestamp = db_field("created_at_ms", _decode_timestamp_ms)
+    last_used_at: Timestamp | None = db_field("last_used_at_ms", _nullable(_decode_timestamp_ms), default=None)
+    expires_at: Timestamp | None = db_field("expires_at_ms", _nullable(_decode_timestamp_ms), default=None)
+    revoked_at: Timestamp | None = db_field("revoked_at_ms", _nullable(_decode_timestamp_ms), default=None)
+
+
 @dataclass(frozen=True)
 class EndpointQuery:
     endpoint_ids: tuple[str, ...] = ()
@@ -756,6 +764,7 @@ ATTEMPTS = _table_for_model(Attempt, "task_attempts", "a")
 WORKERS = _table_for_model(Worker, "workers", "w")
 ENDPOINTS = _table_for_model(Endpoint, "endpoints", "e")
 TXN_ACTIONS = _table_for_model(TransactionAction, "txn_actions", "ta")
+API_KEYS = _table_for_model(ApiKey, "api_keys", "ak")
 WORKER_ATTRIBUTES = Table[tuple[str, str]](
     sql_name="worker_attributes",
     alias="wa",
@@ -842,6 +851,15 @@ ENDPOINT_TASKS = Table[tuple[str, str]](
     columns={
         "endpoint_id": Column("et", "endpoint_id", _decode_str),
         "task_id": Column("et", "task_id", _decode_job_name),
+    },
+)
+TASK_PROFILES = Table[tuple[str, str]](
+    sql_name="task_profiles",
+    alias="tp",
+    columns={
+        "task_id": Column("tp", "task_id", _decode_str),
+        "profile_data": Column("tp", "profile_data", _identity),
+        "captured_at_ms": Column("tp", "captured_at_ms", _decode_timestamp_ms),
     },
 )
 JOBS.columns["parent_job_id"] = Column("j", "parent_job_id", _nullable(_decode_job_name))
@@ -1075,6 +1093,27 @@ class ControllerDB:
                     (path.name, Timestamp.now().epoch_ms()),
                 )
 
+    def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
+        """Create user if not exists. Does not update role for existing users."""
+        self.execute(
+            "INSERT OR IGNORE INTO users (user_id, created_at_ms, role) VALUES (?, ?, ?)",
+            (user_id, now.epoch_ms(), role),
+        )
+
+    def set_user_role(self, user_id: str, role: str) -> None:
+        """Update the role for an existing user."""
+        self.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
+
+    def get_user_role(self, user_id: str) -> str:
+        """Get a user's role. Returns 'user' if not found."""
+        with self.snapshot() as q:
+            rows = q.raw(
+                "SELECT role FROM users WHERE user_id = ?",
+                (user_id,),
+                decoders={"role": str},
+            )
+            return rows[0].role if rows else "user"
+
     def next_sequence(self, key: str, *, cur: TransactionCursor) -> int:
         row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         if row is None:
@@ -1207,3 +1246,25 @@ def healthy_active_workers_with_attributes(db: ControllerDB) -> list[Worker]:
         )
     attrs_by_worker = _decode_attribute_rows(attrs)
     return [dc_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+
+
+def insert_task_profile(db: ControllerDB, task_id: str, profile_data: bytes, captured_at: Timestamp) -> None:
+    """Insert a captured profile snapshot for a task.
+
+    The DB trigger caps profiles at 10 per task, evicting the oldest automatically.
+    """
+    db.execute(
+        "INSERT INTO task_profiles (task_id, profile_data, captured_at_ms) VALUES (?, ?, ?)",
+        (task_id, profile_data, captured_at.epoch_ms()),
+    )
+
+
+def get_task_profiles(db: ControllerDB, task_id: str) -> list[tuple[bytes, Timestamp]]:
+    """Return all stored profile snapshots for a task, newest first."""
+    with db.snapshot() as q:
+        rows = q.raw(
+            "SELECT profile_data, captured_at_ms FROM task_profiles WHERE task_id = ? ORDER BY id DESC",
+            (task_id,),
+            decoders={"captured_at_ms": _decode_timestamp_ms},
+        )
+    return [(row.profile_data, row.captured_at_ms) for row in rows]

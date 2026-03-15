@@ -101,7 +101,7 @@ DEFAULT_SCALE_UP_COOLDOWN = Duration.from_minutes(1)
 DEFAULT_BACKOFF_INITIAL = Duration.from_minutes(5)
 DEFAULT_BACKOFF_MAX = Duration.from_minutes(15)
 DEFAULT_BACKOFF_FACTOR = 2.0
-DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(5)
+DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(10)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
 
 
@@ -793,30 +793,39 @@ class ScalingGroup:
             if current_count <= self._config.min_slices:
                 break
 
+            # Verify idle before acquiring a rate-limit token so that
+            # failed verifications don't waste tokens.
+            if not self._verify_slice_idle(slice_state, worker_status_map):
+                continue
+
             if not self.acquire_scale_down_token(timestamp):
-                logger.info("Scale group %s: scale down rate-limited after %d terminations", self.name, len(terminated))
+                if terminated:
+                    logger.info(
+                        "Scale group %s: scale down rate-limited after %d terminations",
+                        self.name,
+                        len(terminated),
+                    )
                 break
 
-            if self._verify_slice_idle(slice_state, worker_status_map):
-                with self._slices_lock:
-                    state = self._slices.get(slice_state.handle.slice_id)
-                last_active = state.last_active if state else Timestamp.from_ms(0)
-                never_active = last_active.epoch_ms() == 0
-                idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
-                logger.info(
-                    "Scale group %s: scaling down slice %s "
-                    "(idle for %dms, never_active=%s, ready=%d/%d, pending=%d, target=%d)",
-                    self.name,
-                    slice_state.handle.slice_id,
-                    idle_duration.to_ms(),
-                    never_active,
-                    ready,
-                    self.num_vms,
-                    pending,
-                    target_capacity,
-                )
-                self.scale_down(slice_state.handle.slice_id, timestamp)
-                terminated.append(slice_state.handle)
+            with self._slices_lock:
+                state = self._slices.get(slice_state.handle.slice_id)
+            last_active = state.last_active if state else Timestamp.from_ms(0)
+            never_active = last_active.epoch_ms() == 0
+            idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
+            logger.info(
+                "Scale group %s: scaling down slice %s "
+                "(idle for %dms, never_active=%s, ready=%d/%d, pending=%d, target=%d)",
+                self.name,
+                slice_state.handle.slice_id,
+                idle_duration.to_ms(),
+                never_active,
+                ready,
+                self.num_vms,
+                pending,
+                target_capacity,
+            )
+            self.scale_down(slice_state.handle.slice_id, timestamp)
+            terminated.append(slice_state.handle)
 
         return terminated
 

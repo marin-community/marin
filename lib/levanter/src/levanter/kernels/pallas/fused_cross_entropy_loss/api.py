@@ -626,18 +626,25 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             elif has_tuned_match:
                 block_sizes_for_impl = inferred
             else:
-                block_sizes_for_impl = _autotune_block_sizes_on_miss(
-                    impl_name=impl_for_call,
-                    fn=fn,
-                    x=x,
-                    labels=labels,
-                    w=w,
-                    inferred=inferred,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                    return_argmax=return_argmax,
-                )
+                try:
+                    block_sizes_for_impl = _autotune_block_sizes_on_miss(
+                        impl_name=impl_for_call,
+                        fn=fn,
+                        x=x,
+                        labels=labels,
+                        w=w,
+                        inferred=inferred,
+                        dtype=dtype,
+                        logit_soft_cap=logit_soft_cap,
+                        precision=precision,
+                        return_argmax=return_argmax,
+                    )
+                except Exception as exc:
+                    if explicit:
+                        raise
+                    _warn_pallas_fallback_once(exc)
+                    errors.append(exc)
+                    continue
         else:
             block_sizes_for_impl = infer_block_sizes(
                 x.shape[0],

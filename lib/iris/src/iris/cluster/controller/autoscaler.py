@@ -931,8 +931,6 @@ class Autoscaler:
         pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING] + requesting
         total = sum(counts.values())
 
-        capacity_slices = ready + pending
-
         logger.debug(
             "Evaluating group %s: total=%d, ready=%d, pending=%d, required_slices=%d, min=%d, max=%d",
             group.name,
@@ -963,20 +961,22 @@ class Autoscaler:
                 )
             ]
 
-        # Priority 2: Scale UP when required slices exceed available capacity
-        if required_slices > capacity_slices and total < group.max_slices:
+        # Priority 2: Scale UP when required slices exceed pending capacity.
+        # Compare against pending only — ready slices were already tested by the
+        # dry-run and found insufficient (e.g. RAM-full), so counting them as
+        # available capacity would double-count and cause deadlock.
+        if required_slices > pending and total < group.max_slices:
             if not group.can_scale_up(ts):
                 logger.debug("Scale group %s: scale up blocked", group.name)
                 return []
 
-            slices_to_add = min(required_slices - capacity_slices, group.max_slices - total)
+            slices_to_add = min(required_slices - pending, group.max_slices - total)
             return [
                 ScalingDecision(
                     scale_group=group.name,
                     action=ScalingAction.SCALE_UP,
                     reason=(
-                        f"required_slices={required_slices} > capacity={capacity_slices}"
-                        f" (scaling {i + 1}/{slices_to_add})"
+                        f"required_slices={required_slices} > pending={pending}" f" (scaling {i + 1}/{slices_to_add})"
                     ),
                 )
                 for i in range(slices_to_add)

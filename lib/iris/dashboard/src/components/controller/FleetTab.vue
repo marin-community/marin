@@ -8,6 +8,7 @@ import { timestampMs, formatRelativeTime, formatBytes, formatWorkerDevice } from
 
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import CopyButton from '@/components/shared/CopyButton.vue'
 
 const { data, loading, error, refresh } = useControllerRpc<ListWorkersResponse>('ListWorkers')
 
@@ -70,7 +71,11 @@ const columns: Column[] = [
         </template>
 
         <template #cell-address="{ row }">
-          {{ (row as WorkerHealthStatus).address ?? '-' }}
+          <span v-if="(row as WorkerHealthStatus).address" class="group/addr inline-flex items-center gap-1">
+            {{ (row as WorkerHealthStatus).address }}
+            <CopyButton :value="(row as WorkerHealthStatus).address!" />
+          </span>
+          <span v-else>-</span>
         </template>
 
         <template #cell-device="{ row }">
@@ -79,7 +84,7 @@ const columns: Column[] = [
 
         <template #cell-zone="{ row }">
           <span class="text-xs font-mono">
-            {{ (row as WorkerHealthStatus).metadata?.gceZone ?? '-' }}
+            {{ (row as WorkerHealthStatus).metadata?.attributes?.zone?.stringValue ?? '-' }}
           </span>
         </template>
 

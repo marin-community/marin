@@ -3,7 +3,7 @@
 
 """E2ECluster: context manager for running Controller + Worker clusters in tests.
 
-Supports both in-process (LocalController) and Docker (real containers) modes.
+Supports both in-process (LocalCluster) and Docker (real containers) modes.
 Docker mode manually wires up Controller + Workers with DockerRuntime, which is
 needed for tests that exercise container-specific behavior (OOM, JAX env vars).
 """
@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.controller.local import LocalController
+from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platform.base import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
@@ -39,13 +39,13 @@ def unique_name(prefix: str) -> str:
 def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
 
-    Sets up controller.local, bundle_prefix, scale groups with local vm_type,
+    Sets up controller.local, remote_state_dir, scale groups with local vm_type,
     and fast autoscaler evaluation for tests.
     """
     config = config_pb2.IrisClusterConfig()
 
     config.controller.local.port = 0
-    config.storage.bundle_prefix = ""
+    config.storage.remote_state_dir = ""
     config.platform.local.SetInParent()
 
     sg = config_pb2.ScaleGroupConfig(
@@ -65,7 +65,7 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
 
     config.defaults.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
     config.defaults.autoscaler.scale_up_delay.CopyFrom(Duration.from_seconds(1).to_proto())
-    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_minutes(5).to_proto())
+    config.defaults.autoscaler.scale_down_delay.CopyFrom(Duration.from_seconds(1).to_proto())
 
     return config
 
@@ -97,7 +97,7 @@ class E2ECluster:
         self._use_docker = use_docker
         self._cache_dir = cache_dir
         self._env_provider_factory = env_provider_factory
-        self._controller: LocalController | Controller | None = None
+        self._controller: LocalCluster | Controller | None = None
         self._controller_port: int | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._container_runtime: DockerRuntime | None = None
@@ -110,7 +110,7 @@ class E2ECluster:
     def __enter__(self):
         if not self._use_docker:
             config = _make_e2e_config(self._num_workers)
-            self._controller = LocalController(config)
+            self._controller = LocalCluster(config)
             address = self._controller.start()
             self._controller_port = int(address.rsplit(":", 1)[1])
             self._controller_client = ControllerServiceClientSync(
@@ -136,7 +136,7 @@ class E2ECluster:
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
-            bundle_prefix=f"file://{bundle_dir}",
+            remote_state_dir=f"file://{bundle_dir}",
         )
         self._controller = Controller(
             config=controller_config,
@@ -207,7 +207,7 @@ class E2ECluster:
             self._controller_client.close()
         if not self._use_docker:
             if self._controller:
-                self._controller.stop()
+                self._controller.close()
         else:
             for worker in self._workers:
                 worker.stop()

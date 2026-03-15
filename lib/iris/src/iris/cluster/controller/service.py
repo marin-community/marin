@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import secrets
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -19,9 +20,26 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
+from iris.cluster.controller.auth import (
+    DEFAULT_JWT_TTL_SECONDS,
+    ControllerAuth,
+    create_api_key,
+    list_api_keys,
+    revoke_api_key,
+    revoke_login_keys_for_user,
+)
+from iris.rpc.auth import (
+    AuthzAction,
+    authorize,
+    authorize_resource_owner,
+    get_verified_identity,
+    get_verified_user,
+    require_identity,
+)
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
+    API_KEYS,
     ATTEMPTS,
     ENDPOINTS,
     JOBS,
@@ -44,7 +62,6 @@ from iris.cluster.controller.db import (
     Worker,
     _tasks_with_attempts,
     endpoint_query_predicate,
-    healthy_active_workers_with_attributes,
     running_tasks_by_worker,
     tasks_for_job_with_attempts,
 )
@@ -63,7 +80,7 @@ from iris.time_utils import Timestamp, Timer
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
-DEFAULT_MAX_TOTAL_LINES = 10000
+DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
@@ -449,7 +466,7 @@ class ControllerProtocol(Protocol):
 
     def create_scheduling_context(self, workers: list[Worker]) -> SchedulingContext: ...
 
-    def get_job_scheduling_diagnostics(self, job: Job, context: SchedulingContext) -> str: ...
+    def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
     def begin_checkpoint(self) -> tuple[str, Any]: ...
 
@@ -503,6 +520,7 @@ class ControllerServiceImpl:
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_store: LogStore,
+        auth: ControllerAuth | None = None,
     ):
         self._transitions = transitions
         self._db = db
@@ -510,6 +528,7 @@ class ControllerServiceImpl:
         self._bundle_store = bundle_store
         self._log_store = log_store
         self._timer = Timer()
+        self._auth = auth or ControllerAuth()
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -523,6 +542,15 @@ class ControllerServiceImpl:
         if not status.HasField("last_routing_decision"):
             return {}
         return build_job_pending_hints(status.last_routing_decision)
+
+    def _authorize_job_owner(self, job_id: JobName) -> None:
+        """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
+
+        Skipped when no auth provider is configured (null-auth mode).
+        """
+        if not self._auth.provider:
+            return
+        authorize_resource_owner(job_id.user)
 
     def launch_job(
         self,
@@ -539,6 +567,17 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
+        # When an auth provider is configured, override the user segment with
+        # the verified identity to prevent impersonation. Only override for
+        # root-level submissions; child jobs inherit the parent's user.
+        verified_user = get_verified_user()
+        if self._auth.provider and verified_user is not None and job_id.is_root:
+            job_id = JobName.root(verified_user, job_id.name)
+
+        # For non-root jobs, verify the caller owns the parent hierarchy
+        if self._auth.provider and verified_user is not None and not job_id.is_root:
+            self._authorize_job_owner(job_id)
+
         # Reject submissions if the parent job has already terminated
         if job_id.parent:
             parent_job = _read_job(self._db, job_id.parent)
@@ -551,19 +590,29 @@ class ControllerServiceImpl:
 
         existing_job = _read_job(self._db, job_id)
         if existing_job:
-            # By default (fail_if_exists=False), replace finished jobs
-            if existing_job.is_finished() and not request.fail_if_exists:
+            policy = request.existing_job_policy
+            if policy == cluster_pb2.EXISTING_JOB_POLICY_ERROR:
+                raise ConnectError(
+                    Code.ALREADY_EXISTS,
+                    f"Job {job_id} already exists (state={cluster_pb2.JobState.Name(existing_job.state)})",
+                )
+            elif policy == cluster_pb2.EXISTING_JOB_POLICY_KEEP:
+                if not existing_job.is_finished():
+                    return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
+                # Job finished, replace it (KEEP only preserves running jobs)
+                self._transitions.remove_finished_job(job_id)
+            elif policy == cluster_pb2.EXISTING_JOB_POLICY_RECREATE:
+                if not existing_job.is_finished():
+                    self._transitions.cancel_job(job_id, "Replaced by new submission")
+                self._transitions.remove_finished_job(job_id)
+            elif existing_job.is_finished():
+                # Default/UNSPECIFIED: replace finished jobs
                 logger.info(
                     "Replacing finished job %s (state=%s) with new submission",
                     job_id,
                     cluster_pb2.JobState.Name(existing_job.state),
                 )
                 self._transitions.remove_finished_job(job_id)
-            elif existing_job.is_finished():
-                raise ConnectError(
-                    Code.ALREADY_EXISTS,
-                    f"Job {job_id} already exists (state={cluster_pb2.JobState.Name(existing_job.state)})",
-                )
             else:
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
@@ -639,17 +688,13 @@ class ControllerServiceImpl:
 
             task_statuses.append(task_to_proto(task, worker_address=worker_addr_by_id.get(task.worker_id, "")))
 
-        # Get scheduling diagnostics for pending jobs
+        # Get scheduling diagnostics for pending jobs from cache
+        # (populated each scheduling cycle by the controller).
         pending_reason = ""
         if job.state == cluster_pb2.JOB_STATE_PENDING:
-            # Create scheduling context once for all tasks
-            workers = healthy_active_workers_with_attributes(self._db)
-            sched_context = self._controller.create_scheduling_context(workers)
-            # Get job-level diagnostics (expensive but only for detail view)
-            pending_reason = self._controller.get_job_scheduling_diagnostics(job, sched_context)
+            sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
+            pending_reason = sched_reason or "Pending scheduler feedback"
             hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire())
-            # Always show both scheduler and autoscaler diagnostics so users
-            # see the full picture (root-cause + scaling status).
             if hint is not None:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
@@ -690,11 +735,13 @@ class ControllerServiceImpl:
         Cascade termination is performed depth-first: all children are
         terminated before the parent. All tasks within each job are killed.
         """
-        job = _read_job(self._db, JobName.from_wire(request.job_id))
+        job_id = JobName.from_wire(request.job_id)
+        job = _read_job(self._db, job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        self._terminate_job_tree(JobName.from_wire(request.job_id))
+        self._authorize_job_owner(job_id)
+        self._terminate_job_tree(job_id)
         return cluster_pb2.Empty()
 
     def _terminate_job_tree(self, job_id: JobName) -> None:
@@ -765,10 +812,12 @@ class ControllerServiceImpl:
 
             pending_reason = j.error or ""
             if j.state == cluster_pb2.JOB_STATE_PENDING:
+                sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
+                pending_reason = sched_reason or "Pending scheduler feedback"
                 hint = autoscaler_pending_hints.get(j.job_id.to_wire())
                 if hint is not None:
                     scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
-                    pending_reason = f"Autoscaler: {scaling_prefix}{hint.message}"
+                    pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
             proto_job = cluster_pb2.JobStatus(
                 job_id=j.job_id.to_wire(),
@@ -929,6 +978,9 @@ class ControllerServiceImpl:
 
         Worker registers once, then waits for heartbeats from the controller.
         """
+        if self._auth.provider is not None:
+            authorize(AuthzAction.REGISTER_WORKER)
+
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
             return cluster_pb2.Controller.RegisterResponse(
@@ -1080,6 +1132,10 @@ class ControllerServiceImpl:
         for w in workers:
             worker_id_to_info[w.worker_id] = (w.worker_id, w.healthy)
 
+        # Fetch running task counts per worker for dashboard display
+        all_worker_ids = {WorkerId(w.worker_id) for w in workers}
+        running_by_worker = running_tasks_by_worker(self._db, all_worker_ids) if all_worker_ids else {}
+
         # Enrich VmInfo objects with worker information by matching vm_id to worker_id
         for group in status.groups:
             for slice_info in group.slices:
@@ -1088,6 +1144,8 @@ class ControllerServiceImpl:
                     if worker_info:
                         vm.worker_id = worker_info[0]
                         vm.worker_healthy = worker_info[1]
+                        wid = WorkerId(vm.worker_id)
+                        vm.running_task_count = len(running_by_worker.get(wid, set()))
 
         return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
@@ -1463,3 +1521,157 @@ class ControllerServiceImpl:
             target="/system/process",
         )
         return stub.get_process_status(forwarded, timeout_ms=10000)
+
+    # ── Auth RPCs ────────────────────────────────────────────────────────
+
+    def get_auth_info(
+        self,
+        request: cluster_pb2.GetAuthInfoRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetAuthInfoResponse:
+        return cluster_pb2.GetAuthInfoResponse(
+            provider=self._auth.provider or "",
+            gcp_project_id=self._auth.gcp_project_id or "",
+        )
+
+    def login(
+        self,
+        request: cluster_pb2.LoginRequest,
+        ctx: Any,
+    ) -> cluster_pb2.LoginResponse:
+        if not self._auth.login_verifier:
+            raise ConnectError(Code.UNIMPLEMENTED, "Login not available (no identity provider configured)")
+        if not self._auth.jwt_manager:
+            raise ConnectError(Code.INTERNAL, "JWT manager not configured")
+
+        try:
+            login_identity = self._auth.login_verifier.verify(request.identity_token)
+        except ValueError as exc:
+            logger.info("Login verification failed: %s", exc)
+            raise ConnectError(Code.UNAUTHENTICATED, "Identity verification failed") from exc
+
+        username = login_identity.user_id
+        if username.startswith("system:"):
+            raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
+
+        now = Timestamp.now()
+        self._db.ensure_user(username, now)
+        role = self._db.get_user_role(username)
+
+        # Revoke old login keys and propagate to in-memory revocation set
+        revoked_ids = revoke_login_keys_for_user(self._db, username, now)
+        for jti in revoked_ids:
+            self._auth.jwt_manager.revoke(jti)
+
+        key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        expires_at = Timestamp.from_ms(now.epoch_ms() + DEFAULT_JWT_TTL_SECONDS * 1000)
+        create_api_key(
+            self._db,
+            key_id=key_id,
+            key_hash=f"jwt:{key_id}",
+            key_prefix="jwt",
+            user_id=username,
+            name=f"login-{now.epoch_ms()}",
+            now=now,
+            expires_at=expires_at,
+        )
+
+        jwt_token = self._auth.jwt_manager.create_token(username, role, key_id)
+        logger.info(
+            "Login: user=%s, role=%s, new_key=%s, revoked=%d old login keys", username, role, key_id, len(revoked_ids)
+        )
+        return cluster_pb2.LoginResponse(token=jwt_token, key_id=key_id, user_id=username)
+
+    def create_api_key(
+        self,
+        request: cluster_pb2.CreateApiKeyRequest,
+        ctx: Any,
+    ) -> cluster_pb2.CreateApiKeyResponse:
+        if not self._auth.jwt_manager:
+            raise ConnectError(Code.INTERNAL, "JWT manager not configured")
+
+        identity = require_identity()
+        target_user = request.user_id or identity.user_id
+        if target_user != identity.user_id:
+            authorize(AuthzAction.MANAGE_OTHER_KEYS)
+
+        now = Timestamp.now()
+        self._db.ensure_user(target_user, now)
+        role = self._db.get_user_role(target_user)
+
+        key_id = f"iris_k_{secrets.token_urlsafe(8)}"
+        ttl = request.ttl_ms // 1000 if request.ttl_ms > 0 else DEFAULT_JWT_TTL_SECONDS
+        # Always persist the actual JWT expiry so the DB and token agree.
+        expires_at = Timestamp.from_ms(now.epoch_ms() + ttl * 1000)
+
+        create_api_key(
+            self._db,
+            key_id=key_id,
+            key_hash=f"jwt:{key_id}",
+            key_prefix="jwt",
+            user_id=target_user,
+            name=request.name or f"key-{now.epoch_ms()}",
+            now=now,
+            expires_at=expires_at,
+        )
+
+        jwt_token = self._auth.jwt_manager.create_token(target_user, role, key_id, ttl_seconds=ttl)
+        # Use key_id prefix (not JWT prefix — all HS256 JWTs share the same header)
+        return cluster_pb2.CreateApiKeyResponse(key_id=key_id, token=jwt_token, key_prefix=key_id[:8])
+
+    def revoke_api_key(
+        self,
+        request: cluster_pb2.RevokeApiKeyRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Empty:
+        identity = require_identity()
+        with self._db.snapshot() as q:
+            key = q.one(API_KEYS, where=API_KEYS.c.key_id == request.key_id)
+        if key is None:
+            raise ConnectError(Code.NOT_FOUND, f"API key not found: {request.key_id}")
+        if key.user_id != identity.user_id:
+            authorize(AuthzAction.MANAGE_OTHER_KEYS)
+        revoke_api_key(self._db, request.key_id, Timestamp.now())
+        if self._auth.jwt_manager:
+            self._auth.jwt_manager.revoke(request.key_id)
+        return cluster_pb2.Empty()
+
+    def list_api_keys(
+        self,
+        request: cluster_pb2.ListApiKeysRequest,
+        ctx: Any,
+    ) -> cluster_pb2.ListApiKeysResponse:
+        identity = require_identity()
+        target_user = request.user_id or identity.user_id
+        if target_user != identity.user_id:
+            authorize(AuthzAction.MANAGE_OTHER_KEYS)
+
+        keys = list_api_keys(self._db, user_id=target_user if target_user else None)
+        key_infos = []
+        for k in keys:
+            key_infos.append(
+                cluster_pb2.ApiKeyInfo(
+                    key_id=k.key_id,
+                    key_prefix=k.key_prefix,
+                    user_id=k.user_id,
+                    name=k.name,
+                    created_at_ms=k.created_at.epoch_ms(),
+                    last_used_at_ms=k.last_used_at.epoch_ms() if k.last_used_at else 0,
+                    expires_at_ms=k.expires_at.epoch_ms() if k.expires_at else 0,
+                    revoked=k.revoked_at is not None,
+                )
+            )
+        return cluster_pb2.ListApiKeysResponse(keys=key_infos)
+
+    def get_current_user(
+        self,
+        request: cluster_pb2.GetCurrentUserRequest,
+        ctx: Any,
+    ) -> cluster_pb2.GetCurrentUserResponse:
+        identity = get_verified_identity()
+        if identity is None:
+            return cluster_pb2.GetCurrentUserResponse(user_id="anonymous", role="")
+        return cluster_pb2.GetCurrentUserResponse(
+            user_id=identity.user_id,
+            role=identity.role,
+        )

@@ -48,11 +48,16 @@ DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _build_dashboard():
-    """Build the Vue dashboard once per test session so dashboard tests can render."""
-    from iris.cli.build import _ensure_dashboard_dist
-
-    _ensure_dashboard_dist()
+def _ensure_dashboard_built():
+    """Build dashboard assets once per session so dashboard tests have content to render."""
+    dashboard_dir = IRIS_ROOT / "dashboard"
+    if not (dashboard_dir / "package.json").exists():
+        return
+    if shutil.which("npm") is None:
+        logging.getLogger(__name__).warning("npm not found, skipping dashboard build for tests")
+        return
+    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
+    subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
 
 
 def pytest_addoption(parser):

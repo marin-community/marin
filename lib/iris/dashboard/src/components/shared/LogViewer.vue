@@ -42,6 +42,7 @@ const taskLogState = props.taskId
       id: props.taskId,
       maxTotalLines: tailLines.value || undefined,
       attemptId: selectedAttemptId.value >= 0 ? selectedAttemptId.value : -1,
+      tail: true,
     }))
   : null
 
@@ -119,7 +120,6 @@ const filteredLogs = computed(() => {
         <option :value="1000">1,000 lines</option>
         <option :value="5000">5,000 lines</option>
         <option :value="10000">10,000 lines</option>
-        <option :value="0">All</option>
       </select>
       <select
         v-if="attempts && attempts.length > 0"

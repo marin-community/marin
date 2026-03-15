@@ -605,6 +605,10 @@ class RayActorGroup:
         self._yielded = True
         return self._handles
 
+    def is_done(self) -> bool:
+        """Ray actors managed by Zephyr don't have an independent job lifecycle."""
+        return False
+
     def shutdown(self) -> None:
         """Kill all Ray actors."""
         for handle in self._handles:

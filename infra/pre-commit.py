@@ -528,9 +528,44 @@ def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Jupyter notebooks", 0)
 
 
+def _ensure_iris_protos() -> None:
+    """Generate iris protobuf files if they are missing and npx is available.
+
+    Pyrefly needs the generated *_pb2.py and *_connect.py files on disk to
+    resolve imports from other modules, even when the generated files themselves
+    are excluded from type-checking via project-excludes.
+    """
+    import shutil
+
+    rpc_dir = ROOT_DIR / "lib" / "iris" / "src" / "iris" / "rpc"
+    # Check if any pb2 file exists already
+    if list(rpc_dir.glob("*_pb2.py")):
+        return
+
+    generate_script = ROOT_DIR / "lib" / "iris" / "scripts" / "generate_protos.py"
+    if not generate_script.exists():
+        return
+
+    if shutil.which("npx") is None:
+        print("  ⚠ Iris protobuf files are missing and npx is not installed; pyrefly may report false errors")
+        return
+
+    print("  Generating iris protobuf files for type checking...")
+    result = subprocess.run(
+        [sys.executable, str(generate_script)],
+        cwd=ROOT_DIR / "lib" / "iris",
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"  ⚠ Proto generation failed: {result.stderr.strip()}")
+
+
 def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
+
+    _ensure_iris_protos()
 
     args = ["uvx", "pyrefly@0.42.0", "check", "--baseline", ".pyrefly-baseline.json"]
     result = run_cmd(args)

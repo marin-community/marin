@@ -15,11 +15,13 @@ from starlette.testclient import TestClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
+    JOBS,
     TASKS,
     ATTEMPTS,
     ControllerDB,
     Endpoint,
     _tasks_with_attempts,
+    healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -145,9 +147,9 @@ def scheduler():
 def _make_controller_mock(state, scheduler, autoscaler=None):
     """Build a mock that implements the ControllerProtocol for testing.
 
-    The mock delegates create_scheduling_context and get_job_scheduling_diagnostics
-    to the scheduler, mirroring how the real controller converts worker/job rows
-    into scheduler-native types at the boundary.
+    The mock delegates create_scheduling_context to the scheduler and computes
+    scheduling diagnostics on the fly, mirroring how the real controller caches
+    diagnostics per scheduling cycle.
     """
 
     def _create_scheduling_context(workers):
@@ -167,7 +169,15 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         building_counts = {row.worker_id: row.c for row in rows}
         return scheduler.create_scheduling_context(workers, building_counts=building_counts)
 
-    def _get_job_scheduling_diagnostics(job, context):
+    def _get_job_scheduling_diagnostics(job_wire_id):
+        """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
+        with state._db.snapshot() as q:
+            rows = q.select(JOBS, where=JOBS.c.job_id == job_wire_id)
+        if not rows:
+            return None
+        job = rows[0]
+        if job.state != cluster_pb2.JOB_STATE_PENDING:
+            return None
         req = JobRequirements(
             resources=job.request.resources,
             constraints=list(job.request.constraints),
@@ -176,6 +186,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if t.can_be_scheduled()), None)
+        workers = healthy_active_workers_with_attributes(state._db)
+        context = _create_scheduling_context(workers)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
     controller_mock = Mock()
@@ -1002,3 +1014,32 @@ def test_bundle_download_route_serves_bundle_bytes(client, service):
     assert resp.status_code == 200
     assert resp.content == bundle_bytes
     assert resp.headers["content-type"] == "application/zip"
+
+
+# =============================================================================
+# Auth Config Endpoint Tests
+# =============================================================================
+
+
+def test_auth_config_returns_disabled_by_default(client):
+    """Auth config endpoint reports auth disabled when no verifier is configured."""
+    resp = client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["auth_enabled"] is False
+    assert data["provider"] is None
+
+
+def test_auth_config_returns_enabled_when_verifier_set(service):
+    """Auth config endpoint reports auth enabled with provider name."""
+    from iris.rpc.auth import StaticTokenVerifier
+
+    verifier = StaticTokenVerifier({"test-token": "test-user"})
+    dashboard = ControllerDashboard(service, auth_verifier=verifier, auth_provider="gcp")
+    authed_client = TestClient(dashboard.app)
+
+    resp = authed_client.get("/auth/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["auth_enabled"] is True
+    assert data["provider"] == "gcp"

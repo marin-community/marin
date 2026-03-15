@@ -17,7 +17,7 @@
 
 Provides start_controller() and stop_controller() — both taking a Platform
 instance. These work uniformly across GCP and Manual platforms. For local
-mode, use LocalController directly (fundamentally different mechanism:
+mode, use LocalCluster directly (fundamentally different mechanism:
 in-process, no SSH/Docker).
 """
 
@@ -307,7 +307,7 @@ def _build_controller_vm_config(
         if ssh.key_file:
             vm_config.manual.ssh_key_file = ssh.key_file
     else:
-        raise ValueError(f"start_controller() does not support controller type: {which}. Use LocalController for local.")
+        raise ValueError(f"start_controller() does not support controller type: {which}. Use LocalCluster for local.")
 
     return vm_config
 
