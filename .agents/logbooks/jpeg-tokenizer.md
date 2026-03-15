@@ -1495,3 +1495,37 @@
     - baseline `ac_dense` checkpoint
     - new `ac_dense_absdc` checkpoint
     - optional `coeff_k64` anchor.
+
+### 2026-03-14 22:37 - Whole-image eval: `ac_dense_absdc` beats `ac_dense` and `coeff_k64`
+
+- Goal:
+  - verify whether removing DC differencing improves sequence-level NTP quality at fixed sequence length and vocab
+- Eval launch path:
+  - initial `v6e-8` eval submit (`r1`) remained capacity-pending
+  - attempted `v5litepod-16` (`r2`) was unschedulable on this cluster
+  - attempted `v6e-16` (`r3`) accepted but remained autoscaler-pending
+  - final successful run (`r4`) on `v6e-4`:
+    - job:
+      `/dlwh/jpeg-tokenizer-ac-dense-absdc-repr-eval-r4-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-absdc-repr-eval-r4-iris1`
+- Command (r4 run specs):
+  - `coeff_k64_exact` checkpoint:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-k64-libjpeg-swa4096-trial-7e3e81/checkpoints/step-2000`
+  - `ac_dense_exact` checkpoint:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-whole-libjpeg-swa4096-trial-97d827/checkpoints/step-2000`
+  - `ac_dense_absdc_exact` checkpoint:
+    `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-trial-54207f/checkpoints/step-2000`
+  - full validation (`3925` images), `batch_size=8`
+- Results (whole-image loss; mean bits/image):
+  - `ac_dense_absdc_exact`: `138,354.19`
+  - `coeff_k64_exact`: `138,557.72`
+  - `ac_dense_exact`: `138,763.53`
+- Bits/pixel:
+  - `ac_dense_absdc_exact`: `2.1111`
+  - `coeff_k64_exact`: `2.1142`
+  - `ac_dense_exact`: `2.1174`
+- Interpretation:
+  - removing DC differencing improves whole-image NTP objective at matched `seq_len=65536` and `vocab_size=6142`.
+  - this is consistent with context probe results (`ac_dense_absdc` local flip `0.0000` vs `ac_dense` `0.0156`), strengthening
+    the "constant token meaning helps AR" claim on both axis `(3)` probe and sequence-level metric.
