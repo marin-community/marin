@@ -7,6 +7,7 @@ import socket
 import time
 import zipfile
 import hashlib
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -667,6 +668,24 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert env["JOB_ONLY"] == "from_job"
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
+
+
+def test_prepare_and_cleanup_workdir_called_during_lifecycle(worker, mock_runtime):
+    """prepare_workdir is called during setup and cleanup_workdir during teardown."""
+    request = create_run_task_request()
+    task_id = worker.submit_task(request)
+
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    mock_runtime.prepare_workdir.assert_called_once()
+    call_kwargs = mock_runtime.prepare_workdir.call_args.kwargs
+    assert isinstance(call_kwargs["workdir"], Path)
+    assert isinstance(call_kwargs["disk_bytes"], int)
+
+    mock_runtime.cleanup_workdir.assert_called_once()
+    cleanup_arg = mock_runtime.cleanup_workdir.call_args[0][0]
+    assert isinstance(cleanup_arg, Path)
 
 
 def test_task_failure_error_appears_in_logs(worker):

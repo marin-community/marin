@@ -412,6 +412,45 @@ def test_status_ignores_successful_init_containers(monkeypatch):
     assert status.phase == ContainerPhase.RUNNING
 
 
+def test_disk_bytes_sets_emptydir_sizelimit(monkeypatch):
+    """When disk_bytes is set on the resource spec, the workdir emptyDir volume should have a sizeLimit."""
+    manifests = _capture_manifest(monkeypatch)
+
+    device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(count=0))
+    resources = cluster_pb2.ResourceSpecProto(device=device, disk_bytes=10 * 1024**3)
+    config = ContainerConfig(
+        image="ghcr.io/example/task:latest",
+        entrypoint=_make_entrypoint(["python", "-c", "print('ok')"]),
+        env={"FOO": "bar"},
+        workdir="/app",
+        task_id="job/task/0",
+        network_mode="host",
+        resources=resources,
+    )
+
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(config)
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    workdir_vol = next(v for v in pod["spec"]["volumes"] if v["name"] == "workdir")
+    assert "sizeLimit" in workdir_vol["emptyDir"]
+    assert workdir_vol["emptyDir"]["sizeLimit"] == str(10 * 1024**3)
+
+
+def test_no_disk_bytes_emptydir_has_no_sizelimit(monkeypatch):
+    """When disk_bytes is not set, the workdir emptyDir volume should have no sizeLimit."""
+    manifests = _capture_manifest(monkeypatch)
+
+    runtime = KubernetesRuntime(namespace="iris")
+    handle = runtime.create_container(_make_config())
+    handle.run()
+
+    pod = _pod_manifest(manifests)
+    workdir_vol = next(v for v in pod["spec"]["volumes"] if v["name"] == "workdir")
+    assert workdir_vol["emptyDir"] == {}
+
+
 def _make_zip(entries: dict[str, bytes]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zf:

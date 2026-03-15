@@ -13,6 +13,7 @@ from iris.cluster.worker.env_probe import (
     HostMetricsCollector,
     _read_net_dev_bytes,
     build_worker_metadata,
+    collect_workdir_size_mb,
     construct_worker_id,
 )
 from iris.rpc import config_pb2
@@ -361,6 +362,27 @@ def test_host_metrics_collector_network_delta(monkeypatch):
     snapshot2 = collector.collect()
     assert snapshot2.net_recv_bps == 1000
     assert snapshot2.net_sent_bps == 2000
+
+
+# --- Workdir size collection ---
+
+
+def test_collect_workdir_size_mb_returns_value(tmp_path):
+    """Writing data to a directory yields a non-negative used MB count."""
+    (tmp_path / "data.bin").write_bytes(b"\0" * 4096)
+    result = collect_workdir_size_mb(tmp_path)
+    assert result >= 0
+
+
+def test_collect_workdir_size_mb_returns_zero_for_missing():
+    """A nonexistent path returns 0 instead of raising."""
+    from pathlib import Path
+
+    result = collect_workdir_size_mb(Path("/nonexistent/path/unlikely_to_exist"))
+    assert result == 0
+
+
+# --- Network metrics ---
 
 
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
