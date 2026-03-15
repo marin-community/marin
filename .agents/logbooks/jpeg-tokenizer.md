@@ -1324,3 +1324,39 @@
   - monitor to terminal state and summarize by rubric axis:
     - `(2)` from perturbation amplification
     - partial `(4)` signal from horizon-tail behavior
+
+### 2026-03-14 18:56 - Context-dependence probe implemented and full runs launched
+
+- Goal:
+  - operationalize rubric axis `(3)` with a direct local-token context-dependence score
+- Changes:
+  - added:
+    `scripts/jpeg_tokenizer/evaluate_context_dependence.py`
+  - method:
+    - keep one `8x8` target block fixed from base image
+    - replace all surrounding pixels with a paired context image
+    - re-canonicalize and re-encode
+    - compare target-block token sequences for:
+      `coeff_k64`, `ac_dense`, `symbols`, `huffman_events`
+    - `coeff_k64` serves as an absolute-coefficient invariance control
+  - local smoke (`16` pairs) was sanity-clean:
+    - `coeff_k64` mean flip `0.0000`
+    - `ac_dense` mean flip `0.0156`
+    - `symbols` mean flip `0.0314`
+    - `huffman_events` mean flip `0.0327`
+- Launches:
+  - center block run:
+    - Iris job: `/dlwh/jpeg-tokenizer-context-dependence-center-r1-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-context-dependence-center-r1-iris1`
+    - config: `3925` validation pairs, shuffled, `target_block=(16,16)`
+  - off-center run:
+    - Iris job: `/dlwh/jpeg-tokenizer-context-dependence-offcenter-r1-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-context-dependence-offcenter-r1-iris1`
+    - config: `3925` validation pairs, shuffled, `target_block=(8,24)`
+- Current status:
+  - both jobs are `JOB_STATE_RUNNING` and logging progress (no failure signal)
+- Next action:
+  - wait for terminal success and fold context-dependence scores into the rubric table next to perturbation
+    amplification.
