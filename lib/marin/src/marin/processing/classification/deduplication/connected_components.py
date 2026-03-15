@@ -3,7 +3,6 @@
 
 import logging
 from collections.abc import Iterator, Sequence
-from functools import partial
 from typing import Any, TypedDict
 
 import dupekit
@@ -50,11 +49,6 @@ def _internal_orderable_id(record_id: Any) -> str:
     return record_id_norm
 
 
-class BucketWithIds(TypedDict):
-    bucket: str
-    ids: list[RecordId]
-
-
 def connected_components(
     ds: Dataset[CCInput],
     ctx: ZephyrContext,
@@ -73,15 +67,47 @@ def connected_components(
         max_iterations: Maximum number of iterations to run the connected components algorithm
         preserve_singletons: Whether to preserve single-node buckets in the output
     """
+
+    def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
+        """Generator reducer: dedup items by record_id_norm, then yield pairwise links."""
+        seen: dict[str, RecordId] = {}
+        for item in items:
+            norm = _internal_orderable_id(item["id"])
+            if norm in seen:
+                existing = seen[norm]
+                if existing["file_idx"] != item["file_idx"]:
+                    logger.warning(
+                        "Document %s appears in multiple files (file_idx %d and %d) within bucket %s",
+                        item["id"],
+                        existing["file_idx"],
+                        item["file_idx"],
+                        bucket,
+                    )
+            else:
+                seen[norm] = RecordId(
+                    record_id=item["id"],
+                    record_id_norm=norm,
+                    file_idx=item["file_idx"],
+                )
+
+        ids = list(seen.values())
+
+        if preserve_singletons and len(ids) == 1:
+            yield _make_link(ids[0], ids[0])
+            return
+
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                yield _make_link(ids[i], ids[j])
+                yield _make_link(ids[j], ids[i])
+
     curr_it = ctx.execute(
         ds
-        # Group nodes in buckets
+        # Group nodes in buckets, deduplicate, and emit pairwise links
         .group_by(
             lambda x: x["bucket"],
-            reducer=_reduce_buckets,
+            reducer=_reduce_bucket_to_links,
         )
-        # Go from bucket -> links
-        .flat_map(partial(_gen_links_within_buckets, preserve_singletons=preserve_singletons))
         # Construct Node state, init with:
         #  * each node is its own component
         #  * adjacency list from links
@@ -122,23 +148,6 @@ def connected_components(
     return converged, curr_it
 
 
-def _reduce_buckets(bucket: str, items: Iterator[CCInput]) -> BucketWithIds:
-    # TODO: do we want/need this optimization?
-    # if len(all_items) <= 1:
-    #    return None  # No duplicates in this bucket
-    return {
-        "bucket": bucket,
-        "ids": [
-            RecordId(
-                record_id=item["id"],
-                record_id_norm=_internal_orderable_id(item["id"]),
-                file_idx=item["file_idx"],
-            )
-            for item in items
-        ],
-    }
-
-
 def _make_link(source: RecordId, dest: RecordId) -> dict:
     return {
         "source_record_id": source["record_id"],
@@ -148,39 +157,18 @@ def _make_link(source: RecordId, dest: RecordId) -> dict:
     }
 
 
-def _gen_links_within_buckets(record: CCInput, *, preserve_singletons: bool) -> Iterator[dict]:
-    ids = record.get("ids", [])
-
-    norm_ids = [i["record_id_norm"] for i in ids]
-    # TODO: this will materialize ids!
-    if len(norm_ids) != len(set(norm_ids)):
-        duplicate_ids = [x for x in norm_ids if norm_ids.count(x) > 1]
-        raise ValueError(f"Duplicate found in bucket during link_reduce: {duplicate_ids}")
-
-    if preserve_singletons and len(ids) == 1:
-        yield _make_link(ids[0], ids[0])
-        return
-
-    # Emit all pairwise links
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            if ids[i] == ids[j]:
-                continue
-
-            yield _make_link(ids[i], ids[j])
-            yield _make_link(ids[j], ids[i])
-
-
 def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
-    all_links = list(links)
+    first = next(links)
+    adj: set[str] = {first["dest_record_id_norm"]}
+    for link in links:
+        adj.add(link["dest_record_id_norm"])
     return CCNode(
-        record_id=all_links[0]["source_record_id"],
-        record_id_norm=all_links[0]["source_record_id_norm"],
-        adjacency_list=list(set(link["dest_record_id_norm"] for link in all_links)),
-        # init with own id as component
+        record_id=first["source_record_id"],
+        record_id_norm=first["source_record_id_norm"],
+        adjacency_list=list(adj),
         component_id=node_id,
         changed=True,
-        file_idx=all_links[0]["source_file_idx"],
+        file_idx=first["source_file_idx"],
     )
 
 
