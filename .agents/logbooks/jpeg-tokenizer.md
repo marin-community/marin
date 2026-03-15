@@ -1404,3 +1404,94 @@
 - Next action:
   - run a focused ablation that keeps fixed-length dense AC tokens but removes DC chaining (absolute DC instead of
     delta) to isolate "token meaning constancy" from sequence-length effects.
+
+### 2026-03-14 19:38 - Absolute-DC context ablation completed on full validation set
+
+- Goal:
+  - isolate DC-chain context dependence by evaluating `ac_dense_absdc` (same fixed-length dense stream, DC encoded as
+    absolute value rather than delta)
+- Code changes:
+  - added `encode_jpeg_ac_dense_absolute_dc_tokens(...)` in
+    `experiments/jpeg_tokenizer/base/jpeg_codecs.py`
+  - extended
+    `scripts/jpeg_tokenizer/evaluate_context_dependence.py`
+    to include `ac_dense_absdc`
+- Launches:
+  - center:
+    - job: `/dlwh/jpeg-tokenizer-context-dependence-center-r3cpu-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-context-dependence-center-r3cpu-iris1`
+  - off-center:
+    - job: `/dlwh/jpeg-tokenizer-context-dependence-offcenter-r3cpu-iris1`
+    - output:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-context-dependence-offcenter-r3cpu-iris1`
+- Results (`3925` pairs each):
+  - center `(16,16)`:
+    - `coeff_k64`: mean flip `0.0000`
+    - `ac_dense`: mean flip `0.0156`
+    - `ac_dense_absdc`: mean flip `0.0000`
+    - `symbols`: mean flip `0.0342`
+    - `huffman_events`: mean flip `0.0353`
+  - off-center `(8,24)`:
+    - `coeff_k64`: mean flip `0.0000`
+    - `ac_dense`: mean flip `0.0156`
+    - `ac_dense_absdc`: mean flip `0.0000`
+    - `symbols`: mean flip `0.0435`
+    - `huffman_events`: mean flip `0.0488`
+- Interpretation:
+  - DC differencing alone explains the nonzero `ac_dense` context dependence at this block-local probe.
+  - once DC is absolute, dense coefficient tokens become fully context-invariant at the block level, matching
+    `coeff_k64`.
+
+### 2026-03-14 19:38 - AC-dense absolute-DC token store built in-region
+
+- Goal:
+  - build full Imagenette token store for `ac_dense_absdc` to run whole-image NTP head-to-head against `ac_dense`
+- Code changes:
+  - updated
+    `scripts/jpeg_tokenizer/build_whole_image_ac_dense_token_store.py`
+    with `--dc-mode {delta,absolute}`
+  - updated
+    `experiments/jpeg_tokenizer/base/data.py`
+    `write_token_store(...)` to support remote `gs://` destinations via `fsspec` staging/upload
+- Initial failure and fix:
+  - first build job (`/dlwh/jpeg-tokenizer-ac-dense-absdc-store-build-r1-iris1`) failed after encode completion
+    because `gsutil` is not installed in Iris worker images
+  - replaced external copy step with direct remote write in code; relaunched as r2
+- Successful build:
+  - job: `/dlwh/jpeg-tokenizer-ac-dense-absdc-store-build-r2-iris1` -> `JOB_STATE_SUCCEEDED`
+  - output store:
+    `gs://marin-eu-west4/jpeg_tokenizer/token_store/imagenette_ac_dense_absdc_whole_libjpeg_v0`
+  - metadata:
+    - `vocab_size=6142`
+    - `seq_len=65536`
+    - train `9469`, validation `3925`
+    - `dc_mode=absolute`
+
+### 2026-03-14 19:54 - AC-dense absolute-DC smoke succeeded; trial launched
+
+- Goal:
+  - start training comparison for sequence-level/whole-image loss: `ac_dense` vs `ac_dense_absdc`
+- Smoke launch:
+  - job: `/dlwh/jpeg-tokenizer-ac-dense-absdc-smoke-iris1`
+  - step:
+    `tokexplore/jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-smoke`
+  - W&B:
+    `https://wandb.ai/marin-community/tokexplore/runs/jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-smoke-iris1`
+  - terminal state: `JOB_STATE_SUCCEEDED` (parent + child)
+  - key metrics:
+    - eval loss `8.296 -> 1.901 -> 1.735`
+    - checkpoint:
+      `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-smoke-0e7879/checkpoints/step-32`
+- Trial launch:
+  - job: `/dlwh/jpeg-tokenizer-ac-dense-absdc-trial-iris1`
+  - step:
+    `tokexplore/jpeg-tokenizer-ac-dense-absdc-whole-libjpeg-swa4096-trial`
+  - current status:
+    - submitted and running under Iris executor;
+    - waiting for child training dispatch/log lines before full progress tracking.
+- Next action:
+  - monitor trial to terminal, then run whole-image representation eval including:
+    - baseline `ac_dense` checkpoint
+    - new `ac_dense_absdc` checkpoint
+    - optional `coeff_k64` anchor.
