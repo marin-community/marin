@@ -116,6 +116,7 @@ class ActorClient:
         self._rpc_client = ActorServiceClientSync(
             address=url,
             timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
+            accept_compression=[],
         )
         return self._rpc_client
 

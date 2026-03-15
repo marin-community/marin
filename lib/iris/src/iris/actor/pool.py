@@ -132,6 +132,7 @@ class ActorPool(Generic[T]):
             client = ActorServiceClientSync(
                 address=url,
                 timeout_ms=int(self._timeout * 1000),
+                accept_compression=[],
             )
             self._clients[url] = client
             return client
