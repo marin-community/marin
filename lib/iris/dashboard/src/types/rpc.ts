@@ -436,12 +436,6 @@ export interface ColumnMeta {
   type: string
 }
 
-export interface QueryResponse {
-  columns: ColumnMeta[]
-  rows: string[]
-  totalCount: number
-}
-
 export interface RawQueryResponse {
   columns: ColumnMeta[]
   rows: string[]

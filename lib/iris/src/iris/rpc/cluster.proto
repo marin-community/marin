@@ -1019,7 +1019,6 @@ service ControllerService {
   rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
 
   // Generic query API
-  rpc ExecuteQuery(QueryRequest) returns (QueryResponse);
   rpc ExecuteRawQuery(RawQueryRequest) returns (RawQueryResponse);
 }
 

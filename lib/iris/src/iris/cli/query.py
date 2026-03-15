@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI command for executing structured and raw SQL queries against the controller."""
+"""CLI command for executing raw SQL queries against the controller."""
 
 import csv
 import io
 import json
 
 import click
-from google.protobuf import json_format
 from tabulate import tabulate
 
 from iris.cli.main import _make_authenticated_client, require_controller_url
@@ -48,8 +47,7 @@ _FORMATTERS = {
 
 
 @click.command("query")
-@click.argument("query_json", required=False)
-@click.option("--raw", "raw_sql", default=None, help="Raw SQL query (admin-only)")
+@click.argument("sql")
 @click.option(
     "--format",
     "-f",
@@ -59,38 +57,22 @@ _FORMATTERS = {
     help="Output format",
 )
 @click.pass_context
-def query_cmd(ctx: click.Context, query_json: str | None, raw_sql: str | None, fmt: str) -> None:
-    """Execute a query against the controller database.
-
-    Pass a JSON query structure as a positional argument, or use --raw for
-    direct SQL (admin-only).
+def query_cmd(ctx: click.Context, sql: str, fmt: str) -> None:
+    """Execute a raw SQL query against the controller database.
 
     \b
     Examples:
-      iris query '{"from": {"name": "jobs"}, "limit": 10}'
-      iris query --raw "SELECT count(*) FROM jobs"
-      iris query -f json '{"from": {"name": "workers"}}'
+      iris query "SELECT * FROM jobs LIMIT 10"
+      iris query "SELECT count(*) FROM jobs"
+      iris query -f json "SELECT job_id, state FROM jobs"
     """
-    if not query_json and not raw_sql:
-        raise click.UsageError("Provide a query JSON argument or --raw SQL")
-    if query_json and raw_sql:
-        raise click.UsageError("Cannot use both a query JSON argument and --raw")
-
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider") if ctx.obj else None
     client = _make_authenticated_client(controller_url, token_provider)
 
     try:
-        total_count = 0
-        if raw_sql:
-            request = query_pb2.RawQueryRequest(sql=raw_sql)
-            response = client.execute_raw_query(request)
-        else:
-            query_dict = json.loads(query_json)  # type: ignore[arg-type]
-            query = json_format.ParseDict(query_dict, query_pb2.Query())
-            request = query_pb2.QueryRequest(query=query)
-            response = client.execute_query(request)
-            total_count = response.total_count
+        request = query_pb2.RawQueryRequest(sql=sql)
+        response = client.execute_raw_query(request)
 
         columns = list(response.columns)
         rows = _parse_rows(list(response.rows))
@@ -99,8 +81,5 @@ def query_cmd(ctx: click.Context, query_json: str | None, raw_sql: str | None, f
 
         if output:
             click.echo(output)
-
-        if fmt == "table" and total_count > len(rows):
-            click.echo(f"\n({len(rows)} of {total_count} rows)")
     finally:
         client.close()

@@ -1,103 +1,38 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { executeQuery, executeRawQuery, parseRows } from '@/composables/useQuery'
-import type { QueryRequest, Query } from '@/composables/useQuery'
+import { executeRawQuery, parseRows } from '@/composables/useQuery'
 import type { ColumnMeta } from '@/types/rpc'
-
-type QueryMode = 'structured' | 'raw'
 
 interface QueryTemplate {
   label: string
   description: string
-  mode: QueryMode
-  content: string
+  sql: string
 }
 
 const QUERY_TEMPLATES: QueryTemplate[] = [
   {
     label: 'All Jobs',
     description: 'List all jobs ordered by submission time',
-    mode: 'structured',
-    content: JSON.stringify({
-      from: { name: 'jobs' },
-      columns: [
-        { name: 'job_id' },
-        { name: 'user_id' },
-        { name: 'state' },
-        { name: 'submitted_at_ms' },
-        { name: 'started_at_ms' },
-        { name: 'finished_at_ms' },
-        { name: 'num_tasks' },
-        { name: 'error' },
-      ],
-      orderBy: [{ column: 'submitted_at_ms', direction: 'SORT_DESC' }],
-      limit: 100,
-    } satisfies Query, null, 2),
+    sql: 'SELECT job_id, user_id, state, submitted_at_ms, started_at_ms, finished_at_ms, num_tasks, error FROM jobs ORDER BY submitted_at_ms DESC LIMIT 100',
   },
   {
     label: 'Running Tasks',
     description: 'Tasks currently in running state',
-    mode: 'structured',
-    content: JSON.stringify({
-      from: { name: 'tasks' },
-      columns: [
-        { name: 'task_id' },
-        { name: 'job_id' },
-        { name: 'state' },
-        { name: 'started_at_ms' },
-        { name: 'failure_count' },
-        { name: 'preemption_count' },
-      ],
-      where: {
-        comparison: {
-          column: 'state',
-          op: 'CMP_EQ',
-          value: { intValue: '3' },
-        },
-      },
-      orderBy: [{ column: 'started_at_ms', direction: 'SORT_DESC' }],
-      limit: 100,
-    } satisfies Query, null, 2),
+    sql: 'SELECT task_id, job_id, state, started_at_ms, failure_count, preemption_count FROM tasks WHERE state = 3 ORDER BY started_at_ms DESC LIMIT 100',
   },
   {
     label: 'Worker Status',
     description: 'All workers with health and resource info',
-    mode: 'structured',
-    content: JSON.stringify({
-      from: { name: 'workers' },
-      columns: [
-        { name: 'worker_id' },
-        { name: 'address' },
-        { name: 'healthy' },
-        { name: 'active' },
-        { name: 'consecutive_failures' },
-        { name: 'last_heartbeat_ms' },
-        { name: 'committed_gpu' },
-        { name: 'committed_tpu' },
-      ],
-      orderBy: [{ column: 'last_heartbeat_ms', direction: 'SORT_DESC' }],
-    } satisfies Query, null, 2),
+    sql: 'SELECT worker_id, address, healthy, active, consecutive_failures, last_heartbeat_ms, committed_gpu, committed_tpu FROM workers ORDER BY last_heartbeat_ms DESC',
   },
   {
     label: 'Jobs per User',
     description: 'Job count grouped by user and state',
-    mode: 'structured',
-    content: JSON.stringify({
-      from: { name: 'jobs', alias: 'j' },
-      columns: [
-        { name: 'user_id' },
-        { name: 'state' },
-        { name: 'job_id', func: 'AGG_COUNT', alias: 'job_count' },
-      ],
-      groupBy: { columns: [{ name: 'user_id' }, { name: 'state' }] },
-      orderBy: [{ column: 'user_id', direction: 'SORT_ASC' }],
-    } satisfies Query, null, 2),
+    sql: 'SELECT user_id, state, COUNT(*) as job_count FROM jobs GROUP BY user_id, state ORDER BY user_id ASC',
   },
 ]
 
-const mode = ref<QueryMode>('structured')
-const queryInput = ref(QUERY_TEMPLATES[0].content)
-const rawSqlInput = ref('SELECT job_id, state, user_id FROM jobs ORDER BY submitted_at_ms DESC LIMIT 50')
+const sqlInput = ref(QUERY_TEMPLATES[0].sql)
 
 const columns = ref<ColumnMeta[]>([])
 const rows = ref<Record<string, unknown>[]>([])
@@ -119,12 +54,7 @@ const paginatedRows = computed(() => {
 })
 
 function applyTemplate(template: QueryTemplate) {
-  mode.value = template.mode
-  if (template.mode === 'structured') {
-    queryInput.value = template.content
-  } else {
-    rawSqlInput.value = template.content
-  }
+  sqlInput.value = template.sql
 }
 
 async function execute() {
@@ -137,19 +67,10 @@ async function execute() {
   totalCount.value = 0
 
   try {
-    if (mode.value === 'structured') {
-      const parsed = JSON.parse(queryInput.value) as Query
-      const request: QueryRequest = { query: parsed }
-      const response = await executeQuery(request)
-      columns.value = response.columns
-      rows.value = parseRows(response.columns, response.rows)
-      totalCount.value = response.totalCount
-    } else {
-      const response = await executeRawQuery({ sql: rawSqlInput.value })
-      columns.value = response.columns
-      rows.value = parseRows(response.columns, response.rows)
-      totalCount.value = rows.value.length
-    }
+    const response = await executeRawQuery({ sql: sqlInput.value })
+    columns.value = response.columns
+    rows.value = parseRows(response.columns, response.rows)
+    totalCount.value = rows.value.length
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -177,78 +98,35 @@ function handleKeydown(event: KeyboardEvent) {
 
 <template>
   <div class="space-y-4">
-    <!-- Mode toggle and templates -->
-    <div class="flex items-center gap-4 flex-wrap">
-      <div class="flex rounded-lg border border-surface-border overflow-hidden">
-        <button
-          :class="[
-            'px-3 py-1.5 text-sm font-medium transition-colors',
-            mode === 'structured'
-              ? 'bg-accent text-white'
-              : 'bg-surface text-text-secondary hover:text-text hover:bg-surface-sunken',
-          ]"
-          @click="mode = 'structured'"
-        >
-          Structured Query
-        </button>
-        <button
-          :class="[
-            'px-3 py-1.5 text-sm font-medium transition-colors border-l border-surface-border',
-            mode === 'raw'
-              ? 'bg-accent text-white'
-              : 'bg-surface text-text-secondary hover:text-text hover:bg-surface-sunken',
-          ]"
-          @click="mode = 'raw'"
-        >
-          Raw SQL
-        </button>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <span class="text-xs text-text-secondary">Templates:</span>
-        <button
-          v-for="template in QUERY_TEMPLATES"
-          :key="template.label"
-          class="px-2.5 py-1 text-xs rounded border border-surface-border text-text-secondary
-                 hover:text-text hover:bg-surface-sunken transition-colors"
-          :title="template.description"
-          @click="applyTemplate(template)"
-        >
-          {{ template.label }}
-        </button>
-      </div>
+    <!-- Templates -->
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-xs text-text-secondary">Templates:</span>
+      <button
+        v-for="template in QUERY_TEMPLATES"
+        :key="template.label"
+        class="px-2.5 py-1 text-xs rounded border border-surface-border text-text-secondary
+               hover:text-text hover:bg-surface-sunken transition-colors"
+        :title="template.description"
+        @click="applyTemplate(template)"
+      >
+        {{ template.label }}
+      </button>
     </div>
 
-    <!-- Query input -->
+    <!-- SQL input -->
     <div>
-      <div v-if="mode === 'structured'">
-        <label class="block text-xs font-medium text-text-secondary mb-1">
-          Query JSON
-        </label>
-        <textarea
-          v-model="queryInput"
-          rows="12"
-          class="w-full font-mono text-[13px] bg-surface-sunken text-text border border-surface-border
-                 rounded-lg px-3 py-2 resize-y focus:outline-none focus:ring-1 focus:ring-accent"
-          placeholder='{"from": {"name": "jobs"}, "limit": 10}'
-          spellcheck="false"
-          @keydown="handleKeydown"
-        />
-      </div>
-      <div v-else>
-        <label class="block text-xs font-medium text-text-secondary mb-1">
-          SQL Query (admin-only, SELECT only)
-        </label>
-        <textarea
-          v-model="rawSqlInput"
-          rows="6"
-          class="w-full font-mono text-[13px] bg-surface-sunken text-text border border-surface-border
-                 rounded-lg px-3 py-2 resize-y focus:outline-none focus:ring-1 focus:ring-accent"
-          placeholder="SELECT * FROM jobs LIMIT 10"
-          spellcheck="false"
-          @keydown="handleKeydown"
-        />
-      </div>
+      <label class="block text-xs font-medium text-text-secondary mb-1">
+        SQL Query (SELECT only)
+      </label>
+      <textarea
+        v-model="sqlInput"
+        rows="6"
+        class="w-full font-mono text-[13px] bg-surface-sunken text-text border border-surface-border
+               rounded-lg px-3 py-2 resize-y focus:outline-none focus:ring-1 focus:ring-accent"
+        placeholder="SELECT * FROM jobs LIMIT 10"
+        spellcheck="false"
+        @keydown="handleKeydown"
+      />
     </div>
 
     <!-- Execute button -->
