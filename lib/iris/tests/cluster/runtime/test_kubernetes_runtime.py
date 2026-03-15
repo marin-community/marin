@@ -20,7 +20,7 @@ import zipfile
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.kubernetes import KubernetesRuntime
-from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerPhase
+from iris.cluster.runtime.types import ContainerConfig, ContainerErrorKind, ContainerPhase, MountKind, MountSpec
 from iris.rpc import cluster_pb2
 
 
@@ -413,7 +413,7 @@ def test_status_ignores_successful_init_containers(monkeypatch):
 
 
 def test_disk_bytes_sets_emptydir_sizelimit(monkeypatch):
-    """When disk_bytes is set on the resource spec, the workdir emptyDir volume should have a sizeLimit."""
+    """When a WORKDIR MountSpec has size_bytes, the emptyDir volume should have a sizeLimit."""
     manifests = _capture_manifest(monkeypatch)
 
     device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(count=0))
@@ -426,6 +426,7 @@ def test_disk_bytes_sets_emptydir_sizelimit(monkeypatch):
         task_id="job/task/0",
         network_mode="host",
         resources=resources,
+        mounts=[MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=10 * 1024**3)],
     )
 
     runtime = KubernetesRuntime(namespace="iris")
@@ -433,21 +434,23 @@ def test_disk_bytes_sets_emptydir_sizelimit(monkeypatch):
     handle.run()
 
     pod = _pod_manifest(manifests)
-    workdir_vol = next(v for v in pod["spec"]["volumes"] if v["name"] == "workdir")
+    workdir_vol = next(v for v in pod["spec"]["volumes"] if "emptyDir" in v)
     assert "sizeLimit" in workdir_vol["emptyDir"]
     assert workdir_vol["emptyDir"]["sizeLimit"] == str(10 * 1024**3)
 
 
 def test_no_disk_bytes_emptydir_has_no_sizelimit(monkeypatch):
-    """When disk_bytes is not set, the workdir emptyDir volume should have no sizeLimit."""
+    """When a WORKDIR MountSpec has size_bytes=0, the emptyDir volume should have no sizeLimit."""
     manifests = _capture_manifest(monkeypatch)
 
+    config = _make_config()
+    config.mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=0)]
     runtime = KubernetesRuntime(namespace="iris")
-    handle = runtime.create_container(_make_config())
+    handle = runtime.create_container(config)
     handle.run()
 
     pod = _pod_manifest(manifests)
-    workdir_vol = next(v for v in pod["spec"]["volumes"] if v["name"] == "workdir")
+    workdir_vol = next(v for v in pod["spec"]["volumes"] if "emptyDir" in v)
     assert workdir_vol["emptyDir"] == {}
 
 

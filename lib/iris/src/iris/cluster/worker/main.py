@@ -71,7 +71,7 @@ def serve(worker_config: str):
     if wc_proto.runtime == "kubernetes":
         container_runtime = KubernetesRuntime()
     else:
-        container_runtime = DockerRuntime()
+        container_runtime = DockerRuntime(cache_dir=config.cache_dir)
 
     worker = Worker(config, container_runtime=container_runtime)
 

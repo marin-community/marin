@@ -49,8 +49,9 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerStats,
     ContainerStatus,
+    MountKind,
+    MountSpec,
     RuntimeLogReader,
-    WorkdirSpec,
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ManagedThread, get_thread_container
@@ -376,6 +377,25 @@ class ProcessLogReader:
         return list(self._logs)
 
 
+def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -> dict[str, str]:
+    """Build container_path -> host_path mapping for process runtime.
+
+    WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
+    CACHE/TMPFS mounts resolve to subdirectories under cache_dir, created on demand.
+    """
+    result: dict[str, str] = {}
+    for mount in config.mounts:
+        if mount.kind == MountKind.WORKDIR:
+            if config.workdir_host_path:
+                result[mount.container_path] = str(config.workdir_host_path)
+        elif mount.kind in (MountKind.CACHE, MountKind.TMPFS):
+            if cache_dir:
+                host_dir = cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir.mkdir(parents=True, exist_ok=True)
+                result[mount.container_path] = str(host_dir)
+    return result
+
+
 @dataclass
 class ProcessContainerHandle:
     """Process implementation of ContainerHandle.
@@ -412,7 +432,7 @@ class ProcessContainerHandle:
         config = self.config
 
         # Remap container paths to host paths in env vars
-        mount_map = {container_path: host_path for host_path, container_path, _ in config.mounts}
+        mount_map = _resolve_mount_map(config, cache_dir=self.runtime._cache_dir)
         env = {**build_device_env_vars(config), **dict(config.env)}
         for key, value in env.items():
             if value in mount_map:
@@ -488,10 +508,8 @@ class ProcessContainerHandle:
 
     def disk_usage_mb(self) -> int:
         """Return used space in MB on the filesystem containing the workdir."""
-        mount_map = {cp: hp for hp, cp, _ in self.config.mounts}
-        host_workdir = mount_map.get(self.config.workdir)
-        if host_workdir and Path(host_workdir).exists():
-            return int(shutil.disk_usage(host_workdir).used / (1024 * 1024))
+        if self.config.workdir_host_path and self.config.workdir_host_path.exists():
+            return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
         return 0
 
     def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
@@ -599,7 +617,8 @@ class ProcessRuntime:
     Creates ProcessContainerHandle instances with the build/run lifecycle.
     """
 
-    def __init__(self):
+    def __init__(self, cache_dir: Path | None = None):
+        self._cache_dir = cache_dir
         self._handles: list[ProcessContainerHandle] = []
         _active_runtimes.add(self)
 
@@ -620,10 +639,10 @@ class ProcessRuntime:
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
-        workdir_spec: WorkdirSpec | None = None,
+        workdir_mount: MountSpec | None = None,
     ) -> None:
         """Stage bundle and workdir files on worker-local filesystem."""
-        del workdir_spec  # Process runtime has no backing storage to provision
+        del workdir_mount  # Process runtime has no backing storage to provision
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
         bundle_store.write_workdir_files(workdir, workdir_files)

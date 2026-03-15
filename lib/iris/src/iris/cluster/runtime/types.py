@@ -55,6 +55,20 @@ class ContainerPhase(StrEnum):
     STOPPED = "stopped"
 
 
+class MountKind(StrEnum):
+    WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, emptyDir on K8s
+    TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
+    CACHE = "cache"  # persistent cross-task cache (uv, cargo); hostPath bind mount
+
+
+@dataclass(frozen=True)
+class MountSpec:
+    container_path: str
+    kind: MountKind = MountKind.CACHE
+    read_only: bool = False
+    size_bytes: int = 0  # 0 = no limit; tmpfs size / emptyDir sizeLimit
+
+
 @dataclass
 class ContainerConfig:
     """Configuration for running a container."""
@@ -65,8 +79,9 @@ class ContainerConfig:
     workdir: str = "/app"
     resources: cluster_pb2.ResourceSpecProto | None = None
     timeout_seconds: int | None = None
-    mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
+    mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
+    workdir_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
     job_id: str | None = None
@@ -86,20 +101,6 @@ class ContainerConfig:
         if not self.resources or not self.resources.disk_bytes:
             return None
         return self.resources.disk_bytes
-
-
-@dataclass(frozen=True)
-class WorkdirSpec:
-    """Declares the workdir configuration a task wants.
-
-    The runtime interprets this according to its capabilities:
-    - Docker: mounts tmpfs with size limit when disk_bytes > 0
-    - K8s: sets emptyDir sizeLimit in the pod spec
-    - Process: no enforcement
-    """
-
-    disk_bytes: int = 0
-    tmpfs: bool = False
 
 
 @dataclass
@@ -272,11 +273,11 @@ class ContainerRuntime(Protocol):
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
-        workdir_spec: WorkdirSpec | None = None,
+        workdir_mount: MountSpec | None = None,
     ) -> None:
         """Provision the workdir and materialize task bundle/workdir files.
 
-        The runtime sets up any backing storage described by *workdir_spec*
+        The runtime sets up any backing storage described by *workdir_mount*
         (e.g. Docker mounts tmpfs) before extracting the bundle. Kubernetes
         may no-op and materialize inside the task Pod instead.
         """

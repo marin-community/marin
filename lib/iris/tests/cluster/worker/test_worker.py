@@ -668,8 +668,8 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert "IRIS_TASK_ID" in env
 
 
-def test_workdir_spec_passed_to_stage_bundle(worker, mock_runtime):
-    """stage_bundle receives a WorkdirSpec when disk_bytes > 0."""
+def test_workdir_mount_passed_to_stage_bundle(worker, mock_runtime):
+    """stage_bundle receives a MountSpec when disk_bytes > 0."""
     request = create_run_task_request()
     request.resources.CopyFrom(cluster_pb2.ResourceSpecProto(disk_bytes=512 * 1024 * 1024))
     task_id = worker.submit_task(request)
@@ -679,11 +679,11 @@ def test_workdir_spec_passed_to_stage_bundle(worker, mock_runtime):
 
     mock_runtime.stage_bundle.assert_called_once()
     call_kwargs = mock_runtime.stage_bundle.call_args.kwargs
-    from iris.cluster.runtime.types import WorkdirSpec
+    from iris.cluster.runtime.types import MountKind, MountSpec
 
-    assert isinstance(call_kwargs["workdir_spec"], WorkdirSpec)
-    assert call_kwargs["workdir_spec"].disk_bytes == 512 * 1024 * 1024
-    assert call_kwargs["workdir_spec"].tmpfs is True
+    assert isinstance(call_kwargs["workdir_mount"], MountSpec)
+    assert call_kwargs["workdir_mount"].size_bytes == 512 * 1024 * 1024
+    assert call_kwargs["workdir_mount"].kind == MountKind.WORKDIR
 
 
 def test_task_failure_error_appears_in_logs(worker):
@@ -813,7 +813,7 @@ def test_bundle(tmp_path):
 @pytest.fixture
 def real_worker(cache_dir):
     """Create Worker with real components (not mocks)."""
-    runtime = DockerRuntime()
+    runtime = DockerRuntime(cache_dir=cache_dir)
     config = WorkerConfig(
         port=0,
         cache_dir=cache_dir,

@@ -29,7 +29,8 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     RuntimeLogReader,
-    WorkdirSpec,
+    MountKind,
+    MountSpec,
 )
 from iris.cluster.types import (
     JobName,
@@ -551,13 +552,17 @@ class TaskAttempt:
 
         assert self.workdir is not None
         disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
-        workdir_spec = WorkdirSpec(disk_bytes=disk_bytes, tmpfs=disk_bytes > 0) if disk_bytes > 0 else None
+        workdir_mount = MountSpec(
+            container_path="/app",
+            kind=MountKind.WORKDIR,
+            size_bytes=disk_bytes,
+        )
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
             workdir_files=dict(self.request.entrypoint.workdir_files),
             bundle_store=self._bundle_store,
-            workdir_spec=workdir_spec,
+            workdir_mount=workdir_mount,
         )
 
         logger.info(
@@ -618,20 +623,12 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        # Pre-create cache mount directories so Docker doesn't create them as root.
-        # Use tmpfs-backed fast IO dir when available for better IOPS.
-        uv_cache = self._fast_io_dir / "uv"
-        cargo_cache = self._fast_io_dir / "cargo"
-        cargo_target = self._fast_io_dir / "cargo-target"
-        uv_cache.mkdir(parents=True, exist_ok=True)
-        cargo_cache.mkdir(parents=True, exist_ok=True)
-        cargo_target.mkdir(parents=True, exist_ok=True)
-
+        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
         mounts = [
-            (str(self.workdir), "/app", "rw"),
-            (str(uv_cache), "/uv/cache", "rw"),
-            (str(cargo_cache), "/root/.cargo/registry", "rw"),
-            (str(cargo_target), "/root/.cargo/target", "rw"),
+            MountSpec("/app", kind=MountKind.WORKDIR, size_bytes=disk_bytes),
+            MountSpec("/uv/cache", kind=MountKind.CACHE),
+            MountSpec("/root/.cargo/registry", kind=MountKind.CACHE),
+            MountSpec("/root/.cargo/target", kind=MountKind.CACHE),
         ]
 
         config = ContainerConfig(
@@ -641,6 +638,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             timeout_seconds=timeout_seconds,
             mounts=mounts,
+            workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             job_id=job_id.to_wire(),

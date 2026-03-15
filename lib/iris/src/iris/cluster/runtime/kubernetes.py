@@ -37,7 +37,8 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerStats,
     ContainerStatus,
-    WorkdirSpec,
+    MountKind,
+    MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2
@@ -219,32 +220,39 @@ class KubernetesContainerHandle:
 
         mounts = []
         volumes = []
-        for i, (host_path, container_path, mode) in enumerate(self.config.mounts):
-            # /app is pod-local emptyDir so tasks can run on any node.
-            if container_path == self.config.workdir:
-                continue
-
+        for i, mount in enumerate(self.config.mounts):
             volume_name = f"mount-{i}"
-            mounts.append(
-                {
-                    "name": volume_name,
-                    "mountPath": container_path,
-                    "readOnly": "ro" in mode,
-                }
-            )
-            volumes.append(
-                {
-                    "name": volume_name,
-                    "hostPath": {"path": host_path, "type": "DirectoryOrCreate"},
-                }
-            )
-
-        mounts.append({"name": "workdir", "mountPath": self.config.workdir, "readOnly": False})
-        empty_dir_spec: dict[str, str] = {}
-        disk_bytes = self.config.get_disk_bytes()
-        if disk_bytes:
-            empty_dir_spec["sizeLimit"] = f"{disk_bytes}"
-        volumes.append({"name": "workdir", "emptyDir": empty_dir_spec})
+            if mount.kind in (MountKind.WORKDIR, MountKind.TMPFS):
+                empty_dir_spec: dict[str, str] = {}
+                if mount.size_bytes > 0:
+                    empty_dir_spec["sizeLimit"] = str(mount.size_bytes)
+                mounts.append(
+                    {
+                        "name": volume_name,
+                        "mountPath": mount.container_path,
+                        "readOnly": mount.read_only,
+                    }
+                )
+                volumes.append(
+                    {
+                        "name": volume_name,
+                        "emptyDir": empty_dir_spec,
+                    }
+                )
+            elif mount.kind == MountKind.CACHE:
+                mounts.append(
+                    {
+                        "name": volume_name,
+                        "mountPath": mount.container_path,
+                        "readOnly": mount.read_only,
+                    }
+                )
+                volumes.append(
+                    {
+                        "name": volume_name,
+                        "hostPath": {"path": mount.container_path, "type": "DirectoryOrCreate"},
+                    }
+                )
 
         workdir_files = dict(self.config.entrypoint.workdir_files)
         if workdir_files:
@@ -282,10 +290,17 @@ class KubernetesContainerHandle:
 
         container["volumeMounts"] = mounts
 
+        # Find the workdir volume name for the init container
+        workdir_volume_name = None
+        for i, mount in enumerate(self.config.mounts):
+            if mount.kind == MountKind.WORKDIR:
+                workdir_volume_name = f"mount-{i}"
+                break
+
         init_containers: list[dict[str, object]] = []
         bundle_id = self.config.env.get("IRIS_BUNDLE_ID", "")
         if bundle_id or workdir_files:
-            stage_mounts = [{"name": "workdir", "mountPath": self.config.workdir, "readOnly": False}]
+            stage_mounts = [{"name": workdir_volume_name, "mountPath": self.config.workdir, "readOnly": False}]
             stage_env = [
                 {"name": "IRIS_WORKDIR", "value": self.config.workdir},
                 {"name": "IRIS_BUNDLE_ID", "value": bundle_id},
@@ -381,12 +396,14 @@ class KubernetesContainerHandle:
                 self._workdir_configmap_name = None
             raise
         self._started = True
+        workdir_mount = next((m for m in self.config.mounts if m.kind == MountKind.WORKDIR), None)
+        workdir_size = workdir_mount.size_bytes if workdir_mount else 0
         logger.info(
             "Started Kubernetes task pod %s (task_id=%s, gpus=%s, disk=%s, hostNetwork=%s)",
             self._pod_name,
             self.config.task_id,
             gpu_limits.get("nvidia.com/gpu", "0"),
-            f"{disk_gi}Gi" if disk_bytes else "default",
+            f"{workdir_size // (1024 * 1024 * 1024)}Gi" if workdir_size else "default",
             self.config.network_mode == "host",
         )
 
@@ -648,10 +665,10 @@ class KubernetesRuntime:
         workdir: Path,
         workdir_files: dict[str, bytes],
         bundle_store: BundleStore,
-        workdir_spec: WorkdirSpec | None = None,
+        workdir_mount: MountSpec | None = None,
     ) -> None:
         """No-op: Kubernetes task Pods materialize bundle/workdir in-pod."""
-        del bundle_id, workdir, workdir_files, bundle_store, workdir_spec
+        del bundle_id, workdir, workdir_files, bundle_store, workdir_mount
 
     def list_containers(self) -> list[KubernetesContainerHandle]:
         return list(self._handles)
