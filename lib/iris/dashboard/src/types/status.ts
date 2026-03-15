@@ -30,15 +30,30 @@ export type TaskState =
   | 'unschedulable'
   | 'assigned'
 
+// The DB stores state as an integer column. This maps integer values to
+// normalized state names so the dashboard works with both proto enum strings
+// (e.g. "JOB_STATE_RUNNING") and raw integer values from the query API.
+const STATE_INT_MAP: Record<number, string> = {
+  0: 'unspecified',
+  1: 'pending',
+  2: 'building',
+  3: 'running',
+  4: 'succeeded',
+  5: 'failed',
+  6: 'killed',
+  7: 'worker_failed',
+  8: 'unschedulable',
+  9: 'assigned',
+}
+
 /**
  * Strip the proto enum prefix (JOB_STATE_ or TASK_STATE_) and lowercase.
- * Handles null, undefined, empty string, and numeric 0.
+ * Also handles integer state values from the database.
  */
 export function stateToName(protoState: string | number | null | undefined): string {
   if (protoState === null || protoState === undefined) return 'unknown'
   if (protoState === '') return 'unknown'
-  if (protoState === 0) return 'unspecified'
-  if (typeof protoState === 'number') return 'unknown'
+  if (typeof protoState === 'number') return STATE_INT_MAP[protoState] ?? 'unknown'
 
   return protoState.replace(/^(JOB_STATE_|TASK_STATE_)/, '').toLowerCase()
 }

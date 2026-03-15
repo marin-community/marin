@@ -427,3 +427,22 @@ export interface ApiKeyInfo {
 export interface ListApiKeysResponse {
   keys: ApiKeyInfo[]
 }
+
+// -- Generic Query API --
+
+/** Column metadata describing a single column in a query result set. */
+export interface ColumnMeta {
+  name: string
+  type: string
+}
+
+export interface QueryResponse {
+  columns: ColumnMeta[]
+  rows: string[]
+  totalCount: number
+}
+
+export interface RawQueryResponse {
+  columns: ColumnMeta[]
+  rows: string[]
+}

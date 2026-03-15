@@ -1,0 +1,216 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package iris.cluster;
+
+// ============================================================================
+// GENERIC QUERY API
+// ============================================================================
+
+// Structured query against the controller database.
+// Equivalent to: SELECT <columns> FROM <table> [JOIN ...] [WHERE ...] [GROUP BY ...] [ORDER BY ...] [LIMIT ... OFFSET ...]
+message Query {
+  // Columns to select. Empty = all columns from the primary table.
+  repeated QueryColumn columns = 1;
+
+  // Primary table to query.
+  QueryTable from = 2;
+
+  // Filter conditions (AND of all provided).
+  QueryFilter where = 3;
+
+  // Joins against other tables.
+  repeated QueryJoin joins = 4;
+
+  // Group-by columns with optional aggregate functions.
+  QueryGroupBy group_by = 5;
+
+  // Sort order.
+  repeated QueryOrderBy order_by = 6;
+
+  // Pagination.
+  int32 limit = 7;   // Max rows (0 = server default, capped at 1000)
+  int32 offset = 8;  // Skip first N rows
+}
+
+// A column reference, optionally with an aggregate function.
+message QueryColumn {
+  string name = 1;          // Column name (e.g., "job_id", "state")
+  string table = 2;         // Table alias (empty = primary table)
+  AggregateFunc func = 3;   // Aggregate function (NONE for plain column)
+  string alias = 4;         // Output alias (e.g., "job_count")
+}
+
+enum AggregateFunc {
+  AGG_NONE = 0;
+  AGG_COUNT = 1;
+  AGG_SUM = 2;
+  AGG_AVG = 3;
+  AGG_MIN = 4;
+  AGG_MAX = 5;
+  AGG_COUNT_STAR = 6;  // COUNT(*) — ignores column name
+}
+
+// Table reference.
+message QueryTable {
+  string name = 1;   // Table name (must be in the allowlist)
+  string alias = 2;  // Optional alias for use in joins/filters
+}
+
+// Filter expression tree.
+message QueryFilter {
+  oneof filter {
+    ComparisonFilter comparison = 1;
+    LogicalFilter logical = 2;
+    NotFilter not = 3;
+    InFilter in = 4;
+    LikeFilter like = 5;
+    NullCheckFilter null_check = 6;
+    BetweenFilter between = 7;
+  }
+}
+
+message ComparisonFilter {
+  string column = 1;
+  string table = 2;        // Table alias (empty = primary table)
+  ComparisonOp op = 3;
+  QueryValue value = 4;
+}
+
+enum ComparisonOp {
+  CMP_EQ = 0;
+  CMP_NE = 1;
+  CMP_LT = 2;
+  CMP_LE = 3;
+  CMP_GT = 4;
+  CMP_GE = 5;
+}
+
+message LogicalFilter {
+  LogicalOp op = 1;
+  repeated QueryFilter operands = 2;
+}
+
+enum LogicalOp {
+  LOGICAL_AND = 0;
+  LOGICAL_OR = 1;
+}
+
+message NotFilter {
+  QueryFilter operand = 1;
+}
+
+message InFilter {
+  string column = 1;
+  string table = 2;
+  repeated QueryValue values = 3;
+}
+
+message LikeFilter {
+  string column = 1;
+  string table = 2;
+  string pattern = 3;  // SQL LIKE pattern (e.g., "%train%")
+}
+
+message NullCheckFilter {
+  string column = 1;
+  string table = 2;
+  NullOp op = 3;
+}
+
+enum NullOp {
+  NULL_IS_NULL = 0;
+  NULL_IS_NOT_NULL = 1;
+}
+
+message BetweenFilter {
+  string column = 1;
+  string table = 2;
+  QueryValue low = 3;
+  QueryValue high = 4;
+}
+
+// Typed scalar value.
+message QueryValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+    bool bool_value = 4;
+  }
+}
+
+message QueryJoin {
+  QueryTable table = 1;
+  JoinKind kind = 2;
+  // Join condition: left_table.left_column = right_table.right_column
+  string left_column = 3;
+  string left_table = 4;   // Table alias (empty = primary table)
+  string right_column = 5;
+  string right_table = 6;  // Table alias of joined table
+}
+
+enum JoinKind {
+  JOIN_INNER = 0;
+  JOIN_LEFT = 1;
+}
+
+message QueryGroupBy {
+  repeated QueryColumn columns = 1;  // Columns to group by (func must be AGG_NONE)
+}
+
+message QueryOrderBy {
+  string column = 1;
+  string table = 2;
+  SortDir direction = 3;
+}
+
+enum SortDir {
+  SORT_ASC = 0;
+  SORT_DESC = 1;
+}
+
+// ---- RPC messages ----
+
+message QueryRequest {
+  Query query = 1;
+  // Target database: "main" (default) or "logs" (log store).
+  string database = 2;
+}
+
+message QueryResponse {
+  // Column metadata for the result set.
+  repeated ColumnMeta columns = 1;
+  // Rows as JSON-encoded arrays (each row is a JSON array of values).
+  repeated string rows = 2;
+  // Total row count before LIMIT (populated when offset=0 and limit>0).
+  int32 total_count = 3;
+}
+
+message ColumnMeta {
+  string name = 1;   // Column name or alias
+  string type = 2;   // "text", "integer", "real", "blob"
+}
+
+// Admin-only raw SQL query.
+message RawQueryRequest {
+  string sql = 1;    // Raw SELECT statement
+}
+
+message RawQueryResponse {
+  repeated ColumnMeta columns = 1;
+  repeated string rows = 2;
+}
