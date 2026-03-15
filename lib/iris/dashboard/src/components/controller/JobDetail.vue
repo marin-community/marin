@@ -6,10 +6,10 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName, statusColors } from '@/types/status'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest,
-  GetJobStatusResponse, ListTasksResponse,
+  GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
   ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatBytes, formatDeviceConfig } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatDeviceConfig } from '@/utils/formatting'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -30,6 +30,7 @@ const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
+const childJobs = ref<JobStatus[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
@@ -76,6 +77,24 @@ async function fetchData() {
     job.value = jobResp.job
     jobRequest.value = jobResp.request ?? null
     tasks.value = tasksResp.tasks ?? []
+
+    // Fetch child jobs using the job name as a prefix filter
+    const jobName = jobResp.job.name
+    if (jobName) {
+      const childResp = await controllerRpcCall<ListJobsResponse>('ListJobs', {
+        nameFilter: jobName,
+        limit: 500,
+      })
+      // Filter to direct children only: name starts with "jobName/" and has no further "/"
+      const prefix = jobName + '/'
+      childJobs.value = (childResp.jobs ?? []).filter(j => {
+        if (!j.name.startsWith(prefix)) return false
+        const suffix = j.name.slice(prefix.length)
+        return suffix.length > 0 && !suffix.includes('/')
+      })
+    } else {
+      childJobs.value = []
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -130,6 +149,74 @@ function taskIndex(taskId: string): string {
   if (!last) return '-'
   const parsed = parseInt(last, 10)
   return isNaN(parsed) ? '-' : String(parsed)
+}
+
+// -- Child job helpers --
+
+function childJobLeafName(name: string): string {
+  const lastSlash = name.lastIndexOf('/')
+  return lastSlash >= 0 ? name.slice(lastSlash + 1) : name
+}
+
+function childJobDuration(j: JobStatus): string {
+  const started = timestampMs(j.startedAt)
+  if (started) {
+    const ended = timestampMs(j.finishedAt) || Date.now()
+    return formatDuration(started, ended)
+  }
+  const submitted = timestampMs(j.submittedAt)
+  if (submitted) return 'queued ' + formatRelativeTime(submitted)
+  return '-'
+}
+
+const SEGMENT_COLORS: Record<string, string> = {
+  succeeded: 'bg-status-success',
+  running: 'bg-accent',
+  building: 'bg-status-purple',
+  assigned: 'bg-status-orange',
+  failed: 'bg-status-danger',
+  worker_failed: 'bg-status-danger',
+  killed: 'bg-text-muted',
+  pending: 'bg-surface-border',
+}
+
+interface ProgressSegment {
+  count: number
+  colorClass: string
+  label: string
+}
+
+function progressSegments(j: JobStatus): ProgressSegment[] {
+  const counts = j.taskStateCounts ?? {}
+  const total = j.taskCount ?? 0
+  if (total === 0) return []
+  const succeeded = counts['succeeded'] ?? 0
+  const running = counts['running'] ?? 0
+  const building = counts['building'] ?? 0
+  const assigned = counts['assigned'] ?? 0
+  const failed = counts['failed'] ?? 0
+  const workerFailed = counts['worker_failed'] ?? 0
+  const killed = counts['killed'] ?? 0
+  const pending = total - succeeded - running - building - assigned - failed - workerFailed - killed
+  return [
+    { count: succeeded, colorClass: SEGMENT_COLORS['succeeded'], label: 'succeeded' },
+    { count: running, colorClass: SEGMENT_COLORS['running'], label: 'running' },
+    { count: building, colorClass: SEGMENT_COLORS['building'], label: 'building' },
+    { count: assigned, colorClass: SEGMENT_COLORS['assigned'], label: 'assigned' },
+    { count: failed, colorClass: SEGMENT_COLORS['failed'], label: 'failed' },
+    { count: workerFailed, colorClass: SEGMENT_COLORS['worker_failed'], label: 'worker_failed' },
+    { count: killed, colorClass: SEGMENT_COLORS['killed'], label: 'killed' },
+    { count: Math.max(0, pending), colorClass: SEGMENT_COLORS['pending'], label: 'pending' },
+  ].filter(s => s.count > 0)
+}
+
+function progressSummary(j: JobStatus): string {
+  const counts = j.taskStateCounts ?? {}
+  const running = counts['running'] ?? 0
+  const total = j.taskCount ?? 0
+  const succeeded = counts['succeeded'] ?? 0
+  if (running > 0) return `${running} running`
+  return `${succeeded}/${total}`
 }
 
 // -- Computed --
@@ -409,6 +496,68 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             {{ c.key }} {{ c.op }} {{ c.value?.stringValue ?? c.value?.intValue ?? '' }}
           </span>
         </div>
+      </div>
+
+      <!-- Child Jobs -->
+      <div v-if="childJobs.length > 0" class="mb-6">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
+          Child Jobs
+        </h3>
+        <table class="w-full border-collapse">
+          <thead>
+            <tr class="border-b border-surface-border">
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Name</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Duration</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Tasks</th>
+              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Diagnostic</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="child in childJobs"
+              :key="child.jobId"
+              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+            >
+              <td class="px-3 py-2 text-[13px]">
+                <RouterLink
+                  :to="'/job/' + encodeURIComponent(child.jobId)"
+                  class="text-accent hover:underline font-mono"
+                >
+                  {{ childJobLeafName(child.name) }}
+                </RouterLink>
+              </td>
+              <td class="px-3 py-2 text-[13px]">
+                <StatusBadge :status="child.state" size="sm" />
+              </td>
+              <td class="px-3 py-2 text-[13px] text-text-secondary font-mono">
+                {{ childJobDuration(child) }}
+              </td>
+              <td class="px-3 py-2 text-[13px]">
+                <div v-if="(child.taskCount ?? 0) === 0" class="text-xs text-text-muted">
+                  no tasks
+                </div>
+                <div v-else class="flex items-center gap-1.5">
+                  <div class="flex h-2 w-28 rounded-full overflow-hidden bg-surface-sunken">
+                    <div
+                      v-for="(seg, i) in progressSegments(child)"
+                      :key="i"
+                      :class="seg.colorClass"
+                      :style="{ width: (seg.count / (child.taskCount ?? 1) * 100).toFixed(1) + '%' }"
+                      :title="seg.label + ': ' + seg.count"
+                    />
+                  </div>
+                  <span class="text-xs text-text-secondary whitespace-nowrap">
+                    {{ progressSummary(child) }}
+                  </span>
+                </div>
+              </td>
+              <td class="px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="child.pendingReason ?? ''">
+                {{ child.pendingReason || '—' }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <!-- Tasks table -->
