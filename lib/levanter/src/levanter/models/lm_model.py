@@ -3,10 +3,11 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Generic, Optional, Type, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, Optional, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
@@ -19,6 +20,9 @@ from levanter.models.loss import maybe_fused_next_token_loss
 
 LmConfigT = TypeVar("LmConfigT", bound="LmConfig")
 LmT = TypeVar("LmT", bound="LmHeadModel")
+
+if TYPE_CHECKING:
+    from levanter.data.text.examples import GrugLmExample
 
 
 class LmExample(eqx.Module):
@@ -214,6 +218,45 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
         return lm_logits
 
+    def logits_from_token_ids_array(
+        self,
+        input_ids: jax.Array,
+        *,
+        batch_axis: Axis | str | None = "batch",
+        key=None,
+    ) -> jax.Array:
+        """
+        Compute logits from array token IDs and return a plain JAX array.
+
+        This adapter is intended for migration paths that avoid named tensors at
+        call sites while keeping existing model internals unchanged.
+        """
+        if input_ids.ndim == 1:
+            Pos = self.Pos.resize(input_ids.shape[0])
+            named_input_ids = hax.named(input_ids, Pos)
+        elif input_ids.ndim == 2:
+            if batch_axis is None:
+                Batch = Axis("batch", input_ids.shape[0])
+            elif isinstance(batch_axis, str):
+                Batch = Axis(batch_axis, input_ids.shape[0])
+            else:
+                Batch = batch_axis
+                if Batch.size != input_ids.shape[0]:
+                    raise ValueError(
+                        f"Batch axis size ({Batch.size}) must match input batch size ({input_ids.shape[0]})."
+                    )
+
+            Pos = self.Pos.resize(input_ids.shape[1])
+            named_input_ids = hax.named(input_ids, (Batch, Pos))
+        else:
+            raise ValueError(f"input_ids must have rank 1 or 2, got rank={input_ids.ndim}")
+
+        activations = self.activations(named_input_ids, key=key)
+        if isinstance(activations, tuple):
+            activations, _ = activations
+        logits = hax.dot(activations, self.get_lm_head(), axis=self.Embed)
+        return logits.array
+
     @abc.abstractmethod
     def activations(
         self,
@@ -297,3 +340,45 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         )
 
         return loss + aux_loss
+
+    def compute_next_token_loss_array(
+        self,
+        example: "LmExample | GrugLmExample",
+        *,
+        batch_axis: Axis | str | None = "batch",
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jax.Array:
+        """
+        Compute next-token cross-entropy and always return a plain JAX array.
+
+        This bridges array-native batches (for example `GrugLmExample`) to the legacy
+        named-tensor model interface during migration.
+        """
+        named_example: LmExample
+        if isinstance(example, LmExample):
+            named_example = example
+        else:
+            from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+
+            if not isinstance(example, GrugLmExample):
+                raise TypeError(f"Unsupported example type: {type(example)}")
+            named_example = named_lm_example_from_grug(example, Pos=self.Pos, batch_axis=batch_axis)
+
+        loss = self.compute_next_token_loss(
+            named_example,
+            key=key,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+        )
+
+        if isinstance(loss, hax.NamedArray):
+            return loss.array
+        return jnp.asarray(loss)

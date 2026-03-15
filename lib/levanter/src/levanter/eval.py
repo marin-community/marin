@@ -26,7 +26,7 @@ from haliax.partitioning import ResourceMapping
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
+from levanter.data.text.examples import GrugLmExample
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
@@ -162,22 +162,6 @@ def _join_prefix(prefix: str, tag: str) -> str:
     return tag
 
 
-def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model_pos: hax.Axis) -> LmExample:
-    if isinstance(batch, LmExample):
-        return batch
-    if not isinstance(batch, GrugLmExample):
-        raise TypeError(f"Unsupported eval batch type: {type(batch)}")
-
-    if batch.tokens.ndim == 1:
-        Pos = model_pos.resize(batch.tokens.shape[0])
-        return named_lm_example_from_grug(batch, Pos=Pos)
-    if batch.tokens.ndim == 2:
-        Pos = model_pos.resize(batch.tokens.shape[1])
-        return named_lm_example_from_grug(batch, Pos=Pos, batch_axis=EvalBatch)
-
-    raise ValueError(f"GrugLmExample tokens must be rank-1 or rank-2 for eval, got rank={batch.tokens.ndim}")
-
-
 def _default_lm_eval_loss_fn(
     model: LmHeadModel,
     batch: LmEvalExample,
@@ -187,14 +171,31 @@ def _default_lm_eval_loss_fn(
     axis_mapping: ResourceMapping | None,
 ) -> LossFnOutput:
     model = inference_mode(model, True)
-    named_batch = _ensure_named_lm_example(batch, EvalBatch=EvalBatch, model_pos=model.Pos)
     if mp is not None:
         model = mp.cast_to_compute(model)
-    per_pos_loss = model.compute_next_token_loss(
-        named_batch, reduction=None, reduction_axis=(), axis_mapping=axis_mapping
-    ).array
-    per_pos_weight = named_batch.loss_weight.array
-    per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
+
+    if axis_mapping is not None:
+        with hax.axis_mapping(axis_mapping):
+            per_pos_loss = model.compute_next_token_loss_array(
+                batch,
+                batch_axis=EvalBatch,
+                reduction=None,
+                reduction_axis=(),
+            )
+    else:
+        per_pos_loss = model.compute_next_token_loss_array(
+            batch,
+            batch_axis=EvalBatch,
+            reduction=None,
+            reduction_axis=(),
+        )
+
+    if isinstance(batch, LmExample):
+        per_pos_weight = batch.loss_weight.array
+        per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+    else:
+        per_pos_weight = batch.loss_weight
+        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
     return per_pos_loss, per_pos_weight, per_pos_token_id
 
 
