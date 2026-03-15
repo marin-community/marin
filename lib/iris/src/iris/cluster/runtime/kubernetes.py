@@ -239,7 +239,11 @@ class KubernetesContainerHandle:
             )
 
         mounts.append({"name": "workdir", "mountPath": self.config.workdir, "readOnly": False})
-        volumes.append({"name": "workdir", "emptyDir": {}})
+        empty_dir_spec: dict[str, str] = {}
+        disk_bytes = self.config.get_disk_bytes()
+        if disk_bytes:
+            empty_dir_spec["sizeLimit"] = f"{disk_bytes}"
+        volumes.append({"name": "workdir", "emptyDir": empty_dir_spec})
 
         workdir_files = dict(self.config.entrypoint.workdir_files)
         if workdir_files:
@@ -642,6 +646,12 @@ class KubernetesRuntime:
     ) -> None:
         """No-op: Kubernetes task Pods materialize bundle/workdir in-pod."""
         del bundle_id, workdir, workdir_files, bundle_store
+
+    def prepare_workdir(self, *, workdir: Path, disk_bytes: int) -> None:
+        pass  # K8s handles workdir provisioning via pod spec emptyDir
+
+    def cleanup_workdir(self, workdir: Path) -> None:
+        pass  # K8s cleans up pod volumes automatically
 
     def list_containers(self) -> list[KubernetesContainerHandle]:
         return list(self._handles)

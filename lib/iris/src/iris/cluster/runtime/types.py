@@ -259,6 +259,23 @@ class ContainerRuntime(Protocol):
         """
         ...
 
+    def prepare_workdir(
+        self,
+        *,
+        workdir: Path,
+        disk_bytes: int,
+    ) -> None:
+        """Prepare runtime-specific backing storage for workdir before staging.
+
+        Docker mounts a bounded tmpfs. K8s handles this via pod spec. Process is a no-op.
+        disk_bytes of 0 means no limit requested.
+        """
+        ...
+
+    def cleanup_workdir(self, workdir: Path) -> None:
+        """Undo any runtime-specific workdir setup from prepare_workdir."""
+        ...
+
     def list_containers(self) -> list[ContainerHandle]:
         """List all managed containers."""
         ...

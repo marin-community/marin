@@ -17,6 +17,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -786,6 +787,33 @@ class DockerRuntime:
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
         bundle_store.write_workdir_files(workdir, workdir_files)
+
+    def prepare_workdir(self, *, workdir: Path, disk_bytes: int) -> None:
+        if disk_bytes <= 0:
+            return
+        if sys.platform != "linux":
+            raise RuntimeError("Docker workdir disk limits require Linux tmpfs mounts")
+        workdir.mkdir(parents=True, exist_ok=True)
+        if os.path.ismount(workdir):
+            logger.info("Workdir %s is already a mountpoint; reusing", workdir)
+            return
+        result = subprocess.run(
+            ["mount", "-t", "tmpfs", "-o", f"size={disk_bytes},nodev,nosuid", "tmpfs", str(workdir)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to mount tmpfs workdir {workdir}: {result.stderr.strip()}")
+        logger.info("Mounted tmpfs workdir %s with size=%d bytes", workdir, disk_bytes)
+
+    def cleanup_workdir(self, workdir: Path) -> None:
+        if not os.path.ismount(workdir):
+            return
+        result = subprocess.run(["umount", str(workdir)], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to unmount tmpfs workdir {workdir}: {result.stderr.strip()}")
+        logger.info("Unmounted tmpfs workdir %s", workdir)
 
     def track_container(self, container_id: str) -> None:
         """Track a container ID for cleanup."""

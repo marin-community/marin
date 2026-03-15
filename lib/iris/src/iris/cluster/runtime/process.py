@@ -616,6 +616,12 @@ class ProcessRuntime:
             bundle_store.extract_bundle_to(bundle_id, workdir)
         bundle_store.write_workdir_files(workdir, workdir_files)
 
+    def prepare_workdir(self, *, workdir: Path, disk_bytes: int) -> None:
+        pass
+
+    def cleanup_workdir(self, workdir: Path) -> None:
+        pass
+
     def list_containers(self) -> list[ProcessContainerHandle]:
         """List all managed container handles."""
         return list(self._handles)
