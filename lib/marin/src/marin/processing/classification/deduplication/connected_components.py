@@ -15,13 +15,13 @@ logger = logging.getLogger(__name__)
 # TODO (rav): can we have just a single id that's expected to be clean on the inputs?
 class RecordId(TypedDict):
     record_id: Any
-    record_id_norm: str
+    id_norm: str
     file_idx: int
 
 
 class CCNode(TypedDict):
     record_id: Any
-    record_id_norm: str
+    id_norm: str
     adjacency_list: list[str]
     component_id: str
     changed: bool
@@ -41,12 +41,12 @@ def _internal_orderable_id(record_id: Any) -> str:
     to string to make internal zephyr/ray/pyarrow serde happy.
     """
     if isinstance(record_id, int):
-        record_id_norm = str(record_id)
+        id_norm = str(record_id)
     elif isinstance(record_id, str):
-        record_id_norm = str(dupekit.hash_xxh3_128(record_id.encode()))
+        id_norm = str(dupekit.hash_xxh3_128(record_id.encode()))
     else:
         raise ValueError(f"Unsupported id type: {type(record_id)}")
-    return record_id_norm
+    return id_norm
 
 
 def connected_components(
@@ -69,7 +69,7 @@ def connected_components(
     """
 
     def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
-        """Generator reducer: dedup items by record_id_norm, then yield pairwise links."""
+        """Generator reducer: dedup items by id_norm, then yield pairwise links."""
         seen: dict[str, RecordId] = {}
         for item in items:
             norm = _internal_orderable_id(item["id"])
@@ -86,7 +86,7 @@ def connected_components(
             else:
                 seen[norm] = RecordId(
                     record_id=item["id"],
-                    record_id_norm=norm,
+                    id_norm=norm,
                     file_idx=item["file_idx"],
                 )
 
@@ -96,12 +96,12 @@ def connected_components(
             yield _make_link(ids[0], ids[0])
             return
 
-        # Use a star topology: pick the node with the smallest record_id_norm
+        # Use a star topology: pick the node with the smallest id_norm
         # as the hub and link all others to it. This is O(n) instead of O(n²)
         # and produces the same connected components via hash-to-min propagation.
-        hub = min(ids, key=lambda x: x["record_id_norm"])
+        hub = min(ids, key=lambda x: x["id_norm"])
         for node in ids:
-            if node["record_id_norm"] == hub["record_id_norm"]:
+            if node["id_norm"] == hub["id_norm"]:
                 continue
             yield _make_link(hub, node)
             yield _make_link(node, hub)
@@ -127,7 +127,7 @@ def connected_components(
         #  * each node is its own component
         #  * adjacency list from links
         .group_by(
-            lambda x: x["source_record_id_norm"],
+            lambda x: x["source_id_norm"],
             reducer=_build_adjacency,
         ).write_vortex(f"{output_dir}/it_0/part-{{shard:05d}}.vortex"),
         verbose=True,
@@ -166,20 +166,20 @@ def connected_components(
 def _make_link(source: RecordId, dest: RecordId) -> dict:
     return {
         "source_record_id": source["record_id"],
-        "source_record_id_norm": source["record_id_norm"],
+        "source_id_norm": source["id_norm"],
         "source_file_idx": source["file_idx"],
-        "dest_record_id_norm": dest["record_id_norm"],
+        "dest_id_norm": dest["id_norm"],
     }
 
 
 def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
     first = next(links)
-    adj: set[str] = {first["dest_record_id_norm"]}
+    adj: set[str] = {first["dest_id_norm"]}
     for link in links:
-        adj.add(link["dest_record_id_norm"])
+        adj.add(link["dest_id_norm"])
     return CCNode(
         record_id=first["source_record_id"],
-        record_id_norm=first["source_record_id_norm"],
+        id_norm=first["source_id_norm"],
         adjacency_list=list(adj),
         component_id=node_id,
         changed=True,
@@ -194,10 +194,10 @@ def _emit_messages(node: CCNode) -> Iterator[dict]:
     """
     # 1. Preserve structure (self-message carries all node fields)
     yield {
-        "key": node["record_id_norm"],
+        "key": node["id_norm"],
         "is_self": True,
         "record_id": node["record_id"],
-        "record_id_norm": node["record_id_norm"],
+        "id_norm": node["id_norm"],
         "adjacency_list": node["adjacency_list"],
         "component_id": node["component_id"],
         "changed": node["changed"],
@@ -210,7 +210,7 @@ def _emit_messages(node: CCNode) -> Iterator[dict]:
             "key": neighbor_id,
             "is_self": False,
             "record_id": node["record_id"],
-            "record_id_norm": "",
+            "id_norm": "",
             "adjacency_list": [],
             "component_id": node["component_id"],
             "changed": False,
@@ -232,7 +232,7 @@ def _reduce_node_step(key: str, incoming: Iterator[dict]) -> CCNode:
         if msg["is_self"]:
             node_structure = CCNode(
                 record_id=msg["record_id"],
-                record_id_norm=msg["record_id_norm"],
+                id_norm=msg["id_norm"],
                 adjacency_list=msg["adjacency_list"],
                 component_id=msg["component_id"],
                 changed=msg["changed"],

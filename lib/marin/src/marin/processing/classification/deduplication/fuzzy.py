@@ -146,7 +146,7 @@ def dedup_fuzzy_document(
             .map(
                 lambda r: {
                     "id": r["record_id"],
-                    "is_dup": r["component_id"] != r["record_id_norm"],
+                    "is_dup": r["component_id"] != r["id_norm"],
                     "file_idx": r["file_idx"],
                 }
             )
