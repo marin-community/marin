@@ -8,7 +8,7 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import braceexpand
 import datasets
