@@ -1095,3 +1095,33 @@ Initial reading:
 - periodic resets reduce that fragility (`0.057 -> 0.045`)
 - token-level loss here is confounded by vocabulary/encoding choices, so the cleanest mechanism signal in this first
   synthetic pass is the decoded-event corruption amplification rather than raw bits/sequence ranking
+
+### Reset-Interval Sweep
+
+Using the same long-run synthetic setting (`mode_switch_prob=0.005`), we swept reset interval:
+
+- `8`:
+  `artifacts/jpeg_tokenizer/analysis/synthetic_tokenizer_mechanisms_r3_reset8`
+- `32`:
+  `artifacts/jpeg_tokenizer/analysis/synthetic_tokenizer_mechanisms_r3_reset32`
+- `128`:
+  `artifacts/jpeg_tokenizer/analysis/synthetic_tokenizer_mechanisms_r3_reset128`
+
+`run_shared` baseline in all three:
+
+- clean bits/sequence: `1248.64`
+- semantic tail hamming: `0.0571`
+
+Reset variants:
+
+| Reset interval | Clean bits/sequence | Delta total | Semantic tail hamming |
+| ---: | ---: | ---: | ---: |
+| `8` | `1681.01` | `10.64` | `0.0300` |
+| `32` | `1455.97` | `10.44` | `0.0452` |
+| `128` | `1293.85` | `10.14` | `0.0894` |
+
+This suggests a non-monotonic reset tradeoff in this setup:
+
+- frequent resets materially reduce semantic corruption amplification
+- very sparse resets can be worse than no resets for semantic tail stability, likely because rare mode markers become
+  high-impact single points of failure when perturbed
