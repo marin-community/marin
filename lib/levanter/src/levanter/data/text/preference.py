@@ -7,18 +7,17 @@ This module provides dataset formats, processors, and datasets for preference
 learning where each example contains chosen and rejected responses.
 """
 
+import dataclasses
 import functools
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Dict, Literal, TypedDict
-import dataclasses
 
 import equinox as eqx
 import haliax as hax
 import jax
 import numpy as np
-from haliax import Axis
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
@@ -31,6 +30,7 @@ from .datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from .formats import ChatProcessor, LmDatasetFormatBase
 
 logger = logging.getLogger("levanter.data.text.preference")
+Axis = hax.Axis
 
 
 class ProcessedPreferenceChatDict(TypedDict):

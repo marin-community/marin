@@ -8,11 +8,13 @@ import jax.numpy as jnp
 from jax.tree_util import register_dataclass
 
 import haliax as hax
-from haliax import Axis, AxisSelector, NamedArray, NamedOrNumeric
+from haliax import AxisSelector, NamedArray, NamedOrNumeric
 
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
+
+Axis = hax.Axis
 
 
 @register_dataclass

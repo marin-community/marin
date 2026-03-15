@@ -18,8 +18,9 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 from draccus import ChoiceRegistry, field
-from haliax import Axis
 from jaxtyping import PRNGKeyArray
+
+import haliax as hax
 
 import levanter
 from levanter.data import AsyncDataset
@@ -55,6 +56,7 @@ from levanter.utils.jax_utils import key_iterator
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.utils.logging import silence_transformer_nag
 
+Axis = hax.Axis
 
 silence_transformer_nag()  # noqa
 

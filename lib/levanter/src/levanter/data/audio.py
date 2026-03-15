@@ -18,7 +18,6 @@ from iris.marin_fs import url_to_fs
 import jax
 import numpy as np
 from draccus import field
-from haliax import Axis
 from jaxtyping import PRNGKeyArray
 from typing_extensions import TypedDict
 
@@ -49,7 +48,7 @@ from transformers import (  # noqa
 
 
 logger = logging.getLogger("levanter.data.audio")
-
+Axis = hax.Axis
 AudioTextDict = TypedDict(
     "AudioTextDict",
     {

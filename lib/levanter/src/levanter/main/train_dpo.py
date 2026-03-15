@@ -11,7 +11,6 @@ import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
-from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
 import levanter
@@ -36,6 +35,8 @@ from levanter.utils.jax_utils import parameter_count, use_cpu_device
 from levanter.utils.tree_utils import inference_mode
 
 logger = logging.getLogger(__name__)
+
+Axis = hax.Axis
 
 
 class DpoModel(eqx.Module):

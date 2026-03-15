@@ -9,7 +9,6 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
-from haliax import Axis
 from haliax.partitioning import ResourceAxis
 from haliax.util import is_named_array
 from jax.lax import with_sharding_constraint
@@ -21,6 +20,8 @@ from levanter.utils.jax_utils import zeros_like_tree
 
 Args = ParamSpec("Args")
 R = TypeVar("R")
+
+Axis = hax.Axis
 
 
 class ReductionType(enum.Enum):

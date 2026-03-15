@@ -870,7 +870,7 @@ class InferenceEngine:
 
         decode_state = self.gen_state.decode_state
         max_seqs_in_prefill = self.config.max_seqs_in_prefill
-        max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
+        max_prefill_size = self.config.max_prefill_size or self.model.max_length
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
 

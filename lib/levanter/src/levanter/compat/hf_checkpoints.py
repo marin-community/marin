@@ -33,7 +33,6 @@ import transformers.utils.hub
 from fsspec import AbstractFileSystem
 from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
-from haliax import Axis
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import (
@@ -82,6 +81,7 @@ from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 if TYPE_CHECKING:
     from transformers import FeatureExtractionMixin, ProcessorMixin
 
+Axis = haliax.Axis
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
 logger = logging.getLogger(__name__)
