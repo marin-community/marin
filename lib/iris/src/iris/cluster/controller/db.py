@@ -368,6 +368,10 @@ class QuerySnapshot:
         finally:
             self._lock.release()
 
+    def execute_sql(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+        """Execute raw SQL and return the cursor for result inspection."""
+        return self._conn.execute(sql, params)
+
     def _fetchall(self, sql: str, params: Sequence[object]) -> list[sqlite3.Row]:
         return list(self._conn.execute(sql, tuple(params)).fetchall())
 

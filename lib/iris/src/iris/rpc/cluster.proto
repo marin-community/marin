@@ -19,6 +19,7 @@ package iris.cluster;
 import "time.proto";
 import "vm.proto";
 import "logging.proto";
+import "query.proto";
 
 // ============================================================================
 // SHARED TYPES
@@ -1016,6 +1017,9 @@ service ControllerService {
   rpc RevokeApiKey(RevokeApiKeyRequest) returns (Empty);
   rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
   rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
+
+  // Generic query API
+  rpc ExecuteRawQuery(RawQueryRequest) returns (RawQueryResponse);
 }
 
 service WorkerService {

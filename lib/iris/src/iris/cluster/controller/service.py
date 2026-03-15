@@ -66,6 +66,8 @@ from iris.cluster.controller.db import (
     tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
+from iris.cluster.controller.query import execute_raw_query
+from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
@@ -1674,4 +1676,18 @@ class ControllerServiceImpl:
         return cluster_pb2.GetCurrentUserResponse(
             user_id=identity.user_id,
             role=identity.role,
+        )
+
+    def execute_raw_query(
+        self,
+        request: query_pb2.RawQueryRequest,
+        ctx: Any,
+    ) -> query_pb2.RawQueryResponse:
+        identity = require_identity()
+        if identity.role != "admin":
+            raise ConnectError(Code.PERMISSION_DENIED, "admin role required for raw queries")
+        result = execute_raw_query(self._db, request.sql)
+        return query_pb2.RawQueryResponse(
+            columns=result.columns,
+            rows=result.rows,
         )
