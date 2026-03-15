@@ -1690,5 +1690,5 @@ class ControllerServiceImpl:
         return query_pb2.RawQueryResponse(
             columns=result.columns,
             rows=result.rows,
-            total_count=result.total_count,
+            truncated=result.truncated,
         )

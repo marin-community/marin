@@ -186,11 +186,11 @@ def test_raw_query_reject_multi_statement(db: ControllerDB) -> None:
         execute_raw_query(db, "SELECT 1; SELECT 2")
 
 
-# ---- Snapshot isolation: writes inside SELECT are rolled back ----
+# ---- Snapshot isolation ----
 
 
-def test_snapshot_prevents_writes(db: ControllerDB) -> None:
-    """Even if a subquery somehow mutated data, the snapshot rolls back."""
+def test_snapshot_isolation_sees_consistent_data(db: ControllerDB) -> None:
+    """Verify snapshot reads work and return expected data."""
     result = execute_raw_query(db, "SELECT COUNT(*) FROM jobs")
     rows = _parse_rows(result)
     assert rows[0][0] == 3
@@ -235,12 +235,18 @@ def test_log_store_not_available(db: ControllerDB) -> None:
         execute_raw_query(db, "SELECT * FROM logs", database="logs")
 
 
-# ---- total_count ----
+# ---- truncation ----
 
 
-def test_total_count_reflects_returned_rows(db: ControllerDB) -> None:
+def test_not_truncated_when_under_limit(db: ControllerDB) -> None:
     result = execute_raw_query(db, "SELECT job_id FROM jobs")
-    assert result.total_count == 3
+    assert not result.truncated
+    assert len(result.rows) == 3
+
+
+def test_unknown_database_rejected(db: ControllerDB) -> None:
+    with pytest.raises(ValueError, match="Unknown database"):
+        execute_raw_query(db, "SELECT 1", database="typo")
 
 
 # ---- Blob encoding ----

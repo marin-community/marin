@@ -11,6 +11,7 @@ export type { ColumnMeta, RawQueryResponse }
 
 export interface RawQueryRequest {
   sql: string
+  database?: string
 }
 
 /** Execute a raw SQL query (admin-only). */

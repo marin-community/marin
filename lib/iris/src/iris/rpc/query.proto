@@ -24,7 +24,7 @@ message RawQueryRequest {
 message RawQueryResponse {
   repeated ColumnMeta columns = 1;
   repeated string rows = 2;
-  int32 total_count = 3;
+  bool truncated = 3;
 }
 
 message ColumnMeta {

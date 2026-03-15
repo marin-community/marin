@@ -24,7 +24,7 @@ MAX_RESULT_ROWS = 1000
 class QueryResult:
     columns: list[query_pb2.ColumnMeta]
     rows: list[str]  # JSON-encoded arrays
-    total_count: int
+    truncated: bool
 
 
 def execute_raw_query(
@@ -44,6 +44,9 @@ def execute_raw_query(
     if ";" in stripped:
         raise ValueError("Multiple SQL statements are not allowed")
 
+    if database not in ("main", "logs"):
+        raise ValueError(f"Unknown database: {database!r}. Must be 'main' or 'logs'.")
+
     if database == "logs":
         if log_store is None:
             raise ValueError("Log store not available")
@@ -53,27 +56,35 @@ def execute_raw_query(
     with db.snapshot() as q:
         cursor = q.execute_sql(stripped)
         col_descriptions = cursor.description or []
-        raw_rows = cursor.fetchmany(MAX_RESULT_ROWS)
+        raw_rows = cursor.fetchmany(MAX_RESULT_ROWS + 1)
 
-    return _build_result(col_descriptions, raw_rows, len(raw_rows))
+    truncated = len(raw_rows) > MAX_RESULT_ROWS
+    if truncated:
+        raw_rows = raw_rows[:MAX_RESULT_ROWS]
+
+    return _build_result(col_descriptions, raw_rows, truncated=truncated)
 
 
 def _execute_on_conn(conn: sqlite3.Connection, sql: str) -> QueryResult:
     """Execute SQL on a raw connection within a snapshot."""
     cursor = conn.execute(sql)
     col_descriptions = cursor.description or []
-    raw_rows = cursor.fetchmany(MAX_RESULT_ROWS)
-    return _build_result(col_descriptions, raw_rows, len(raw_rows))
+    raw_rows = cursor.fetchmany(MAX_RESULT_ROWS + 1)
+    truncated = len(raw_rows) > MAX_RESULT_ROWS
+    if truncated:
+        raw_rows = raw_rows[:MAX_RESULT_ROWS]
+    return _build_result(col_descriptions, raw_rows, truncated=truncated)
 
 
 def _build_result(
     col_descriptions: list[tuple],
     raw_rows: list[tuple],
-    total_count: int,
+    *,
+    truncated: bool,
 ) -> QueryResult:
     columns = [query_pb2.ColumnMeta(name=desc[0], type="unknown") for desc in col_descriptions]
     rows = [json.dumps([_encode_cell(row[i]) for i in range(len(columns))]) for row in raw_rows]
-    return QueryResult(columns=columns, rows=rows, total_count=total_count)
+    return QueryResult(columns=columns, rows=rows, truncated=truncated)
 
 
 def _encode_cell(value: object) -> object:

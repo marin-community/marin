@@ -83,7 +83,7 @@ def query_cmd(ctx: click.Context, sql: str, database: str, fmt: str) -> None:
         if output:
             click.echo(output)
 
-        if fmt == "table" and response.total_count > len(rows):
-            click.echo(f"\n({len(rows)} of {response.total_count} rows)")
+        if fmt == "table" and response.truncated:
+            click.echo(f"\n(showing first {len(rows)} rows; results truncated)")
     finally:
         client.close()
