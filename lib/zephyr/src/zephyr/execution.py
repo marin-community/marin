@@ -557,6 +557,7 @@ class ZephyrCoordinator:
         self._is_last_stage: bool = False
         self._initialized: bool = False
         self._pipeline_running: bool = False
+        self._worker_heartbeat_timeout: float = 120.0  # seconds before marking a worker dead
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -652,25 +653,29 @@ class ZephyrCoordinator:
             }
             return (task, attempt, config)
 
-    def _assert_in_flight_consistent(self, worker_id: str, shard_idx: int) -> None:
-        """Assert _in_flight[worker_id], if present, matches the reported shard.
+    def _check_in_flight_consistent(self, worker_id: str, shard_idx: int) -> bool:
+        """Check if _in_flight[worker_id] matches the reported shard.
 
-        Workers block on report_result/report_error before calling pull_task,
-        so _in_flight can never point to a different shard. It may be absent
-        if a heartbeat timeout already re-queued the task.
+        Returns True if consistent (or absent). Logs a warning and returns
+        False on mismatch, which can happen when the actor backend reorders
+        concurrent report_result/pull_task calls.
         """
         in_flight = self._in_flight.get(worker_id)
-        if in_flight is not None:
-            assert in_flight[0].shard_idx == shard_idx, (
-                f"_in_flight mismatch for {worker_id}: reporting shard {shard_idx}, "
-                f"but _in_flight tracks shard {in_flight[0].shard_idx}. "
-                f"This indicates report_result/pull_task reordering — workers must block on report_result."
+        if in_flight is not None and in_flight[0].shard_idx != shard_idx:
+            logger.warning(
+                "_in_flight mismatch for %s: reporting shard %d, but _in_flight tracks shard %d. "
+                "Likely actor call reordering — ignoring stale _in_flight entry.",
+                worker_id,
+                shard_idx,
+                in_flight[0].shard_idx,
             )
+            return False
+        return True
 
     def report_result(self, worker_id: str, shard_idx: int, attempt: int, result: TaskResult) -> None:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
-            self._assert_in_flight_consistent(worker_id, shard_idx)
+            self._check_in_flight_consistent(worker_id, shard_idx)
 
             current_attempt = self._task_attempts.get(shard_idx, 0)
             if attempt != current_attempt:
@@ -689,13 +694,14 @@ class ZephyrCoordinator:
         """Worker reports a task failure. All errors are fatal."""
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
-            self._assert_in_flight_consistent(worker_id, shard_idx)
+            self._check_in_flight_consistent(worker_id, shard_idx)
             self._in_flight.pop(worker_id, None)
             self._fatal_error = error_info
             self._worker_states[worker_id] = WorkerState.DEAD
 
     def get_status(self) -> JobStatus:
         with self._lock:
+            now = time.monotonic()
             return JobStatus(
                 stage=self._stage_name,
                 completed=self._completed_shards,
@@ -708,7 +714,8 @@ class ZephyrCoordinator:
                 workers={
                     wid: {
                         "state": state.value,
-                        "last_seen_ago": time.monotonic() - self._last_seen.get(wid, 0),
+                        "last_seen_ago": now - self._last_seen.get(wid, 0),
+                        "in_flight_shard": self._in_flight[wid][0].shard_idx if wid in self._in_flight else None,
                     }
                     for wid, state in self._worker_states.items()
                 },
@@ -743,6 +750,29 @@ class ZephyrCoordinator:
             self._fatal_error = None
             self._is_last_stage = is_last_stage
 
+    def _check_worker_liveness(self, now: float) -> None:
+        """Mark busy workers as dead if they haven't contacted us recently.
+
+        Must be called with self._lock held. When a busy worker exceeds the
+        heartbeat timeout, its in-flight task is requeued so another worker
+        can pick it up.
+        """
+        timeout = self._worker_heartbeat_timeout
+        for wid, state in list(self._worker_states.items()):
+            if state != WorkerState.BUSY:
+                continue
+            last_seen = self._last_seen.get(wid, 0)
+            silent_duration = now - last_seen
+            if silent_duration > timeout:
+                logger.warning(
+                    "Worker %s silent for %.0fs (timeout %.0fs), marking dead and requeuing task",
+                    wid,
+                    silent_duration,
+                    timeout,
+                )
+                self._worker_states[wid] = WorkerState.DEAD
+                self._maybe_requeue_worker_task(wid)
+
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
         backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
@@ -750,8 +780,11 @@ class ZephyrCoordinator:
         start_time = time.monotonic()
         all_dead_since: float | None = None
         no_workers_timeout = self._no_workers_timeout
+        last_liveness_check = 0.0
+        liveness_check_interval = 30.0
 
         while True:
+            now = time.monotonic()
             with self._lock:
                 if self._fatal_error:
                     raise ZephyrWorkerError(self._fatal_error)
@@ -762,6 +795,11 @@ class ZephyrCoordinator:
                 if completed >= total:
                     return
 
+                # Periodically check per-worker liveness
+                if now - last_liveness_check >= liveness_check_interval:
+                    self._check_worker_liveness(now)
+                    last_liveness_check = now
+
                 # Count alive workers (READY or BUSY), not just total registered.
                 # Dead/failed workers stay in _worker_states but can't make progress.
                 alive_workers = sum(
@@ -769,7 +807,6 @@ class ZephyrCoordinator:
                 )
 
                 if alive_workers == 0:
-                    now = time.monotonic()
                     elapsed = now - start_time
 
                     if all_dead_since is None:
@@ -1295,11 +1332,11 @@ class ZephyrContext:
         raise last_exception  # type: ignore[misc]
 
     def _start_worker_watchdog(self, stop_event: threading.Event) -> threading.Thread:
-        """Daemon thread that aborts the coordinator when the worker job dies.
+        """Daemon thread that aborts the coordinator when the worker job fails.
 
-        Checks the single worker job status every 10s. When the job has
-        permanently terminated (retries exhausted), calls coordinator.abort()
-        to fail the current stage immediately.
+        Checks the worker job status every 10s. Only aborts on FAILED
+        (crash/OOM). SUCCEEDED is normal — workers exit cleanly after
+        receiving SHUTDOWN from the coordinator.
         """
         poll_interval = 10.0
 
@@ -1311,13 +1348,17 @@ class ZephyrContext:
                 if self._worker_job is None or self._coordinator is None:
                     continue
                 try:
-                    if FrayJobStatus.finished(self._worker_job.status()):
+                    status = self._worker_job.status()
+                    if status == FrayJobStatus.FAILED:
                         reason = (
-                            "Worker job terminated permanently (retries exhausted). "
+                            "Worker job FAILED (retries exhausted). "
                             "Workers likely crashed (OOM or other fatal error)."
                         )
                         logger.error("Worker watchdog: %s", reason)
                         self._coordinator.abort.remote(reason)
+                        return
+                    if status == FrayJobStatus.SUCCEEDED:
+                        logger.debug("Worker watchdog: workers exited cleanly")
                         return
                 except Exception:
                     logger.debug("Worker watchdog: failed to check worker status", exc_info=True)
