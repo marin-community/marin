@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the actor-based execution engine (ZephyrContext)."""
+"""Tests for the execution engine (ZephyrContext)."""
 
 from __future__ import annotations
 
@@ -136,12 +136,12 @@ def test_chunk_cleanup(fray_client, tmp_path):
         assert len(files) == 0, f"Expected cleanup but found: {files}"
 
 
-def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
-    """After heartbeat timeout, get_status workers dict reflects FAILED state,
-    and the status log distinguishes alive from total workers.
+def test_re_registration_requeues_in_flight_task(actor_context, tmp_path):
+    """Re-registering a worker that had an in-flight task requeues that task.
 
-    Also verifies that re-registering a worker that had an in-flight task
-    requeues that task so it is not silently lost.
+    This is the primary crash-recovery mechanism: when a worker replica restarts
+    (e.g. after preemption), it re-registers with the coordinator, which
+    requeues any task the previous incarnation was working on.
     """
     from zephyr.execution import Shard, ShardTask, ZephyrCoordinator
 
@@ -158,58 +158,36 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     )
     coord.start_stage("test", [task])
 
-    # Register 3 workers
-    for i in range(3):
-        coord.register_worker(f"worker-{i}")
+    # Register 2 workers
+    coord.register_worker("worker-0")
+    coord.register_worker("worker-1")
 
     status = coord.get_status()
-    assert len(status.workers) == 3
+    assert len(status.workers) == 2
     assert all(w["state"] == "ready" for w in status.workers.values())
 
     # worker-0 pulls the task so it becomes in-flight
     pulled = coord.pull_task("worker-0")
     assert pulled is not None and pulled != "SHUTDOWN"
+    assert "worker-0" in coord._in_flight
 
-    # Simulate 2 workers dying via heartbeat timeout
-    coord._last_seen["worker-0"] = 0.0
-    coord._last_seen["worker-1"] = 0.0
-    coord.check_heartbeats(timeout=30.0)
-
-    status = coord.get_status()
-    assert status.workers["worker-0"]["state"] == "failed"
-    assert status.workers["worker-1"]["state"] == "failed"
-    assert status.workers["worker-2"]["state"] == "ready"
-
-    # Total workers in dict is still 3, but only 1 is alive
-    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
-    assert alive == 1
-    assert len(status.workers) == 3
-
-    # worker-2 picks up the requeued task
-    pulled2 = coord.pull_task("worker-2")
-    assert pulled2 is not None and pulled2 != "SHUTDOWN"
-
-    # Simulate worker-0 re-registering while worker-2 holds the task in-flight
-    # (race between heartbeat requeue and re-registration).
-    # Since worker-0 has no in-flight task anymore, this is a no-op for requeueing.
+    # worker-0 dies and re-registers (simulating preemption recovery)
     coord.register_worker("worker-0")
-    status = coord.get_status()
-    assert status.workers["worker-0"]["state"] == "ready"
-    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
-    assert alive == 2  # worker-0 ready, worker-1 still failed, worker-2 busy
-
-    # Now test the direct re-registration requeue path:
-    # worker-2 dies while holding the task, and before heartbeat fires,
-    # it re-registers — the in-flight task should be requeued.
-    assert "worker-2" in coord._in_flight  # worker-2 has the task
-    coord.register_worker("worker-2")
-    assert "worker-2" not in coord._in_flight  # in-flight cleared
+    assert "worker-0" not in coord._in_flight  # in-flight cleared
     assert len(coord._task_queue) == 1  # task was requeued
 
+    # worker-1 picks up the requeued task
+    pulled2 = coord.pull_task("worker-1")
+    assert pulled2 is not None and pulled2 != "SHUTDOWN"
 
-def test_no_duplicate_results_on_heartbeat_timeout(actor_context, fray_client, tmp_path):
-    """When a task is requeued after heartbeat timeout, the original worker's
-    stale result (from a previous attempt) is rejected by the coordinator."""
+    status = coord.get_status()
+    assert status.workers["worker-0"]["state"] == "ready"
+    assert status.workers["worker-1"]["state"] == "busy"
+
+
+def test_no_duplicate_results_on_worker_restart(actor_context, fray_client, tmp_path):
+    """When a task is requeued after worker re-registration, the original
+    worker's stale result (from a previous attempt) is rejected."""
     from zephyr.execution import Shard, ShardTask, TaskResult, ZephyrCoordinator
 
     coord = ZephyrCoordinator()
@@ -226,19 +204,18 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, fray_client, t
     coord.start_stage("test", [task])
 
     # Worker A pulls task (attempt 0)
+    coord.register_worker("worker-A")
     pulled = coord.pull_task("worker-A")
     assert pulled is not None
     assert pulled != "SHUTDOWN"
     _task_a, attempt_a, _config = pulled
 
-    # Simulate heartbeat timeout: mark worker-A stale and requeue
-    coord._last_seen["worker-A"] = 0.0
-    coord.check_heartbeats(timeout=0.0)
-
-    # Task should be requeued with incremented attempt
+    # Worker A dies and re-registers — task requeued with incremented attempt
+    coord.register_worker("worker-A")
     assert coord._task_attempts[0] == 1
 
     # Worker B picks up the requeued task (attempt 1)
+    coord.register_worker("worker-B")
     pulled_b = coord.pull_task("worker-B")
     assert pulled_b is not None
     assert pulled_b != "SHUTDOWN"
@@ -295,6 +272,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     coord.start_stage("test", [task])
 
     # Worker A pulls task (attempt 0)
+    coord.register_worker("worker-A")
     pulled_a = coord.pull_task("worker-A")
     _task_a, attempt_a, _config = pulled_a
 
@@ -302,11 +280,11 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     stale_ref = PickleDiskChunk.write(str(tmp_path / "stale-chunk.pkl"), [1, 2, 3])
     assert Path(stale_ref.path).exists()
 
-    # Heartbeat timeout re-queues the task
-    coord._last_seen["worker-A"] = 0.0
-    coord.check_heartbeats(timeout=0.0)
+    # Worker A dies and re-registers — task requeued
+    coord.register_worker("worker-A")
 
     # Worker B pulls and completes the re-queued task (attempt 1)
+    coord.register_worker("worker-B")
     pulled_b = coord.pull_task("worker-B")
     _task_b, attempt_b, _config = pulled_b
 
@@ -384,17 +362,11 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
     )
     coord.start_stage("test", [task])
 
-    # Register 2 workers
+    # Register 2 workers, then mark them dead (simulating watchdog abort)
     coord.register_worker("worker-0")
     coord.register_worker("worker-1")
-
-    # Kill all workers via heartbeat timeout
-    coord._last_seen["worker-0"] = 0.0
-    coord._last_seen["worker-1"] = 0.0
-    coord.check_heartbeats(timeout=0.0)
-
-    assert coord._worker_states["worker-0"] == WorkerState.FAILED
-    assert coord._worker_states["worker-1"] == WorkerState.FAILED
+    coord._worker_states["worker-0"] = WorkerState.DEAD
+    coord._worker_states["worker-1"] = WorkerState.DEAD
 
     # _wait_for_stage should raise after the dead timer expires
     with pytest.raises(ZephyrWorkerError, match="No alive workers"):
@@ -422,11 +394,9 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     )
     coord.start_stage("test", [task])
 
-    # Register and kill a worker
+    # Register a worker then mark it dead (simulating crash)
     coord.register_worker("worker-0")
-    coord._last_seen["worker-0"] = 0.0
-    coord.check_heartbeats(timeout=0.0)
-    assert coord._worker_states["worker-0"] == WorkerState.FAILED
+    coord._worker_states["worker-0"] = WorkerState.DEAD
 
     # In a background thread, re-register the worker and complete the task
     # after a short delay (simulating recovery before timeout expires)
@@ -465,7 +435,7 @@ def test_fresh_actors_per_execute(fray_client, tmp_path):
 
     # After execute(): everything is torn down
     assert zctx._coordinator is None
-    assert zctx._worker_jobs == []
+    assert zctx._worker_job is None
     assert zctx._pipeline_id == 0
 
     # Can execute again (creates fresh coordinator + workers)
@@ -474,7 +444,7 @@ def test_fresh_actors_per_execute(fray_client, tmp_path):
     assert sorted(results2) == [20, 40]
 
     assert zctx._coordinator is None
-    assert zctx._worker_jobs == []
+    assert zctx._worker_job is None
     assert zctx._pipeline_id == 1
 
 

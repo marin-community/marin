@@ -10,6 +10,7 @@ import subprocess
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
 from typing import Any, cast
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, _reset_current_actor, _set_current_actor
@@ -64,7 +65,17 @@ class LocalJobHandle:
         self._future.cancel()
 
 
-def _run_callable(entry: CallableEntrypoint) -> None:
+def _log_job_failure(fut: Future[None], job_id: str) -> None:
+    """Log job failures on future completion (used as a done callback)."""
+    exc = fut.exception()
+    if exc is not None:
+        logger.warning("Job %s failed: %s", job_id, exc, exc_info=exc)
+
+
+def _run_callable(entry: CallableEntrypoint, task_index: int = 0) -> None:
+    from fray.v2.task_info import set_task_index
+
+    set_task_index(task_index)
     name = getattr(entry.callable, "__name__", repr(entry.callable))
     try:
         entry.callable(*entry.args, **entry.kwargs)
@@ -91,6 +102,48 @@ def _run_binary(entry: BinaryEntrypoint) -> None:
         raise subprocess.CalledProcessError(returncode, cmd)
 
 
+class LocalReplicaJobHandle:
+    """Job handle wrapping N replica threads as a single logical job.
+
+    Status follows multi-replica semantics:
+    - RUNNING if any replica is running
+    - FAILED if any replica failed (and none running)
+    - SUCCEEDED if all replicas succeeded
+    - STOPPED if terminated
+    """
+
+    def __init__(self, job_id: str, replicas: list[LocalJobHandle]):
+        self._job_id = job_id
+        self._replicas = replicas
+        self._terminated = threading.Event()
+
+    @property
+    def job_id(self) -> str:
+        return self._job_id
+
+    def status(self) -> JobStatus:
+        if self._terminated.is_set():
+            return JobStatus.STOPPED
+        statuses = [r.status() for r in self._replicas]
+        if any(s == JobStatus.RUNNING for s in statuses):
+            return JobStatus.RUNNING
+        if any(s == JobStatus.FAILED for s in statuses):
+            return JobStatus.FAILED
+        if all(s == JobStatus.SUCCEEDED for s in statuses):
+            return JobStatus.SUCCEEDED
+        return JobStatus.RUNNING
+
+    def wait(self, timeout: float | None = None, *, raise_on_failure: bool = True) -> JobStatus:
+        for r in self._replicas:
+            r.wait(timeout=timeout, raise_on_failure=raise_on_failure)
+        return self.status()
+
+    def terminate(self) -> None:
+        self._terminated.set()
+        for r in self._replicas:
+            r.terminate()
+
+
 class LocalClient:
     """In-process Client implementation for development and testing.
 
@@ -101,15 +154,17 @@ class LocalClient:
         self._executor = ThreadPoolExecutor(max_workers=max_threads)
         self._jobs: list[LocalJobHandle] = []
 
-    def submit(self, request: JobRequest, adopt_existing: bool = True) -> LocalJobHandle:
+    def submit(self, request: JobRequest, adopt_existing: bool = True) -> LocalJobHandle | LocalReplicaJobHandle:
         """Submit a job for execution.
 
-        Args:
-            request: The job request to submit.
-            adopt_existing: If True (default), return existing job handle when name conflicts.
-                          LocalClient currently doesn't enforce unique names, so this
-                          parameter has no effect but is included for API compatibility.
+        For multi-replica jobs (``request.replicas > 1``), spawns N threads
+        and returns a ``LocalReplicaJobHandle`` that aggregates their status.
+        Each replica's task index is set via ``fray.v2.task_info.set_task_index``.
         """
+        replicas = request.replicas or 1
+        if replicas > 1:
+            return self._submit_replicated(request, replicas)
+
         entry = request.entrypoint
         if entry.callable_entrypoint is not None:
             future = self._executor.submit(_run_callable, entry.callable_entrypoint)
@@ -119,16 +174,28 @@ class LocalClient:
             raise ValueError("JobRequest entrypoint must have either callable_entrypoint or binary_entrypoint")
 
         job_id = f"local-{request.name}-{uuid.uuid4().hex[:8]}"
-
-        def _on_done(fut: Future[None], _job_id: str = job_id) -> None:
-            exc = fut.exception()
-            if exc is not None:
-                logger.warning("Job %s failed: %s", _job_id, exc, exc_info=exc)
-
-        future.add_done_callback(_on_done)
+        future.add_done_callback(partial(_log_job_failure, job_id=job_id))
         handle = LocalJobHandle(job_id, future)
         self._jobs.append(handle)
         return handle
+
+    def _submit_replicated(self, request: JobRequest, replicas: int) -> LocalReplicaJobHandle:
+        """Submit a multi-replica job. Each replica runs in its own thread."""
+        entry = request.entrypoint
+        if entry.callable_entrypoint is None:
+            raise ValueError("Multi-replica jobs only support callable entrypoints in local mode")
+
+        replica_handles: list[LocalJobHandle] = []
+        for i in range(replicas):
+            future = self._executor.submit(_run_callable, entry.callable_entrypoint, task_index=i)
+            job_id = f"local-{request.name}-replica-{i}-{uuid.uuid4().hex[:8]}"
+            future.add_done_callback(partial(_log_job_failure, job_id=job_id))
+            handle = LocalJobHandle(job_id, future)
+            self._jobs.append(handle)
+            replica_handles.append(handle)
+
+        group_id = f"local-{request.name}-{uuid.uuid4().hex[:8]}"
+        return LocalReplicaJobHandle(group_id, replica_handles)
 
     def create_actor(
         self,

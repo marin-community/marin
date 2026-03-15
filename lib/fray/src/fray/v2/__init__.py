@@ -5,7 +5,8 @@
 
 from fray.v2.actor import ActorContext, ActorFuture, ActorGroup, ActorHandle, ActorMethod, current_actor
 from fray.v2.client import Client, JobAlreadyExists, JobFailed, JobHandle, current_client, set_current_client, wait_all
-from fray.v2.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
+from fray.v2.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle, LocalReplicaJobHandle
+from fray.v2.task_info import get_task_index, set_task_index
 from fray.v2.types import (
     ActorConfig,
     BinaryEntrypoint,
@@ -53,6 +54,7 @@ __all__ = [
     "LocalActorMethod",
     "LocalClient",
     "LocalJobHandle",
+    "LocalReplicaJobHandle",
     "ResourceConfig",
     "TpuConfig",
     "TpuTopologyInfo",
@@ -60,7 +62,9 @@ __all__ = [
     "create_environment",
     "current_actor",
     "current_client",
+    "get_task_index",
     "get_tpu_topology",
     "set_current_client",
+    "set_task_index",
     "wait_all",
 ]

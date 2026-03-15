@@ -3,11 +3,12 @@
 
 """Execution engine for Zephyr pipelines.
 
-The coordinator is the sole actor. Workers are plain job tasks that poll the
-coordinator for work, execute shard operations, and report results back. This
-eliminates per-worker actor endpoints, reducing pressure on the endpoints API
-while preserving persistent worker state, transient error recovery, and
-backend-agnostic dispatch via fray v2's Client protocol.
+The coordinator is the sole actor. Workers are replicas within a single job
+that poll the coordinator for work, execute shard operations, and report
+results back. This eliminates per-worker actor endpoints (N+1 → 1) and
+reduces job overhead (N jobs → 1). Workers discover their identity via
+``fray.v2.get_task_index()`` and re-register on restart, automatically
+recovering in-flight tasks without heartbeats.
 """
 
 from __future__ import annotations
@@ -552,7 +553,6 @@ class ZephyrCoordinator:
         self._no_workers_timeout: float = 60.0
 
         # Worker management (workers self-register via register_worker)
-        self._coordinator_thread: threading.Thread | None = None
         self._shutdown: bool = False
         self._is_last_stage: bool = False
         self._initialized: bool = False
@@ -582,12 +582,6 @@ class ZephyrCoordinator:
         self._no_workers_timeout = no_workers_timeout
 
         logger.info("Coordinator initialized")
-
-        # Start coordinator background loop (heartbeat checking only)
-        self._coordinator_thread = threading.Thread(
-            target=self._coordinator_loop, daemon=True, name="zephyr-coordinator-loop"
-        )
-        self._coordinator_thread.start()
         self._initialized = True
 
     def register_worker(self, worker_id: str) -> None:
@@ -612,46 +606,6 @@ class ZephyrCoordinator:
 
             logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_states))
 
-    def _coordinator_loop(self) -> None:
-        """Background loop for heartbeat checking only.
-
-        Workers register themselves via register_worker() - no polling needed.
-        """
-        last_log_time = 0.0
-
-        while not self._shutdown:
-            # Check heartbeats, re-queue stale tasks.
-            # NOTE: we could use self._self_handle.check_heartbeats.remote() to
-            # serialize this with worker RPCs (pull_task, report_result) via the
-            # concurrency queue instead of running it inline.
-            self.check_heartbeats()
-
-            # Log status periodically during active execution
-            now = time.monotonic()
-            if self._has_active_execution() and now - last_log_time > 5.0:
-                self._log_status()
-                last_log_time = now
-
-            time.sleep(0.5)
-
-    def _has_active_execution(self) -> bool:
-        return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
-
-    def _log_status(self) -> None:
-        alive = sum(1 for s in self._worker_states.values() if s in {WorkerState.READY, WorkerState.BUSY})
-        dead = sum(1 for s in self._worker_states.values() if s in {WorkerState.FAILED, WorkerState.DEAD})
-        logger.info(
-            "[%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead",
-            self._stage_name,
-            self._completed_shards,
-            self._total_shards,
-            len(self._in_flight),
-            len(self._task_queue),
-            alive,
-            len(self._worker_states),
-            dead,
-        )
-
     def _maybe_requeue_worker_task(self, worker_id: str) -> None:
         """If the worker has a task in-flight, re-queue it and mark the worker as failed."""
         task_and_attempt = self._in_flight.pop(worker_id, None)
@@ -661,15 +615,6 @@ class ZephyrCoordinator:
             self._task_attempts[task.shard_idx] += 1
             self._task_queue.append(task)
             self._retries += 1
-
-    def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
-        """Internal heartbeat check (called with lock held)."""
-        now = time.monotonic()
-        for worker_id, last in list(self._last_seen.items()):
-            if now - last > timeout and self._worker_states.get(worker_id) not in {WorkerState.FAILED, WorkerState.DEAD}:
-                logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
-                self._worker_states[worker_id] = WorkerState.FAILED
-                self._maybe_requeue_worker_task(worker_id)
 
     def pull_task(self, worker_id: str) -> tuple[ShardTask, int, dict] | str | None:
         """Called by workers to get next task.
@@ -748,11 +693,6 @@ class ZephyrCoordinator:
             self._in_flight.pop(worker_id, None)
             self._fatal_error = error_info
             self._worker_states[worker_id] = WorkerState.DEAD
-
-    def heartbeat(self, worker_id: str) -> None:
-        # No lock needed: _last_seen is only read by _check_worker_heartbeats
-        # (which holds the lock), and monotonic float writes are atomic on CPython.
-        self._last_seen[worker_id] = time.monotonic()
 
     def get_status(self) -> JobStatus:
         with self._lock:
@@ -971,14 +911,9 @@ class ZephyrCoordinator:
         return f"ZephyrCoordinator(name={self._name})"
 
     def shutdown(self) -> None:
-        """Signal workers to exit. Worker group is managed by ZephyrContext."""
+        """Signal workers to exit. Worker job is managed by ZephyrContext."""
         logger.info("[coordinator.shutdown] Starting shutdown")
         self._shutdown = True
-
-        # Wait for coordinator thread to exit
-        if self._coordinator_thread is not None:
-            self._coordinator_thread.join(timeout=5.0)
-
         logger.info("Coordinator shutdown complete")
 
     def set_chunk_config(self, prefix: str, execution_id: str) -> None:
@@ -998,11 +933,6 @@ class ZephyrCoordinator:
     def start_stage(self, stage_name: str, tasks: list[ShardTask], is_last_stage: bool = False) -> None:
         """Load a new stage's tasks into the queue (legacy compat)."""
         self._start_stage(stage_name, tasks, is_last_stage=is_last_stage)
-
-    def check_heartbeats(self, timeout: float = 120.0) -> None:
-        """Marks stale workers as FAILED, re-queues their in-flight tasks."""
-        with self._lock:
-            self._check_worker_heartbeats(timeout)
 
     def collect_results(self) -> dict[int, TaskResult]:
         """Return results for the completed stage (legacy compat)."""
@@ -1050,96 +980,46 @@ class _WorkerState:
         return self._shared_data_cache[name]
 
 
-def _run_zephyr_worker(coordinator: ActorHandle, worker_id: str) -> None:
+def _run_zephyr_worker(coordinator: ActorHandle, base_name: str) -> None:
     """Worker job entrypoint. Polls coordinator for tasks until SHUTDOWN.
 
-    This is a plain function (not an actor) — no endpoint registration
-    required. The worker self-terminates when the coordinator becomes
-    unreachable (heartbeat failures) or sends SHUTDOWN.
+    Each replica discovers its task index via ``get_task_index()`` (set by
+    the backend) and derives a unique worker ID. On restart (e.g. after
+    preemption), re-registration with the coordinator automatically requeues
+    any in-flight task from the previous incarnation.
     """
-    state = _WorkerState(worker_id)
-    shutdown_event = threading.Event()
+    from fray.v2 import get_task_index
 
-    # Register with coordinator
+    task_index = get_task_index()
+    worker_id = f"{base_name}-{task_index}"
+    state = _WorkerState(worker_id)
+
+    # Register with coordinator (re-registration requeues stale in-flight tasks)
     coordinator.register_worker.remote(worker_id).result(timeout=60.0)
 
-    # Start heartbeat thread
-    heartbeat_thread = threading.Thread(
-        target=_worker_heartbeat_loop,
-        args=(coordinator, state, shutdown_event),
-        daemon=True,
-        name=f"zephyr-hb-{worker_id}",
-    )
-    heartbeat_thread.start()
-
-    try:
-        _worker_poll_loop(coordinator, state, shutdown_event)
-    finally:
-        shutdown_event.set()
-        heartbeat_thread.join(timeout=5.0)
-        logger.info("[%s] Worker exiting", worker_id)
-
-
-def _worker_heartbeat_loop(
-    coordinator: ActorHandle,
-    state: _WorkerState,
-    shutdown_event: threading.Event,
-    interval: float = 5.0,
-    max_consecutive_failures: int = 5,
-) -> None:
-    """Send periodic heartbeats to the coordinator."""
-    worker_id = state.worker_id
-    heartbeat_count = 0
-    consecutive_failures = 0
-    while not shutdown_event.is_set():
-        try:
-            coordinator.heartbeat.remote(worker_id).result()
-            heartbeat_count += 1
-            consecutive_failures = 0
-            if heartbeat_count % 10 == 1:
-                logger.debug("[%s] Sent heartbeat #%d", worker_id, heartbeat_count)
-        except Exception as e:
-            consecutive_failures += 1
-            logger.warning(
-                "[%s] Heartbeat failed (%d/%d): %s",
-                worker_id,
-                consecutive_failures,
-                max_consecutive_failures,
-                e,
-            )
-            if consecutive_failures >= max_consecutive_failures:
-                logger.error(
-                    "[%s] %d consecutive heartbeat failures — coordinator unreachable, exiting",
-                    worker_id,
-                    consecutive_failures,
-                )
-                shutdown_event.set()
-                break
-        shutdown_event.wait(timeout=interval)
-    logger.debug("[%s] Heartbeat loop exiting after %d beats", worker_id, heartbeat_count)
+    _worker_poll_loop(coordinator, state)
+    logger.info("[%s] Worker exiting", worker_id)
 
 
 def _worker_poll_loop(
     coordinator: ActorHandle,
     state: _WorkerState,
-    shutdown_event: threading.Event,
 ) -> None:
-    """Poll coordinator for tasks. Exits on SHUTDOWN, coordinator death, or shutdown event."""
+    """Poll coordinator for tasks. Exits on SHUTDOWN or coordinator death."""
     worker_id = state.worker_id
-    task_count = 0
     backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
 
     future: ActorFuture | None = None
     future_start = 0.0
     warned = False
 
-    while not shutdown_event.is_set():
+    while True:
         if future is None:
             future = coordinator.pull_task.remote(worker_id)
             future_start = time.monotonic()
             warned = False
 
-        # Poll with a short timeout so we stay responsive to shutdown
+        # Poll with a short timeout so we stay responsive
         try:
             response = future.result(timeout=0.5)
         except TimeoutError:
@@ -1179,14 +1059,11 @@ def _worker_poll_loop(
             # report_result is fully processed before the next pull_task,
             # preventing _in_flight tracking races.
             coordinator.report_result.remote(worker_id, task.shard_idx, attempt, result).result()
-            task_count += 1
-        except Exception as e:
-            logger.error("Worker %s error on shard %d: %s", worker_id, task.shard_idx, e)
-            coordinator.report_error.remote(
-                worker_id,
-                task.shard_idx,
-                "".join(traceback.format_exc()),
-            ).result()
+        except Exception:
+            error_tb = traceback.format_exc()
+            logger.error("Worker %s error on shard %d:\n%s", worker_id, task.shard_idx, error_tb)
+            with suppress(Exception):
+                coordinator.report_error.remote(worker_id, task.shard_idx, error_tb).result()
 
 
 def _execute_shard(state: _WorkerState, task: ShardTask, config: dict) -> TaskResult:
@@ -1285,7 +1162,7 @@ class ZephyrContext:
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     _coordinator: ActorHandle | None = field(default=None, repr=False)
     _coordinator_group: Any = field(default=None, repr=False)
-    _worker_jobs: list[JobHandle] = field(default_factory=list, repr=False)
+    _worker_job: JobHandle | None = field(default=None, repr=False)
     # NOTE: execute calls increment this at the very beginning
     _pipeline_id: int = field(default=-1, repr=False)
 
@@ -1353,12 +1230,11 @@ class ZephyrContext:
     ) -> Sequence:
         """Execute a dataset pipeline.
 
-        Creates a coordinator actor which in turn starts worker jobs. Workers
-        are plain jobs that poll the coordinator — no actor endpoints needed.
-        If the coordinator dies mid-execution (e.g., VM preemption), the
-        pipeline is retried with fresh infrastructure up to
-        ``max_execution_retries`` times. Application errors
-        (``ZephyrWorkerError``) are never retried.
+        Creates a coordinator actor and submits a single worker job with N
+        replicas that poll the coordinator. If the coordinator dies
+        mid-execution (e.g., VM preemption), the pipeline is retried with
+        fresh infrastructure up to ``max_execution_retries`` times.
+        Application errors (``ZephyrWorkerError``) are never retried.
         """
         plan = compute_plan(dataset, hints)
         if verbose or dry_run:
@@ -1419,9 +1295,9 @@ class ZephyrContext:
         raise last_exception  # type: ignore[misc]
 
     def _start_worker_watchdog(self, stop_event: threading.Event) -> threading.Thread:
-        """Daemon thread that aborts the coordinator when all worker jobs die.
+        """Daemon thread that aborts the coordinator when the worker job dies.
 
-        Checks worker job statuses every 10s. When all worker jobs have
+        Checks the single worker job status every 10s. When the job has
         permanently terminated (retries exhausted), calls coordinator.abort()
         to fail the current stage immediately.
         """
@@ -1432,12 +1308,12 @@ class ZephyrContext:
                 stop_event.wait(poll_interval)
                 if stop_event.is_set():
                     return
-                if not self._worker_jobs or self._coordinator is None:
+                if self._worker_job is None or self._coordinator is None:
                     continue
                 try:
-                    if all(FrayJobStatus.finished(j.status()) for j in self._worker_jobs):
+                    if FrayJobStatus.finished(self._worker_job.status()):
                         reason = (
-                            "All worker jobs terminated permanently (retries exhausted). "
+                            "Worker job terminated permanently (retries exhausted). "
                             "Workers likely crashed (OOM or other fatal error)."
                         )
                         logger.error("Worker watchdog: %s", reason)
@@ -1474,50 +1350,46 @@ class ZephyrContext:
             self.no_workers_timeout,
         ).result()
 
-        # Submit worker jobs — deterministic names derived from coordinator
+        # Submit worker job — 1 job with N replicas
         if num_shards > 0:
             assert self.max_workers is not None
             actual_workers = min(self.max_workers, num_shards)
-            self._worker_jobs = self._submit_worker_jobs(actual_workers, attempt)
+            self._worker_job = self._submit_worker_job(actual_workers, attempt)
         else:
-            self._worker_jobs = []
+            self._worker_job = None
 
-        logger.info("Coordinator initialized with %d workers for %s", len(self._worker_jobs), self.name)
+        logger.info("Coordinator initialized with %d workers for %s", actual_workers if num_shards > 0 else 0, self.name)
 
-    def _submit_worker_jobs(self, num_workers: int, attempt: int) -> list[JobHandle]:
-        """Submit N worker jobs that poll the coordinator for tasks.
+    def _submit_worker_job(self, num_workers: int, attempt: int) -> JobHandle:
+        """Submit a single worker job with N replicas.
 
-        Worker names are deterministic from the coordinator name, so
-        re-creating the coordinator after preemption adopts existing workers.
+        Each replica discovers its task index via ``get_task_index()`` and
+        derives a unique worker ID. Names are deterministic from the
+        coordinator name, so re-creating after preemption adopts existing
+        workers.
         """
-        coordinator_handle = self._coordinator
         base_name = f"zephyr-{self.name}-p{self._pipeline_id}-a{attempt}-workers"
-        jobs: list[JobHandle] = []
-
-        for i in range(num_workers):
-            worker_id = f"{base_name}-{i}"
-            request = JobRequest(
-                name=worker_id,
-                entrypoint=Entrypoint.from_callable(
-                    _run_zephyr_worker,
-                    args=(coordinator_handle, worker_id),
-                ),
-                resources=self.resources,
-                max_retries_failure=10,
-            )
-            job = self.client.submit(request)
-            jobs.append(job)
-
-        logger.info("Submitted %d worker jobs for %s", num_workers, base_name)
-        return jobs
+        request = JobRequest(
+            name=base_name,
+            entrypoint=Entrypoint.from_callable(
+                _run_zephyr_worker,
+                args=(self._coordinator, base_name),
+            ),
+            resources=self.resources,
+            replicas=num_workers,
+            max_retries_failure=10,
+        )
+        job = self.client.submit(request)
+        logger.info("Submitted worker job %s with %d replicas", base_name, num_workers)
+        return job
 
     def shutdown(self) -> None:
-        """Shutdown coordinator and worker jobs."""
-        # Terminate worker jobs first (they'll also die when coordinator goes away)
-        for job in self._worker_jobs:
+        """Shutdown coordinator and worker job."""
+        # Terminate worker job first (replicas also die when coordinator goes away)
+        if self._worker_job is not None:
             with suppress(Exception):
-                job.terminate()
-        self._worker_jobs = []
+                self._worker_job.terminate()
+            self._worker_job = None
 
         # Terminate coordinator actor
         if self._coordinator_group is not None:
