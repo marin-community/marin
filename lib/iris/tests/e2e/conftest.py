@@ -62,12 +62,16 @@ def _ensure_dashboard_built(tmp_path_factory):
         logging.getLogger(__name__).warning("npm not found, skipping dashboard build for tests")
         return
 
-    from filelock import FileLock
+    import fcntl
 
     lock_path = tmp_path_factory.getbasetemp().parent / "dashboard_build.lock"
-    with FileLock(lock_path):
-        subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
-        subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True, capture_output=True)
+            subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 def pytest_addoption(parser):
