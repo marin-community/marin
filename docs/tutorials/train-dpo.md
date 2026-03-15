@@ -20,7 +20,7 @@ from experiments.llama import llama_3_1_8b
 from experiments.simple_dpo_config import SimpleDPOConfig
 from levanter.data.text import PreferenceChatLmDatasetFormat
 from marin.execution.executor import executor_main
-from marin.resources.resource_configs import v5p_32
+from fray.cluster import ResourceConfig
 ```
 
 ## Tokenizing Preference Data
@@ -56,7 +56,7 @@ from the loss by default.
 model_config = llama_3_1_8b()
 
 dpo_config = SimpleDPOConfig(
-    resources=v5p_32,
+    resources=ResourceConfig.with_tpu("v5p-32"),
     train_batch_size=128,
     num_train_steps=2000,
     learning_rate=5e-7,

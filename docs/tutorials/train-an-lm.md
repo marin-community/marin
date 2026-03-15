@@ -67,7 +67,7 @@ Set up your training configuration by calculating the number of training steps a
     NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
     training_config = SimpleTrainConfig(
-        resources=GpuConfig(gpu_count=4),           # Hardware configuration: 4 GPUs
+        resources=ResourceConfig.with_gpu("H100", count=4),  # Hardware configuration: 4 GPUs
         train_batch_size=BATCH_SIZE,                # Sequences processed per step
         num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
         learning_rate=3e-3,                         # Peak learning rate
@@ -86,7 +86,7 @@ Set up your training configuration by calculating the number of training steps a
     NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 
     training_config = SimpleTrainConfig(
-        resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores
+        resources=ResourceConfig.with_tpu("v4-128"),  # Hardware configuration: 128 v4 TPU cores
         train_batch_size=BATCH_SIZE,                # Sequences processed per step
         num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
         learning_rate=3e-3,                         # Peak learning rate

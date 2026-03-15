@@ -132,8 +132,9 @@ This class defines basic training configuration that is sufficient for most expe
         )
         ```
 
-The `CpuOnlyConfig` is a [resource configuration](../references/resource-config.md) that requests a certain number of CPUs;
-`GpuConfig` requests GPUs; and `TpuPodConfig` for requests TPUs.
+[`ResourceConfig`](../references/resource-config.md) provides factory methods for different hardware:
+`ResourceConfig.with_cpu()` requests CPUs, `ResourceConfig.with_gpu(...)` requests GPUs,
+and `ResourceConfig.with_tpu(...)` requests TPUs.
 
 ### 4. Train the Model
 
