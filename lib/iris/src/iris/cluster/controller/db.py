@@ -368,6 +368,10 @@ class QuerySnapshot:
         finally:
             self._lock.release()
 
+    def execute_sql(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
+        """Execute raw SQL and return the cursor for result inspection."""
+        return self._conn.execute(sql, params)
+
     def _fetchall(self, sql: str, params: Sequence[object]) -> list[sqlite3.Row]:
         return list(self._conn.execute(sql, tuple(params)).fetchall())
 
@@ -561,7 +565,12 @@ class Job:
     is_reservation_holder: bool = db_field("is_reservation_holder", _decode_bool_int)
 
     def is_finished(self) -> bool:
-        return self.state in TERMINAL_JOB_STATES
+        return self.state in (
+            cluster_pb2.JOB_STATE_SUCCEEDED,
+            cluster_pb2.JOB_STATE_FAILED,
+            cluster_pb2.JOB_STATE_KILLED,
+            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+        )
 
     @property
     def is_coscheduled(self) -> bool:

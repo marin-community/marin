@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -298,6 +300,16 @@ class LogStore:
         self._write_conn.close()
         if self._temp_dir is not None:
             self._temp_dir.cleanup()
+
+    @contextmanager
+    def snapshot(self) -> Iterator[sqlite3.Connection]:
+        """Read-only snapshot context. Connection is always rolled back."""
+        with self._read_lock:
+            self._read_conn.execute("BEGIN")
+            try:
+                yield self._read_conn
+            finally:
+                self._read_conn.rollback()
 
     @staticmethod
     def _row_to_entry(row: tuple) -> logging_pb2.LogEntry:

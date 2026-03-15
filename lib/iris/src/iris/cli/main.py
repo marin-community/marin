@@ -361,10 +361,12 @@ from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.job import job  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
+from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402
 
 iris.add_command(cluster)
 iris.add_command(build)
 iris.add_command(job)
+iris.add_command(query_cmd)
 register_rpc_commands(iris)
 register_process_status_commands(iris)

@@ -66,6 +66,8 @@ from iris.cluster.controller.db import (
     tasks_for_job_with_attempts,
 )
 from iris.cluster.controller.pending_diagnostics import PendingHint, build_job_pending_hints
+from iris.cluster.controller.query import execute_raw_query as run_raw_query
+from iris.rpc import query_pb2
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.log_store import PROCESS_LOG_KEY, LogStore, task_log_key
@@ -80,7 +82,7 @@ from iris.time_utils import Timestamp, Timer
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
-DEFAULT_MAX_TOTAL_LINES = 100000
+DEFAULT_MAX_TOTAL_LINES = 10000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
@@ -590,29 +592,19 @@ class ControllerServiceImpl:
 
         existing_job = _read_job(self._db, job_id)
         if existing_job:
-            policy = request.existing_job_policy
-            if policy == cluster_pb2.EXISTING_JOB_POLICY_ERROR:
-                raise ConnectError(
-                    Code.ALREADY_EXISTS,
-                    f"Job {job_id} already exists (state={cluster_pb2.JobState.Name(existing_job.state)})",
-                )
-            elif policy == cluster_pb2.EXISTING_JOB_POLICY_KEEP:
-                if not existing_job.is_finished():
-                    return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
-                # Job finished, replace it (KEEP only preserves running jobs)
-                self._transitions.remove_finished_job(job_id)
-            elif policy == cluster_pb2.EXISTING_JOB_POLICY_RECREATE:
-                if not existing_job.is_finished():
-                    self._transitions.cancel_job(job_id, "Replaced by new submission")
-                self._transitions.remove_finished_job(job_id)
-            elif existing_job.is_finished():
-                # Default/UNSPECIFIED: replace finished jobs
+            # By default (fail_if_exists=False), replace finished jobs
+            if existing_job.is_finished() and not request.fail_if_exists:
                 logger.info(
                     "Replacing finished job %s (state=%s) with new submission",
                     job_id,
                     cluster_pb2.JobState.Name(existing_job.state),
                 )
                 self._transitions.remove_finished_job(job_id)
+            elif existing_job.is_finished():
+                raise ConnectError(
+                    Code.ALREADY_EXISTS,
+                    f"Job {job_id} already exists (state={cluster_pb2.JobState.Name(existing_job.state)})",
+                )
             else:
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
@@ -1674,4 +1666,19 @@ class ControllerServiceImpl:
         return cluster_pb2.GetCurrentUserResponse(
             user_id=identity.user_id,
             role=identity.role,
+        )
+
+    def execute_raw_query(
+        self,
+        request: query_pb2.RawQueryRequest,
+        ctx: Any,
+    ) -> query_pb2.RawQueryResponse:
+        identity = require_identity()
+        if identity.role != "admin":
+            raise ConnectError(Code.PERMISSION_DENIED, "admin role required for raw queries")
+        result = run_raw_query(self._db, request.sql, log_store=self._log_store, database=request.database or "main")
+        return query_pb2.RawQueryResponse(
+            columns=result.columns,
+            rows=result.rows,
+            total_count=result.total_count,
         )
