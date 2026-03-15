@@ -28,7 +28,7 @@ from levanter.data.text import (
     dataset_for_preference_format,
 )
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmHeadModel
+from levanter.models.lm_model import ArrayLmHeadModel, LmConfig, LmExample, LmHeadModel
 from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -50,28 +50,40 @@ def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
 
 
 def dpo_loss_from_logps(
-    delta_pi: jnp.ndarray,
-    delta_ref: jnp.ndarray,
+    delta_pi: jnp.ndarray | hax.NamedArray,
+    delta_ref: jnp.ndarray | hax.NamedArray,
     *,
     beta: float,
 ) -> tuple[jnp.ndarray, dict[str, Metric]]:
-    logits = (delta_pi - delta_ref) * beta
+    delta_pi_array = _as_array(delta_pi)
+    delta_ref_array = _as_array(delta_ref)
+    logits = (delta_pi_array - delta_ref_array) * beta
     loss = jnp.mean(jax.nn.softplus(-logits))
     metrics = {
         "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi), ReductionType.MEAN),
-        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref), ReductionType.MEAN),
+        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi_array), ReductionType.MEAN),
+        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref_array), ReductionType.MEAN),
         "dpo_accuracy": Metric.from_value(jnp.mean(logits > 0), ReductionType.MEAN),
     }
     return loss, metrics
 
 
-def _logp_sum(model: ArrayLmHeadModel, example, *, key=None, axis_mapping=None) -> jnp.ndarray:
+def _as_array(value: jnp.ndarray | hax.NamedArray) -> jnp.ndarray:
+    if isinstance(value, hax.NamedArray):
+        return value.array
+    return jnp.asarray(value)
+
+
+def _logp_sum(model: ArrayLmHeadModel, example, *, key=None, axis_mapping=None):
     if axis_mapping is not None:
         with hax.axis_mapping(axis_mapping):
             nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
     else:
         nll = model.compute_next_token_loss_array(example, reduction="sum", reduction_axis="position", key=key)
+
+    if isinstance(example, LmExample) and not isinstance(nll, hax.NamedArray):
+        nll = hax.named(jnp.asarray(nll), ())
+
     return -nll
 
 
