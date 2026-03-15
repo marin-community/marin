@@ -79,7 +79,7 @@ scale_groups:
         pool: cpu-erapids
     min_slices: 0
     max_slices: 1  # Cost-safe default; increase for production workloads
-    priority: 100
+    priority: 50
     slice_template:
       num_vms: 1
       coreweave:
@@ -102,7 +102,7 @@ scale_groups:
         pool: h100-8x
     min_slices: 0
     max_slices: 1  # Cost-safe default; increase for production workloads
-    priority: 50
+    priority: 100
     slice_template:
       num_vms: 1
       coreweave:
@@ -125,7 +125,7 @@ scale_groups:
         pool: h100-16x
     min_slices: 0
     max_slices: 1
-    priority: 50
+    priority: 100
     slice_template:
       num_vms: 2
       coreweave:

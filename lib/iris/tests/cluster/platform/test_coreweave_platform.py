@@ -92,6 +92,8 @@ class FakeKubectl:
         self._services: dict[str, dict] = {}
         self._configmaps: dict[str, dict] = {}
         self._secrets: dict[str, dict] = {}
+        self._cluster_roles: dict[str, dict] = {}
+        self._cluster_role_bindings: dict[str, dict] = {}
         self._failures: dict[str, str] = {}
         self._pod_logs: dict[str, str] = {}
         self._events: list[dict] = []
@@ -191,6 +193,10 @@ class FakeKubectl:
             return self._handle_delete_generic(clean_args, "configmap", self._configmaps)
         if "delete" in clean_args and "secret" in clean_args:
             return self._handle_delete_generic(clean_args, "secret", self._secrets)
+        if "delete" in clean_args and "clusterrolebinding" in clean_args:
+            return self._handle_delete_generic(clean_args, "clusterrolebinding", self._cluster_role_bindings)
+        if "delete" in clean_args and "clusterrole" in clean_args:
+            return self._handle_delete_generic(clean_args, "clusterrole", self._cluster_roles)
         if "set" in clean_args and "image" in clean_args:
             return self._handle_set_image(clean_args)
         if "rollout" in clean_args and "restart" in clean_args:
@@ -262,6 +268,19 @@ class FakeKubectl:
             self._secrets[name] = {
                 "metadata": data.get("metadata", {}),
                 "data": data.get("data", {}),
+            }
+            return _completed()
+        elif kind == "ClusterRole":
+            self._cluster_roles[name] = {
+                "metadata": data.get("metadata", {}),
+                "rules": data.get("rules", []),
+            }
+            return _completed()
+        elif kind == "ClusterRoleBinding":
+            self._cluster_role_bindings[name] = {
+                "metadata": data.get("metadata", {}),
+                "subjects": data.get("subjects", []),
+                "roleRef": data.get("roleRef", {}),
             }
             return _completed()
 
@@ -1150,7 +1169,7 @@ def test_start_controller_reconciles_when_already_available(fake_kubectl: FakeKu
 
 
 def test_stop_controller_deletes_resources_except_nodepool(fake_kubectl: FakeKubectl):
-    """stop_controller deletes Deployment, Service, ConfigMap, and S3 secret but not NodePool."""
+    """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and RBAC but not NodePool."""
     platform = _make_platform()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
@@ -1188,6 +1207,35 @@ def test_stop_controller_idempotent(fake_kubectl: FakeKubectl):
     # No resources exist -- should not raise
     platform.stop_controller(cluster_config)
     platform.shutdown()
+
+
+def test_rbac_isolation_across_namespaces(fake_kubectl: FakeKubectl):
+    """Two Iris instances with different namespaces get isolated RBAC; teardown of one doesn't affect the other."""
+    platform_a = _make_platform(namespace="alpha")
+    platform_b = _make_platform(namespace="beta")
+
+    platform_a.ensure_rbac()
+    platform_b.ensure_rbac()
+
+    # Each gets a namespace-qualified ClusterRole and ClusterRoleBinding
+    assert "iris-controller-alpha" in fake_kubectl._cluster_roles
+    assert "iris-controller-beta" in fake_kubectl._cluster_roles
+
+    # Binding references the correct ClusterRole and namespace
+    binding_a = fake_kubectl._cluster_role_bindings["iris-controller-alpha"]
+    assert binding_a["roleRef"]["name"] == "iris-controller-alpha"
+    assert binding_a["subjects"][0]["namespace"] == "alpha"
+
+    # Stopping alpha cleans up its RBAC without affecting beta
+    platform_a.stop_controller(_make_cluster_config())
+
+    assert "iris-controller-alpha" not in fake_kubectl._cluster_roles
+    assert "iris-controller-alpha" not in fake_kubectl._cluster_role_bindings
+    assert "iris-controller-beta" in fake_kubectl._cluster_roles
+    assert "iris-controller-beta" in fake_kubectl._cluster_role_bindings
+
+    platform_a.shutdown()
+    platform_b.shutdown()
 
 
 def test_tunnel_parses_address():

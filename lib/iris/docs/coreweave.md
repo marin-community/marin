@@ -173,8 +173,8 @@ in `CoreweavePlatform`):
 |----------|---------|
 | `iris` Namespace | Isolation for all Iris resources |
 | `iris-controller` ServiceAccount | In-cluster K8s API auth for controller and worker Pods |
-| `iris-controller` ClusterRole | API permissions (see below) |
-| `iris-controller` ClusterRoleBinding | Binds ServiceAccount to ClusterRole |
+| `iris-controller-{namespace}` ClusterRole | API permissions (see below). Namespace-qualified to support multiple Iris instances on the same CKS cluster. |
+| `iris-controller-{namespace}` ClusterRoleBinding | Binds ServiceAccount to ClusterRole. Namespace-qualified to avoid collisions. |
 
 **ClusterRole permissions**:
 
@@ -364,7 +364,7 @@ The platform detects fatal errors before the full timeout expires:
 `CoreweavePlatform.start_controller()` orchestrates the full startup sequence.
 See `lib/iris/src/iris/cluster/platform/coreweave.py`.
 
-1. Apply RBAC prerequisites (Namespace, ServiceAccount, ClusterRole, ClusterRoleBinding)
+1. Apply RBAC prerequisites (Namespace, ServiceAccount, ClusterRole `iris-controller-{ns}`, ClusterRoleBinding `iris-controller-{ns}`)
 2. Create S3 credentials Secret (if S3 storage configured)
 3. Apply ConfigMap with cluster config
 4. Create/reconcile all shared NodePools in parallel via `ensure_nodepools()`
