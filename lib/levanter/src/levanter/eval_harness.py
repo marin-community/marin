@@ -1171,7 +1171,7 @@ class LmEvalHarnessConfig:
                     task_dict = _call_with_retry(lambda t=task: tasks.get_task_dict(t, manager))
                     this_tasks.update(task_dict)
                 else:
-                    our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
+                    our_name = (task.get("task_alias") or task["task"]) if isinstance(task, dict) else task
                     assert isinstance(our_name, str)
                     our_name = our_name.replace(" ", "_")
                     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)

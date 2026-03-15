@@ -23,6 +23,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import wandb
+from matplotlib.ticker import NullLocator
 
 from experiments.domain_phase_mix.starcoder_metadata import (
     load_three_phase_starcoder_dataset,
@@ -50,6 +51,14 @@ def _display_dataset_name(dataset: str) -> str:
     }.get(dataset, dataset)
 
 
+def _display_policy_name(policy: str) -> str:
+    if "wsd_boundary_aligned" in policy:
+        return "Feature Bayes Linear optima (WSD boundary-aligned)"
+    if "wsds" in policy or "wsd" in policy:
+        return "Feature Bayes Linear optima (WSD)"
+    return "Feature Bayes Linear optima"
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark-output-dir", type=Path, required=True)
@@ -67,6 +76,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--observed-reference-csv", type=Path, default=None)
     parser.add_argument("--output-path", type=Path, default=None)
     parser.add_argument("--csv-output", type=Path, default=None)
+    parser.add_argument("--x-scale", choices=("linear", "log"), default="linear")
     return parser.parse_args()
 
 
@@ -316,6 +326,8 @@ def _plot_validation_frame(
     frame: pd.DataFrame,
     *,
     dataset: str,
+    policy: str,
+    x_scale: str,
     best_observed_bpb: float,
     observed_count: int,
     best_observed_tuple: tuple[float, ...],
@@ -372,9 +384,14 @@ def _plot_validation_frame(
     ax_bpb.set_xlabel("Subset size")
     ax_bpb.set_ylabel("BPB")
     ax_regret.set_ylabel("Regret@1")
-    ax_bpb.set_title(f"{_display_dataset_name(dataset)} — predicted vs actual BPB at Feature Bayes Linear optima")
+    ax_bpb.set_title(f"{_display_dataset_name(dataset)} — predicted vs actual BPB at {_display_policy_name(policy)}")
     ax_bpb.grid(True, which="major", axis="both", alpha=0.25)
-    ax_bpb.set_xticks(frame["subset_size"].tolist())
+    ax_bpb.set_xscale(x_scale)
+    subset_sizes = frame["subset_size"].astype(int).tolist()
+    ax_bpb.set_xticks(subset_sizes)
+    ax_bpb.set_xticklabels([str(value) for value in subset_sizes])
+    if x_scale == "log":
+        ax_bpb.xaxis.set_minor_locator(NullLocator())
     ax_bpb.annotate(
         "\n".join(
             [
@@ -488,7 +505,8 @@ def main() -> None:
 
     output_path = args.output_path
     if output_path is None:
-        output_path = benchmark_output_dir / "plots" / f"{args.dataset}_{args.policy}_predicted_vs_actual_bpb.png"
+        suffix = "_logx" if args.x_scale == "log" else ""
+        output_path = benchmark_output_dir / "plots" / f"{args.dataset}_{args.policy}_predicted_vs_actual_bpb{suffix}.png"
     csv_output = args.csv_output
     if csv_output is None:
         csv_output = benchmark_output_dir / f"{args.dataset}_{args.policy}_predicted_vs_actual_bpb.csv"
@@ -497,6 +515,8 @@ def main() -> None:
     _plot_validation_frame(
         frame,
         dataset=args.dataset,
+        policy=args.policy,
+        x_scale=args.x_scale,
         best_observed_bpb=observed_summary.best_bpb,
         observed_count=observed_summary.observed_count,
         best_observed_tuple=observed_summary.best_tuple,
