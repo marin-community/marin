@@ -1013,3 +1013,48 @@ This supports a stronger claim than the earlier short-run table:
 
 - the representation ordering (`K=64` > symbols > bytes) persisted under both longer optimization and modest model scaling
 - this makes it less likely that the baseline ordering is only an artifact of undertraining or too-small model capacity
+
+## Prefix Corruption Spin (`r1`)
+
+The first full prefix-corruption sweep on the exact whole-image representations is now complete.
+
+- Iris job:
+  `/dlwh/jpeg-tokenizer-prefix-corruption-r1-iris1`
+- Final state:
+  `JOB_STATE_SUCCEEDED`
+- Output directory:
+  `gs://marin-eu-west4/tokexplore/jpeg-tokenizer-prefix-corruption-r1-iris1`
+- Artifacts:
+  - `perturbation_eval.json`
+  - `summary.md`
+- Eval setup:
+  - split: validation (`1024` images)
+  - perturbation: one-token corruption at fraction `0.5`
+  - horizons: `1, 64, 512, 4096`
+  - reporting: sequence-level `bits/image` deltas
+
+### Clean Whole-Image Loss (bits/image)
+
+| Representation | Mean bits/image |
+| --- | ---: |
+| `ac_dense_absdc_exact` | `139846.16` |
+| `coeff_k64_exact` | `140043.05` |
+| `ac_dense_exact` | `140306.02` |
+| `symbols_exact` | `146575.95` |
+| `huffman_events_exact` | `148758.15` |
+
+### Prefix-Corruption Sensitivity (Delta bits/image, fraction `0.5`)
+
+| Representation | `delta_total` | `delta_immediate` | `delta_h4096` | `delta_tail_h4096` |
+| --- | ---: | ---: | ---: | ---: |
+| `coeff_k64_exact` | `12.67` | `0.03` | `0.30` | `0.27` |
+| `ac_dense_exact` | `12.43` | `0.03` | `0.08` | `0.05` |
+| `ac_dense_absdc_exact` | `12.46` | `0.02` | `0.09` | `0.07` |
+| `symbols_exact` | `3.81` | `0.29` | `0.94` | `0.65` |
+| `huffman_events_exact` | `7.48` | `1.78` | `3.82` | `2.04` |
+
+Current reading from this run:
+
+- coefficients and dense-AC variants have near-zero immediate and short-horizon penalty but a larger integrated full-sequence delta
+- symbols and especially huffman-events show much higher immediate and long-tail penalty per corruption
+- at this scale, context-dependent syntax/event streams are more prefix-fragile than fixed-semantic coefficient-style tokens
