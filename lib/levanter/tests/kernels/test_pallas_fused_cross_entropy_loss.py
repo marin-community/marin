@@ -974,7 +974,7 @@ def test_pallas_autotune_skipped_when_tuned_match_exists(monkeypatch: pytest.Mon
     assert seen_block_sizes == [inferred]
 
 
-def test_pallas_tpu_autotune_benchmark_wraps_in_shard_map_when_named_sharding_present(
+def test_autotune_benchmark_wraps_in_shard_map_when_named_sharding_present(
     monkeypatch: pytest.MonkeyPatch,
 ):
     x = jnp.ones((4, 8), dtype=jnp.float32)
@@ -1001,7 +1001,7 @@ def test_pallas_tpu_autotune_benchmark_wraps_in_shard_map_when_named_sharding_pr
         calls.append((mesh, in_specs, out_specs, check_vma))
         return fn
 
-    monkeypatch.setattr(fused_api.jax, "default_backend", lambda: "tpu")
+    monkeypatch.setattr(fused_api.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(fused_api, "_named_sharding_of", fake_named_sharding_of)
     monkeypatch.setattr(fused_api.jax, "shard_map", fake_shard_map)
 

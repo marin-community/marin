@@ -150,9 +150,6 @@ def _maybe_wrap_loss_in_shard_map_for_benchmark(
     labels: jax.Array,
     w: jax.Array,
 ) -> Callable[[jax.Array, jax.Array, jax.Array], jax.Array]:
-    if jax.default_backend() != "tpu":
-        return fn
-
     x_sharding = _named_sharding_of(x)
     labels_sharding = _named_sharding_of(labels)
     w_sharding = _named_sharding_of(w)
